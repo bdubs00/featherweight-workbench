@@ -1,12 +1,6 @@
 module github.com/bdubs00/featherweight-workbench
 
-go 1.27.0
-
-// The workbench builds against the kernel checkout next to it until the
-// kernel has a release. Then replace this pair with the tag, for example
-// "go get github.com/bdubs00/featherweight-kernel@v0.1.0", and remove the
-// replace directive.
-require github.com/bdubs00/featherweight-kernel v0.0.0-00010101000000-000000000000
+go 1.27.1
 
 replace github.com/bdubs00/featherweight-kernel => ../featherweight-kernel
 
@@ -14,6 +8,11 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.6.0
 	github.com/alicebob/miniredis/v2 v2.40.0
 	github.com/anthropics/anthropic-sdk-go v1.80.0
+	// The workbench builds against the kernel checkout next to it until the
+	// kernel has a release. Then replace this pair with the tag, for example
+	// "go get github.com/bdubs00/featherweight-kernel@v0.1.0", and remove the
+	// replace directive.
+	github.com/bdubs00/featherweight-kernel v0.0.0-00010101000000-000000000000
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/nats-io/nats-server/v2 v2.15.1
@@ -55,6 +54,7 @@ require (
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
+	github.com/google/ax v0.3.2-0.20261016202944-8d2ccf36f194 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
