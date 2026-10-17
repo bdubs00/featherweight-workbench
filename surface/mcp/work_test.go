@@ -14,6 +14,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -260,12 +261,12 @@ func TestRunResultAndBuilderReachTheOwner(t *testing.T) {
 		"POST /v1/builder":             builder,
 		"GET /v1/runs/01GONE/result":   http.StatusNotFound,
 	})
-	fleet := &fakeFleet{name: "view", owner: srv.URL, members: []fw.FleetMember{
-		{Name: "view", Self: true, State: fw.MemberLive, AccessMode: fw.AccessModeRules},
-		{Name: "owner", State: fw.MemberLive, CanForward: true, AccessMode: fw.AccessModeRules},
+	fake := &fakeFleet{name: "view", owner: srv.URL, members: []fleet.Member{
+		{Name: "view", Self: true, State: fleet.MemberLive, AccessMode: fw.AccessModeRules},
+		{Name: "owner", State: fleet.MemberLive, CanForward: true, AccessMode: fw.AccessModeRules},
 	}}
-	fleet.set(remote, &fw.Run{ID: "01GONE", Agent: "reviewer", State: fw.StateCompleted})
-	view := manageAgent(t, newScript().model(), fw.WithFleet(fleet))
+	fake.set(remote, &fw.Run{ID: "01GONE", Agent: "reviewer", State: fw.StateCompleted})
+	view := attach(manageAgent(t, newScript().model()), fake)
 	cs := as(t, ctx, serveAgent(t, view, nil).URL, "alice-token")
 
 	res := callTool(t, ctx, cs, toolRunResult, map[string]any{"runId": remote.ID})
@@ -513,7 +514,7 @@ func TestDashboardHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	all, err := view.Runs(actx, a, "", "")
+	all, err := dashboard.Runs(actx, a, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

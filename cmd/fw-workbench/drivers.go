@@ -12,6 +12,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/surface/a2a"
 	"github.com/bdubs00/featherweight-kernel/telemetry"
 	"github.com/bdubs00/featherweight-workbench/agents"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 
 	_ "github.com/bdubs00/featherweight-kernel/authn/spiffe"
@@ -28,7 +29,6 @@ import (
 	_ "github.com/bdubs00/featherweight-kernel/tools/mcp"
 
 	_ "github.com/bdubs00/featherweight-workbench/authn/oidc"
-	_ "github.com/bdubs00/featherweight-workbench/fleet"
 	_ "github.com/bdubs00/featherweight-workbench/surface/web"
 	_ "github.com/bdubs00/featherweight-workbench/titles"
 	_ "github.com/bdubs00/featherweight-workbench/tools/builder"
@@ -46,6 +46,7 @@ func init() {
 		return err
 	}
 	cli.AgentsDelete = agents.Delete
+	cli.RegisterDoctorCheck(fleet.DoctorCheck)
 	cli.NewLogger = telemetry.Logger
 	cli.SetBuildInfo = telemetry.SetBuildInfo
 	cli.ServeMCPStdio = mcp.ServeStdio

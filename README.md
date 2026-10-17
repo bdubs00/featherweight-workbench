@@ -77,7 +77,7 @@ Each run gets a title that a model writes, such as "Fix checkout retries", the f
 
 ## The fleet
 
-Each process with `fleet.subject` publishes a record of itself and of its runs on the bus. Any process serves one view of the whole fleet. A request about a run of another process goes to that process with the credential of the caller. [examples/agentgateway](examples/agentgateway/README.md) runs a fleet behind agentgateway on one public URL.
+Each process with `workbench.fleet.subject` publishes a record of itself and of its runs on the bus. Any process serves one view of the whole fleet. A request about a run of another process goes to that process with the credential of the caller. [examples/agentgateway](examples/agentgateway/README.md) runs a fleet behind agentgateway on one public URL.
 
 ## How the workbench builds on the kernel
 

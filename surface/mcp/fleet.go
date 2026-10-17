@@ -20,6 +20,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -34,14 +35,14 @@ const maxMemberBody = 64 << 20
 
 // fleetResult is the structured result of the fleet tool.
 type fleetResult struct {
-	View    string           `json:"view"`
-	Name    string           `json:"name"`
-	Members []fw.FleetMember `json:"members"`
+	View    string         `json:"view"`
+	Name    string         `json:"name"`
+	Members []fleet.Member `json:"members"`
 }
 
 // addFleetTool adds the fleet tool when the fleet is on.
 func (s *server) addFleetTool() {
-	if s.a.Fleet() == nil {
+	if fleet.Of(s.a) == nil {
 		return
 	}
 	sdk.AddTool(s.srv, &sdk.Tool{
@@ -72,7 +73,7 @@ func withPageURL(a *fw.Agent, text string) string {
 
 // members lists the members that the caller can see.
 func (s *server) members(ctx context.Context) (fleetResult, error) {
-	f := s.a.Fleet()
+	f := fleet.Of(s.a)
 	if f == nil {
 		return fleetResult{}, errFleetOff
 	}
@@ -81,13 +82,13 @@ func (s *server) members(ctx context.Context) (fleetResult, error) {
 		return fleetResult{}, err
 	}
 	if members == nil {
-		members = []fw.FleetMember{}
+		members = []fleet.Member{}
 	}
 	return fleetResult{View: viewFleet, Name: f.Name(), Members: members}, nil
 }
 
 // errFleetOff answers a request that needs the fleet when the fleet is off.
-var errFleetOff = fmt.Errorf("%w: the fleet is off; set fleet.subject (FW_FLEET_SUBJECT) to turn it on", fw.ErrInvalidRequest)
+var errFleetOff = fmt.Errorf("%w: the fleet is off; set workbench.fleet.subject (FW_WORKBENCH_FLEET_SUBJECT) to turn it on", fw.ErrInvalidRequest)
 
 // withCredential puts the bearer credential of the HTTP request of a call
 // into ctx when ctx has none. Over a legacy session, the context of a call
@@ -112,7 +113,7 @@ func withCredential(ctx context.Context, req sdk.Request) context.Context {
 // ownerOf returns the member that owns a run of another member, or "" when
 // the fleet is off or does not know the run.
 func (s *server) ownerOf(ctx context.Context, id string) (string, error) {
-	f := s.a.Fleet()
+	f := fleet.Of(s.a)
 	if f == nil {
 		return "", nil
 	}
@@ -156,7 +157,7 @@ func (e *memberError) text() string {
 // JSON answer into v. An error status gives a *memberError with the detail
 // of the problem document.
 func (s *server) callMember(ctx context.Context, member, method, path string, body any, idemKey string, v any) error {
-	f := s.a.Fleet()
+	f := fleet.Of(s.a)
 	if f == nil {
 		return errFleetOff
 	}
@@ -181,7 +182,7 @@ func (s *server) callMember(ctx context.Context, member, method, path string, bo
 	}
 	resp, err := f.Forward(ctx, member, req)
 	if err != nil {
-		if errors.Is(err, fw.ErrFleetNoRoute) || errors.Is(err, fw.ErrFleetNoCredential) {
+		if errors.Is(err, fleet.ErrNoRoute) || errors.Is(err, fleet.ErrNoCredential) {
 			return err
 		}
 		return fmt.Errorf("mcp: the fleet member %s did not answer: %w", member, err)
@@ -208,7 +209,7 @@ func (s *server) callMember(ctx context.Context, member, method, path string, bo
 // at most maxRawBytes+1 bytes. size is the size that the member names, or
 // -1 when the answer does not name it.
 func (s *server) memberFile(ctx context.Context, member, id, path string) (data []byte, size int64, err error) {
-	f := s.a.Fleet()
+	f := fleet.Of(s.a)
 	if f == nil {
 		return nil, -1, errFleetOff
 	}
@@ -219,7 +220,7 @@ func (s *server) memberFile(ctx context.Context, member, id, path string) (data 
 	req.Header.Set("Accept", "application/octet-stream")
 	resp, err := f.Forward(ctx, member, req)
 	if err != nil {
-		if errors.Is(err, fw.ErrFleetNoRoute) || errors.Is(err, fw.ErrFleetNoCredential) {
+		if errors.Is(err, fleet.ErrNoRoute) || errors.Is(err, fleet.ErrNoCredential) {
 			return nil, -1, err
 		}
 		return nil, -1, fmt.Errorf("mcp: the fleet member %s did not answer: %w", member, err)
@@ -370,7 +371,7 @@ func (s *server) startOn(ctx context.Context, member string, in runArgs) *sdk.Ca
 // fleetInstructions is the part of the server instructions about the
 // fleet, or "" when the fleet is off.
 func fleetInstructions(a *fw.Agent) string {
-	f := a.Fleet()
+	f := fleet.Of(a)
 	if f == nil {
 		return ""
 	}

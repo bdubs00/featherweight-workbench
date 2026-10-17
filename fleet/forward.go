@@ -44,18 +44,18 @@ func newClient() *http.Client {
 	}
 }
 
-// Forward implements fw.Fleet. The credential goes to an ax address through
+// Forward implements View. The credential goes to an ax address through
 // the router, or to a URL that a glob of fleet.forward names, and nowhere
 // else.
 func (f *Fleet) Forward(ctx context.Context, member string, req *http.Request) (*http.Response, error) {
 	if req == nil || req.URL == nil {
 		return nil, fmt.Errorf("fleet: forward to %s: no request", member)
 	}
-	if via := req.Header.Get(fw.HeaderFleetVia); via != "" {
-		return nil, fmt.Errorf("fleet: %w: the view %s forwarded this request, and a member forwards a request once only", fw.ErrFleetNoRoute, via)
+	if via := req.Header.Get(HeaderVia); via != "" {
+		return nil, fmt.Errorf("fleet: %w: the view %s forwarded this request, and a member forwards a request once only", ErrNoRoute, via)
 	}
 	if member == f.name {
-		return nil, fmt.Errorf("fleet: %w: %s is this member", fw.ErrFleetNoRoute, member)
+		return nil, fmt.Errorf("fleet: %w: %s is this member", ErrNoRoute, member)
 	}
 	path := req.URL.Path
 	if !strings.HasPrefix(path, "/v1/") {
@@ -64,7 +64,7 @@ func (f *Fleet) Forward(ctx context.Context, member string, req *http.Request) (
 	if err := f.startView(ctx); err != nil {
 		return nil, err
 	}
-	var rec *fw.FleetRecord
+	var rec *Record
 	for _, r := range f.remotes(time.Now()) {
 		if r.rec.Name == member {
 			rec = r.rec
@@ -72,15 +72,15 @@ func (f *Fleet) Forward(ctx context.Context, member string, req *http.Request) (
 		}
 	}
 	if rec == nil {
-		return nil, fmt.Errorf("fleet: %w: the view knows no member %q", fw.ErrFleetNoRoute, member)
+		return nil, fmt.Errorf("fleet: %w: the view knows no member %q", ErrNoRoute, member)
 	}
 	base, actor, err := f.route(rec.URL)
 	if err != nil {
-		return nil, fmt.Errorf("fleet: %w: %s: %v", fw.ErrFleetNoRoute, member, err)
+		return nil, fmt.Errorf("fleet: %w: %s: %v", ErrNoRoute, member, err)
 	}
 	cred := fw.CredentialFrom(ctx)
 	if cred == "" {
-		return nil, fmt.Errorf("fleet: forward to %s: %w", member, fw.ErrFleetNoCredential)
+		return nil, fmt.Errorf("fleet: forward to %s: %w", member, ErrNoCredential)
 	}
 	u := *base
 	u.Path = strings.TrimSuffix(base.Path, "/") + path
@@ -104,7 +104,7 @@ func (f *Fleet) Forward(ctx context.Context, member string, req *http.Request) (
 		}
 	}
 	out.Header.Set("Authorization", cred)
-	out.Header.Set(fw.HeaderFleetVia, f.name)
+	out.Header.Set(HeaderVia, f.name)
 	if actor != "" {
 		out.Header.Set(headerTargetActor, actor)
 	}
@@ -113,7 +113,7 @@ func (f *Fleet) Forward(ctx context.Context, member string, req *http.Request) (
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("fleet: forward to %s: %w", member, ctx.Err())
 		}
-		return nil, fmt.Errorf("fleet: %w: %s did not answer: %v", fw.ErrFleetNoRoute, member, err)
+		return nil, fmt.Errorf("fleet: %w: %s did not answer: %v", ErrNoRoute, member, err)
 	}
 	return resp, nil
 }

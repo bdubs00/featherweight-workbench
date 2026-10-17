@@ -18,6 +18,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
 func TestRunFileTool(t *testing.T) {
@@ -87,12 +88,12 @@ func TestRunFileReachesTheOwner(t *testing.T) {
 	if err != nil || r.State != fw.StateCompleted {
 		t.Fatalf("owner run = %+v, %v", r, err)
 	}
-	fleet := &fakeFleet{name: "viewer", owner: ownerSrv.URL, members: []fw.FleetMember{
-		{Name: "viewer", Self: true, State: fw.MemberLive, AccessMode: fw.AccessModeRules},
-		{Name: "owner", State: fw.MemberLive, CanForward: true, AccessMode: fw.AccessModeRules},
+	fake := &fakeFleet{name: "viewer", owner: ownerSrv.URL, members: []fleet.Member{
+		{Name: "viewer", Self: true, State: fleet.MemberLive, AccessMode: fw.AccessModeRules},
+		{Name: "owner", State: fleet.MemberLive, CanForward: true, AccessMode: fw.AccessModeRules},
 	}}
-	fleet.set(r)
-	viewer := manageAgent(t, newScript().model(), fw.WithFleet(fleet))
+	fake.set(r)
+	viewer := attach(manageAgent(t, newScript().model()), fake)
 	cs := as(t, ctx, serveAgent(t, viewer, nil).URL, "bob-token")
 	res := callTool(t, ctx, cs, toolRunFile, map[string]any{"runId": r.ID, "path": "docs/a b.md"})
 	var v view.FileView
@@ -100,7 +101,7 @@ func TestRunFileReachesTheOwner(t *testing.T) {
 	if res.IsError || v.Text != "remote text" || v.Path != "docs/a b.md" {
 		t.Fatalf("remote run_file = %+v, %q", v, textOf(res))
 	}
-	if got := fleet.lastForward().Get("Accept"); got != "application/json" {
+	if got := fake.lastForward().Get("Accept"); got != "application/json" {
 		t.Errorf("forwarded Accept = %q", got)
 	}
 }
@@ -231,12 +232,12 @@ func TestRunFileRawReachesTheOwner(t *testing.T) {
 	if err != nil || r.State != fw.StateCompleted {
 		t.Fatalf("owner run = %+v, %v", r, err)
 	}
-	fleet := &fakeFleet{name: "view", owner: ownerSrv.URL, members: []fw.FleetMember{
-		{Name: "view", Self: true, State: fw.MemberLive, AccessMode: fw.AccessModeRules},
-		{Name: "owner", State: fw.MemberLive, CanForward: true, AccessMode: fw.AccessModeRules},
+	fake := &fakeFleet{name: "view", owner: ownerSrv.URL, members: []fleet.Member{
+		{Name: "view", Self: true, State: fleet.MemberLive, AccessMode: fw.AccessModeRules},
+		{Name: "owner", State: fleet.MemberLive, CanForward: true, AccessMode: fw.AccessModeRules},
 	}}
-	fleet.set(r)
-	view := manageAgent(t, newScript().model(), fw.WithFleet(fleet))
+	fake.set(r)
+	view := attach(manageAgent(t, newScript().model()), fake)
 	cs := as(t, ctx, serveAgent(t, view, nil).URL, "bob-token")
 
 	res := callTool(t, ctx, cs, toolRunFile, map[string]any{"runId": r.ID, "path": "img/a b.png", "raw": true})
@@ -244,7 +245,7 @@ func TestRunFileRawReachesTheOwner(t *testing.T) {
 	if c := embedded(res); res.IsError || c == nil || !bytes.Equal(c.Blob, png) || c.MIMEType != "image/png" || !strings.Contains(textOf(res), hex.EncodeToString(sum[:])) {
 		t.Fatalf("remote raw = %+v: %s", c, textOf(res))
 	}
-	if got := fleet.lastForward().Get("Accept"); got != "application/octet-stream" {
+	if got := fake.lastForward().Get("Accept"); got != "application/octet-stream" {
 		t.Errorf("forwarded Accept = %q", got)
 	}
 	res = callTool(t, ctx, cs, toolRunFile, map[string]any{"runId": r.ID, "path": "big.txt", "raw": true})

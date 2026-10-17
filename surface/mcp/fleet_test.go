@@ -15,6 +15,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -24,7 +25,7 @@ import (
 type fakeFleet struct {
 	name    string
 	owner   string
-	members []fw.FleetMember
+	members []fleet.Member
 
 	mu      sync.Mutex
 	runs    []*fw.Run
@@ -34,7 +35,7 @@ type fakeFleet struct {
 
 func (f *fakeFleet) Name() string { return f.name }
 
-func (f *fakeFleet) Members(context.Context) ([]fw.FleetMember, error) { return f.members, nil }
+func (f *fakeFleet) Members(context.Context) ([]fleet.Member, error) { return f.members, nil }
 
 func (f *fakeFleet) Runs(context.Context) ([]*fw.Run, error) {
 	f.mu.Lock()
@@ -68,7 +69,7 @@ func (f *fakeFleet) Forward(ctx context.Context, member string, req *http.Reques
 	}
 	cred := fw.CredentialFrom(ctx)
 	if cred == "" {
-		return nil, fw.ErrFleetNoCredential
+		return nil, fleet.ErrNoCredential
 	}
 	u, err := url.Parse(f.owner + req.URL.String())
 	if err != nil {
@@ -77,7 +78,7 @@ func (f *fakeFleet) Forward(ctx context.Context, member string, req *http.Reques
 	out := req.Clone(ctx)
 	out.URL, out.Host, out.RequestURI = u, u.Host, ""
 	out.Header.Set("Authorization", cred)
-	out.Header.Set(fw.HeaderFleetVia, f.name)
+	out.Header.Set(fleet.HeaderVia, f.name)
 	f.mu.Lock()
 	f.forward = append(f.forward, out.Header.Clone())
 	f.mu.Unlock()
@@ -140,12 +141,12 @@ func TestFleetTools(t *testing.T) {
 		t.Fatalf("owner run = %+v, %v", r, err)
 	}
 
-	fleet := &fakeFleet{name: "view", owner: ownerSrv.URL, members: []fw.FleetMember{
-		{Name: "view", Self: true, State: fw.MemberLive, AccessMode: fw.AccessModeRules},
-		{Name: "owner", State: fw.MemberLive, CanForward: true, AccessMode: fw.AccessModeRules, Agents: []fw.FleetAgent{{Name: "reviewer", Role: "owner"}}},
+	fake := &fakeFleet{name: "view", owner: ownerSrv.URL, members: []fleet.Member{
+		{Name: "view", Self: true, State: fleet.MemberLive, AccessMode: fw.AccessModeRules},
+		{Name: "owner", State: fleet.MemberLive, CanForward: true, AccessMode: fw.AccessModeRules, Agents: []fleet.RecordAgent{{Name: "reviewer", Role: "owner"}}},
 	}}
-	fleet.set(r)
-	view := manageAgent(t, newScript(endTurn("local")).model(), fw.WithFleet(fleet))
+	fake.set(r)
+	view := attach(manageAgent(t, newScript(endTurn("local")).model()), fake)
 	cs := as(t, ctx, serveAgent(t, view, nil).URL, "alice-token")
 
 	// The fleet tool and the fleet arguments exist.
@@ -187,7 +188,7 @@ func TestFleetTools(t *testing.T) {
 	if st.Member != "owner" || st.Pending == nil {
 		t.Fatalf("remote status = %+v", st)
 	}
-	if h := fleet.lastForward(); h.Get("Authorization") != "Bearer alice-token" || h.Get(fw.HeaderFleetVia) != "view" {
+	if h := fake.lastForward(); h.Get("Authorization") != "Bearer alice-token" || h.Get(fleet.HeaderVia) != "view" {
 		t.Fatalf("forwarded headers = %v", h)
 	}
 	var ev eventsResult
@@ -257,7 +258,7 @@ func TestFleetTools(t *testing.T) {
 	if res.IsError || started.Member != "owner" || !strings.Contains(textOf(res), "run_status") {
 		t.Fatalf("remote run = %+v: %s", started, textOf(res))
 	}
-	if h := fleet.lastForward(); h.Get("Idempotency-Key") != "r-1" {
+	if h := fake.lastForward(); h.Get("Idempotency-Key") != "r-1" {
 		t.Errorf("forwarded headers = %v", h)
 	}
 	if got, err := owner.Get(context.Background(), started.ID); err != nil || got.Metadata[fw.MetaTitle] != "Remote work" {
@@ -276,9 +277,9 @@ func TestFleetTools(t *testing.T) {
 	}
 
 	// A fleet that cannot route answers with an error result.
-	fleet.mu.Lock()
-	fleet.err = errors.Join(fw.ErrFleetNoRoute, errors.New("the member owner has no URL"))
-	fleet.mu.Unlock()
+	fake.mu.Lock()
+	fake.err = errors.Join(fleet.ErrNoRoute, errors.New("the member owner has no URL"))
+	fake.mu.Unlock()
 	if res := callTool(t, ctx, cs, toolRunStatus, map[string]any{"runId": remote.ID}); !res.IsError || !strings.Contains(textOf(res), "No route") {
 		t.Fatalf("no route = %s", textOf(res))
 	}

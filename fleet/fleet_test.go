@@ -46,19 +46,18 @@ type member struct {
 }
 
 // newMember builds an agent that joins the fleet on bus. mut changes the
-// configuration, and opts come after the defaults, so they win.
-func newMember(t *testing.T, bus fw.Bus, name string, mut func(*fw.Config), opts ...fw.Option) *member {
+// configuration of the kernel and of the fleet, and opts come after the
+// defaults, so they win.
+func newMember(t *testing.T, bus fw.Bus, name string, mut func(*fw.Config, *Config), opts ...fw.Option) *member {
 	t.Helper()
 	cfg := fw.DefaultConfig()
 	cfg.Home = t.TempDir()
-	cfg.Fleet.Subject = subj
-	cfg.Fleet.Name = name
-	cfg.Fleet.Interval = 40 * time.Millisecond
+	fc := Config{Subject: subj, Name: name, Interval: 40 * time.Millisecond, Expire: DefaultExpire}
 	// The fleet offers configured agents only, so the members of a test
 	// configure the default agent that their runs use.
 	cfg.Agents = map[string]fw.AgentProfile{"default": {}}
 	if mut != nil {
-		mut(cfg)
+		mut(cfg, &fc)
 	}
 	base := []fw.Option{
 		fw.WithConfig(cfg),
@@ -73,15 +72,18 @@ func newMember(t *testing.T, bus fw.Bus, name string, mut func(*fw.Config), opts
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	f, err := Open(context.Background(), a, fc)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	Attach(a, f)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		Attach(a, nil)
+		_ = f.Close()
 		a.Close(ctx)
 	})
-	f, ok := a.Fleet().(*Fleet)
-	if !ok {
-		t.Fatalf("Fleet() is %T, not *fleet.Fleet", a.Fleet())
-	}
 	return &member{a: a, f: f}
 }
 
@@ -101,15 +103,15 @@ func eventually(t *testing.T, what string, cond func() bool) {
 }
 
 // retain puts a record of a fake member on the bus.
-func retain(t *testing.T, bus fw.Retainer, rec fw.FleetRecord) {
+func retain(t *testing.T, bus fw.Retainer, rec Record) {
 	t.Helper()
 	if rec.Version == 0 {
-		rec.Version = fw.FleetVersion
+		rec.Version = Version
 	}
 	if rec.UpdatedAt.IsZero() {
 		rec.UpdatedAt = time.Now().UTC()
 	}
-	if err := bus.Retain(context.Background(), fw.FleetRecordSubject(subj, rec.Name), fw.MustEvent(rec.Name, fw.EvFleetRecord, rec)); err != nil {
+	if err := bus.Retain(context.Background(), RecordSubject(subj, rec.Name), fw.MustEvent(rec.Name, EvRecord, rec)); err != nil {
 		t.Fatalf("Retain: %v", err)
 	}
 }
@@ -173,7 +175,7 @@ func TestPublishAndLazyView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Members: %v", err)
 	}
-	if len(ms) != 2 || !ms[0].Self || ms[0].Name != "beta" || ms[1].Name != "alpha" || ms[1].State != fw.MemberLive {
+	if len(ms) != 2 || !ms[0].Self || ms[0].Name != "beta" || ms[1].Name != "alpha" || ms[1].State != MemberLive {
 		t.Fatalf("Members = %+v", ms)
 	}
 	if ms[1].AccessMode != fw.AccessModeRules || len(ms[1].Agents) != 1 || ms[1].Agents[0].Name != "default" {
@@ -214,12 +216,12 @@ func TestActiveRunAndCounts(t *testing.T) {
 //	    group ops as viewers.
 //	r2: agent bare (no access block), started by bob.
 //	r3: agent bare, a child of r1 with no principal.
-func rulesRecord(name, def string) fw.FleetRecord {
+func rulesRecord(name, def string) Record {
 	now := time.Now().UTC()
-	return fw.FleetRecord{
+	return Record{
 		Name:   name,
-		Access: fw.FleetAccess{Mode: fw.AccessModeRules, Default: def, Admins: []string{"root"}},
-		Agents: []fw.FleetAgent{
+		Access: Access{Mode: fw.AccessModeRules, Default: def, Admins: []string{"root"}},
+		Agents: []RecordAgent{
 			{Name: "bare"},
 			{Name: "team", Access: &fw.Access{Owners: []string{"alice"}, Viewers: []string{"group:ops"}}},
 		},
@@ -320,7 +322,7 @@ func TestExternalMemberNeedsDecisionPoint(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "")
 	bus := fw.NewMemBus()
 	rec := rulesRecord("ext", "")
-	rec.Access = fw.FleetAccess{Mode: fw.AccessModeExternal}
+	rec.Access = Access{Mode: fw.AccessModeExternal}
 	retain(t, bus, rec)
 
 	// The default rules of this process know nothing about the member.
@@ -356,7 +358,7 @@ func TestExternalMemberNeedsDecisionPoint(t *testing.T) {
 	}
 	for who, want := range map[string]string{"alice": "owner", "carol": "operator"} {
 		ms, err := custom.f.Members(as(who))
-		var ext *fw.FleetMember
+		var ext *Member
 		for i := range ms {
 			if ms[i].Name == "ext" {
 				ext = &ms[i]
@@ -403,7 +405,7 @@ func TestAuthzUnavailable(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "")
 	bus := fw.NewMemBus()
 	rec := rulesRecord("ext", "")
-	rec.Access = fw.FleetAccess{Mode: fw.AccessModeCustom}
+	rec.Access = Access{Mode: fw.AccessModeCustom}
 	retain(t, bus, rec)
 	authz := fw.AuthzFunc(func(_ context.Context, _ *fw.Principal, _ string, tg fw.Target) error {
 		if tg.Member == "" {
@@ -456,12 +458,12 @@ func TestForward(t *testing.T) {
 	owner := newCapture(t)
 	router := newCapture(t)
 	bus := fw.NewMemBus()
-	retain(t, bus, fw.FleetRecord{Name: "web", URL: owner.srv.URL, Access: fw.FleetAccess{Mode: fw.AccessModeRules}})
-	retain(t, bus, fw.FleetRecord{Name: "team/rev", URL: "ax:team/rev", Access: fw.FleetAccess{Mode: fw.AccessModeRules}})
-	retain(t, bus, fw.FleetRecord{Name: "nourl", Access: fw.FleetAccess{Mode: fw.AccessModeRules}})
-	retain(t, bus, fw.FleetRecord{Name: "trick", URL: "http://x@evil.example/.127.0.0.1:1", Access: fw.FleetAccess{Mode: fw.AccessModeRules}})
-	view := newMember(t, bus, "view", func(c *fw.Config) {
-		c.Fleet.Forward = []string{"http://127.0.0.1:*"}
+	retain(t, bus, Record{Name: "web", URL: owner.srv.URL, Access: Access{Mode: fw.AccessModeRules}})
+	retain(t, bus, Record{Name: "team/rev", URL: "ax:team/rev", Access: Access{Mode: fw.AccessModeRules}})
+	retain(t, bus, Record{Name: "nourl", Access: Access{Mode: fw.AccessModeRules}})
+	retain(t, bus, Record{Name: "trick", URL: "http://x@evil.example/.127.0.0.1:1", Access: Access{Mode: fw.AccessModeRules}})
+	view := newMember(t, bus, "view", func(c *fw.Config, fc *Config) {
+		fc.Forward = []string{"http://127.0.0.1:*"}
 		c.AX.Router = strings.TrimPrefix(router.srv.URL, "http://")
 	})
 	cred := fw.WithCredential(context.Background(), "Bearer tok")
@@ -484,8 +486,8 @@ func TestForward(t *testing.T) {
 	if got.URL.Path != "/v1/runs/r1/approvals/ap1" || got.URL.RawQuery != "x=1" || got.Method != http.MethodPost || body != `{"decision":"allow"}` {
 		t.Fatalf("owner got %s %s?%s %q", got.Method, got.URL.Path, got.URL.RawQuery, body)
 	}
-	if got.Header.Get("Authorization") != "Bearer tok" || got.Header.Get(fw.HeaderFleetVia) != "view" {
-		t.Fatalf("owner got credential %q via %q", got.Header.Get("Authorization"), got.Header.Get(fw.HeaderFleetVia))
+	if got.Header.Get("Authorization") != "Bearer tok" || got.Header.Get(HeaderVia) != "view" {
+		t.Fatalf("owner got credential %q via %q", got.Header.Get("Authorization"), got.Header.Get(HeaderVia))
 	}
 	if got.Header.Get("Idempotency-Key") != "k1" || got.Header.Get("Accept") != "application/json" || got.Header.Get("X-Other") != "" {
 		t.Fatalf("owner got headers %v", got.Header)
@@ -511,14 +513,14 @@ func TestForward(t *testing.T) {
 		{"this member", cred, "view", newReq()},
 		{"member without URL", cred, "nourl", newReq()},
 		{"URL outside the globs", cred, "trick", newReq()},
-		{"a forwarded request", cred, "web", func() *http.Request { r := newReq(); r.Header.Set(fw.HeaderFleetVia, "other"); return r }()},
+		{"a forwarded request", cred, "web", func() *http.Request { r := newReq(); r.Header.Set(HeaderVia, "other"); return r }()},
 	}
 	for _, c := range noRoute {
-		if _, err := view.f.Forward(c.ctx, c.member, c.req); !errors.Is(err, fw.ErrFleetNoRoute) {
+		if _, err := view.f.Forward(c.ctx, c.member, c.req); !errors.Is(err, ErrNoRoute) {
 			t.Errorf("%s: %v", c.name, err)
 		}
 	}
-	if _, err := view.f.Forward(context.Background(), "web", newReq()); !errors.Is(err, fw.ErrFleetNoCredential) {
+	if _, err := view.f.Forward(context.Background(), "web", newReq()); !errors.Is(err, ErrNoCredential) {
 		t.Fatalf("no credential: %v", err)
 	}
 	r, _ := http.NewRequest(http.MethodGet, "/metrics", nil)
@@ -540,7 +542,7 @@ func TestForward(t *testing.T) {
 
 	// Without a glob, an http member is read-only.
 	closed := newMember(t, bus, "closed", nil)
-	if _, err := closed.f.Forward(cred, "web", newReq()); !errors.Is(err, fw.ErrFleetNoRoute) {
+	if _, err := closed.f.Forward(cred, "web", newReq()); !errors.Is(err, ErrNoRoute) {
 		t.Fatalf("no glob: %v", err)
 	}
 }
@@ -567,11 +569,11 @@ func TestGlobMatch(t *testing.T) {
 }
 
 func TestShorten(t *testing.T) {
-	long := strings.Repeat("é", fw.FleetTextLimit) // two bytes each
-	big := `"` + strings.Repeat("x", fw.FleetPendingInputLimit) + `"`
+	long := strings.Repeat("é", TextLimit) // two bytes each
+	big := `"` + strings.Repeat("x", PendingInputLimit) + `"`
 	r := &fw.Run{ID: "r", Input: long, Output: "short", Member: "m", Pending: &fw.Approval{ID: "ap", Input: []byte(big)}}
 	c := shorten(r)
-	if len(c.Input) > fw.FleetTextLimit || !strings.HasSuffix(c.Input, cutMark) || !strings.HasPrefix(c.Input, "éé") {
+	if len(c.Input) > TextLimit || !strings.HasSuffix(c.Input, cutMark) || !strings.HasPrefix(c.Input, "éé") {
 		t.Fatalf("input cut to %d bytes", len(c.Input))
 	}
 	if strings.ContainsRune(c.Input, '�') {
@@ -597,12 +599,12 @@ func TestPickAndFit(t *testing.T) {
 	}
 	runs = append(runs, &fw.Run{ID: "active-old", State: fw.StateRunning, CreatedAt: now.Add(-time.Hour)})
 	kept, omitted := pickRuns(runs)
-	if len(kept) != fw.FleetFinishedRuns+1 || omitted != 10 || kept[len(kept)-1].ID != "active-old" {
+	if len(kept) != FinishedRuns+1 || omitted != 10 || kept[len(kept)-1].ID != "active-old" {
 		t.Fatalf("kept %d, omitted %d", len(kept), omitted)
 	}
 
-	text := strings.Repeat("y", fw.FleetTextLimit)
-	rec := fw.FleetRecord{Name: "m", Access: fw.FleetAccess{Mode: fw.AccessModeRules}}
+	text := strings.Repeat("y", TextLimit)
+	rec := Record{Name: "m", Access: Access{Mode: fw.AccessModeRules}}
 	for i := 0; i < 120; i++ {
 		rec.Runs = append(rec.Runs, &fw.Run{ID: fmt.Sprintf("b%03d", i), State: fw.StateCompleted, Input: text, Output: text, Error: text})
 	}
@@ -611,7 +613,7 @@ func TestPickAndFit(t *testing.T) {
 		t.Fatalf("fit: %v", err)
 	}
 	b, _ := contentKey(rec)
-	if len(b) > fw.FleetRecordLimit {
+	if len(b) > RecordLimit {
 		t.Fatalf("record is %d bytes", len(b))
 	}
 	if rec.Omitted == 0 || rec.Runs[0].ID != "b000" || rec.Runs[len(rec.Runs)-1].ID != "active" {
@@ -633,7 +635,7 @@ func TestRecordCutsLongInput(t *testing.T) {
 		return err == nil
 	})
 	r, _ := beta.f.Run(context.Background(), run.ID)
-	if len(r.Input) > fw.FleetTextLimit || !strings.HasSuffix(r.Input, cutMark) {
+	if len(r.Input) > TextLimit || !strings.HasSuffix(r.Input, cutMark) {
 		t.Fatalf("input is %d bytes", len(r.Input))
 	}
 	local, _ := alpha.a.Get(context.Background(), run.ID)
@@ -693,14 +695,14 @@ func TestStatesAndExpire(t *testing.T) {
 	bus := fw.NewMemBus()
 	now := time.Now().UTC()
 	run := []*fw.Run{{ID: "x1", Agent: "default", State: fw.StateRunning}}
-	retain(t, bus, fw.FleetRecord{Name: "old", Access: fw.FleetAccess{Mode: fw.AccessModeRules, Default: "open"}, Runs: run, UpdatedAt: now.Add(-8 * 24 * time.Hour)})
-	retain(t, bus, fw.FleetRecord{Name: "sleepy", Access: fw.FleetAccess{Mode: fw.AccessModeRules, Default: "open"}, Runs: run, UpdatedAt: now.Add(-time.Hour)})
-	retain(t, bus, fw.FleetRecord{Name: "gone", Access: fw.FleetAccess{Mode: fw.AccessModeRules, Default: "open"}, Runs: run, Stopped: true})
+	retain(t, bus, Record{Name: "old", Access: Access{Mode: fw.AccessModeRules, Default: "open"}, Runs: run, UpdatedAt: now.Add(-8 * 24 * time.Hour)})
+	retain(t, bus, Record{Name: "sleepy", Access: Access{Mode: fw.AccessModeRules, Default: "open"}, Runs: run, UpdatedAt: now.Add(-time.Hour)})
+	retain(t, bus, Record{Name: "gone", Access: Access{Mode: fw.AccessModeRules, Default: "open"}, Runs: run, Stopped: true})
 	// A member with a long interval of its own stays live for three of its
 	// intervals, whatever the interval of the view.
-	retain(t, bus, fw.FleetRecord{Name: "slow", Interval: time.Hour, Access: fw.FleetAccess{Mode: fw.AccessModeRules, Default: "open"}, Runs: run, UpdatedAt: now.Add(-time.Hour)})
+	retain(t, bus, Record{Name: "slow", Interval: time.Hour, Access: Access{Mode: fw.AccessModeRules, Default: "open"}, Runs: run, UpdatedAt: now.Add(-time.Hour)})
 	// A long interval keeps a member live for three minutes.
-	view := newMember(t, bus, "view", func(c *fw.Config) { c.Fleet.Interval = time.Minute })
+	view := newMember(t, bus, "view", func(_ *fw.Config, fc *Config) { fc.Interval = time.Minute })
 	states := func() map[string]string {
 		ms, err := view.f.Members(context.Background())
 		if err != nil {
@@ -713,36 +715,57 @@ func TestStatesAndExpire(t *testing.T) {
 		return out
 	}
 	got := states()
-	if len(got) != 3 || got["sleepy"] != fw.MemberQuiet || got["gone"] != fw.MemberStopped || got["slow"] != fw.MemberLive {
+	if len(got) != 3 || got["sleepy"] != MemberQuiet || got["gone"] != MemberStopped || got["slow"] != MemberLive {
 		t.Fatalf("states = %v", got)
 	}
 	// A heartbeat brings an old member back.
-	if err := bus.Retain(context.Background(), fw.FleetAliveSubject(subj, "old"), fw.MustEvent("old", fw.EvFleetAlive, fw.FleetAlive{Name: "old", At: time.Now().UTC()})); err != nil {
+	if err := bus.Retain(context.Background(), AliveSubject(subj, "old"), fw.MustEvent("old", EvAlive, Alive{Name: "old", At: time.Now().UTC()})); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the old member is live again", func() bool { return states()["old"] == fw.MemberLive })
+	eventually(t, "the old member is live again", func() bool { return states()["old"] == MemberLive })
 }
 
+// TestCloseSendsStopped starts alpha as the kernel does, through the service
+// Start, so the close of the agent stops the fleet and sends the last
+// record.
 func TestCloseSendsStopped(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "")
+	t.Setenv(EnvSubject, subj)
+	t.Setenv(EnvName, "alpha")
+	t.Setenv(EnvInterval, "40ms")
 	bus := fw.NewMemBus()
-	alpha := newMember(t, bus, "alpha", nil)
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	cfg.Agents = map[string]fw.AgentProfile{"default": {}}
+	alpha, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(fw.NoAuthn{}),
+		fw.WithModel(textModel("done")), fw.WithLedger(fw.NewMemLedger()), fw.WithBus(bus),
+		fw.WithLogger(quietLogger()), fw.WithServices(Start))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	f, ok := Of(alpha).(*Fleet)
+	if !ok || f == nil || f.Name() != "alpha" {
+		t.Fatalf("the service attached %T", Of(alpha))
+	}
 	beta := newMember(t, bus, "beta", nil)
 	eventually(t, "beta sees alpha", func() bool {
 		ms, err := beta.f.Members(context.Background())
-		return err == nil && len(ms) == 2 && ms[1].State == fw.MemberLive
+		return err == nil && len(ms) == 2 && ms[1].State == MemberLive
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	alpha.a.Close(ctx)
+	alpha.Close(ctx)
 	eventually(t, "alpha is stopped", func() bool {
 		ms, err := beta.f.Members(context.Background())
-		return err == nil && len(ms) == 2 && ms[1].State == fw.MemberStopped
+		return err == nil && len(ms) == 2 && ms[1].State == MemberStopped
 	})
-	if err := alpha.f.Close(); err != nil {
+	if Of(alpha) != nil {
+		t.Fatal("the service left its view attached")
+	}
+	if err := f.Close(); err != nil {
 		t.Fatalf("a second Close: %v", err)
 	}
-	if _, err := alpha.f.Runs(context.Background()); err == nil {
+	if _, err := f.Runs(context.Background()); err == nil {
 		t.Fatal("a closed fleet started its view")
 	}
 }
@@ -752,21 +775,36 @@ func TestMemberName(t *testing.T) {
 	if host == "" {
 		host = "fw"
 	}
-	if got := memberName("", ":8080"); got != host+":8080" {
-		t.Fatalf("memberName = %q", got)
+	cfg := fw.DefaultConfig()
+	cfg.Listen = ":8080"
+	if got, _ := defaults("", "", cfg); got != host+":8080" {
+		t.Fatalf("default name = %q", got)
 	}
-	if got := memberName(" team/rev ", ":80"); got != "team/rev" {
-		t.Fatalf("memberName = %q", got)
+	if got, u := defaults("team/rev", "", cfg); got != "team/rev" || u != "" {
+		t.Fatalf("given name = %q, url %q", got, u)
 	}
-	if got := memberName("", ""); got != host {
-		t.Fatalf("memberName = %q", got)
+	cfg.Listen = ""
+	if got, _ := defaults("", "", cfg); got != host {
+		t.Fatalf("default name without a port = %q", got)
+	}
+	// The variables win over the file, and a bad value is an error.
+	t.Setenv(EnvSubject, "fw.lab")
+	t.Setenv(EnvName, "me")
+	t.Setenv(EnvInterval, "5s")
+	c, err := Load(fw.DefaultConfig())
+	if err != nil || c.Subject != "fw.lab" || c.Name != "me" || c.Interval != 5*time.Second || c.Expire != DefaultExpire {
+		t.Fatalf("Load = %+v, %v", c, err)
+	}
+	t.Setenv(EnvURL, "ftp://x")
+	if _, err := Load(fw.DefaultConfig()); err == nil || !strings.Contains(err.Error(), "workbench.fleet.url") {
+		t.Fatalf("a bad URL = %v", err)
 	}
 }
 
 func TestRecordAccess(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "team")
 	bus := fw.NewMemBus()
-	alpha := newMember(t, bus, "alpha", func(c *fw.Config) {
+	alpha := newMember(t, bus, "alpha", func(c *fw.Config, _ *Config) {
 		c.Access.Default = " Closed "
 		c.Access.Admins = []string{"root"}
 		c.Agents = map[string]fw.AgentProfile{"rev": {Description: "reviews", Access: &fw.Access{Owners: []string{"alice"}}}}
@@ -793,8 +831,8 @@ func TestRecordAccess(t *testing.T) {
 func TestFrontWithoutAgentsStaysOutOfSight(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "")
 	bus := fw.NewMemBus()
-	front := newMember(t, bus, "front-1", func(c *fw.Config) { c.Agents = map[string]fw.AgentProfile{} })
-	view := newMember(t, bus, "view", func(c *fw.Config) {
+	front := newMember(t, bus, "front-1", func(c *fw.Config, _ *Config) { c.Agents = map[string]fw.AgentProfile{} })
+	view := newMember(t, bus, "view", func(c *fw.Config, _ *Config) {
 		c.Agents = map[string]fw.AgentProfile{"reviewer": {Description: "Reviews"}}
 	})
 	eventually(t, "the view hears the front", func() bool {
@@ -831,7 +869,7 @@ func (s slowBus) Retain(ctx context.Context, _ string, _ fw.Event) error {
 func TestStartDoesNotWaitForTheBus(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "")
 	start := time.Now()
-	newMember(t, slowBus{fw.NewMemBus()}, "slow", func(c *fw.Config) { c.Fleet.Interval = time.Second })
+	newMember(t, slowBus{fw.NewMemBus()}, "slow", func(_ *fw.Config, fc *Config) { fc.Interval = time.Second })
 	if d := time.Since(start); d > 500*time.Millisecond {
 		t.Fatalf("New took %v with a bus that hangs", d)
 	}
@@ -841,8 +879,8 @@ func TestViewWaitsForANewRun(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "")
 	bus := fw.NewMemBus()
 	// A long interval, so only the publish of the change can name the run.
-	owner := newMember(t, bus, "owner", func(c *fw.Config) { c.Fleet.Interval = time.Minute })
-	view := newMember(t, bus, "view", func(c *fw.Config) { c.Fleet.Interval = time.Minute })
+	owner := newMember(t, bus, "owner", func(_ *fw.Config, fc *Config) { fc.Interval = time.Minute })
+	view := newMember(t, bus, "view", func(_ *fw.Config, fc *Config) { fc.Interval = time.Minute })
 	if _, err := view.f.Members(context.Background()); err != nil {
 		t.Fatal(err)
 	}

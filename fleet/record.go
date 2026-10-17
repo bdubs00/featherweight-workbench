@@ -17,15 +17,15 @@ const cutMark = "…"
 // record builds the record of this process. It reads the runs and the
 // profiles with no principal, so it sees all of them. The kernel returns
 // copies, and record changes only its own copies.
-func (f *Fleet) record() (fw.FleetRecord, error) {
+func (f *Fleet) record() (Record, error) {
 	cfg := f.a.Config()
-	rec := fw.FleetRecord{
-		Version:  fw.FleetVersion,
+	rec := Record{
+		Version:  Version,
 		Name:     f.name,
 		URL:      f.url,
 		Atespace: f.atespace,
 		Interval: f.interval,
-		Access:   fw.FleetAccess{Mode: f.a.AccessMode()},
+		Access:   Access{Mode: f.a.AccessMode()},
 	}
 	if rec.Access.Mode == fw.AccessModeRules {
 		rec.Access.Default = "open"
@@ -40,9 +40,9 @@ func (f *Fleet) record() (fw.FleetRecord, error) {
 	if err != nil {
 		return rec, err
 	}
-	rec.Agents = make([]fw.FleetAgent, 0, len(profiles))
+	rec.Agents = make([]RecordAgent, 0, len(profiles))
 	for _, p := range profiles {
-		rec.Agents = append(rec.Agents, fw.FleetAgent{Name: p.Name, Description: p.Description, Access: p.Access, Teams: teams.OfAgent(teams.Patterns(f.a.Config()), p.Access)})
+		rec.Agents = append(rec.Agents, RecordAgent{Name: p.Name, Description: p.Description, Access: p.Access, Teams: teams.OfAgent(teams.Patterns(f.a.Config()), p.Access)})
 	}
 	runs, err := f.a.List(bg)
 	if err != nil {
@@ -63,7 +63,7 @@ func pickRuns(runs []*fw.Run) ([]*fw.Run, int) {
 	finished, omitted := 0, 0
 	for _, r := range runs {
 		if r.State.Terminal() {
-			if finished >= fw.FleetFinishedRuns {
+			if finished >= FinishedRuns {
 				omitted++
 				continue
 			}
@@ -74,18 +74,18 @@ func pickRuns(runs []*fw.Run) ([]*fw.Run, int) {
 	return out, omitted
 }
 
-// shorten returns a copy of a run with its texts cut to fw.FleetTextLimit
+// shorten returns a copy of a run with its texts cut to TextLimit
 // and without the input of a pending call that is larger than
-// fw.FleetPendingInputLimit.
+// PendingInputLimit.
 func shorten(r *fw.Run) *fw.Run {
 	c := *r
-	c.Input = cut(c.Input, fw.FleetTextLimit)
-	c.Output = cut(c.Output, fw.FleetTextLimit)
-	c.Error = cut(c.Error, fw.FleetTextLimit)
+	c.Input = cut(c.Input, TextLimit)
+	c.Output = cut(c.Output, TextLimit)
+	c.Error = cut(c.Error, TextLimit)
 	c.Member = ""
 	if r.Pending != nil {
 		p := *r.Pending
-		if len(p.Input) > fw.FleetPendingInputLimit {
+		if len(p.Input) > PendingInputLimit {
 			p.Input = nil
 		}
 		c.Pending = &p
@@ -109,16 +109,16 @@ func cut(s string, n int) string {
 	return s[:i] + cutMark
 }
 
-// fit drops runs until the record is at most fw.FleetRecordLimit bytes:
+// fit drops runs until the record is at most RecordLimit bytes:
 // the oldest finished runs first, then the oldest runs of any state. Each
 // dropped run counts in Omitted.
-func fit(rec *fw.FleetRecord) error {
+func fit(rec *Record) error {
 	for {
 		b, err := json.Marshal(rec)
 		if err != nil {
 			return fmt.Errorf("fleet: encode the record: %w", err)
 		}
-		if len(b) <= fw.FleetRecordLimit || len(rec.Runs) == 0 {
+		if len(b) <= RecordLimit || len(rec.Runs) == 0 {
 			return nil
 		}
 		drop := len(rec.Runs) - 1

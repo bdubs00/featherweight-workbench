@@ -8,7 +8,7 @@ The kernel is a separate repository, featherweight-kernel. Its document `docs/AR
 
 ### 1.1 How the workbench builds on the kernel
 
-The workbench changes no kernel code. It plugs in through six extension points of the kernel:
+The workbench changes no kernel code. It plugs in through the extension points of the kernel:
 
 - `native.Extend` adds routes to the native surface of the kernel, on the same listener and behind the same authentication. The package `surface/web` registers one extension in `init`. Its routes get a `*native.Kit`, so they answer errors and forward the runs of other fleet members as the run routes do.
 - `fw.RegisterDefaults` changes the default configuration in `init`. The package `surface/mcp` adds `mcp` to `surfaces`, and the package `tools/builder` adds `propose_agent` to the built-in tools. A file or a variable still overrides each default.
@@ -16,6 +16,7 @@ The workbench changes no kernel code. It plugs in through six extension points o
 - `fw.RegisterExtension` claims a top-level block of `fw.yaml` for the workbench. The package `teams` claims the block `workbench`, and `fw.Config.Extension` decodes it (section 8).
 - `fw.RegisterRunAnnotator` adds metadata to every run that the kernel queues. The package `teams` records the teams of the person who starts a run this way (section 8).
 - `fw.Agent.SetProfiles` replaces the profiles of the kernel at runtime, and `cli.AgentsPut` and `cli.AgentsDelete` give the verb `agents` its writes. The package `agents` uses them (section 10).
+- `fw.RegisterService` runs work beside the agent for as long as it lives, `Kit.SetRelay` of the native surface answers a request about a run of another process, `metrics.RegisterCollector` adds series to the metrics surface, and `cli.RegisterDoctorCheck` adds a line to `fw doctor`. The package `fleet` uses all four (section 4).
 
 Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `authn/oidc` registers the mode `oidc`, `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary.
 
@@ -210,7 +211,7 @@ A fleet is not a set of replicas. Replicas of one agent share one ledger and ser
 
 ### 4.1 The member record
 
-Each member has a name and a URL. Under ax, the name is `<atespace>/<task>` and the URL is `ax:<atespace>/<task>`. Elsewhere, the name is `<host>:<port>`, and the URL is empty until `fleet.url` sets it. A member without a URL is read-only to the other members. The name must be unique in the fleet.
+Each member has a name and a URL. Under ax, the name is `<atespace>/<task>` and the URL is `ax:<atespace>/<task>`. Elsewhere, the name is `<host>:<port>`, and the URL is empty until `workbench.fleet.url` sets it. A member without a URL is read-only to the other members. The name must be unique in the fleet.
 
 The record of a member holds these facts:
 
@@ -223,7 +224,7 @@ A process that configures no agent profile offers no agent to the fleet. A front
 
 The run objects in a record are short. The input, the output, and the error of a run are cut to 2 KB. If the input of a pending tool call is larger than 4 KB, the record leaves it out. A record is at most 512 KB, and the oldest finished runs are left out first. When a person opens a run of another member, the view reads the full run from its owner.
 
-A member publishes its record to `<fleet.subject>.members.<token>`. The token is the name with each character other than a letter, a digit, `-`, or `_` changed to `_`. One second after an event that changes a run object, the member publishes again. Such events are a new run, an approval request, a decision, the end of a turn, and the end of a run. Every `fleet.interval`, the member builds a fresh record and compares it with the last one. If the two differ, for example after a profile change, it publishes the record. Otherwise it publishes a heartbeat to `<fleet.subject>.alive.<token>`. When the process stops on `SIGTERM`, it publishes a last record with `stopped: true`.
+A member publishes its record to `<subject>.members.<token>`. The token is the name with each character other than a letter, a digit, `-`, or `_` changed to `_`. One second after an event that changes a run object, the member publishes again. Such events are a new run, an approval request, a decision, the end of a turn, and the end of a run. Every interval, the member builds a fresh record and compares it with the last one. If the two differ, for example after a profile change, it publishes the record. Otherwise it publishes a heartbeat to `<subject>.alive.<token>`. When the process stops on `SIGTERM`, it publishes a last record with `stopped: true`.
 
 ### 4.2 Retained subjects
 
@@ -231,7 +232,7 @@ The bus keeps the last record of each member. A member that starts later therefo
 
 ### 4.3 The view
 
-A member starts its view at the first request that needs the fleet. The view watches both subjects and reads the retained records. A member that never serves such a request spends no work on the view. A scrape of `/metrics` is such a request, because the fleet gauges read the view (the kernel architecture, section 10.1). The first scrape therefore starts the view, and it can wait up to 2 s for the retained records. The view gives each member one of three states. A member that published within three of its intervals is `live`. A member that did not is `quiet`, and a member that sent a last record is `stopped`. Under ax, a quiet member is usually a Task that sleeps. The view ignores a record that is older than `fleet.expire`.
+A member starts its view at the first request that needs the fleet. The view watches both subjects and reads the retained records. A member that never serves such a request spends no work on the view. A scrape of `/metrics` is such a request, because the fleet gauges read the view (the kernel architecture, section 10.1). The first scrape therefore starts the view, and it can wait up to 2 s for the retained records. The view gives each member one of three states. A member that published within three of its intervals is `live`. A member that did not is `quiet`, and a member that sent a last record is `stopped`. Under ax, a quiet member is usually a Task that sleeps. The view ignores a record that is older than `workbench.fleet.expire`.
 
 ### 4.4 Who sees what
 
@@ -249,39 +250,42 @@ Run ids are unique across the fleet. A request can name a run that the process d
 The forwarded request carries the bearer credential of the caller. The owner authenticates the caller again and authorizes the action in its kernel. The view therefore never acts under an identity of its own, and the owner records the real decider in its ledger. A credential goes to two kinds of address only:
 
 - An ax address, through the router at `ax.router` with the header `ate-target-actor`. The router wakes a Task that sleeps, so an approval reaches a sleeping member.
-- A URL that matches a glob in `fleet.forward`. In such a glob, `*` matches any text without a slash. The glob matches the scheme, the host, and the path of the URL. A URL with user information, a query, or a fragment never receives a credential.
+- A URL that matches a glob in `workbench.fleet.forward`. In such a glob, `*` matches any text without a slash. The glob matches the scheme, the host, and the path of the URL. A URL with user information, a query, or a fragment never receives a credential.
 
-A record therefore cannot send a credential to any other address. For the owner to accept the credential, both members trust the same issuer and the same `auth.oidc.audience`, or share the static token. A caller with an X.509 client certificate, or over stdio, carries no bearer credential. Such a caller sees the fleet but acts only on the runs of the member that it reached. If the owner refuses the credential, the view answers 403, and if the owner does not answer, the view answers 502. A forwarded request carries the header `Fw-Fleet-Via` with the name of the view. A member never forwards such a request again, so a stale record cannot cause a loop.
+A record therefore cannot send a credential to any other address. The relay of the native surface, which the package registers with `Kit.SetRelay`, does the forwarding for the run routes of the kernel, and the MCP server does it for its work tools. For the owner to accept the credential, both members trust the same issuer and the same `auth.oidc.audience`, or share the static token. A caller with an X.509 client certificate, or over stdio, carries no bearer credential. Such a caller sees the fleet but acts only on the runs of the member that it reached. If the owner refuses the credential, the view answers 403, and if the owner does not answer, the view answers 502. A forwarded request carries the header `Fw-Fleet-Via` with the name of the view. A member never forwards such a request again, so a stale record cannot cause a loop.
 
 ### 4.6 Configuration
 
+The fleet reads the block `fleet` under the key `workbench` of `fw.yaml`, which the workbench claims (section 8). Each variable wins over the file.
+
 | Key | Variable | Meaning | Default |
 |---|---|---|---|
-| `fleet.subject` | `FW_FLEET_SUBJECT` | The subject prefix of the fleet. Empty turns the fleet off. | empty |
-| `fleet.name` | `FW_FLEET_NAME` | The name of this member | `<atespace>/<task>` under ax, else `<host>:<port>` |
-| `fleet.url` | `FW_FLEET_URL` | The address where other members reach this one | `ax:<atespace>/<task>` under ax, else empty |
-| `fleet.forward` | `FW_FLEET_FORWARD` | Globs over the URLs that can receive the credential of a caller | empty |
-| `fleet.interval` | `FW_FLEET_INTERVAL` | The time between two heartbeats | `30s` |
-| `fleet.expire` | `FW_FLEET_EXPIRE` | The age after which the view ignores a record | `168h` |
+| `workbench.fleet.subject` | `FW_WORKBENCH_FLEET_SUBJECT` | The subject prefix of the fleet. Empty turns the fleet off. | empty |
+| `workbench.fleet.name` | `FW_WORKBENCH_FLEET_NAME` | The name of this member | `<atespace>/<task>` under ax, else `<host>:<port>` |
+| `workbench.fleet.url` | `FW_WORKBENCH_FLEET_URL` | The address where other members reach this one | `ax:<atespace>/<task>` under ax, else empty |
+| `workbench.fleet.forward` | `FW_WORKBENCH_FLEET_FORWARD` | Globs over the URLs that can receive the credential of a caller, with commas between them | empty |
+| `workbench.fleet.interval` | `FW_WORKBENCH_FLEET_INTERVAL` | The time between two heartbeats | `30s` |
+| `workbench.fleet.expire` | `FW_WORKBENCH_FLEET_EXPIRE` | The age after which the view ignores a record | `168h` |
 
-Under ax, three variables on each Task make a fleet: `FW_BUS_DRIVER=nats`, `FW_BUS_URL`, and `FW_FLEET_SUBJECT=fw.fleet`. Outside ax, each member also sets `fleet.url`, and each member that serves a view sets `fleet.forward`:
+Under ax, three variables on each Task make a fleet: `FW_BUS_DRIVER=nats`, `FW_BUS_URL`, and `FW_WORKBENCH_FLEET_SUBJECT=fw.fleet`. Outside ax, each member also sets the URL, and each member that serves a view sets the forward globs:
 
 ```yaml
 bus: { driver: nats, url: "nats://nats.agents.svc:4222" }
-fleet:
-  subject: fw.fleet
-  url: "http://reviewer.agents.svc:8080"
-  forward: ["http://*.agents.svc:8080"]
+workbench:
+  fleet:
+    subject: fw.fleet
+    url: "http://reviewer.agents.svc:8080"
+    forward: ["http://*.agents.svc:8080"]
 ```
 
-The commands that do not serve, for example `fw-workbench run`, `fw-workbench mcp`, and `fw-workbench agents`, turn the fleet off.
+The fleet is a service of the kernel (`fw.RegisterService`), and the commands that do not serve, for example `fw-workbench run`, `fw-workbench mcp`, and `fw-workbench agents`, start no service, so they never join a fleet. `fw-workbench doctor` has a line about the fleet.
 
 The directory `examples/agentgateway` puts a fleet behind agentgateway on one public URL. Its README lists the rules that keep the dashboard and the login working through the gateway.
 
 ### 4.7 Surfaces
 
-- The native API serves `GET /v1/fleet`. It lists the members that the caller can see. Each member has its state, the agents that the caller can see, and its counts of active runs and of runs that wait for input. `GET /v1/runs` lists the runs of the whole fleet, and `?scope=local` lists the runs of this process only. Each run of another member carries the field `member`.
-- The MCP server adds the tool `fleet`, and `runs_list` takes the arguments `scope` and `member`.
+- The native API serves `GET /v1/fleet`. It lists the members that the caller can see. Each member has its state, the agents that the caller can see, and its counts of active runs and of runs that wait for input. `GET /v1/fleet/runs` lists the runs of the whole fleet in the shape of `GET /v1/runs` of the kernel, which covers this process only. Its parameter `scope` is `fleet`, the default, or `local`, `member` narrows the list to one member, and `parent` lists the children of a run of any member. `agent`, `state`, `principal`, and `limit` narrow it as on `GET /v1/runs`. Each run of another member carries the field `member`. `POST /v1/runs?member=<name>` starts a run on that member.
+- The MCP server adds the tool `fleet`, and `runs_list` takes the arguments `scope` and `member`: the scope `fleet`, the default, covers every member, and `local` covers this process only.
 - The home of the dashboard lists the work of the whole fleet that the caller can see. The Agents place groups the agents by member, and the Operator view lists the members (section 6.2). Approve, deny, cancel, and a follow-up work in the same way on every run.
 
 The A2A server and the MCP resources `fw://runs/{id}`, `fw://runs/{id}/ledger`, and `fw://runs/{id}/files/{+path}` serve the runs of their own process only.
@@ -498,7 +502,6 @@ To follow a run to its result:
 
 The split did not change the contract of the package `fw`. That contract still holds the hooks that the workbench drivers plug into:
 
-- The fleet: `fw.Fleet`, `fw.FleetConfig`, `fw.RegisterFleet`, `fw.WithFleet`, `Agent.Fleet`, and `fw.Retainer`. The native surface of the kernel forwards a request about a run of another member, and its metrics surface reports the fleet gauges.
 - The connections: `fw.GrantStore`, `fw.Connection`, `fw.ConnectStart`, `fw.Connector`, `fw.ConnectRequest`, and `fw.RequestConnect`. `Agent` holds the methods `Connections`, `BeginConnect`, `FinishConnect`, `Disconnect`, and `Grants`. The MCP client of the kernel, `tools/mcp`, still acts for a person (the kernel architecture, section 7.11).
 - The configuration blocks that the workbench reads: `mcp`, `fleet`, and `auth.oidc`.
 

@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -39,7 +40,7 @@ var workTools = map[string]bool{
 // tool, a management tool, the fleet tool when the fleet is on, or a
 // connection tool when a tool source acts for a person.
 func (s *server) reserved(name string) bool {
-	return workTools[name] || (name == toolFleet && s.a.Fleet() != nil) ||
+	return workTools[name] || (name == toolFleet && fleet.Of(s.a) != nil) ||
 		((name == toolConnections || name == toolDisconnect) && len(s.a.Connectors()) > 0)
 }
 
@@ -129,7 +130,7 @@ func runSchema(a *fw.Agent) json.RawMessage {
 		},
 		"required": []string{"input"},
 	}
-	if f := a.Fleet(); f != nil {
+	if f := fleet.Of(a); f != nil {
 		props := schema["properties"].(map[string]any)
 		props["member"] = map[string]any{"type": "string",
 			"description": "The fleet member that runs the agent; the fleet tool lists the members and their agents. Empty, or " + f.Name() + ", runs it here. A run on another member never waits: the call returns the run object at once."}
@@ -367,7 +368,7 @@ func (s *server) run(ctx context.Context, req *sdk.CallToolRequest, in runArgs) 
 	}
 	in.Metadata = md
 	if member := strings.TrimSpace(in.Member); member != "" {
-		f := s.a.Fleet()
+		f := fleet.Of(s.a)
 		if f == nil {
 			return failResult(errFleetOff), nil, nil
 		}

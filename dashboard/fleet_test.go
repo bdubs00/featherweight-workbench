@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
 // stubFleet is a fleet with fixed runs of another member.
@@ -19,7 +20,7 @@ type stubFleet struct {
 
 func (stubFleet) Name() string { return "here" }
 
-func (stubFleet) Members(context.Context) ([]fw.FleetMember, error) { return nil, nil }
+func (stubFleet) Members(context.Context) ([]fleet.Member, error) { return nil, nil }
 
 func (s stubFleet) Runs(context.Context) ([]*fw.Run, error) { return s.runs, s.err }
 
@@ -33,7 +34,7 @@ func (s stubFleet) Run(_ context.Context, id string) (*fw.Run, error) {
 }
 
 func (stubFleet) Forward(context.Context, string, *http.Request) (*http.Response, error) {
-	return nil, fw.ErrFleetNoRoute
+	return nil, fleet.ErrNoRoute
 }
 
 func ids(runs []*fw.Run) string {
@@ -45,10 +46,10 @@ func ids(runs []*fw.Run) string {
 }
 
 func TestMembersText(t *testing.T) {
-	text := MembersText("here", []fw.FleetMember{
-		{Name: "here", Self: true, State: fw.MemberLive, AccessMode: fw.AccessModeRules, Agents: []fw.FleetAgent{{Name: "reviewer", Role: "owner"}}, Active: 1},
-		{Name: "there", State: fw.MemberQuiet, LastSeen: time.Now().Add(-3 * time.Minute), AccessMode: fw.AccessModeExternal, CanForward: true, Agents: []fw.FleetAgent{{Name: "deployer", Role: "operator"}}, InputRequired: 2},
-		{Name: "far", State: fw.MemberStopped, LastSeen: time.Now().Add(-50 * time.Hour)},
+	text := MembersText("here", []fleet.Member{
+		{Name: "here", Self: true, State: fleet.MemberLive, AccessMode: fw.AccessModeRules, Agents: []fleet.RecordAgent{{Name: "reviewer", Role: "owner"}}, Active: 1},
+		{Name: "there", State: fleet.MemberQuiet, LastSeen: time.Now().Add(-3 * time.Minute), AccessMode: fw.AccessModeExternal, CanForward: true, Agents: []fleet.RecordAgent{{Name: "deployer", Role: "operator"}}, InputRequired: 2},
+		{Name: "far", State: fleet.MemberStopped, LastSeen: time.Now().Add(-50 * time.Hour)},
 	})
 	for _, want := range []string{
 		"This process is the fleet member here.",

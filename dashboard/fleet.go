@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
 // MembersText describes the members of a fleet, one line each. Name is the
 // name of this process.
-func MembersText(name string, members []fw.FleetMember) string {
+func MembersText(name string, members []fleet.Member) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "This process is the fleet member %s.", name)
 	if len(members) == 0 {
@@ -31,7 +31,7 @@ func MembersText(name string, members []fw.FleetMember) string {
 // MemberLine is one member on one line: its state, when it was last heard,
 // its authorization mode, its agents with the role of the caller, its runs,
 // and whether this process can act on its runs.
-func MemberLine(m fw.FleetMember) string {
+func MemberLine(m fleet.Member) string {
 	var b strings.Builder
 	b.WriteString("- " + m.Name)
 	if m.Self {

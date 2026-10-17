@@ -43,7 +43,7 @@ func (s *server) usage(w http.ResponseWriter, r *http.Request) {
 // and the recent results, from the runs of the whole fleet that the caller
 // can view.
 func (s *server) home(w http.ResponseWriter, r *http.Request) {
-	runs, err := view.Runs(r.Context(), s.a, "", "")
+	runs, err := dashboard.Runs(r.Context(), s.a, "", "")
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -80,7 +80,7 @@ const othersLimit = 200
 // outside the teams of the caller, newest first, at most othersLimit, as
 // {"runs": [...]}. The page groups them by person behind one row of home.
 func (s *server) others(w http.ResponseWriter, r *http.Request) {
-	runs, err := view.Runs(r.Context(), s.a, "", "")
+	runs, err := dashboard.Runs(r.Context(), s.a, "", "")
 	if err != nil {
 		s.fail(w, r, err)
 		return

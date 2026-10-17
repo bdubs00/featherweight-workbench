@@ -1,22 +1,31 @@
 package web
 
-// This file serves GET /v1/fleet, the members of the fleet
-// (docs/ARCHITECTURE.md, the fleet). The native surface of the kernel
-// forwards a request about a run that another member owns, and starts a run
-// on another member with POST /v1/runs?member=<name>.
+// This file serves GET /v1/fleet, the members of the fleet, and
+// GET /v1/fleet/runs, the runs of the whole fleet (docs/ARCHITECTURE.md,
+// section 4.7). The relay of the fleet answers a request about a run that
+// another member owns through the native surface of the kernel, and starts
+// a run on another member with POST /v1/runs?member=<name>.
 
 import (
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/surface/view"
+	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 )
+
+// fleetOff is the problem detail of a fleet route without a fleet.
+const fleetOff = "the fleet is off; set workbench.fleet.subject (FW_WORKBENCH_FLEET_SUBJECT) to turn it on"
 
 // fleet answers GET /v1/fleet with the name of this member and the members
 // that the caller can see.
 func (s *server) fleet(w http.ResponseWriter, r *http.Request) {
-	f := s.a.Fleet()
+	f := fleet.Of(s.a)
 	if f == nil {
-		problem(w, r, http.StatusNotFound, "the fleet is off; set fleet.subject (FW_FLEET_SUBJECT) to turn it on")
+		problem(w, r, http.StatusNotFound, fleetOff)
 		return
 	}
 	members, err := f.Members(r.Context())
@@ -25,7 +34,47 @@ func (s *server) fleet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if members == nil {
-		members = []fw.FleetMember{}
+		members = []fleet.Member{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"name": f.Name(), "members": members})
+}
+
+// fleetRuns answers GET /v1/fleet/runs with the runs of the whole fleet that
+// the caller can see, in the shape of GET /v1/runs of the kernel. The query
+// parameter scope is fleet, the default, or local. The parameter member
+// narrows the list to one member, and parent lists the children of a run of
+// any member. The parameters agent, state, principal, and limit narrow the
+// list as on GET /v1/runs.
+func (s *server) fleetRuns(w http.ResponseWriter, r *http.Request) {
+	if fleet.Of(s.a) == nil {
+		problem(w, r, http.StatusNotFound, fleetOff)
+		return
+	}
+	q := r.URL.Query()
+	limit := 0
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			problem(w, r, http.StatusBadRequest, "the query parameter limit must be a positive number")
+			return
+		}
+		limit = n
+	}
+	var runs []*fw.Run
+	var err error
+	if parent := q.Get("parent"); parent != "" {
+		runs, err = dashboard.Children(r.Context(), s.a, parent)
+	} else {
+		runs, err = dashboard.Runs(r.Context(), s.a, q.Get("scope"), q.Get("member"))
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	matched := view.Filter(runs, q.Get("agent"), q.Get("state"), q.Get("principal"), 0)
+	glance, total := view.GlanceOf(matched, time.Now()), len(matched)
+	if limit > 0 && len(matched) > limit {
+		matched = matched[:limit]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": matched, "total": total, "glance": glance})
 }

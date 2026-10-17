@@ -13,7 +13,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/metrics"
-	_ "github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
 func newAgent(t *testing.T, cfg *fw.Config, s fw.Surface, opts ...fw.Option) *fw.Agent {
@@ -61,10 +61,10 @@ func scrape(t *testing.T, h http.Handler, path string) (int, string) {
 
 // retain puts the record of another fleet member on the bus, as that member
 // would publish it.
-func retain(t *testing.T, bus fw.Retainer, subject string, rec fw.FleetRecord) {
+func retain(t *testing.T, bus fw.Retainer, subject string, rec fleet.Record) {
 	t.Helper()
-	rec.Version = fw.FleetVersion
-	if err := bus.Retain(context.Background(), fw.FleetRecordSubject(subject, rec.Name), fw.MustEvent(rec.Name, fw.EvFleetRecord, rec)); err != nil {
+	rec.Version = fleet.Version
+	if err := bus.Retain(context.Background(), fleet.RecordSubject(subject, rec.Name), fw.MustEvent(rec.Name, fleet.EvRecord, rec)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -77,10 +77,10 @@ func TestFleetGauges(t *testing.T) {
 	bus := fw.NewMemBus()
 	now := time.Now().UTC()
 	asked := now.Add(-2 * time.Hour)
-	retain(t, bus, subject, fw.FleetRecord{
+	retain(t, bus, subject, fleet.Record{
 		Name: "default/reviewer", URL: "ax:default/reviewer", Interval: time.Second,
-		Access:    fw.FleetAccess{Mode: fw.AccessModeRules, Default: "private"},
-		Agents:    []fw.FleetAgent{{Name: "reviewer"}},
+		Access:    fleet.Access{Mode: fw.AccessModeRules, Default: "private"},
+		Agents:    []fleet.RecordAgent{{Name: "reviewer"}},
 		UpdatedAt: now.Add(-time.Hour), // a Task that sleeps
 		Runs: []*fw.Run{
 			{ID: "01RUNNING", Agent: "reviewer", State: fw.StateRunning, Principal: "alice@example.com", CreatedAt: now},
@@ -89,19 +89,21 @@ func TestFleetGauges(t *testing.T) {
 			{ID: "01DONE", Agent: "reviewer", State: fw.StateCompleted, CreatedAt: now},
 		},
 	})
-	retain(t, bus, subject, fw.FleetRecord{
+	retain(t, bus, subject, fleet.Record{
 		Name: "builder", URL: "http://builder:8080", Interval: time.Hour,
-		Access:    fw.FleetAccess{Mode: fw.AccessModeExternal},
-		Agents:    []fw.FleetAgent{{Name: "builder"}},
+		Access:    fleet.Access{Mode: fw.AccessModeExternal},
+		Agents:    []fleet.RecordAgent{{Name: "builder"}},
 		UpdatedAt: now,
 		Runs:      []*fw.Run{{ID: "01QUEUED", Agent: "builder", State: fw.StateQueued, CreatedAt: now}},
 	})
 	cfg := fw.DefaultConfig()
 	cfg.Home = t.TempDir()
-	cfg.Fleet.Subject = subject
-	cfg.Fleet.Name = "front"
-	a := newAgent(t, cfg, metrics.New(), fw.WithBus(bus))
-	if a.Fleet() == nil {
+	// The agent passes WithoutDefaults, so the test starts the service of the
+	// fleet itself, from the variables.
+	t.Setenv(fleet.EnvSubject, subject)
+	t.Setenv(fleet.EnvName, "front")
+	a := newAgent(t, cfg, metrics.New(), fw.WithBus(bus), fw.WithServices(fleet.Start))
+	if fleet.Of(a) == nil {
 		t.Fatal("the agent has no fleet")
 	}
 	h, err := a.Handler()

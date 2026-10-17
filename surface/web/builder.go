@@ -15,6 +15,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
 // builderBody is the body of POST /v1/builder. Input is the first message
@@ -52,11 +53,11 @@ func (s *server) builder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fromRun != "" {
-		if member, ok := s.ownerOf(w, r, fromRun); !ok {
+		if member, ok := fleet.Owner(s.a, w, r, fromRun); !ok {
 			return
 		} else if member != "" {
 			r.Body = io.NopCloser(bytes.NewReader(raw.Bytes()))
-			s.forward(w, r, member)
+			fleet.Forward(s.a, w, r, member)
 			return
 		}
 		var err error

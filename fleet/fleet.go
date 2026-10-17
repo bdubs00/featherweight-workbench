@@ -1,5 +1,9 @@
-// Package fleet is the default fw.Fleet (docs/ARCHITECTURE.md section 8.6).
-// It registers itself with fw.RegisterFleet.
+// Package fleet is the fleet of the workbench (docs/ARCHITECTURE.md
+// section 4): a set of fw processes that share one bus and one subject. It
+// runs as a service of the kernel (fw.RegisterService), answers requests
+// about the runs of other members through the relay of the native surface
+// (native.Relay), and adds its gauges to the metrics surface
+// (metrics.RegisterCollector). The kernel knows no fleet.
 //
 // Each process publishes a record of itself and of its runs to a retained
 // subject on the bus, and a heartbeat when nothing changed. The view of the
@@ -15,8 +19,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -25,10 +29,48 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/surface/metrics"
+	"github.com/bdubs00/featherweight-kernel/surface/native"
 )
 
 func init() {
-	fw.RegisterFleet(Open)
+	fw.RegisterService(Start)
+	native.Extend(func(k *native.Kit) error {
+		k.SetRelay(NewRelay(k.Agent()))
+		return nil
+	})
+	metrics.RegisterCollector(NewCollector)
+}
+
+// Start is the service of the fleet (fw.Service). When the configuration
+// sets a subject, it opens the fleet of the agent and attaches the View, so
+// the surfaces and the relay find it through Of. Without a subject it does
+// nothing.
+func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
+	c, err := Load(a.Config())
+	if err != nil {
+		return nil, err
+	}
+	if c.Subject == "" {
+		return nil, nil
+	}
+	f, err := Open(ctx, a, c)
+	if err != nil {
+		return nil, err
+	}
+	Attach(a, f)
+	return service{a: a, f: f}, nil
+}
+
+// service stops the fleet of an agent and detaches its View.
+type service struct {
+	a *fw.Agent
+	f *Fleet
+}
+
+func (s service) Close() error {
+	Attach(s.a, nil)
+	return s.f.Close()
 }
 
 // debounce is the time between a change of a run and the record that
@@ -51,7 +93,7 @@ var changes = map[string]bool{
 	fw.EvMessageReceived:   true,
 }
 
-// Fleet is the default fw.Fleet. Build it with Open.
+// Fleet is the default View. Build it with Open.
 type Fleet struct {
 	a        *fw.Agent
 	log      *slog.Logger
@@ -88,19 +130,19 @@ type Fleet struct {
 	markDone chan struct{} // closed when that heartbeat arrives
 
 	mu      sync.RWMutex
-	records map[string]*fw.FleetRecord // the newest record of each other member
-	alive   map[string]time.Time       // the newest heartbeat of each other member
+	records map[string]*Record   // the newest record of each other member
+	alive   map[string]time.Time // the newest heartbeat of each other member
 }
 
-// Open builds the fleet of an agent, publishes the first record, and
-// starts the publisher. A bus that does not answer at start is a warning,
-// not a failure, so a member boots while the bus is down.
-func Open(ctx context.Context, a *fw.Agent) (fw.Fleet, error) {
+// Open builds the fleet of an agent from a configuration that Load filled,
+// publishes the first record, and starts the publisher. A bus that does not
+// answer at start is a warning, not a failure, so a member boots while the
+// bus is down.
+func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 	cfg := a.Config()
-	fc := cfg.Fleet
 	subject := strings.TrimSpace(fc.Subject)
 	if subject == "" {
-		return nil, errors.New("fleet: fleet.subject is empty")
+		return nil, errors.New("fleet: workbench.fleet.subject is empty")
 	}
 	if a.Bus() == nil {
 		return nil, errors.New("fleet: the agent has no bus")
@@ -109,7 +151,7 @@ func Open(ctx context.Context, a *fw.Agent) (fw.Fleet, error) {
 		a:        a,
 		log:      a.Logger().With("component", "fleet"),
 		bus:      a.Bus(),
-		name:     memberName(fc.Name, cfg.Listen),
+		name:     fc.Name,
 		url:      strings.TrimSpace(fc.URL),
 		subject:  subject,
 		atespace: atespace(),
@@ -121,14 +163,14 @@ func Open(ctx context.Context, a *fw.Agent) (fw.Fleet, error) {
 		dirty:    make(chan struct{}, 1),
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
-		records:  map[string]*fw.FleetRecord{},
+		records:  map[string]*Record{},
 		alive:    map[string]time.Time{},
 	}
 	if f.interval <= 0 {
-		f.interval = fw.DefaultFleetInterval
+		f.interval = DefaultInterval
 	}
 	if f.expire <= 0 {
-		f.expire = fw.DefaultFleetExpire
+		f.expire = DefaultExpire
 	}
 	if r, ok := f.bus.(fw.Retainer); ok {
 		f.ret = r
@@ -146,22 +188,6 @@ func Open(ctx context.Context, a *fw.Agent) (fw.Fleet, error) {
 	return f, nil
 }
 
-// memberName is fleet.name, else "<host>:<port>" from the host name and the
-// port of the listener.
-func memberName(name, listen string) string {
-	if name = strings.TrimSpace(name); name != "" {
-		return name
-	}
-	host, _ := os.Hostname()
-	if host == "" {
-		host = "fw"
-	}
-	if _, port, err := net.SplitHostPort(listen); err == nil && port != "" {
-		return host + ":" + port
-	}
-	return host
-}
-
 // atespace is the atespace of the process, as the kernel reads it.
 func atespace() string {
 	if v := os.Getenv("FW_ATESPACE"); v != "" {
@@ -170,7 +196,7 @@ func atespace() string {
 	return "local"
 }
 
-// Name implements fw.Fleet.
+// Name implements View.
 func (f *Fleet) Name() string { return f.name }
 
 // observe marks the record dirty after an event that changes a run.
@@ -264,11 +290,11 @@ func (f *Fleet) publish(ctx context.Context, kind publishKind) error {
 			return nil
 		}
 		if f.ret != nil {
-			return f.send(ctx, fw.FleetAliveSubject(f.subject, f.name), fw.EvFleetAlive, fw.FleetAlive{Name: f.name, At: now})
+			return f.send(ctx, AliveSubject(f.subject, f.name), EvAlive, Alive{Name: f.name, At: now})
 		}
 	}
 	rec.UpdatedAt = now
-	if err := f.send(ctx, fw.FleetRecordSubject(f.subject, f.name), fw.EvFleetRecord, rec); err != nil {
+	if err := f.send(ctx, RecordSubject(f.subject, f.name), EvRecord, rec); err != nil {
 		return err
 	}
 	f.last = key
@@ -295,7 +321,7 @@ func (f *Fleet) send(ctx context.Context, subject, typ string, data any) error {
 
 // contentKey is the JSON of a record without its time, so two records with
 // the same facts compare equal.
-func contentKey(rec fw.FleetRecord) ([]byte, error) {
+func contentKey(rec Record) ([]byte, error) {
 	rec.UpdatedAt = time.Time{}
 	b, err := json.Marshal(rec)
 	if err != nil {

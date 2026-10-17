@@ -13,6 +13,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
 // fakeFleet is a fleet with one other member, "owner", that a test server
@@ -21,7 +22,7 @@ import (
 type fakeFleet struct {
 	name    string
 	owner   string // the URL of the owner
-	members []fw.FleetMember
+	members []fleet.Member
 
 	mu      sync.Mutex
 	runs    []*fw.Run
@@ -32,7 +33,7 @@ type fakeFleet struct {
 
 func (f *fakeFleet) Name() string { return f.name }
 
-func (f *fakeFleet) Members(context.Context) ([]fw.FleetMember, error) { return f.members, nil }
+func (f *fakeFleet) Members(context.Context) ([]fleet.Member, error) { return f.members, nil }
 
 func (f *fakeFleet) Runs(context.Context) ([]*fw.Run, error) {
 	f.mu.Lock()
@@ -65,13 +66,13 @@ func (f *fakeFleet) Forward(ctx context.Context, member string, req *http.Reques
 		return nil, ferr
 	}
 	if member != "owner" {
-		return nil, errors.Join(fw.ErrFleetNoRoute, errors.New("unknown member "+member))
+		return nil, errors.Join(fleet.ErrNoRoute, errors.New("unknown member "+member))
 	}
 	if cred == "" {
 		cred = fw.CredentialFrom(ctx)
 	}
 	if cred == "" {
-		return nil, fw.ErrFleetNoCredential
+		return nil, fleet.ErrNoCredential
 	}
 	u, err := url.Parse(f.owner + req.URL.String())
 	if err != nil {
@@ -80,7 +81,7 @@ func (f *fakeFleet) Forward(ctx context.Context, member string, req *http.Reques
 	out := req.Clone(ctx)
 	out.URL, out.Host, out.RequestURI = u, u.Host, ""
 	out.Header.Set("Authorization", cred)
-	out.Header.Set(fw.HeaderFleetVia, f.name)
+	out.Header.Set(fleet.HeaderVia, f.name)
 	f.mu.Lock()
 	f.forward = append(f.forward, out.Header.Clone())
 	f.mu.Unlock()
@@ -127,11 +128,11 @@ func newFleetPair(t *testing.T, opts ...fw.Option) *fleetPair {
 	p := &fleetPair{calls: &atomic.Int32{}}
 	p.owner = manageAgent(t, newScript(callTool("c1", "rm", `{"path":"x"}`), endTurn("done"), endTurn("again")).model(), append([]fw.Option{fw.WithTools(rmTool(p.calls))}, opts...)...)
 	p.ownerURL = serve(t, p.owner).URL
-	p.fleet = &fakeFleet{name: "view", owner: p.ownerURL, members: []fw.FleetMember{
-		{Name: "view", Self: true, State: fw.MemberLive, AccessMode: fw.AccessModeRules},
-		{Name: "owner", State: fw.MemberLive, CanForward: true, AccessMode: fw.AccessModeRules, Agents: []fw.FleetAgent{{Name: "reviewer", Role: "owner"}}},
+	p.fleet = &fakeFleet{name: "view", owner: p.ownerURL, members: []fleet.Member{
+		{Name: "view", Self: true, State: fleet.MemberLive, AccessMode: fw.AccessModeRules},
+		{Name: "owner", State: fleet.MemberLive, CanForward: true, AccessMode: fw.AccessModeRules, Agents: []fleet.RecordAgent{{Name: "reviewer", Role: "owner"}}},
 	}}
-	p.view = manageAgent(t, newScript(endTurn("local")).model(), append([]fw.Option{fw.WithFleet(p.fleet)}, opts...)...)
+	p.view = attach(manageAgent(t, newScript(endTurn("local")).model(), opts...), p.fleet)
 	p.viewURL = serve(t, p.view).URL
 
 	resp, b := do(t, "POST", p.ownerURL+"/v1/runs", `{"agent":"reviewer","input":"clean up","wait":true}`, "Authorization", asAlice)
@@ -163,13 +164,14 @@ func TestFleetOff(t *testing.T) {
 	if p := decodeProblem(t, resp, b, http.StatusNotFound); !strings.Contains(p.Detail, "fleet.subject") {
 		t.Errorf("detail = %q", p.Detail)
 	}
-	resp, b = do(t, "GET", srv.URL+"/v1/runs?member=owner", "")
-	decodeProblem(t, resp, b, http.StatusBadRequest)
-	resp, b = do(t, "GET", srv.URL+"/v1/runs?scope=everywhere", "")
-	decodeProblem(t, resp, b, http.StatusBadRequest)
+	resp, b = do(t, "GET", srv.URL+"/v1/fleet/runs", "")
+	decodeProblem(t, resp, b, http.StatusNotFound)
+	resp, b = do(t, "GET", srv.URL+"/v1/fleet/runs?member=owner", "")
+	decodeProblem(t, resp, b, http.StatusNotFound)
 	resp, b = do(t, "POST", srv.URL+"/v1/runs?member=owner", `{"input":"x"}`)
 	decodeProblem(t, resp, b, http.StatusBadRequest)
-	resp, b = do(t, "GET", srv.URL+"/v1/runs?scope=local", "")
+	// The run list of the kernel knows no fleet and ignores its parameters.
+	resp, b = do(t, "GET", srv.URL+"/v1/runs?scope=local&member=owner", "")
 	var list struct{ Runs []*fw.Run }
 	decodeJSON(t, resp, b, http.StatusOK, &list)
 }
@@ -181,7 +183,7 @@ func TestFleetListAndRead(t *testing.T) {
 	resp, b := do(t, "GET", p.viewURL+"/v1/fleet", "", "Authorization", asAlice)
 	var fl struct {
 		Name    string
-		Members []fw.FleetMember
+		Members []fleet.Member
 	}
 	decodeJSON(t, resp, b, http.StatusOK, &fl)
 	if fl.Name != "view" || len(fl.Members) != 2 || fl.Members[1].Agents[0].Role != "owner" {
@@ -190,7 +192,7 @@ func TestFleetListAndRead(t *testing.T) {
 
 	list := func(query string) []*fw.Run {
 		t.Helper()
-		resp, b := do(t, "GET", p.viewURL+"/v1/runs"+query, "", "Authorization", asAlice)
+		resp, b := do(t, "GET", p.viewURL+"/v1/fleet/runs"+query, "", "Authorization", asAlice)
 		var out struct{ Runs []*fw.Run }
 		decodeJSON(t, resp, b, http.StatusOK, &out)
 		return out.Runs
@@ -211,8 +213,15 @@ func TestFleetListAndRead(t *testing.T) {
 	if got := runIDs(list("?state=input-required")); got != p.remote.ID+"@owner" {
 		t.Errorf("waiting runs = %s", got)
 	}
-	resp, b = do(t, "GET", p.viewURL+"/v1/runs?scope=both", "", "Authorization", asAlice)
+	resp, b = do(t, "GET", p.viewURL+"/v1/fleet/runs?scope=both", "", "Authorization", asAlice)
 	decodeProblem(t, resp, b, http.StatusBadRequest)
+	// The run list of the kernel covers this process only.
+	resp, b = do(t, "GET", p.viewURL+"/v1/runs", "", "Authorization", asAlice)
+	var local struct{ Runs []*fw.Run }
+	decodeJSON(t, resp, b, http.StatusOK, &local)
+	if got := runIDs(local.Runs); got != p.local.ID {
+		t.Errorf("kernel runs = %s", got)
+	}
 
 	// A read of the remote run goes to the owner with the credential of the
 	// caller and the via header, and comes back with the member.
@@ -222,7 +231,7 @@ func TestFleetListAndRead(t *testing.T) {
 		t.Fatalf("remote run = %+v", r)
 	}
 	h := p.fleet.forwarded()
-	if len(h) != 1 || h[0].Get("Authorization") != asAlice || h[0].Get(fw.HeaderFleetVia) != "view" || h[0].Get("Accept") != "" {
+	if len(h) != 1 || h[0].Get("Authorization") != asAlice || h[0].Get(fleet.HeaderVia) != "view" || h[0].Get("Accept") != "" {
 		t.Fatalf("forwarded headers = %v", h)
 	}
 	// A local run never goes out.
@@ -257,10 +266,10 @@ func TestFleetListAndRead(t *testing.T) {
 	cancel()
 
 	// A request that a member forwarded is never forwarded again.
-	resp, b = do(t, "GET", p.viewURL+"/v1/runs/"+p.remote.ID, "", "Authorization", asAlice, fw.HeaderFleetVia, "elsewhere")
+	resp, b = do(t, "GET", p.viewURL+"/v1/runs/"+p.remote.ID, "", "Authorization", asAlice, fleet.HeaderVia, "elsewhere")
 	decodeProblem(t, resp, b, http.StatusNotFound)
 	// Children of a remote run come from the fleet.
-	resp, b = do(t, "GET", p.viewURL+"/v1/runs?parent="+p.remote.ID, "", "Authorization", asAlice)
+	resp, b = do(t, "GET", p.viewURL+"/v1/fleet/runs?parent="+p.remote.ID, "", "Authorization", asAlice)
 	var kids struct{ Runs []*fw.Run }
 	decodeJSON(t, resp, b, http.StatusOK, &kids)
 	if len(kids.Runs) != 0 {
@@ -268,7 +277,7 @@ func TestFleetListAndRead(t *testing.T) {
 	}
 
 	// The glance covers the runs of the whole fleet.
-	resp, b = do(t, "GET", p.viewURL+"/v1/runs", "", "Authorization", asAlice)
+	resp, b = do(t, "GET", p.viewURL+"/v1/fleet/runs", "", "Authorization", asAlice)
 	var glanced struct{ Glance view.Glance }
 	decodeJSON(t, resp, b, http.StatusOK, &glanced)
 	if g := glanced.Glance; g.Waiting != 1 || g.Finished != 1 || g.Sentence != "One run needs you." {

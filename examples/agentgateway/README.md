@@ -65,7 +65,7 @@ A member that runs as a plain Deployment, such as `reviewer`, is always on too. 
 
 ## Members that run as ax Tasks
 
-An ax Task has no Kubernetes Service. Under ax, fw sets the name of the member to `<atespace>/<task>` and its URL to `ax:<atespace>/<task>` by itself. The front reaches such a member through the atenet router, which wakes the Task first. A Task can send traffic out of its sandbox only over HTTP, so it connects to NATS over WebSocket: set `FW_BUS_URL` to `ws://nats.fw-fleet.svc.cluster.local:8080`.
+An ax Task has no Kubernetes Service. Under ax, fw-workbench sets the name of the member to `<atespace>/<task>` and its URL to `ax:<atespace>/<task>` by itself. The front reaches such a member through the atenet router, which wakes the Task first. A Task can send traffic out of its sandbox only over HTTP, so it connects to NATS over WebSocket: set `FW_BUS_URL` to `ws://nats.fw-fleet.svc.cluster.local:8080`.
 
 ## What was tested
 

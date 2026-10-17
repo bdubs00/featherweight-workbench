@@ -15,6 +15,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
 // answers is a model that gives the texts in order and then the last text
@@ -126,7 +127,7 @@ func TestResultReachesTheOwner(t *testing.T) {
 	if res.RunID != p.remote.ID || res.Status != dashboard.StatusNeedsYou || res.Pending == nil || res.Pending.ID != p.remote.Pending.ID {
 		t.Fatalf("remote result = %s", b)
 	}
-	if h := p.fleet.forwarded(); len(h) != before+1 || h[len(h)-1].Get(fw.HeaderFleetVia) != "view" {
+	if h := p.fleet.forwarded(); len(h) != before+1 || h[len(h)-1].Get(fleet.HeaderVia) != "view" {
 		t.Fatalf("forwarded = %v", h)
 	}
 }

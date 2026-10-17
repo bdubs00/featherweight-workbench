@@ -22,6 +22,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
 // fakeIssuer is an OpenID Connect issuer with a discovery document and a
@@ -812,26 +813,29 @@ func TestSigninMovesToTheCallbackHost(t *testing.T) {
 // fleet, or with a ledger or a bus that processes share, the replicas
 // likely have files of their own, so the start logs one warning.
 func TestSigninKeyFileWarnsForReplicas(t *testing.T) {
-	warned := func(t *testing.T, change func(*fw.Config), opts ...fw.Option) int {
+	warned := func(t *testing.T, change func(*fw.Config), v fleet.View, opts ...fw.Option) int {
 		t.Helper()
 		e := &signinEnv{issuer: newFakeIssuer(t), clock: &testClock{t: time.Now()}, log: &lockedBuffer{}}
 		a, err := signinAgent(t, e, change, opts...)
 		if err != nil {
 			t.Fatal(err)
 		}
+		if v != nil {
+			fleet.Attach(a, v)
+		}
 		if _, err := a.Handler(); err != nil {
 			t.Fatal(err)
 		}
 		return strings.Count(e.log.String(), "likely has replicas")
 	}
-	fleet := fw.WithFleet(&fakeFleet{name: "view", members: []fw.FleetMember{{Name: "view", Self: true, State: fw.MemberLive}}})
-	if n := warned(t, nil, fleet); n != 1 {
+	fake := &fakeFleet{name: "view", members: []fleet.Member{{Name: "view", Self: true, State: fleet.MemberLive}}}
+	if n := warned(t, nil, fake); n != 1 {
 		t.Errorf("fleet: %d warnings", n)
 	}
-	if n := warned(t, func(c *fw.Config) { c.Bus.Driver = "nats" }); n != 1 {
+	if n := warned(t, func(c *fw.Config) { c.Bus.Driver = "nats" }, nil); n != 1 {
 		t.Errorf("shared bus: %d warnings", n)
 	}
-	if n := warned(t, nil); n != 0 {
+	if n := warned(t, nil, nil); n != 0 {
 		t.Errorf("one process: %d warnings", n)
 	}
 	// A shared key or a client secret is the same in every replica.
@@ -841,7 +845,7 @@ func TestSigninKeyFileWarnsForReplicas(t *testing.T) {
 		}
 		return "", fw.ErrSecretNotFound
 	}))
-	if n := warned(t, nil, fleet, shared); n != 0 {
+	if n := warned(t, nil, fake, shared); n != 0 {
 		t.Errorf("fleet with a shared key: %d warnings", n)
 	}
 }

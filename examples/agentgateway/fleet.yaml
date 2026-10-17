@@ -98,8 +98,8 @@ data:
   FW_MCP_AUTH_AUDIENCE: https://fleet.example.com/mcp
   FW_BUS_DRIVER: nats
   FW_BUS_URL: nats://nats.fw-fleet.svc.cluster.local:4222
-  FW_FLEET_SUBJECT: fw.fleet
-  FW_FLEET_FORWARD: http://*.fw-fleet.svc.cluster.local:8080
+  FW_WORKBENCH_FLEET_SUBJECT: fw.fleet
+  FW_WORKBENCH_FLEET_FORWARD: http://*.fw-fleet.svc.cluster.local:8080
 ---
 # The Secret fw-front holds the key that signs the approval retries of MCP
 # and the browser sign-in. This file does not hold it, so no deployment
@@ -135,7 +135,7 @@ spec:
           env:
             - {name: FW_HOME, value: /data}
             # Each replica is its own member, so it needs its own name.
-            - name: FW_FLEET_NAME
+            - name: FW_WORKBENCH_FLEET_NAME
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
             # Replicas must share this key. A signed approval retry or a
             # sign-in callback can then reach either replica.
@@ -224,8 +224,8 @@ spec:
           env:
             - {name: FW_HOME, value: /data}
             - {name: FW_CONFIG, value: /etc/fw/fw.yaml}
-            - {name: FW_FLEET_NAME, value: reviewer}
-            - {name: FW_FLEET_URL, value: "http://reviewer.fw-fleet.svc.cluster.local:8080"}
+            - {name: FW_WORKBENCH_FLEET_NAME, value: reviewer}
+            - {name: FW_WORKBENCH_FLEET_URL, value: "http://reviewer.fw-fleet.svc.cluster.local:8080"}
             - {name: FW_MODEL, value: "openai/MODEL"}
             - {name: OPENAI_BASE_URL, value: "https://models.example.com/v1"}
           ports:

@@ -23,6 +23,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/agents"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/teams"
 	"github.com/bdubs00/featherweight-workbench/titles"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -110,9 +111,9 @@ const (
 )
 
 // schemaOf picks the schema with the fleet arguments when the fleet is on.
-func schemaOf(a *fw.Agent, plain, fleet string) json.RawMessage {
-	if a.Fleet() != nil {
-		return json.RawMessage(fleet)
+func schemaOf(a *fw.Agent, plain, withFleet string) json.RawMessage {
+	if fleet.Of(a) != nil {
+		return json.RawMessage(withFleet)
 	}
 	return json.RawMessage(plain)
 }
@@ -261,7 +262,7 @@ type (
 		Events  []view.EventLine `json:"events,omitempty"`
 		Items   []dashboard.Item `json:"items,omitempty"`
 		Name    string           `json:"name,omitempty"`
-		Members []fw.FleetMember `json:"members,omitempty"`
+		Members []fleet.Member   `json:"members,omitempty"`
 		PageURL string           `json:"pageUrl,omitempty"`
 	}
 )
@@ -412,9 +413,9 @@ func explain(err error) string {
 		return "No agent profile is named " + strings.TrimPrefix(err.Error(), fw.ErrAgentNotFound.Error()+": ") + ". The agents_list tool names the profiles you can see."
 	case errors.Is(err, fw.ErrClosed):
 		return "The agent is shutting down."
-	case errors.Is(err, fw.ErrFleetNoCredential):
+	case errors.Is(err, fleet.ErrNoCredential):
 		return "Forbidden: this request carries no bearer credential, so it cannot act on a run of another fleet member. Connect with a bearer token."
-	case errors.Is(err, fw.ErrFleetNoRoute):
+	case errors.Is(err, fleet.ErrNoRoute):
 		return "No route: " + strings.TrimPrefix(err.Error(), "fw: ") + "."
 	}
 	var me *memberError
@@ -568,7 +569,7 @@ func (s *server) runsList(ctx context.Context, req *sdk.CallToolRequest, in runs
 // With the fleet on, the scope fleet, the default, adds the runs of the
 // other members, and member keeps the runs of one member.
 func (s *server) visibleRuns(ctx context.Context, agent, state, principal, by, scope, member string, limit int) (runsResult, error) {
-	all, err := view.Runs(ctx, s.a, scope, member)
+	all, err := dashboard.Runs(ctx, s.a, scope, member)
 	if err != nil {
 		return runsResult{}, err
 	}
@@ -582,7 +583,7 @@ func (s *server) visibleRuns(ctx context.Context, agent, state, principal, by, s
 // childRuns lists the child runs of a run that the caller can view, after
 // the filters. The parent can belong to another member of the fleet.
 func (s *server) childRuns(ctx context.Context, parent, agent, state, principal, by string, limit int) (runsResult, error) {
-	kids, err := view.Children(ctx, s.a, parent)
+	kids, err := dashboard.Children(ctx, s.a, parent)
 	if err != nil {
 		return runsResult{}, err
 	}
@@ -779,7 +780,7 @@ func (s *server) dashboard(ctx context.Context, req *sdk.CallToolRequest, in das
 	out.Agents = agents
 	// Every run that the caller can see, of every member. The fields runs
 	// and glance keep their old meaning for the page in the field.
-	all, err := view.Runs(ctx, s.a, "", "")
+	all, err := dashboard.Runs(ctx, s.a, "", "")
 	if err != nil {
 		return failResult(err), nil, nil
 	}
@@ -818,7 +819,7 @@ func (s *server) dashboard(ctx context.Context, req *sdk.CallToolRequest, in das
 			return failResult(err), nil, nil
 		}
 		out.Home = &home
-		if s.a.Fleet() != nil {
+		if fleet.Of(s.a) != nil {
 			fl, err := s.members(ctx)
 			if err != nil {
 				return failResult(err), nil, nil

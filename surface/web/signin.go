@@ -44,6 +44,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
 // Routes, the cookie, and the limits of the browser sign-in.
@@ -147,7 +148,7 @@ func newSignin(a *fw.Agent, now func() time.Time) (*signin, error) {
 		// Each replica has its own home, and so its own key file. A
 		// callback that reaches another replica then fails.
 		a.Logger().Warn("native: the key of the sign-in cookie comes from a file of this process, and this agent likely has replicas with files of their own; set "+sharedKeySecret+" on every replica, or set auth.oidc.clientSecret",
-			"file", filepath.Join(homeOf(a), signinKeyFile), "fleet", a.Fleet() != nil, "ledger", a.Config().Ledger.Driver, "bus", a.Config().Bus.Driver)
+			"file", filepath.Join(homeOf(a), signinKeyFile), "fleet", fleet.Of(a) != nil, "ledger", a.Config().Ledger.Driver, "bus", a.Config().Bus.Driver)
 	}
 	return si, nil
 }
@@ -156,7 +157,7 @@ func newSignin(a *fw.Agent, now func() time.Time) (*signin, error) {
 // processes: it has a fleet, or it uses a ledger or a bus that processes
 // share.
 func likelyReplicas(a *fw.Agent) bool {
-	if a.Fleet() != nil {
+	if fleet.Of(a) != nil {
 		return true
 	}
 	cfg := a.Config()

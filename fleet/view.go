@@ -62,7 +62,7 @@ func (f *Fleet) settle(ctx context.Context) {
 		f.markDone = nil
 		f.markMu.Unlock()
 	}()
-	if err := f.send(ctx, fw.FleetAliveSubject(f.subject, f.name), fw.EvFleetAlive, fw.FleetAlive{Name: f.name, At: at}); err != nil {
+	if err := f.send(ctx, AliveSubject(f.subject, f.name), EvAlive, Alive{Name: f.name, At: at}); err != nil {
 		f.log.Warn("the view starts without the retained records", "error", err)
 		return
 	}
@@ -79,9 +79,9 @@ func (f *Fleet) settle(ctx context.Context) {
 // onEvent sends each event of the fleet subject to its handler.
 func (f *Fleet) onEvent(e fw.Event) error {
 	switch e.Type {
-	case fw.EvFleetRecord:
+	case EvRecord:
 		f.onRecord(e)
-	case fw.EvFleetAlive:
+	case EvAlive:
 		f.onAlive(e)
 	}
 	return nil
@@ -89,7 +89,7 @@ func (f *Fleet) onEvent(e fw.Event) error {
 
 // onRecord keeps the newest record of each other member.
 func (f *Fleet) onRecord(e fw.Event) {
-	var rec fw.FleetRecord
+	var rec Record
 	if err := e.Decode(&rec); err != nil {
 		f.log.Warn("a record does not decode", "id", e.ID, "error", err)
 		return
@@ -108,7 +108,7 @@ func (f *Fleet) onRecord(e fw.Event) {
 // onAlive keeps the newest heartbeat of each other member. Its own
 // heartbeat ends the wait of settle.
 func (f *Fleet) onAlive(e fw.Event) {
-	var hb fw.FleetAlive
+	var hb Alive
 	if err := e.Decode(&hb); err != nil {
 		f.log.Warn("a heartbeat does not decode", "id", e.ID, "error", err)
 		return
@@ -135,7 +135,7 @@ func (f *Fleet) onAlive(e fw.Event) {
 // remote is one other member at one moment. The record is never changed
 // after it arrives, so a remote can be read without a lock.
 type remote struct {
-	rec  *fw.FleetRecord
+	rec  *Record
 	seen time.Time
 }
 
@@ -160,7 +160,7 @@ func (f *Fleet) remotes(now time.Time) []remote {
 }
 
 // state names the state of a member: stopped after a last record, live
-// within fw.FleetQuietAfter of its intervals, else quiet. A record without
+// within QuietAfter of its intervals, else quiet. A record without
 // an interval is judged by the interval of this process.
 func (f *Fleet) state(r remote, now time.Time) string {
 	interval := r.rec.Interval
@@ -169,15 +169,15 @@ func (f *Fleet) state(r remote, now time.Time) string {
 	}
 	switch {
 	case r.rec.Stopped:
-		return fw.MemberStopped
-	case now.Sub(r.seen) <= fw.FleetQuietAfter*interval:
-		return fw.MemberLive
+		return MemberStopped
+	case now.Sub(r.seen) <= QuietAfter*interval:
+		return MemberLive
 	}
-	return fw.MemberQuiet
+	return MemberQuiet
 }
 
-// Members implements fw.Fleet.
-func (f *Fleet) Members(ctx context.Context) ([]fw.FleetMember, error) {
+// Members implements View.
+func (f *Fleet) Members(ctx context.Context) ([]Member, error) {
 	if err := f.startView(ctx); err != nil {
 		return nil, err
 	}
@@ -185,21 +185,21 @@ func (f *Fleet) Members(ctx context.Context) ([]fw.FleetMember, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := []fw.FleetMember{self}
+	out := []Member{self}
 	now := time.Now()
 	for _, r := range f.remotes(now) {
 		runOK, roles, err := f.allow(ctx, r.rec, r.rec.Runs, true)
 		if err != nil {
 			return nil, err
 		}
-		m := fw.FleetMember{
+		m := Member{
 			Name:       r.rec.Name,
 			URL:        r.rec.URL,
 			State:      f.state(r, now),
 			LastSeen:   r.seen,
 			CanForward: f.canForward(r.rec.URL),
 			AccessMode: r.rec.Access.Mode,
-			Agents:     []fw.FleetAgent{},
+			Agents:     []RecordAgent{},
 		}
 		for i, ag := range r.rec.Agents {
 			if roles[i] != "" {
@@ -234,15 +234,15 @@ func (f *Fleet) Members(ctx context.Context) ([]fw.FleetMember, error) {
 
 // self is this process as a member: its agents and its runs as the
 // principal in ctx sees them.
-func (f *Fleet) self(ctx context.Context) (fw.FleetMember, error) {
-	m := fw.FleetMember{
+func (f *Fleet) self(ctx context.Context) (Member, error) {
+	m := Member{
 		Name:       f.name,
 		URL:        f.url,
 		Self:       true,
-		State:      fw.MemberLive,
+		State:      MemberLive,
 		LastSeen:   time.Now().UTC(),
 		AccessMode: f.a.AccessMode(),
-		Agents:     []fw.FleetAgent{},
+		Agents:     []RecordAgent{},
 	}
 	profiles, err := f.profiles(ctx)
 	if err != nil {
@@ -260,7 +260,7 @@ func (f *Fleet) self(ctx context.Context) (fw.FleetMember, error) {
 		if roles[i] == "" {
 			continue
 		}
-		m.Agents = append(m.Agents, fw.FleetAgent{Name: p.Name, Description: p.Description, Access: p.Access, Teams: teams.OfAgent(teams.Patterns(f.a.Config()), p.Access), Role: roles[i]})
+		m.Agents = append(m.Agents, RecordAgent{Name: p.Name, Description: p.Description, Access: p.Access, Teams: teams.OfAgent(teams.Patterns(f.a.Config()), p.Access), Role: roles[i]})
 	}
 	runs, err := f.a.List(ctx)
 	if err != nil {
@@ -277,7 +277,7 @@ func (f *Fleet) self(ctx context.Context) (fw.FleetMember, error) {
 	return m, nil
 }
 
-// Runs implements fw.Fleet.
+// Runs implements View.
 func (f *Fleet) Runs(ctx context.Context) ([]*fw.Run, error) {
 	if err := f.startView(ctx); err != nil {
 		return nil, err
@@ -303,7 +303,7 @@ func (f *Fleet) Runs(ctx context.Context) ([]*fw.Run, error) {
 	return out, nil
 }
 
-// Run implements fw.Fleet.
+// Run implements View.
 func (f *Fleet) Run(ctx context.Context, id string) (*fw.Run, error) {
 	if err := f.startView(ctx); err != nil {
 		return nil, err
@@ -349,8 +349,8 @@ const (
 )
 
 // find returns the newest record that holds the run, and the run.
-func (f *Fleet) find(id string) (*fw.FleetRecord, *fw.Run) {
-	var owner *fw.FleetRecord
+func (f *Fleet) find(id string) (*Record, *fw.Run) {
+	var owner *Record
 	var found *fw.Run
 	for _, r := range f.remotes(time.Now()) {
 		for _, run := range r.rec.Runs {
@@ -377,7 +377,7 @@ func withMember(r *fw.Run, member string) *fw.Run {
 // the lineage. A call without a principal sees everything as an owner. A
 // decision point that does not answer is an error, so a listing never
 // hides an outage.
-func (f *Fleet) allow(ctx context.Context, rec *fw.FleetRecord, runs []*fw.Run, agents bool) (runOK []bool, roles []string, err error) {
+func (f *Fleet) allow(ctx context.Context, rec *Record, runs []*fw.Run, agents bool) (runOK []bool, roles []string, err error) {
 	runOK = make([]bool, len(runs))
 	if agents {
 		roles = make([]string, len(rec.Agents))

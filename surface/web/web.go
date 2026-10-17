@@ -54,6 +54,7 @@ func (s *server) mount() error {
 		{"GET /v1/runs/{id}/result", s.k.Remote(s.result)},
 		{"GET /v1/runs/{id}/transcript", s.k.Remote(s.transcript)},
 		{"GET /v1/fleet", s.fleet},
+		{"GET /v1/fleet/runs", s.fleetRuns},
 		{"GET /v1/usage", s.usage},
 		{"GET /v1/connections", s.listConnections},
 		{"POST /v1/connections/{server}", s.startConnection},
@@ -101,14 +102,6 @@ func (s *server) decodeFiles(w http.ResponseWriter, r *http.Request, v any, file
 
 func (s *server) start(w http.ResponseWriter, r *http.Request, req fw.RunRequest) (*fw.Run, bool) {
 	return s.k.Start(w, r, req)
-}
-
-func (s *server) ownerOf(w http.ResponseWriter, r *http.Request, id string) (string, bool) {
-	return s.k.OwnerOf(w, r, id)
-}
-
-func (s *server) forward(w http.ResponseWriter, r *http.Request, member string) {
-	s.k.Forward(w, r, member)
 }
 
 func problem(w http.ResponseWriter, r *http.Request, status int, detail string) {
