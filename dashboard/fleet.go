@@ -1,0 +1,82 @@
+package dashboard
+
+// This file holds the members of the fleet as text (docs/ARCHITECTURE.md,
+// the fleet). The runs of the whole fleet come from package view of the
+// kernel.
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/bdubs00/featherweight-kernel/fw"
+)
+
+// MembersText describes the members of a fleet, one line each. Name is the
+// name of this process.
+func MembersText(name string, members []fw.FleetMember) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "This process is the fleet member %s.", name)
+	if len(members) == 0 {
+		b.WriteString("\nYou can see no member.")
+		return b.String()
+	}
+	fmt.Fprintf(&b, "\n%d members you can see:", len(members))
+	for _, m := range members {
+		b.WriteString("\n" + MemberLine(m))
+	}
+	return b.String()
+}
+
+// MemberLine is one member on one line: its state, when it was last heard,
+// its authorization mode, its agents with the role of the caller, its runs,
+// and whether this process can act on its runs.
+func MemberLine(m fw.FleetMember) string {
+	var b strings.Builder
+	b.WriteString("- " + m.Name)
+	if m.Self {
+		b.WriteString(" (this process)")
+	}
+	b.WriteString(": " + m.State)
+	if !m.Self && !m.LastSeen.IsZero() {
+		b.WriteString(", heard " + ago(m.LastSeen) + " ago")
+	}
+	if m.AccessMode != "" {
+		b.WriteString(", access " + m.AccessMode)
+	}
+	if len(m.Agents) == 0 {
+		b.WriteString("; no agent you can see")
+	} else {
+		names := make([]string, len(m.Agents))
+		for i, a := range m.Agents {
+			names[i] = a.Name
+			if a.Role != "" {
+				names[i] += " (you are " + a.Role + ")"
+			}
+		}
+		b.WriteString("; agents " + strings.Join(names, ", "))
+	}
+	fmt.Fprintf(&b, "; %s, %d waiting for input", count(m.Active, "active run", "active runs"), m.InputRequired)
+	switch {
+	case m.Self:
+	case m.CanForward:
+		b.WriteString("; this process can act on its runs")
+	default:
+		b.WriteString("; read-only from here, because it has no address that this process can reach")
+	}
+	return b.String()
+}
+
+// ago is how long ago a time was, in one unit.
+func ago(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", max(0, int(d.Seconds())))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}

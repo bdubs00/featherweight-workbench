@@ -1,0 +1,2547 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>featherweight</title>
+<style>
+/* A calm workbench: neutral colors and one accent. A status always has a
+   word or an icon, so color is never the only signal. */
+:root {
+  --canvas: #f5f5f7; --surface: #fff; --fill: #ececef; --ink: #1d1d1f; --ink2: #6b6b70; --hair: rgba(60,60,67,.16);
+  --tint: #0066cc; --press: #0071e3; --bubble: #e9e9eb; --chev: #b8b8bd; --quiet: #8e8e93;
+  --need: #b45309; --ok: #1f7a3a; --bad: #c4211b; --add: #34c759; --del: #ff3b30;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+:root[data-theme="dark"] {
+  --canvas: #000; --surface: #1c1c1e; --fill: #2c2c2e; --ink: #f5f5f7; --ink2: #a1a1a6; --hair: rgba(84,84,88,.6);
+  --tint: #4ea1ff; --bubble: #262629; --chev: #5a5a5e; --quiet: #8e8e93; --need: #f5a524; --ok: #3ccf6e; --bad: #ff6b61; --add: #30d158; --del: #ff453a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: #000; --surface: #1c1c1e; --fill: #2c2c2e; --ink: #f5f5f7; --ink2: #a1a1a6; --hair: rgba(84,84,88,.6);
+    --tint: #4ea1ff; --bubble: #262629; --chev: #5a5a5e; --quiet: #8e8e93; --need: #f5a524; --ok: #3ccf6e; --bad: #ff6b61; --add: #30d158; --del: #ff453a;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--canvas); color: var(--ink); font: 15px/21px var(--font); -webkit-font-smoothing: antialiased; min-height: 100vh; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--tint); outline-offset: 2px; border-radius: 8px; }
+/* A row in a group with rounded corners shows its focus ring inside, so the
+   group does not clip it. */
+.group > .row:focus-visible, .files > .file:focus-visible, .menu > button:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--tint); }
+[tabindex="-1"]:focus { outline: none; }
+a.btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.app.split { display: grid; grid-template-columns: 360px minmax(0, 1fr); }
+.app.split .side { height: 100vh; overflow: auto; position: sticky; top: 0; border-right: .5px solid var(--hair); }
+.side:empty { display: none; }
+.screen { max-width: 720px; margin: 0 auto; padding: 0 20px 28px; }
+.side .screen { padding: 0 16px 24px; }
+/* The header of Work and Agents: the feather, the two places, and the account. */
+.top { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 10px; min-height: 52px; margin: 0 -20px; padding: 0 16px;
+  background: color-mix(in srgb, var(--canvas) 86%, transparent); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
+.side .top { margin: 0 -16px; }
+.top.scrolled { box-shadow: 0 .5px 0 var(--hair); }
+.brand { flex: none; display: grid; place-items: center; width: 28px; height: 28px; color: var(--tint); }
+.brand svg { width: 22px; height: 22px; }
+.tabs { flex: 1; display: flex; gap: 2px; }
+.tabs button { border: 0; background: none; min-height: 34px; padding: 6px 12px; border-radius: 999px; color: var(--ink2); font-weight: 500; cursor: pointer; }
+.tabs button[aria-current] { background: var(--fill); color: var(--ink); font-weight: 600; }
+.me { width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--fill); color: var(--ink); font-weight: 600; font-size: 14px; cursor: pointer; }
+.pop { position: relative; flex: none; }
+.menu { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; min-width: 240px; max-width: min(340px, 88vw); max-height: 60vh; overflow: auto; padding: 6px;
+  background: var(--surface); border-radius: 12px; box-shadow: 0 0 0 .5px var(--hair), 0 10px 30px rgba(0,0,0,.18); }
+.menu.right { left: auto; right: 0; }
+.menu > button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 7px 10px; border: 0; border-radius: 8px; background: none; text-align: left; cursor: pointer; }
+.menu > button:hover { background: var(--fill); }
+.menu > button .main { flex: 1; min-width: 0; }
+.menu > button .t, .menu > button .s { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu > button .s { font-size: 13px; line-height: 18px; color: var(--ink2); }
+.menu > button .ck { width: 14px; height: 14px; flex: none; color: var(--tint); }
+.menu > .danger { color: var(--bad); }
+.menu .who { padding: 8px 10px 10px; margin-bottom: 6px; border-bottom: .5px solid var(--hair); }
+.menu .who b, .menu .who small { display: block; overflow-wrap: anywhere; }
+.menu .who b { font-size: 15px; color: var(--ink); }
+.menu .who small { font-size: 13px; line-height: 18px; color: var(--ink2); }
+.bar { position: sticky; top: 0; z-index: 10; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr); align-items: center; min-height: 44px; margin: 0 -20px; padding: 0 12px;
+  background: color-mix(in srgb, var(--canvas) 86%, transparent); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
+.side .bar { margin: 0 -16px; }
+.bar.scrolled { box-shadow: 0 .5px 0 var(--hair); }
+.bar .title { text-align: center; font-weight: 600; font-size: 17px; line-height: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; }
+.bar.large-on .title { opacity: 0; } .bar.large-on.scrolled .title { opacity: 1; transition: opacity .15s; }
+.bar .end { justify-self: end; display: flex; gap: 4px; align-items: center; }
+.back { justify-self: start; display: inline-flex; align-items: center; gap: 4px; min-height: 44px; color: var(--tint); background: none; border: 0; padding: 8px 6px; cursor: pointer; font-size: 17px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.back span { overflow: hidden; text-overflow: ellipsis; }
+.back svg { width: 11px; height: 18px; flex: none; }
+h1.large { font: 700 30px/36px var(--font); letter-spacing: -.02em; margin: 6px 0 8px; }
+.glance { font: 600 20px/26px var(--font); letter-spacing: -.012em; margin: 18px 0 4px; text-wrap: balance; }
+.lede { font-size: 17px; line-height: 24px; color: var(--ink2); margin: 0 0 16px; max-width: 46ch; }
+.head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.head .glance { flex: 1; }
+.sec { font: 600 17px/22px var(--font); letter-spacing: -.01em; margin: 26px 0 8px; }
+.sub { font-size: 13px; line-height: 18px; color: var(--ink2); margin: 16px 0 6px 16px; }
+.sec + .sub { margin-top: 0; }
+.group { background: var(--surface); border-radius: 12px; overflow: hidden; }
+.group + .group { margin-top: 12px; }
+.row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 11px 16px; background: none; border: 0; text-align: left; position: relative; cursor: pointer; border-radius: 0; color: inherit; }
+.row + .row::before, .field + .field::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; height: .5px; background: var(--hair); }
+.row:active { background: var(--fill); }
+.row.sel, .row.sel:hover { background: color-mix(in srgb, var(--tint) 13%, transparent); }
+@media (hover: hover) { .row[data-action]:hover { background: color-mix(in srgb, var(--fill) 55%, transparent); } }
+.row .main { flex: 1; min-width: 0; }
+.row .t { font-weight: 600; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .s { display: block; font-size: 13px; line-height: 18px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .end { display: flex; align-items: center; gap: 8px; color: var(--ink2); font-size: 13px; white-space: nowrap; }
+.row.danger .t { color: var(--bad); font-weight: 400; }
+.row.kv { cursor: default; align-items: flex-start; } .row.kv .end { white-space: normal; text-align: right; max-width: 62%; font-size: 15px; line-height: 21px; overflow-wrap: anywhere; }
+.row.link .t { color: var(--tint); font-weight: 400; }
+.row.can { cursor: default; } .row.can .s { white-space: normal; }
+.row:has(> .face) + .row:has(> .face)::before { left: 60px; }
+/* A work item leads with the title of the work. The agent, the status, and
+   the time sit in a quiet line under it, with a small face. */
+.row.work { align-items: center; padding: 11px 12px 11px 16px; }
+.row.work .t { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.row .meta { margin-top: 2px; white-space: normal; }
+/* The parts of a meta line wrap whole. The dot before a part that starts a
+   line falls outside the box, so no line starts or ends with a dot. */
+.meta, .status { overflow: hidden; }
+.parts { display: flex; flex-wrap: wrap; align-items: center; margin-left: -15px; }
+.parts > * { white-space: nowrap; }
+.parts > *::before { content: "\00b7"; display: inline-block; width: 15px; text-align: center; color: var(--quiet); }
+.row .meta .face { vertical-align: -3px; margin-right: 5px; }
+.row .asks { color: var(--ink); margin-top: 3px; }
+.st { white-space: nowrap; }
+.st svg { width: 9px; height: 9px; margin-right: 4px; vertical-align: 0; }
+.st.needs-you { color: var(--need); font-weight: 500; } .st.failed { color: var(--bad); font-weight: 500; }
+.st.working svg { color: var(--tint); } .st.ready svg { color: var(--ok); } .st.ended svg, .st.canceled svg { color: var(--quiet); }
+.chev { width: 8px; height: 13px; color: var(--chev); flex: none; }
+.btn { appearance: none; border: 0; border-radius: 999px; padding: 7px 16px; min-height: 36px; font-weight: 600; background: var(--fill); color: var(--tint); cursor: pointer; white-space: nowrap; }
+.btn.primary { background: var(--press); color: #fff; }
+.btn.small { padding: 4px 12px; min-height: 30px; font-size: 13px; }
+.btn.plain { background: none; padding: 7px 8px; font-weight: 400; font-size: 17px; }
+.btn.plain.strong { font-weight: 600; }
+.btn.danger { color: var(--bad); }
+.btn:disabled { opacity: .45; cursor: default; }
+.empty { color: var(--ink2); padding: 14px 16px; margin: 0; }
+.quiet-note { color: var(--ink2); margin: 10px 4px 0; }
+/* The intention: the composer that starts work, on home and in the empty
+   main pane of a wide window. */
+.intent { margin: 10px 0 6px; }
+.intent .pill { display: block; padding: 10px 10px 10px 16px; border-radius: 18px; }
+.intent .pill:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--tint) 55%, transparent); }
+.intent textarea { display: block; width: 100%; min-height: 72px; max-height: 40vh; border: 0; background: none; resize: none; outline: none; padding: 4px 0 6px; font-size: 17px; line-height: 24px; }
+.intent .tray { padding: 2px 0 8px; }
+.intent .tools { display: flex; align-items: center; gap: 8px; }
+.intent .grow { flex: 1; }
+.agent-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; min-height: 32px; padding: 0 10px 0 6px; border: 0; border-radius: 999px; background: var(--fill); font-size: 14px; font-weight: 500; cursor: pointer; }
+.agent-chip > span:not(.face) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-chip .dn { width: 10px; height: 6px; flex: none; color: var(--ink2); }
+.agent-chip:disabled { cursor: default; color: var(--ink2); }
+.compose { padding-top: 14vh; max-width: 640px; }
+.compose .hint { margin: 10px 4px 0; }
+/* A proposal of the agent builder is the contact card that the agent would
+   get, with the button that creates it. */
+.draft { align-self: stretch; background: var(--surface); border-radius: 16px; padding: 20px 16px 16px; text-align: center; }
+.draft h3 { margin: 10px 0 0; font-size: 20px; line-height: 25px; }
+.draft > p { margin: 2px auto 0; max-width: 46ch; color: var(--ink2); font-size: 14px; line-height: 19px; }
+.draft .can { text-align: left; margin: 14px auto 0; max-width: 46ch; }
+.draft .k { margin: 12px 0 2px; font-size: 13px; line-height: 18px; color: var(--ink2); }
+.draft ul { list-style: none; margin: 0; padding: 0; }
+.draft li { font-size: 15px; line-height: 21px; padding: 1px 0; }
+.draft li small { display: block; color: var(--ink2); font-size: 13px; line-height: 18px; }
+.draft .do { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
+.draft.old { opacity: .5; } .draft.old .do { display: none; }
+.draft .err { color: var(--bad); margin-top: 0; }
+/* The result of a run: the title, the status, the decision that waits, and
+   what the run produced, above the conversation. */
+.result { padding: 4px 0 0; }
+h1.work { font: 700 28px/34px var(--font); letter-spacing: -.02em; margin: 6px 0 4px; overflow-wrap: anywhere; text-wrap: balance; }
+.status { margin: 0; font-size: 13px; line-height: 20px; color: var(--ink2); }
+.status .face { vertical-align: -3px; margin-right: 5px; }
+.agent-link { border: 0; background: none; padding: 0; color: var(--ink2); font-weight: 500; cursor: pointer; }
+@media (hover: hover) { .agent-link:hover { color: var(--ink); } }
+#decision:not(:empty), #outcome:not(:empty) { margin-top: 16px; }
+.summary { background: var(--surface); border-radius: 12px; padding: 13px 16px; overflow-wrap: anywhere; }
+.summary p, .summary ul, .summary ol, .say p, .say ul, .say ol { margin: 0 0 8px; } .summary > :last-child, .say > :last-child { margin-bottom: 0; }
+.summary ul, .summary ol, .say ul, .say ol { padding-left: 22px; }
+.summary code, .say code { font: .9em var(--mono); background: color-mix(in srgb, var(--ink) 8%, transparent); border-radius: 5px; padding: 1px 5px; }
+.summary pre, .say pre { font: 12.5px/18px var(--mono); border-radius: 8px; padding: 8px 10px; margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14em; overflow: auto; }
+.summary pre { background: var(--fill); } .say pre { background: var(--surface); }
+.summary pre code, .say pre code { background: none; padding: 0; font-size: inherit; }
+.lbl { font: 600 13px/18px var(--font); color: var(--ink2); margin: 18px 0 6px 4px; }
+.err-note { margin: 0; padding: 12px 16px; border-radius: 12px; background: color-mix(in srgb, var(--bad) 10%, var(--surface)); overflow-wrap: anywhere; }
+.err-note + * { margin-top: 12px; }
+.limits { margin: 0; padding: 10px 16px; list-style: none; background: var(--surface); border-radius: 12px; }
+.limits li + li { margin-top: 4px; }
+.did { margin-top: 12px; background: var(--surface); border-radius: 12px; }
+.did > summary, .activity > summary, .advanced > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; }
+.did > summary::-webkit-details-marker, .activity > summary::-webkit-details-marker, .advanced > summary::-webkit-details-marker, .steps > summary::-webkit-details-marker, .more > summary::-webkit-details-marker { display: none; }
+.did > summary { min-height: 44px; padding: 10px 16px; }
+.did > summary b { font-weight: 600; } .did > summary span { color: var(--ink2); font-size: 13px; }
+.did[open] > summary .chev, .activity[open] > summary .chev, .advanced[open] > summary .chev, .steps[open] > summary .chev { transform: rotate(90deg); }
+.did > summary .chev, .activity > summary .chev, .advanced > summary .chev, .steps > summary .chev { transition: transform .2s; }
+.did ol { list-style: none; margin: 0; padding: 0 0 6px; }
+.did li { display: flex; align-items: baseline; gap: 10px; padding: 7px 16px; border-top: .5px solid var(--hair); }
+.did li svg { width: 9px; height: 9px; flex: none; color: var(--quiet); }
+.did li.err svg { color: var(--bad); }
+.did li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.did li > small { flex: none; font-size: 13px; color: var(--ink2); }
+.did li.err > small { color: var(--bad); font-weight: 600; }
+.next { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+/* A decision names the action, the target, and the effect, and shows the
+   exact change before the person decides. A question reads as a question. */
+.decide { background: var(--surface); border-radius: 14px; padding: 14px 16px 16px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--need) 40%, transparent); }
+.decide.question { box-shadow: 0 0 0 1px color-mix(in srgb, var(--tint) 35%, transparent); }
+.decide .kick { margin: 0 0 2px; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--need); }
+.decide.question .kick { color: var(--tint); }
+.decide h3 { margin: 0; font: 600 17px/23px var(--font); overflow-wrap: anywhere; }
+.decide .effect { margin: 4px 0 0; }
+.decide .why { margin: 8px 0 0; font-size: 13px; line-height: 18px; color: var(--ink2); }
+.decide .more { margin-top: 8px; font-size: 13px; line-height: 18px; color: var(--ink2); }
+.decide .more > summary { display: inline-flex; align-items: center; min-height: 32px; cursor: pointer; list-style: none; color: var(--tint); }
+.decide .more p { margin: 2px 0 0; }
+.decide .do { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+.decide textarea { width: 100%; margin-top: 10px; border: 0; border-radius: 10px; background: var(--fill); padding: 8px 10px; min-height: 4.5em; resize: vertical; }
+.decide .pick { display: grid; gap: 8px; margin-top: 12px; } .decide .pick.two { grid-template-columns: 1fr 1fr; }
+.decide .pick .btn { white-space: normal; min-height: 40px; }
+.decide .decline { display: block; margin: 6px auto 0; color: var(--ink2); }
+.decide .fld { display: block; margin-top: 10px; } .decide .fld > span { display: block; font-size: 13px; line-height: 18px; color: var(--ink2); margin-bottom: 4px; }
+.decide .fld input:not(.switch), .decide .fld select { width: 100%; min-height: 36px; border: 0; border-radius: 10px; background: var(--fill); padding: 8px 10px; }
+.decide .fld.bool { display: flex; align-items: center; justify-content: space-between; gap: 12px; } .decide .fld.bool > span { margin: 0; color: var(--ink); font-size: 15px; }
+/* A connection is no permission: the person signs in at the service, and
+   the agent then acts as the person there. */
+.decide.connect { box-shadow: 0 0 0 1px color-mix(in srgb, var(--tint) 35%, transparent); }
+.decide.connect .kick { color: var(--tint); }
+.link-note { margin: 10px 0 0; font-size: 13px; line-height: 18px; color: var(--ink2); overflow-wrap: anywhere; }
+.link-note a { color: var(--tint); }
+.code, .io { font: 12.5px/18px var(--mono); background: var(--fill); border-radius: 8px; padding: 8px 10px; margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14em; overflow: auto; }
+.code > span, .io > span { display: block; margin: 0 -10px; padding: 0 10px; }
+.code > span:first-child, .io > span:first-child { margin-top: -8px; padding-top: 8px; }
+.code > span:last-child, .io > span:last-child { margin-bottom: -8px; padding-bottom: 8px; }
+.code > .at, .io > .at { color: var(--ink2); }
+.code > .add, .io > .add, .code > .del, .io > .del { position: relative; padding-left: 24px; }
+.code > .add, .io > .add { background: color-mix(in srgb, var(--add) 16%, transparent); }
+.code > .del, .io > .del { background: color-mix(in srgb, var(--del) 14%, transparent); }
+.code > .add::before, .io > .add::before, .code > .del::before, .io > .del::before { position: absolute; left: 10px; color: var(--ink2); }
+.code > .add::before, .io > .add::before { content: "+"; } .code > .del::before, .io > .del::before { content: "\2212"; }
+/* The conversation, as in Messages: bubbles with tails, and the message bar
+   at the bottom. */
+.screen.talk { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; padding-bottom: 0; }
+.screen.talk > .chat { flex: 1 0 auto; }
+.sec.conv { margin-top: 28px; }
+.chat { display: flex; flex-direction: column; padding: 2px 0 12px; }
+.chat > * { margin: 12px 0 0; }
+.chat > :first-child { margin-top: 0; }
+.chat > .mine + .mine, .chat > .say + .say, .chat > .att + .mine, .chat > .who + *, .chat > .say + .typing { margin-top: 3px; }
+.who { align-self: flex-end; font-size: 12px; line-height: 16px; color: var(--ink2); margin-right: 14px; }
+.when { align-self: center; font-size: 12px; line-height: 16px; color: var(--ink2); } .chat > .when { margin-top: 18px; } .chat > .when:first-child { margin-top: 4px; }
+.when b { font-weight: 600; }
+.mine, .say, .typing { position: relative; max-width: min(78%, 68ch); padding: 7px 13px; border-radius: 18px; line-height: 21px; overflow-wrap: anywhere; }
+.mine { align-self: flex-end; background: var(--press); color: #fff; white-space: pre-wrap; }
+.say, .typing { align-self: flex-start; background: var(--bubble); color: var(--ink); }
+.mine:not(:has(+ .mine))::before, .say:not(:has(+ .say, + .typing))::before, .typing::before,
+.mine:not(:has(+ .mine))::after, .say:not(:has(+ .say, + .typing))::after, .typing::after { content: ""; position: absolute; bottom: 0; height: 17px; }
+.mine:not(:has(+ .mine))::before { right: -7px; width: 20px; background: var(--press); border-bottom-left-radius: 16px 14px; }
+.mine:not(:has(+ .mine))::after { right: -10px; width: 10px; background: var(--canvas); border-bottom-left-radius: 10px; }
+.say:not(:has(+ .say, + .typing))::before, .typing::before { left: -7px; width: 20px; background: var(--bubble); border-bottom-right-radius: 16px 14px; }
+.say:not(:has(+ .say, + .typing))::after, .typing::after { left: -10px; width: 10px; background: var(--canvas); border-bottom-right-radius: 10px; }
+/* A run that hands work to other agents reads as a group conversation: a
+   handoff is a line with the face of the helper, and its answer is a bubble
+   with its face and its name. */
+.hand { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 86%; border: 0; background: none; padding: 2px 6px; border-radius: 8px; color: var(--ink2); font: inherit; font-size: 12px; line-height: 16px; }
+.hand[data-id] { cursor: pointer; } .hand > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.from { align-self: stretch; display: flex; align-items: flex-end; gap: 8px; }
+.from > .face { flex: none; margin-bottom: 1px; }
+.from > .say { max-width: min(calc(78% - 36px), 68ch); }
+.who.them { align-self: flex-start; margin: 0 0 0 50px; }
+.typing { display: flex; gap: 4px; padding: 13px 14px; }
+.typing i { width: 8px; height: 8px; border-radius: 50%; background: var(--ink2); opacity: .35; animation: typing 1.4s ease-in-out infinite; }
+.typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
+@keyframes typing { 0%, 60%, 100% { opacity: .35; transform: none; } 30% { opacity: .9; transform: translateY(-2px); } }
+.att { align-self: flex-end; display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: flex-end; gap: 4px; max-width: 78%; }
+.pic { display: block; padding: 0; border: 0; border-radius: 18px; overflow: hidden; background: var(--fill); cursor: pointer; }
+.pic img { display: block; max-width: 240px; max-height: 300px; min-width: 64px; min-height: 64px; object-fit: cover; }
+.doc { display: flex; align-items: center; gap: 10px; max-width: 100%; padding: 9px 14px 9px 11px; border: 0; border-radius: 18px; background: var(--bubble); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.doc .fi { flex: none; width: 20px; height: 25px; color: var(--press); }
+.doc span { min-width: 0; display: flex; flex-direction: column; }
+.doc b, .doc small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc b { font-weight: 600; font-size: 14px; line-height: 19px; } .doc small { font-size: 12px; line-height: 16px; color: var(--ink2); }
+.steps { align-self: flex-start; max-width: 68ch; border-radius: 12px; }
+.steps[open] { align-self: stretch; background: var(--surface); }
+.steps > summary { display: flex; align-items: center; gap: 8px; padding: 2px 4px; font-size: 13px; line-height: 18px; color: var(--ink2); cursor: pointer; list-style: none; border-radius: 8px; }
+.steps[open] > summary { padding: 9px 14px; }
+.step { padding: 10px 14px; border-top: .5px solid var(--hair); }
+.step header { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; line-height: 18px; font-weight: 600; }
+.step header span { font-weight: 400; color: var(--ink2); }
+.step.err header span, .io.err, .cap.err { color: var(--bad); }
+.files { background: var(--surface); border-radius: 12px; max-width: 68ch; overflow: hidden; }
+.file { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 44px; padding: 8px 14px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; position: relative; }
+.file + .file { border-top: .5px solid var(--hair); }
+.file:active { background: var(--fill); }
+.file .fi { flex: none; width: 20px; height: 25px; color: var(--press); }
+.file .fn { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.file .fn b, .file .fn small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file .fn b { font-weight: 600; font-size: 14px; line-height: 19px; }
+.file .fn small { font-size: 12px; line-height: 16px; color: var(--ink2); }
+.file .fo { flex: none; font-size: 13px; line-height: 18px; color: var(--ink2); }
+.file.gone .fi, .file.gone b { color: var(--ink2); } .file.gone b { text-decoration: line-through; }
+.path { margin: 4px 0 0; font: 13px/18px var(--mono); color: var(--ink2); overflow-wrap: anywhere; }
+.lines { counter-reset: ln; margin: 14px 0 0; padding: 10px 0; background: var(--surface); border-radius: 12px; font: 12.5px/19px var(--mono); white-space: pre; overflow: auto; tab-size: 4; }
+.lines span { display: block; padding-right: 16px; }
+.lines span::before { counter-increment: ln; content: counter(ln); display: inline-block; width: 3em; margin-right: 14px; text-align: right; color: var(--ink2); opacity: .7; user-select: none; }
+.shot { display: block; max-width: 100%; height: auto; margin: 14px auto 0; border-radius: 12px; background: var(--surface); }
+.note { margin: 14px 0 0; padding: 10px 14px; border-radius: 12px; background: color-mix(in srgb, var(--press) 12%, var(--surface)); font-size: 14px; line-height: 20px; }
+.meta-line { margin: 10px 2px 0; font-size: 13px; line-height: 18px; color: var(--ink2); }
+.cap { align-self: center; text-align: center; max-width: 60ch; font-size: 12px; line-height: 16px; color: var(--ink2); margin: 0; }
+.cap.notice { background: var(--fill); color: var(--ink); border-radius: 10px; padding: 6px 12px; }
+.activity { margin: 14px 0 8px; scroll-margin-bottom: 96px; }
+.earlier { display: flex; justify-content: center; margin: 0 0 12px; }
+.dl-note { margin: 10px 2px 0; font-size: 13px; line-height: 18px; color: var(--ink2); }
+/* The sign-in screen: one primary way in, and the token form behind a quiet
+   disclosure. */
+.signin { max-width: 420px; margin: 12vh auto 0; }
+.signin .brand { width: 40px; height: 40px; margin-bottom: 8px; } .signin .brand svg { width: 34px; height: 34px; }
+.signin .btn.wide { width: 100%; min-height: 44px; margin-top: 8px; }
+/* A screen with one task, such as Connect: centered, with the action at
+   full width. */
+.solo { max-width: 420px; margin: 8vh auto 0; }
+.solo .mark { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%; background: var(--fill); color: var(--tint); margin-bottom: 12px; }
+.solo .mark svg { width: 24px; height: 24px; }
+.solo .mark.ok { color: var(--ok); }
+.solo .btn.wide { width: 100%; min-height: 44px; margin-top: 8px; }
+.solo .btn.plain.wide { color: var(--ink2); }
+.solo .hint { margin: 14px 4px 0; text-align: center; }
+/* A work item that waits for a connection keeps its Connect button beside
+   the row, so no button sits inside another. */
+.row-wrap { display: flex; align-items: center; position: relative; }
+.row-wrap > .row { flex: 1; min-width: 0; }
+.row-wrap > .btn { flex: none; margin-right: 12px; }
+.row-wrap:has(> .row.sel) { background: color-mix(in srgb, var(--tint) 13%, transparent); }
+.row-wrap > .row.sel, .row-wrap > .row.sel:hover { background: none; }
+.row-wrap + .row::before, .row + .row-wrap::before, .row-wrap + .row-wrap::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; height: .5px; background: var(--hair); }
+/* A service in Connections: its name, its state, and one action. */
+.conn .row { cursor: default; }
+.conn .s.on { color: var(--ok); }
+.token-way { margin-top: 22px; color: var(--ink2); }
+.token-way > summary { display: inline-flex; align-items: center; min-height: 44px; cursor: pointer; color: var(--tint); }
+.token-way .group { margin-top: 6px; }
+.activity > summary { min-height: 36px; padding: 4px; width: max-content; font-size: 13px; color: var(--ink2); }
+.evl { list-style: none; margin: 4px 0 0; padding: 8px 0; background: var(--surface); border-radius: 12px; font-size: 13px; line-height: 18px; }
+.evl li { display: flex; gap: 12px; padding: 3px 14px; }
+.evl time { flex: none; color: var(--ink2); font: 12px/18px var(--mono); }
+.evl span { min-width: 0; overflow-wrap: anywhere; }
+.composer { position: sticky; bottom: 0; z-index: 5; margin: 0 -20px; padding: 8px 20px calc(12px + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--canvas) 86%, transparent); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
+.composer > form { display: flex; align-items: flex-end; gap: 8px; }
+.attach { flex: none; width: 34px; height: 34px; border: 0; border-radius: 50%; display: grid; place-items: center; background: var(--fill); color: var(--ink2); cursor: pointer; }
+.attach svg { width: 14px; height: 14px; }
+.pill { flex: 1; min-width: 0; background: var(--surface); border-radius: 18px; box-shadow: 0 0 0 .5px var(--hair); padding: 3px 3px 3px 14px; transition: box-shadow .15s; }
+.drop .pill { box-shadow: 0 0 0 2px var(--tint); }
+.pill .line { display: flex; align-items: flex-end; gap: 8px; }
+.composer textarea { flex: 1; min-width: 0; border: 0; background: none; resize: none; padding: 4px 0; max-height: 9em; outline: none; line-height: 21px; }
+.composer .pill:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--tint) 55%, transparent); }
+.send { position: relative; flex: none; width: 28px; height: 28px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--press); color: #fff; cursor: pointer; }
+.send:disabled { background: var(--fill); color: var(--ink2); cursor: default; }
+.send svg { width: 13px; height: 13px; }
+.tray { display: flex; gap: 8px; overflow-x: auto; padding: 8px 11px 6px 0; }
+.tray:empty { display: none; }
+.chip { position: relative; flex: none; display: flex; align-items: center; gap: 8px; height: 64px; border-radius: 12px; background: var(--fill); overflow: hidden; }
+.chip img { width: 64px; height: 64px; object-fit: cover; }
+.chip.file-chip { max-width: 200px; padding: 0 30px 0 10px; }
+.chip .fi { flex: none; width: 20px; height: 25px; color: var(--press); }
+.chip span { min-width: 0; display: flex; flex-direction: column; font-size: 12px; line-height: 16px; }
+.chip b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .chip small { color: var(--ink2); }
+.chip .x { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; background: rgba(0,0,0,.6); color: #fff; cursor: pointer; }
+.chip .x svg { width: 8px; height: 8px; }
+.pinned:has(.jump:not([hidden])) { display: flex; justify-content: center; margin-bottom: 8px; }
+.jump { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 4px 14px; border: 0; border-radius: 999px; background: var(--surface); box-shadow: 0 0 0 .5px var(--hair), 0 2px 8px rgba(0,0,0,.08); color: var(--ink); font-size: 13px; font-weight: 500; cursor: pointer; }
+.jump svg { width: 9px; height: 9px; color: var(--need); }
+.alert { display: flex; align-items: flex-start; gap: 10px; margin: 10px 0; padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, var(--bad) 12%, var(--surface)); }
+.alert p { flex: 1; margin: 0; }
+.field { display: block; padding: 10px 16px; position: relative; }
+.field label { display: block; font-size: 13px; line-height: 18px; color: var(--ink2); margin-bottom: 2px; }
+.field input, .field select, .field textarea { width: 100%; border: 0; background: none; padding: 2px 0; outline: none; }
+.field textarea { resize: vertical; min-height: 5.5em; }
+.field textarea.short { min-height: 3em; }
+.field textarea.mono { font: 12.5px/18px var(--mono); }
+.field:focus-within { box-shadow: inset 3px 0 0 var(--tint); }
+.hint { font-size: 12px; line-height: 16px; color: var(--ink2); margin: 6px 16px 0; }
+.form .group + .group, .form .hint + .group { margin-top: 22px; }
+.advanced { margin-top: 30px; }
+.advanced > summary { min-height: 44px; padding: 4px; width: max-content; font-weight: 600; }
+.advanced > .group:first-of-type { margin-top: 6px; }
+.switch { appearance: none; width: 40px; height: 24px; border-radius: 999px; background: var(--fill); position: relative; cursor: pointer; transition: background .2s; margin: 0; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .2s; }
+.switch:checked { background: var(--ok); } .switch:checked::after { transform: translateX(16px); }
+/* The feather is the brand mark, and a quiet sign that a screen loads. */
+.loading { display: grid; place-items: center; min-height: 40vh; color: var(--quiet); animation: fade .3s ease-out .3s both; }
+.loading.small { min-height: 120px; }
+.loading svg { width: 26px; height: 26px; animation: drift 2.4s ease-in-out infinite; }
+@keyframes fade { from { opacity: 0; } }
+@keyframes drift { 50% { transform: translateY(-3px) rotate(-8deg); } }
+.enter { animation: push .24s cubic-bezier(.2,.8,.2,1); }
+.enter.pop { animation-name: pop; }
+@keyframes push { from { transform: translateX(24px); opacity: 0; } }
+@keyframes pop { from { transform: translateX(-24px); opacity: 0; } }
+/* An agent has a face, as a contact has a picture. It stays small. */
+.face { position: relative; display: inline-block; flex: none; width: var(--s); height: var(--s); }
+.face svg { display: block; width: 100%; height: 100%; }
+.card-top { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 16px 0 4px; }
+.card-top h1 { font: 700 26px/32px var(--font); letter-spacing: -.02em; margin: 12px 0 4px; overflow-wrap: anywhere; }
+.card-top p { margin: 0 0 18px; max-width: 46ch; font-size: 15px; line-height: 21px; color: var(--ink2); }
+@media (pointer: coarse) {
+  .btn, .btn.small, .tabs button, .agent-chip, .menu > button, .decide .more > summary, .activity > summary { min-height: 44px; }
+  .me, .attach { width: 44px; height: 44px; }
+  .send::after { content: ""; position: absolute; inset: -8px; }
+  .jump { min-height: 44px; }
+  /* A small control in a line of text keeps its look and gets a larger
+     area to tap. */
+  .agent-link, .hand, .chip .x { position: relative; }
+  .agent-link::after, .hand::after { content: ""; position: absolute; inset: -12px -4px; }
+  .chip .x::after { content: ""; position: absolute; inset: -11px; }
+  .row { min-height: 52px; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+/* Inline in an MCP host, the frame grows with the page, so no screen asks
+   for the height of the window. */
+:root[data-mode="inline"] .screen.talk { min-height: 0; }
+:root[data-mode="inline"] .compose { padding-top: 24px; }
+:root[data-mode="inline"] .loading { min-height: 120px; }
+@media (max-width: 520px) { .screen { padding: 0 16px 24px; } .bar, .top, .composer { margin: 0 -16px; } .composer { padding-left: 16px; padding-right: 16px; } h1.work { font-size: 24px; line-height: 30px; } }
+</style>
+</head>
+<body>
+<div class="app" id="app"><aside class="side" id="side"></aside><main class="detail" id="detail"><div class="loading" role="status" aria-label="Loading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 17.6C6.3 11.6 10.6 5.6 19.6 4.4 19.2 11.8 14.6 16.8 8.6 17.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.6 20.4 15.6 8.4M8.4 13.2h3.4M11 10.6h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></main></div>
+<script>
+(() => {
+'use strict';
+
+/* ---------- helpers ---------- */
+const $ = (sel, root) => (root || document).querySelector(sel);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]);
+const enc = encodeURIComponent;
+const num = n => (n || 0).toLocaleString();
+const list = s => String(s || '').split(/[\n,]/).map(x => x.trim()).filter(Boolean);
+const firstLine = s => (String(s || '').split('\n').map(x => x.trim()).find(Boolean) || '');
+const isActive = r => r && !['completed', 'failed', 'canceled'].includes(r.state);
+const canRun = role => role === 'owner' || role === 'operator';
+const cap = s => s ? s[0].toUpperCase() + s.slice(1) : '';
+const lower = s => s ? s[0].toLowerCase() + s.slice(1) : '';
+const clean = o => Object.fromEntries(Object.entries(o || {}).filter(([, v]) => v !== undefined && v !== '' && v !== null));
+const runIdOf = x => x && (x.id || (x.run && x.run.id));
+const smooth = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+const obj = v => { if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { return null; } } return v && typeof v === 'object' && !Array.isArray(v) ? v : null; };
+const FEATHER = '<path d="M6.4 17.6C6.3 11.6 10.6 5.6 19.6 4.4 19.2 11.8 14.6 16.8 8.6 17.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'
+  + '<path d="M3.6 20.4 15.6 8.4M8.4 13.2h3.4M11 10.6h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>';
+const svg = {
+  chev: '<svg class="chev" viewBox="0 0 8 13" aria-hidden="true"><path d="M1.5 1.5 6.5 6.5 1.5 11.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  back: '<svg viewBox="0 0 11 18" aria-hidden="true"><path d="M9.5 1.5 2 9l7.5 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  send: '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 12V2M2.5 6.5 7 2l4.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  plus: '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1.5v11M1.5 7h11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  x: '<svg viewBox="0 0 8 8" aria-hidden="true"><path d="m1 1 6 6M7 1 1 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  down: '<svg class="dn" viewBox="0 0 10 6" aria-hidden="true"><path d="m1 1 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  check: '<svg class="ck" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  doc: '<svg class="fi" viewBox="0 0 20 25" aria-hidden="true"><path d="M3.5 1h8.25L18.5 7.75V22a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M11.5 1.25V6a2 2 0 0 0 2 2h4.75" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+  feather: `<svg viewBox="0 0 24 24" aria-hidden="true">${FEATHER}</svg>`,
+  link: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3.2-3.2a4.5 4.5 0 0 0-6.4-6.4l-1.4 1.4M14 10a4.5 4.5 0 0 0-6.4 0l-3.2 3.2a4.5 4.5 0 0 0 6.4 6.4l1.4-1.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  done: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5 10 17.5 19 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+const loadingHTML = small => `<div class="loading${small ? ' small' : ''}" role="status" aria-label="Loading">${svg.feather}</div>`;
+// store keeps a small preference of this browser. Storage can be off, so
+// every call catches its error.
+const store = {
+  get: k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* no storage */ } },
+};
+// draft keeps what a person writes in one place, so it survives a move to
+// another screen, a poll, and a sign-in. The places are home, run:<id>, and
+// create. Text goes to sessionStorage. Files stay in memory, and also go to
+// sessionStorage while they hold about 1 MB or less.
+const FILES = new Map();
+const draft = {
+  text: c => { try { return sessionStorage.getItem('fw.draft.' + c) || ''; } catch (e) { return ''; } },
+  saveText: (c, v) => {
+    try { if (v) sessionStorage.setItem('fw.draft.' + c, v); else sessionStorage.removeItem('fw.draft.' + c); } catch (e) { /* no storage */ }
+  },
+  files: c => {
+    if (!FILES.has(c)) {
+      let f = [];
+      try { f = JSON.parse(sessionStorage.getItem('fw.files.' + c) || '[]'); } catch (e) { f = []; }
+      FILES.set(c, Array.isArray(f) ? f : []);
+    }
+    return FILES.get(c);
+  },
+  saveFiles: c => {
+    const f = FILES.get(c) || [], small = f.length && f.reduce((n, x) => n + x.size, 0) <= 1e6;
+    // A full or closed storage leaves the files in memory only.
+    try { if (small) sessionStorage.setItem('fw.files.' + c, JSON.stringify(f)); else sessionStorage.removeItem('fw.files.' + c); } catch (e) { /* in memory only */ }
+  },
+  clear: c => { draft.saveText(c, ''); FILES.set(c, []); draft.saveFiles(c); },
+};
+// morph changes the children of el to match html and keeps each node that
+// stays. A child with the same data-key keeps its node, so focus, the
+// caret, an open details, and an open menu survive. A form that has the
+// focus or edited fields keeps all of its content.
+function morph(el, html) {
+  const t = document.createElement('template');
+  t.innerHTML = html;
+  patch(el, t.content);
+}
+const keyOf = n => n.nodeType === 1 ? n.getAttribute('data-key') || '' : '';
+const held = n => n.tagName === 'FORM' && (!!n.dataset.dirty || n.contains(document.activeElement));
+// mine names the attributes that belong to the person, not to the server.
+const mine = (n, a) => (a === 'open' && n.tagName === 'DETAILS') || (a === 'hidden' && n.classList.contains('menu')) || a === 'aria-expanded' || a === 'data-dirty';
+function patch(parent, next) {
+  const keyed = new Map();
+  for (const c of parent.children) if (keyOf(c)) keyed.set(keyOf(c), c);
+  let i = 0;
+  for (const w of [...next.childNodes]) {
+    const cur = parent.childNodes[i] || null, k = keyOf(w);
+    let m = null;
+    if (k) { m = keyed.get(k) || null; keyed.delete(k); }
+    else if (cur && !keyOf(cur) && cur.nodeType === w.nodeType && cur.nodeName === w.nodeName) m = cur;
+    if (m) { if (m !== cur) parent.insertBefore(m, cur); update(m, w); }
+    else parent.insertBefore(w, cur);
+    i++;
+  }
+  while (parent.childNodes.length > i) parent.lastChild.remove();
+}
+function update(n, w) {
+  if (n.nodeType !== 1) { if (n.nodeValue !== w.nodeValue) n.nodeValue = w.nodeValue; return; }
+  if (held(n)) return;
+  for (const a of [...w.attributes]) if (n.getAttribute(a.name) !== a.value && !mine(n, a.name)) n.setAttribute(a.name, a.value);
+  for (const a of [...n.attributes]) if (!w.hasAttribute(a.name) && !mine(n, a.name)) n.removeAttribute(a.name);
+  patch(n, w);
+}
+const OPS = {created: 'Created', changed: 'Edited', edited: 'Edited', removed: 'Removed', renamed: 'Renamed'};
+function bytes(n) {
+  if (n < 1024) return n === 1 ? '1 byte' : (n || 0) + ' bytes';
+  if (n < 1048576) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+// ago words a time for a person: just now, 4 minutes ago, yesterday, Oct 12.
+function ago(ts) {
+  if (!ts) return '';
+  const s = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+  const n = (v, one) => `${v} ${one}${v === 1 ? '' : 's'} ago`;
+  if (s < 60) return 'just now';
+  if (s < 3600) return n(Math.floor(s / 60), 'minute');
+  if (s < 86400) return n(Math.floor(s / 3600), 'hour');
+  if (s < 172800) return 'yesterday';
+  return new Date(ts).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+}
+// The status of a work item is a word, with an icon that has its own shape.
+// The server names it. A run without one gets it from its state.
+const STATUS = {'needs-you': 'Needs you', working: 'Working', ready: 'Ready to review', ended: 'Finished', failed: 'Failed', canceled: 'Canceled'};
+const ICON = {
+  'needs-you': '<circle cx="5" cy="5" r="4.2" fill="currentColor"/>',
+  working: '<circle cx="5" cy="5" r="3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="16 7"/>',
+  ready: '<circle cx="5" cy="5" r="3.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5" cy="5" r="1.8" fill="currentColor"/>',
+  ended: '<circle cx="5" cy="5" r="3.6" fill="none" stroke="currentColor" stroke-width="1.4"/>',
+  failed: '<path d="M5 .6 9.6 9H.4Z" fill="currentColor"/>',
+  canceled: '<circle cx="5" cy="5" r="3.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="m2.6 7.4 4.8-4.8" stroke="currentColor" stroke-width="1.4"/>',
+};
+function statusOf(r) {
+  if (!r) return '';
+  if (r.status) return r.status;
+  switch (r.state) {
+    case 'input-required': return 'needs-you';
+    case 'completed': return r.output ? 'ready' : 'ended';
+    case 'failed': return 'failed';
+    case 'canceled': return 'canceled';
+  }
+  return 'working';
+}
+const badge = st => `<span class="st ${esc(st)}"><svg viewBox="0 0 10 10" aria-hidden="true">${ICON[st] || ICON.ended}</svg>${esc(STATUS[st] || cap(st))}</span>`;
+// timeWords says when a work item started, asked, or ended.
+function timeWords(r, st) {
+  if (st === 'working') return 'Started ' + ago(r.createdAt);
+  if (st === 'needs-you') return 'Asked ' + ago((r.pending && r.pending.requestedAt) || r.updatedAt);
+  return cap(ago(r.updatedAt));
+}
+function memberWord(m) {
+  if (!m) return '';
+  if (m.self) return 'here';
+  if (m.state === 'live') return 'online';
+  if (m.state === 'stopped') return 'stopped';
+  return (m.url || '').startsWith('ax:') ? 'asleep' : 'offline';
+}
+// edit reads the input of the files and memory tools, where command names
+// the action on a path. It returns the action in words and the lines that
+// show the change, or null for any other input.
+function edit(v) {
+  v = obj(v);
+  if (!v || typeof v.command !== 'string') return null;
+  const path = typeof v.path === 'string' ? v.path : '';
+  const lines = (kind, s) => typeof s === 'string' && s !== '' ? s.replace(/\n$/, '').split('\n').map(t => [kind, t]) : [];
+  switch (path && v.command) {
+    case 'view': return {what: 'read ' + path, lines: Array.isArray(v.view_range) && v.view_range.length === 2
+      ? [['at', `Lines ${v.view_range[0]} to ${v.view_range[1] === -1 ? 'the end' : v.view_range[1]}`]] : []};
+    case 'create': return {what: 'create ' + path, lines: lines('', v.file_text)};
+    case 'str_replace': return {what: 'edit ' + path, lines: lines('del', v.old_str).concat(lines('add', v.new_str))};
+    case 'insert': return {what: 'edit ' + path, lines: [['at', v.insert_line === 0 ? 'At the top' : `After line ${v.insert_line}`]]
+      .concat(lines('add', typeof v.insert_text === 'string' ? v.insert_text : v.new_str))};
+    case 'delete': return {what: 'delete ' + path, lines: []};
+  }
+  if (v.command === 'rename' && typeof v.old_path === 'string' && typeof v.new_path === 'string') return {what: `rename ${v.old_path} to ${v.new_path}`, lines: []};
+  return null;
+}
+// wants names what an approval lets the run do, in words, or '' when the
+// input does not say it.
+function wants(p) {
+  const e = edit(p.input);
+  if (e) return e.what;
+  const v = obj(p.input);
+  return v && typeof v.command === 'string' ? 'run a command' : '';
+}
+// stepWords names a tool call in the conversation by what it does, such as
+// "Create app.env" or "Run a command". Only a tool whose input says nothing
+// keeps its name, inside the open steps.
+function stepWords(tool, input) {
+  const e = edit(input);
+  if (e) return cap(e.what);
+  const v = obj(input);
+  if (v && typeof v.command === 'string') return 'Run a command';
+  if (v && typeof v.url === 'string') return 'Send a web request';
+  return tool || 'A step';
+}
+// allowWords is what a person allows, in the words of the decision card:
+// "a command", or "it to create app.env".
+function allowWords(input) {
+  const e = edit(input);
+  if (e) return 'it to ' + e.what;
+  const v = obj(input);
+  if (v && typeof v.command === 'string') return 'a command';
+  if (v && typeof v.url === 'string') return 'a web request';
+  return 'this step';
+}
+// preview shows the part of a tool input that a person decides on, as
+// HTML. An edit shows its change, and head puts the action first.
+function preview(v, head) {
+  if (v == null || v === '') return '';
+  const change = edit(v);
+  if (change) return (head ? [['at', cap(change.what)]] : []).concat(change.lines).map(([k, t]) => `<span class="${k || 'ln'}">${esc(t) || ' '}</span>`).join('');
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { return esc(v); } }
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    for (const k of ['command', 'path', 'url', 'query', 'question', 'content']) if (typeof v[k] === 'string') return esc(v[k]);
+    const keys = Object.keys(v);
+    if (keys.length === 1 && typeof v[keys[0]] === 'string') return esc(v[keys[0]]);
+  }
+  return esc(JSON.stringify(v, null, 2));
+}
+// md renders a small, safe subset of Markdown: the text is escaped first.
+const inline = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+function md(src) {
+  const out = [];
+  String(src || '').split('```').forEach((part, i) => {
+    if (i % 2) { out.push(`<pre><code>${esc(part.replace(/^[^\n]*\n/, '').replace(/\n$/, ''))}</code></pre>`); return; }
+    for (const block of part.split(/\n{2,}/)) {
+      const lines = block.trim().split('\n');
+      if (!lines[0]) continue;
+      const item = /^\s*([-*]|\d+\.)\s+/;
+      if (lines.every(l => item.test(l))) {
+        const tag = /^\s*\d/.test(lines[0]) ? 'ol' : 'ul';
+        out.push(`<${tag}>${lines.map(l => `<li>${inline(l.replace(item, ''))}</li>`).join('')}</${tag}>`);
+      } else out.push(`<p>${lines.map(l => /^#{1,4}\s/.test(l) ? `<b>${inline(l.replace(/^#+\s*/, ''))}</b>` : inline(l)).join('<br>')}</p>`);
+    }
+  });
+  return out.join('');
+}
+
+/* ---------- the host bridge: JSON-RPC over postMessage (MCP Apps 2026-01-26) ---------- */
+const bridge = (() => {
+  let seq = 0;
+  const pending = new Map();
+  const handlers = new Map();
+  const post = msg => window.parent.postMessage(msg, '*');
+  function request(method, params, timeout) {
+    return new Promise((resolve, reject) => {
+      const id = ++seq;
+      pending.set(id, {resolve, reject});
+      if (timeout) setTimeout(() => { if (pending.delete(id)) reject(new Error(method + ' timed out')); }, timeout);
+      post({jsonrpc: '2.0', id, method, params: params || {}});
+    });
+  }
+  const notify = (method, params) => post({jsonrpc: '2.0', method, params: params || {}});
+  window.addEventListener('message', ev => {
+    if (ev.source !== window.parent) return;
+    const m = ev.data;
+    if (!m || m.jsonrpc !== '2.0') return;
+    if (m.id !== undefined && m.method === undefined) {
+      const p = pending.get(m.id);
+      if (!p) return;
+      pending.delete(m.id);
+      if (m.error) p.reject(new Error(m.error.message || 'The host refused the request.'));
+      else p.resolve(m.result);
+      return;
+    }
+    if (!m.method) return;
+    const h = handlers.get(m.method);
+    if (m.id === undefined) { if (h) h(m.params || {}); return; }
+    Promise.resolve(h ? h(m.params || {}) : {}).then(
+      r => post({jsonrpc: '2.0', id: m.id, result: r || {}}),
+      e => post({jsonrpc: '2.0', id: m.id, error: {code: -32000, message: String(e && e.message || e)}}));
+  });
+  return {request, notify, on: (method, h) => handlers.set(method, h)};
+})();
+
+/* ---------- backends: the same calls through an MCP host or the native API ---------- */
+// toBlob turns base64 into a Blob of the media type.
+function toBlob(b64, type) {
+  const bin = atob(b64 || '');
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return new Blob([out], {type: type || 'application/octet-stream'});
+}
+const mcp = (() => {
+  async function raw(name, args) {
+    const res = await bridge.request('tools/call', {name, arguments: args || {}});
+    if (res && res.isError) throw new Error((res.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n') || 'The tool ' + name + ' failed.');
+    return res || {};
+  }
+  const call = (name, args) => raw(name, args).then(res => res.structuredContent || {});
+  return {
+    whoami: () => call('whoami'),
+    home: () => call('dashboard', {view: 'home'}).then(r => r.home || {}),
+    agents: () => call('agents_list').then(r => r.agents || []),
+    agent: name => call('agent_get', {name}).then(r => r.agent),
+    putAgent: p => call('agent_put', p).then(r => r.agent),
+    deleteAgent: name => call('agent_delete', {name}),
+    runs: f => call('runs_list', clean(f)),
+    result: id => call('run_result', {runId: id}).then(r => r.result),
+    items: (id, o) => call('run_events', clean({runId: id, from: o && o.from, before: o && o.before, limit: (o && o.limit) || 500})),
+    activity: id => call('run_events', {runId: id, limit: 200}).then(r => r.events || []),
+    file: (id, path) => call('run_file', {runId: id, path}),
+    download: async (id, path) => {
+      const res = await raw('run_file', {runId: id, path, raw: true});
+      const r = (res.content || []).find(c => c.type === 'resource' && c.resource);
+      if (!r) throw new Error('The host sent no file.');
+      return r.resource.blob != null ? toBlob(r.resource.blob, r.resource.mimeType) : new Blob([r.resource.text || ''], {type: r.resource.mimeType || 'text/plain'});
+    },
+    start: req => call('run', Object.assign({wait: false}, clean(req))),
+    builder: b => call('agent_builder', clean(b)),
+    previewAgent: p => call('agent_put', Object.assign({}, p, {dryRun: true})).then(r => r.draft),
+    send: (id, content, files) => call('send', clean({runId: id, content, files: files && files.length ? files : undefined})),
+    decide: (id, approvalId, decision, note, content) => call('approve', clean({runId: id, approvalId, decision, note, content})),
+    cancel: id => call('cancel', {runId: id}),
+    fleet: () => call('fleet'),
+    connections: () => call('connections').then(r => r.connections || []),
+    // A host has no page of fw to come back to, so the connection opens
+    // at the address that the connections tool gives for the service.
+    connect: async server => {
+      const all = await call('connections').then(r => r.connections || []);
+      const c = all.find(x => x.server === server);
+      const url = c && (c.url || c.connectUrl);
+      if (!url) throw new Error('This host gives no address to connect ' + server + '. Connect it on the page of fw.');
+      return {url};
+    },
+    disconnect: server => call('disconnect', {server}),
+  };
+})();
+const native = (() => {
+  const KEY = 'fw.token';
+  const token = () => { try { return sessionStorage.getItem(KEY) || ''; } catch (e) { return ''; } };
+  const auth = () => token() ? {Authorization: 'Bearer ' + token()} : {};
+  async function req(method, path, body) {
+    const headers = Object.assign({Accept: 'application/json'}, auth());
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const res = await fetch(path, {method, headers, body: body === undefined ? undefined : JSON.stringify(body)});
+    if (res.status === 204) return null;
+    const raw = await res.text();
+    let data = null;
+    try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
+    if (res.status === 401) throw unauthorized(data);
+    if (!res.ok) { const e = new Error((data && data.detail) || raw || res.status + ' ' + res.statusText); e.status = res.status; throw e; }
+    return data;
+  }
+  const qs = f => { const s = new URLSearchParams(clean(f)).toString(); return s ? '?' + s : ''; };
+  const run = id => '/v1/runs/' + enc(id);
+  const filePath = (id, path) => run(id) + '/files/' + path.split('/').map(enc).join('/');
+  // unauthorized is the error of a 401. With browser sign-in on, the
+  // problem names the sign-in route, and the page offers it.
+  const unauthorized = data => {
+    const e = new Error('Your access token did not work.');
+    e.signin = true;
+    const u = data && typeof data.signin === 'string' ? data.signin : '';
+    e.signinUrl = u.startsWith('/') && !u.startsWith('//') ? u : '';
+    return e;
+  };
+  return {
+    token, setToken: t => { try { sessionStorage.setItem(KEY, t); } catch (e) { /* no storage */ } },
+    clearToken: () => { try { sessionStorage.removeItem(KEY); } catch (e) { /* no storage */ } },
+    whoami: () => req('GET', '/v1/whoami'),
+    home: () => req('GET', '/v1/home'),
+    agents: () => req('GET', '/v1/agents').then(r => r.agents || []),
+    agent: name => req('GET', '/v1/agents/' + enc(name)),
+    putAgent: p => req('PUT', '/v1/agents/' + enc(p.name), p),
+    deleteAgent: name => req('DELETE', '/v1/agents/' + enc(name)),
+    runs: f => req('GET', '/v1/runs' + qs(f)),
+    result: id => req('GET', run(id) + '/result'),
+    items: (id, o) => req('GET', run(id) + '/transcript' + qs({from: o && o.from, before: o && o.before, limit: (o && o.limit) || 500})),
+    activity: id => req('GET', run(id) + '/events?limit=200').then(r => (r && r.lines) || []),
+    file: (id, path) => req('GET', filePath(id, path)),
+    download: async (id, path) => {
+      const res = await fetch(filePath(id, path) + '?download=1', {headers: auth()});
+      if (res.status === 401) throw unauthorized(await res.json().catch(() => null));
+      if (!res.ok) throw new Error('The file did not download: ' + res.status + ' ' + res.statusText);
+      return res.blob();
+    },
+    start: r => { const b = Object.assign({}, r); delete b.member; return req('POST', '/v1/runs' + (r.member ? '?member=' + enc(r.member) : ''), b); },
+    builder: b => req('POST', '/v1/builder', clean(b)),
+    previewAgent: p => req('PUT', '/v1/agents/' + enc(p.name) + '?dryRun=true', p),
+    send: (id, content, files) => req('POST', run(id) + '/messages', clean({content, files: files && files.length ? files : undefined})),
+    decide: (id, approvalId, decision, note, content) => req('POST', run(id) + '/approvals/' + enc(approvalId), clean({decision, note, content})),
+    cancel: id => req('POST', run(id) + '/cancel', {}),
+    fleet: () => req('GET', '/v1/fleet'),
+    connections: () => req('GET', '/v1/connections').then(r => (r && r.connections) || []),
+    connect: (server, next) => req('POST', '/v1/connections/' + enc(server), clean({next})),
+    disconnect: server => req('DELETE', '/v1/connections/' + enc(server)),
+  };
+})();
+let api = native;
+
+/* ---------- state and navigation ---------- */
+// The stack starts at a place: home (Work) or agents. In a wide window the
+// place stays in the side pane, and the main pane shows the rest.
+const S = {mode: '', me: null, stack: [{view: 'home'}], error: '', timers: [], wide: false, run: null, attach: [], draft: '', members: null, membersAt: 0, agent: null, refresh: null,
+  next: '', signinUrl: '', expired: false, tokenTry: false, focusComposer: false};
+const PLACES = ['home', 'agents'];
+const fleetOn = () => !!(S.me && S.me.fleet);
+const top = () => S.stack[S.stack.length - 1];
+const TITLES = {home: 'Work', agents: 'Agents', operator: 'Operator view', signin: 'Sign in', start: 'New run', create: 'New agent', others: 'Runs by others',
+  connections: 'Connections', connect: 'Connect', connected: 'Connected'};
+// person reports whether the caller is a signed-in person, the only kind
+// of caller that can connect a service.
+const person = () => !!(S.me && S.me.principal && S.me.principal.kind === 'user');
+// me is the subject of the person, and myTeams the teams (section 13.6).
+const me = () => (S.me && S.me.principal && S.me.principal.subject) || '';
+const myTeams = () => (S.me && S.me.teams) || [];
+const sharesTeam = teams => (teams || []).some(t => myTeams().includes(t));
+// who names a principal for a person: the part before the @ of an email,
+// or the last part of a SPIFFE id.
+const who = subject => String(subject || '').replace(/^local:/, '').split('@')[0].split('/').pop();
+const titleOf = s => s.title || TITLES[s.view] || '';
+const members = () => S.members || [];
+function stop() {
+  S.timers.forEach(clearTimeout); S.timers = [];
+  if (S.run && S.run.io) S.run.io.disconnect();
+  S.run = null; S.refresh = null;
+}
+function every(ms, fn) {
+  const tick = async () => {
+    if (!document.hidden) { try { await fn(); } catch (e) { return fail(e); } }
+    S.timers.push(setTimeout(tick, ms));
+  };
+  S.timers.push(setTimeout(tick, ms));
+}
+function go(view, params, how) {
+  const entry = Object.assign({view}, params || {});
+  if (PLACES.includes(view)) S.stack = [entry];
+  else if (how === 'replace') S.stack = [{view: 'home'}, entry];
+  else S.stack.push(entry);
+  show('push');
+}
+function back() { if (S.stack.length > 1) S.stack.pop(); show('pop'); }
+function bar(s, end, large) {
+  const prev = S.stack[S.stack.indexOf(s) - 1];
+  const left = prev && !(S.wide && PLACES.includes(prev.view))
+    ? `<button class="back" data-action="back">${svg.back}<span>${esc(titleOf(prev))}</span></button>` : '<span></span>';
+  return `<header class="bar${large ? ' large-on' : ''}">${left}<div class="title">${esc(titleOf(s))}</div><div class="end">${end || ''}</div></header>`;
+}
+// header is the top of a place: the feather, Work and Agents, and the
+// account menu with who the person is, the operator view, and Sign out.
+function header(cur) {
+  const p = (S.me && S.me.principal) || {};
+  const name = p.name || who(p.subject) || 'You';
+  const tab = (v, t) => `<button data-action="nav" data-view="${v}"${v === cur ? ' aria-current="page"' : ''}>${t}</button>`;
+  const lines = [p.subject ? (p.subject !== name ? p.subject : '') : 'The process itself', myTeams().length ? 'Teams: ' + myTeams().join(', ') : '',
+    S.me && S.me.admin ? 'Admin' : S.me && S.me.canCreate ? 'Can create agents' : ''].filter(Boolean);
+  return `<header class="top"><span class="brand" role="img" aria-label="featherweight">${svg.feather}</span>
+    <nav class="tabs" aria-label="Places">${tab('home', 'Work')}${tab('agents', 'Agents')}</nav>
+    <div class="pop"><button class="me" data-action="menu" aria-haspopup="true" aria-expanded="false" aria-label="Account of ${esc(name)}">${esc((name[0] || '?').toUpperCase())}</button>
+      <div class="menu right" role="menu" hidden><div class="who"><b>${esc(name)}</b>${lines.map(l => `<small>${esc(l)}</small>`).join('')}</div>
+        ${person() ? '<button role="menuitem" data-action="go" data-view="connections">Connections</button>' : ''}
+        <button role="menuitem" data-action="go" data-view="operator">Operator view</button>
+        ${S.mode === 'native' && native.token() ? '<button role="menuitem" class="danger" data-action="signout">Sign out</button>' : ''}</div></div></header>`;
+}
+const alert = () => S.error ? `<div class="alert" role="alert"><p>${esc(S.error)}</p><button class="btn small" data-action="dismiss">Dismiss</button></div>` : '';
+// nextStore keeps the screen to come back to after sign-in, so a reload
+// of the sign-in screen keeps it too.
+const nextStore = {
+  get: () => { try { return sessionStorage.getItem('fw.next') || ''; } catch (e) { return ''; } },
+  set: v => { try { if (v) sessionStorage.setItem('fw.next', v); else sessionStorage.removeItem('fw.next'); } catch (e) { /* no storage */ } },
+};
+// toSignin shows the sign-in screen after a 401. It keeps the screen to
+// come back to, and every draft stays where it is.
+function toSignin(e) {
+  if (e && e.signinUrl) S.signinUrl = e.signinUrl;
+  S.expired = !!native.token() && !S.tokenTry;
+  S.error = S.tokenTry ? 'That access token did not work.' : '';
+  S.tokenTry = false;
+  if (location.hash !== '#signin') { S.next = location.hash; nextStore.set(S.next); }
+  native.clearToken();
+  S.me = null;
+  go('signin', {}, 'replace');
+}
+function fail(e) {
+  console.error(e);
+  if (e && e.signin && S.mode === 'native') return toSignin(e);
+  // A server error names its packages first ("fleet: ... fw: ..."); the person reads the last part.
+  S.error = cap(String((e && e.message) || e).replace(/^.*\bfw: /, '').replace(/^[a-z]+: /, ''));
+  if (!$('#detail .screen')) return mount($('#detail'), bar(top()) + alert() + '<button class="btn" data-action="retry">Try again</button>');
+  for (const el of document.querySelectorAll('.screen')) {
+    const old = $('.alert', el); if (old) old.remove();
+    const b = $('.bar, .top', el);
+    if (b) b.insertAdjacentHTML('afterend', alert());
+  }
+}
+// show draws the screen at the top of the stack. In a wide window the place
+// stays in the side pane, and a stack with only the place shows the
+// composer in the main pane.
+function show(dir) {
+  stop();
+  closeMenus();
+  const s = top(), place = S.stack[0];
+  if (S.mode === 'native') history.replaceState(null, '', hashOf());
+  S.wide = window.matchMedia('(min-width: 960px)').matches && s.view !== 'signin';
+  $('#app').classList.toggle('split', S.wide);
+  const side = $('#side'), el = $('#detail');
+  if (S.wide) {
+    // The side pane keeps its scroll and only marks the open item.
+    if (side.dataset.place === place.view && $('.screen', side)) Promise.resolve(screens[place.view].watch(side)).catch(fail);
+    else { side.dataset.place = place.view; Promise.resolve(screens[place.view].open(place, side)).catch(fail); }
+  } else { side.innerHTML = ''; side.dataset.place = ''; }
+  clearTimeout(S.loadTimer);
+  S.loadTimer = setTimeout(() => { el.innerHTML = loadingHTML(); }, 250);
+  const screen = S.wide && S.stack.length === 1 ? screens.compose : screens[s.view];
+  Promise.resolve(screen.open(s, el, dir)).catch(fail);
+}
+function hashOf() {
+  const s = top();
+  if (S.stack.length === 1 && s.view === 'home') return location.pathname;
+  const at = s.view === 'file' ? ['run', s.id] : [s.view, s.id || s.name || '', s.member || ''];
+  return '#' + at.filter(Boolean).map(enc).join('/');
+}
+function mount(el, html, dir) {
+  if (el.id === 'detail') clearTimeout(S.loadTimer);
+  el.innerHTML = `<div class="screen${dir === 'pop' ? ' enter pop' : dir === 'push' && S.booted ? ' enter' : ''}">${html}</div>`;
+  // A screen that the keyboard opened takes the focus at its heading, so
+  // Tab goes on from there.
+  if (el.id === 'detail' && S.kbd) {
+    S.kbd = false;
+    const h = $('h1', el) || $('.bar .title', el);
+    if (h) { h.tabIndex = -1; h.focus({preventScroll: true}); }
+  }
+  const side = el.id === 'side';
+  const b = $('.bar, .top', el);
+  const onScroll = () => { if (b) b.classList.toggle('scrolled', (side ? el.scrollTop : window.scrollY) > 24); };
+  if (side) el.onscroll = onScroll; else window.onscroll = onScroll;
+  onScroll();
+  return $('.screen', el);
+}
+// markOpen marks the row of the open item in a list of the side pane.
+function markOpen(el) {
+  const s = top();
+  const key = s.view === 'run' || s.view === 'file' ? 'run:' + s.id : s.view === 'agent' ? 'agent:' + s.name + ':' + (s.member || '') : '';
+  for (const r of el.querySelectorAll('[data-sel]')) {
+    const on = S.wide && r.dataset.sel === key;
+    r.classList.toggle('sel', on);
+    if (on) r.setAttribute('aria-current', 'true'); else r.removeAttribute('aria-current');
+  }
+}
+// loadMembers reads the agents that the person can see, by fleet member.
+// Without the fleet, this process is the only member.
+async function loadMembers(force) {
+  if (S.members && !force && Date.now() - S.membersAt < 30000) return S.members;
+  S.members = fleetOn() ? ((await api.fleet()).members || []) : [{self: true, name: '', agents: await api.agents()}];
+  S.membersAt = Date.now();
+  return S.members;
+}
+// startable lists the agents that the person can start: owner or operator,
+// on this process or on a member that this process can reach.
+function startable() {
+  const out = [];
+  for (const m of members()) {
+    if (!(m.self || m.canForward)) continue;
+    for (const a of m.agents || []) if (canRun(a.role)) out.push({name: a.name, member: m.self ? '' : m.name, description: a.description || ''});
+  }
+  return out;
+}
+// chosen is the agent of the composer: the choice of the person, else the
+// last agent that the person used, else the first that the person can start.
+function chosen() {
+  const all = startable();
+  const same = w => x => w && x.name === w.name && x.member === (w.member || '');
+  return all.find(same(S.agent)) || all.find(same(store.get('fw.agent'))) || all[0] || null;
+}
+
+// agentsChanged reads the agents again after a create or a change, and
+// redraws the list of agents in the side pane.
+function agentsChanged() {
+  S.members = null;
+  const side = $('#side');
+  if (S.wide && side.dataset.place === 'agents') screens.agents.watch(side, true).catch(() => {});
+}
+
+/* ---------- menus ---------- */
+function closeMenus() {
+  for (const m of document.querySelectorAll('.menu:not([hidden])')) {
+    m.hidden = true;
+    const b = m.previousElementSibling; if (b) b.setAttribute('aria-expanded', 'false');
+  }
+}
+function openMenu(btn) {
+  const m = btn.nextElementSibling;
+  const was = !m.hidden;
+  closeMenus();
+  if (was) return;
+  m.hidden = false;
+  btn.setAttribute('aria-expanded', 'true');
+  const f = m.querySelector('[aria-checked="true"]') || m.querySelector('button');
+  if (f) f.focus();
+}
+
+/* ---------- the composer that starts work ---------- */
+function agentChip() {
+  if (!S.members) return '<button type="button" class="agent-chip" disabled><span>Loading agents</span></button>';
+  const a = chosen();
+  if (!a) return '<button type="button" class="agent-chip" disabled><span>No agent to start</span></button>';
+  const same = x => x.name === a.name && x.member === a.member;
+  return `<button type="button" class="agent-chip" data-action="menu" aria-haspopup="true" aria-expanded="false" aria-label="Agent: ${esc(a.name)}. Choose another agent">${face(a.name, 20)}<span>${esc(a.name)}${a.member ? ' on ' + esc(a.member) : ''}</span>${svg.down}</button>
+    <div class="menu" role="menu" hidden>${startable().map(x => `<button type="button" role="menuitemradio" aria-checked="${same(x)}" data-action="pick-agent" data-name="${esc(x.name)}" data-member="${esc(x.member)}">
+      ${face(x.name, 24)}<span class="main"><span class="t">${esc(x.name)}${x.member ? ' on ' + esc(x.member) : ''}</span>${x.description ? `<span class="s">${esc(x.description)}</span>` : ''}</span>${same(x) ? svg.check : ''}</button>`).join('')}</div>`;
+}
+function composer() {
+  return `<form class="intent" id="composer" data-form="intent" data-draft="home"><div class="pill">
+      <div class="tray" id="tray"></div>
+      <textarea name="content" rows="3" aria-label="What would you like to move forward?" placeholder="What would you like to move forward?"></textarea>
+      <div class="tools"><button class="attach" type="button" data-action="attach" aria-label="Attach files">${svg.plus}</button>
+        <div class="pop" id="agent-pick">${agentChip()}</div><span class="grow"></span>
+        <button class="btn primary" type="submit" data-send disabled>Start</button></div></div>
+    <input type="file" name="pick" multiple hidden></form>`;
+}
+function drawChip() {
+  const p = $('#agent-pick');
+  if (p) morph(p, agentChip());
+  const f = $('form[data-form="intent"]');
+  if (f) $('[data-send]', f).disabled = !canSend(f);
+}
+// canSend reports whether a message bar has something to send. Work needs
+// words and an agent. A follow-up needs words or a file.
+function canSend(f) {
+  if (!f || !f.content) return false;
+  if (f.dataset.form === 'intent') return !!(f.content.value.trim() && chosen());
+  return !!(f.content.value.trim() || S.attach.length);
+}
+function readyComposer(el) {
+  const f = $('form[data-form="intent"]', el);
+  restoreDraft(f);
+  loadMembers().then(drawChip).catch(() => drawChip());
+  // The composer takes the focus on a desktop, or after "/" anywhere.
+  const t = f && f.content;
+  if (t && (S.focusComposer || !matchMedia('(pointer: coarse)').matches)) {
+    t.focus({preventScroll: true});
+    t.setSelectionRange(t.value.length, t.value.length);
+  }
+  S.focusComposer = false;
+}
+// grow fits a text box to its text.
+function grow(t) { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; }
+// restoreDraft puts the draft of a form back: its text, and for a message
+// bar its files.
+function restoreDraft(f) {
+  if (!f || !f.dataset.draft) return;
+  const c = f.dataset.draft, t = f.content || f.input;
+  if ($('.tray', f)) { S.draft = c; S.attach = draft.files(c); drawTray(); }
+  if (t && !t.value) { t.value = draft.text(c); if (t.value && f.content) grow(t); }
+  const b = $('[data-send]', f); if (b) b.disabled = !canSend(f);
+}
+
+/* ---------- screens ---------- */
+const screens = {};
+
+// compose is the main pane of a wide window when no item is open.
+screens.compose = {
+  open(s, el, dir) {
+    mount(el, `<div class="compose">${alert()}${composer()}</div>`, dir);
+    readyComposer(el);
+  },
+};
+
+screens.home = {
+  open(s, el, dir) {
+    const side = el.id === 'side';
+    mount(el, header('home') + alert() + (side ? '' : composer()) + `<div id="lists">${loadingHTML(true)}</div>`, dir);
+    if (!side) readyComposer(el);
+    return this.watch(el);
+  },
+  // watch reads home every five seconds and changes the rows that changed,
+  // in place. The composer, the focus, and the scroll stay as they are.
+  async watch(el) {
+    const draw = async () => {
+      const h = await api.home();
+      const box = $('#lists', el);
+      if (!box) return;
+      const key = JSON.stringify(h) + Math.floor(Date.now() / 60000);
+      if (box.dataset.key !== key) { box.dataset.key = key; morph(box, this.draw(h)); }
+      markOpen(el);
+    };
+    S.refresh = draw;
+    await draw();
+    every(5000, draw);
+  },
+  draw(h) {
+    const sec = (title, items) => items && items.length ? `<h2 class="sec" data-key="h:${title}">${title}</h2><div class="group" data-key="g:${title}">${items.map(runRow).join('')}</div>` : '';
+    const body = sec('Needs you', h.needsYou) + sec('In progress', h.inProgress) + sec('Recent results', h.recent);
+    // The runs by people outside the teams of the person sit behind one row.
+    const rest = h.others ? `<div class="group" style="margin-top:26px" data-key="others"><button class="row" data-action="go" data-view="others"><span class="main"><span class="t">Runs by others</span></span><span class="end">${num(h.others)}${svg.chev}</span></button></div>` : '';
+    return `<p class="glance" data-key="glance" aria-live="polite">${esc(h.sentence || 'Nothing is running right now.')}</p>`
+      + (body || rest ? body + rest : '<p class="quiet-note" data-key="none">The work that you start shows here.</p>');
+  },
+};
+
+// agents lists the agents that the person can see, by fleet member.
+screens.agents = {
+  open(s, el, dir) {
+    mount(el, header('agents') + alert() + `<div id="alist">${loadingHTML(true)}</div>`, dir);
+    return this.watch(el, true);
+  },
+  async watch(el, force) {
+    const m = await loadMembers(force);
+    const box = $('#alist', el);
+    if (!box) return;
+    const key = JSON.stringify(m);
+    if (box.dataset.key !== key) { box.dataset.key = key; morph(box, this.draw(m)); }
+    markOpen(el);
+  },
+  draw(m) {
+    const n = m.reduce((k, x) => k + (x.agents || []).length, 0);
+    const groups = m.map(x => {
+      // The agents of the person come first, then those of the person's teams.
+      const rank = a => a.role === 'owner' ? 0 : sharesTeam(a.teams) ? 1 : 2;
+      const agents = [...(x.agents || [])].sort((a, z) => rank(a) - rank(z) || a.name.localeCompare(z.name));
+      if (!agents.length) return '';
+      const mem = x.self ? '' : x.name;
+      const rows = agents.map(a => `<button class="row" data-action="agent" data-name="${esc(a.name)}" data-member="${esc(mem)}" data-sel="agent:${esc(a.name)}:${esc(mem)}" data-key="agent:${esc(a.name)}:${esc(mem)}">
+        ${face(a.name, 32)}<span class="main"><span class="t">${esc(a.name)}</span><span class="s">${esc(a.description || (a.role ? 'You are ' + (a.role === 'owner' ? 'the owner' : 'an ' + a.role) : ''))}</span></span>${svg.chev}</button>`).join('');
+      return (fleetOn() ? `<p class="sub" data-key="m:${esc(mem)}">${esc(x.self ? 'On this member' : 'On ' + x.name + ', ' + memberWord(x))}</p>` : '') + `<div class="group" data-key="g:${esc(mem)}">${rows}</div>`;
+    }).join('');
+    const head = `<div class="head"><p class="glance">${n === 0 ? 'No agent is shared with you yet.' : n === 1 ? 'One agent works for you.' : num(n) + ' agents work for you.'}</p>`
+      + (S.me && S.me.canCreate ? '<button class="btn small" data-action="go" data-view="create">New agent</button>' : '') + '</div>';
+    return head + (groups ? `<div style="margin-top:14px">${groups}</div>` : '');
+  },
+};
+// isBuilder reports whether a run is a conversation that creates an agent.
+const isBuilder = r => !!(r && r.metadata && r.metadata['fw.view'] === 'builder');
+// runName is the name that a run shows: its agent, or New agent.
+const runName = r => isBuilder(r) ? 'New agent' : r.agent;
+// workTitle names the work of a run: its title, else the first line of the
+// request.
+const workTitle = r => r.title || (isBuilder(r) ? 'New agent' : firstLine(r.input) || r.agent);
+// askLine says what a run that waits needs from the person.
+function askLine(r) {
+  const p = r.pending;
+  if (!p) return '';
+  if (p.connect) return connectAsk(p.connect);
+  if (p.schema) return p.reason || 'Asks you a question';
+  const w = wants(p);
+  return w ? 'Wants to ' + w : 'Asks for your permission';
+}
+// runRow is one work item in a list: the title, then the agent, the status,
+// and the time. bare leaves out the person, for a list that a heading names.
+function runRow(r, bare) {
+  const st = statusOf(r);
+  const by = bare !== true && r.principal && me() && r.principal !== me() ? 'by ' + who(r.principal) : '';
+  const meta = `<span class="parts">${[face(runName(r), 16) + esc(runName(r)), badge(st), esc(timeWords(r, st)), r.member ? 'on ' + esc(r.member) : '', esc(by)]
+    .filter(Boolean).map(x => `<span>${x}</span>`).join('')}</span>`;
+  const asks = st === 'needs-you' ? askLine(r) : '';
+  const c = st === 'needs-you' && r.pending && r.pending.connect;
+  const row = `<button class="row work" data-action="run" data-id="${esc(r.id)}" data-sel="run:${esc(r.id)}"${c ? '' : ` data-key="run:${esc(r.id)}"`}><span class="main"><span class="t">${esc(workTitle(r))}</span>`
+    + `<span class="s meta">${meta}</span>${asks ? `<span class="s asks">${esc(asks)}</span>` : ''}</span>${c ? '' : svg.chev}</button>`;
+  // A run that waits for a connection offers Connect beside its row.
+  return c ? `<div class="row-wrap" data-key="run:${esc(r.id)}:connect">${row}<button class="btn small" data-action="connect" data-server="${esc(c.server)}" data-run="${esc(r.id)}">Connect</button></div>` : row;
+}
+// connectTitle names the service of a connect request.
+const connectTitle = c => (c && (c.title || c.server)) || 'the service';
+// connectAsk says what a run that waits for a connection needs.
+const connectAsk = c => c.reason === 'expired' ? 'Wants you to sign in to ' + connectTitle(c) + ' again' : 'Wants you to connect ' + connectTitle(c);
+// answerText words the answer to a question: the text of a free answer, Yes
+// or No, one value, or each field with its title from the form.
+function answerText(text, titles) {
+  let o;
+  try { o = JSON.parse(text); } catch (e) { return text; }
+  const word = v => v === true ? 'Yes' : v === false ? 'No' : typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v);
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return word(o);
+  const keys = Object.keys(o);
+  if (keys.length === 1) return word(o[keys[0]]);
+  return keys.map(k => ((titles || {})[k] || cap(k.replace(/[_-]+/g, ' '))) + ': ' + word(o[k])).join('\n');
+}
+// extraText says which tools a run has beyond its agent, with the words of
+// the agent screen when it knows them.
+function extraText(agent, names, abilities) {
+  const words = Object.fromEntries((abilities || []).map(x => [x.tool, x.text]));
+  const what = names.map(n => words[n] ? lower(words[n]) : 'use ' + n);
+  const all = what.length > 1 ? what.slice(0, -1).join(', ') + ' and ' + what.at(-1) : what[0];
+  return `For this run only, ${agent} can also ${all}.`;
+}
+// formOf reads the schema of a question as a list of fields. It returns
+// null for a free-text answer and for a schema that nests, which keeps the
+// text box.
+function formOf(schema) {
+  const s = obj(schema);
+  const props = s && s.type === 'object' && s.properties;
+  if (!props) return null;
+  const keys = Object.keys(props);
+  if (!keys.length || (keys.length === 1 && keys[0] === 'answer' && props.answer.type === 'string' && !props.answer.enum)) return null;
+  const fields = keys.map(k => {
+    const p = props[k] || {};
+    const type = Array.isArray(p.type) ? p.type.find(t => t !== 'null') : p.type;
+    const one = Array.isArray(p.oneOf) && p.oneOf.length && p.oneOf.every(o => o && 'const' in o) ? p.oneOf : null;
+    const choices = one ? one.map(o => o.const) : Array.isArray(p.enum) ? p.enum : type === 'boolean' ? [true, false] : null;
+    const labels = one ? one.map(o => o.title || String(o.const)) : Array.isArray(p.enumNames) ? p.enumNames : type === 'boolean' ? ['Yes', 'No'] : null;
+    return {key: k, title: p.title || cap(k.replace(/[_-]+/g, ' ')), type, choices, labels: labels || (choices || []).map(String), required: (s.required || []).includes(k)};
+  });
+  return fields.every(f => f.choices || ['string', 'number', 'integer'].includes(f.type)) ? fields : null;
+}
+// askFields is the answer part of a question: one button per choice when
+// the answer is one choice, a small form for several fields, else a text box.
+function askFields(form) {
+  if (!form) return '<textarea name="note" placeholder="Your answer" aria-label="Your answer"></textarea>';
+  const f = form[0];
+  if (form.length === 1 && f.choices && f.choices.length <= 6) {
+    const two = f.choices.length === 2 && f.labels.every(l => l.length <= 18);
+    return `<div class="pick${two ? ' two' : ''}">${f.choices.map((c, i) => `<button class="btn" type="submit" value="allow" data-key="${esc(f.key)}" data-pick="${esc(JSON.stringify(c))}">${esc(f.labels[i])}</button>`).join('')}</div>`;
+  }
+  return form.map(f => {
+    const attrs = `data-key="${esc(f.key)}" data-type="${esc(f.type || '')}"${f.required ? ' required' : ''}`;
+    if (f.type === 'boolean' && form.length > 1) return `<label class="fld bool"><span>${esc(f.title)}</span><input type="checkbox" class="switch" ${attrs}></label>`;
+    if (f.choices) return `<label class="fld"><span>${esc(f.title)}</span><select ${attrs}>${f.required ? '' : '<option value="">None</option>'}${f.choices.map((c, i) => `<option value="${esc(JSON.stringify(c))}">${esc(f.labels[i])}</option>`).join('')}</select></label>`;
+    const kind = f.type === 'number' || f.type === 'integer' ? ` type="number"${f.type === 'integer' ? ' step="1"' : ' step="any"'}` : '';
+    return `<label class="fld"><span>${esc(f.title)}</span><input${kind} ${attrs}></label>`;
+  }).join('');
+}
+// decisionOf makes a decision from the pending approval of a run, for a
+// fleet member that answers no result.
+function decisionOf(run) {
+  const p = run && run.pending;
+  if (p && p.connect) return {id: p.id, tool: p.tool, label: 'Connect ' + connectTitle(p.connect), reason: p.reason, connect: p.connect};
+  return p ? {id: p.id, tool: p.tool, label: p.schema ? 'Answer' : 'Allow', question: !!p.schema, reason: p.reason, input: p.input, schema: p.schema} : null;
+}
+// decisionTitle names the action and its target without a tool name.
+function decisionTitle(agent, d) {
+  const e = edit(d.input);
+  if (e) return `${agent} wants to ${e.what}`;
+  const v = obj(d.input);
+  if (v && typeof v.command === 'string') return `${agent} wants to run a command`;
+  if (d.label && d.label !== 'Allow') return `${agent} wants to ${lower(d.label)}`;
+  return `${agent} asks for your permission`;
+}
+// decisionCard is the approval or the question that a run waits for. A
+// permission names the action, the target, and the effect, and shows the
+// exact change. A question shows its form. Raw input and the tool name sit
+// behind Details.
+function decisionCard(run, d) {
+  const q = !!d.question;
+  const agent = runName(run);
+  if (d.connect) return connectCard(run, d);
+  if (q) {
+    const form = formOf(d.schema);
+    const picks = !!(form && form.length === 1 && form[0].choices && form[0].choices.length <= 6);
+    return `<div class="decide question" data-ask="${esc(d.id)}" data-key="ask:${esc(d.id)}">
+      <p class="kick">Question from ${esc(agent)}</p><h3>${esc(d.reason || 'A question for you')}</h3>
+      <form data-form="decide" data-id="${esc(run.id)}" data-approval="${esc(d.id)}" data-question="1">${askFields(form)}
+        ${picks ? '<button class="btn plain small decline" type="submit" value="deny" formnovalidate>Decline</button>'
+          : `<div class="do"><button class="btn" type="submit" value="deny" formnovalidate>Decline</button><button class="btn primary" type="submit" value="allow">${esc(d.label || 'Answer')}</button></div>`}
+      </form></div>`;
+  }
+  const change = preview(d.input, false);
+  // A command shows once: in the code, not again in the effect.
+  const v = obj(d.input), cmd = !edit(d.input) && v && typeof v.command === 'string' ? v.command : '';
+  const effect = d.effect && !(cmd && d.effect.includes(cmd)) ? d.effect : '';
+  const rule = /^rule: /.test(d.reason || '');
+  const why = /^rule: ask destructive/.test(d.reason || '') ? 'This tool can change things, so it waits for you.'
+    : rule ? 'A rule of this agent asks you first.' : d.reason ? cap(d.reason) : '';
+  let raw = '';
+  try { raw = d.input == null ? '' : JSON.stringify(typeof d.input === 'string' ? JSON.parse(d.input) : d.input, null, 2); } catch (e) { raw = String(d.input); }
+  return `<div class="decide" data-ask="${esc(d.id)}" data-key="ask:${esc(d.id)}">
+    <p class="kick">Permission</p><h3>${esc(decisionTitle(agent, d))}</h3>
+    ${effect ? `<p class="effect">${esc(effect)}</p>` : ''}
+    ${change ? `<pre class="code">${change}</pre>` : ''}
+    ${why ? `<p class="why">${esc(why)}</p>` : ''}
+    <details class="more"><summary>Details</summary>${d.tool ? `<p>Tool: <code>${esc(d.tool)}</code></p>` : ''}${rule ? `<p>${esc(cap(d.reason))}</p>` : ''}${raw ? `<pre class="code">${esc(raw)}</pre>` : ''}</details>
+    <form data-form="decide" data-id="${esc(run.id)}" data-approval="${esc(d.id)}">
+      <div class="do"><button class="btn" type="submit" value="deny" formnovalidate>Deny</button><button class="btn primary" type="submit" value="allow">${esc(d.label || 'Allow')}</button></div>
+    </form></div>`;
+}
+// connectCard asks the person to connect the service that the run waits
+// for. Connect opens the sign-in of the service, and the run goes on when
+// it ends. Skip lets the run go on without the service. A connection is no
+// permission, so the card has no Allow.
+function connectCard(run, d) {
+  const c = d.connect, title = connectTitle(c), agent = runName(run);
+  const head = c.reason === 'expired' ? `Sign in to ${title} again` : `Connect ${title}`;
+  const text = c.reason === 'expired' ? `${agent} needs your sign-in at ${title} to go on acting as you there.` : `${agent} wants to act as you in ${title}.`;
+  return `<div class="decide connect" data-ask="${esc(d.id)}" data-key="ask:${esc(d.id)}">
+    <p class="kick">Connection</p><h3>${esc(head)}</h3><p class="effect">${esc(text)}</p>
+    <p class="why">You sign in at ${esc(title)}. You can disconnect it at any time in Connections.</p>
+    <div class="do"><button class="btn" type="button" data-action="skip" data-id="${esc(run.id)}" data-approval="${esc(d.id)}">Skip</button><button class="btn primary" type="button" data-action="connect" data-server="${esc(c.server)}" data-run="${esc(run.id)}">Connect</button></div></div>`;
+}
+// openConnect starts the connection of a service. In a browser, the page
+// goes to the sign-in of the service, which comes back to next. Inside a
+// host, the host opens the address. When the host cannot, the link shows
+// under the button.
+async function openConnect(server, next, el) {
+  const r = await api.connect(server, next);
+  if (S.mode !== 'mcp') { location.assign(r.url); return; }
+  try { await bridge.request('ui/open-link', {url: r.url}, 5000); } catch (e) {
+    const box = el && (el.closest('.decide, .solo, .group, .row-wrap') || el.parentElement);
+    if (!box || $('.link-note', box.parentElement)) return;
+    box.insertAdjacentHTML('afterend', `<p class="link-note">Your host did not open the sign-in. Open it here: <a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc('Connect ' + server)}</a></p>`);
+  }
+}
+// outcomeHTML is what a run produced: the answer, the files that changed,
+// what it did, its limits, and the next actions. A run that works shows
+// none of it, so the conversation stays first.
+function outcomeHTML(run, res) {
+  // The proposal card in the conversation is the result of the builder.
+  if (!res || isBuilder(run)) return '';
+  const st = res.status || statusOf(run);
+  if (st === 'working' || st === 'needs-you') return '';
+  let h = '';
+  // A person cancels a run on purpose, so only a failure gets the note. A
+  // limit says the same in plain words, so it replaces a budget error.
+  const limited = (res.limits || []).length && /^budget exceeded/i.test(res.error || '');
+  if (res.error && st === 'failed' && !limited) h += `<p class="err-note">${esc(cap(res.error))}</p>`;
+  if (res.summary) h += `<div class="summary">${md(res.summary)}</div>`;
+  const files = res.files || [];
+  if (files.length) {
+    h += `<h3 class="lbl">Files changed</h3><div class="files" style="max-width:none">${files.map(f => {
+      const name = f.path.split('/').pop(), dir = f.path.slice(0, -name.length - 1);
+      return `<button class="file${f.op === 'removed' ? ' gone' : ''}" data-action="file" data-id="${esc(run.id)}" data-path="${esc(f.path)}">${svg.doc}<span class="fn"><b>${esc(name)}</b>${dir ? `<small>${esc(dir)}</small>` : ''}</span><span class="fo">${esc(OPS[f.op] || cap(f.op))}${f.size ? ', ' + esc(bytes(f.size)) : ''}</span>${svg.chev}</button>`;
+    }).join('')}</div>`;
+  }
+  const steps = res.steps || [];
+  if (steps.length) {
+    // Each step is a recorded outcome. Done says that the call returned, not
+    // that a check passed.
+    const errs = steps.filter(x => x.isError).length;
+    const word = x => x.isError ? 'Error' : x.done ? 'Done' : 'No result';
+    const icon = x => x.isError ? ICON.failed : x.done ? '<circle cx="5" cy="5" r="3" fill="currentColor"/>' : ICON.ended;
+    h += `<details class="did"><summary>${svg.chev}<b>What it did</b><span>${steps.length === 1 ? '1 step' : steps.length + ' steps'}${errs ? ', ' + (errs === 1 ? '1 error' : errs + ' errors') : ''}</span></summary>
+      <ol>${steps.map(x => `<li class="${x.isError ? 'err' : ''}"><svg viewBox="0 0 10 10" aria-hidden="true">${icon(x)}</svg><span>${esc(x.text)}</span><small>${word(x)}</small></li>`).join('')}</ol></details>`;
+  }
+  if ((res.limits || []).length) h += `<h3 class="lbl">Limits</h3><ul class="limits">${res.limits.map(l => `<li>${esc(l)}</li>`).join('')}</ul>`;
+  const next = (res.next || []).filter(n => n.kind !== 'decide' && n.kind !== 'answer' && n.kind !== 'connect');
+  if (next.length) h += `<div class="next">${next.map((n, i) => `<button class="btn${i === 0 ? ' primary' : ''}" data-action="next" data-kind="${esc(n.kind)}">${esc(n.label)}</button>`).join('')}</div>`;
+  return h;
+}
+
+// PAGE is the number of events that one page of a conversation reads.
+const PAGE = 120;
+
+screens.run = {
+  async open(s, el, dir) {
+    // A run opens at its recent end: the last page of its events. Earlier
+    // pages load above the chat when the person asks for them.
+    const page = await api.items(s.id, {limit: PAGE});
+    if (top() !== s) return; // the person left the screen while it loaded
+    const run = page.run;
+    s.title = workTitle(run);
+    const ctx = {id: s.id, run, cursor: 0, prev: page.prev || 0, group: null, el, idle: false, lastAt: 0, rkey: '', rn: 0, res: null, helpers: [], decided: '', orphans: []};
+    const end = `<button class="btn plain" data-action="cancel" data-id="${esc(s.id)}" id="cancel"${isActive(run) ? '' : ' hidden'}>Cancel</button>`;
+    mount(el, bar(s, end, true) + alert() + `<section class="result" aria-label="Result">
+        <h1 class="work" id="work-title">${esc(s.title)}</h1><p class="status" id="status"></p><div id="decision"></div><div id="outcome"></div></section>
+      <h2 class="sec conv">Conversation</h2>
+      <div class="earlier" id="earlier"${ctx.prev ? '' : ' hidden'}><button class="btn small" type="button" data-action="earlier">Load earlier messages</button></div>
+      <div class="chat" id="chat"></div><div id="kids"></div>
+      <details class="activity" id="activity"><summary>${svg.chev}Activity</summary><ol class="evl"></ol></details>
+      <div class="composer" id="composer"><div class="pinned" id="pinned"></div><form data-form="send" data-id="${esc(s.id)}" data-draft="run:${esc(s.id)}">
+        <button class="attach" type="button" data-action="attach" aria-label="Attach files">${svg.plus}</button>
+        <div class="pill"><div class="tray" id="tray"></div><div class="line">
+          <textarea name="content" rows="1" aria-label="Message" placeholder="${isBuilder(run) ? 'Describe a change' : 'Message ' + esc(run.agent)}"></textarea>
+          <button class="send" type="submit" aria-label="Send" data-send disabled>${svg.send}</button></div></div>
+        <input type="file" name="pick" multiple hidden></form></div>`, dir).classList.add('talk');
+    S.run = ctx;
+    this.apply(ctx, page);
+    // The next poll reads the events after the run as it was read.
+    ctx.cursor = Math.max(ctx.cursor, (run.seq || 0) + 1);
+    restoreDraft($('form[data-form="send"]', el));
+    this.kids(ctx).catch(() => {});
+    // A run that works and a builder conversation open at their end, where
+    // the agent writes. Any other run opens at its result.
+    window.scrollTo(0, statusOf(run) === 'working' || isBuilder(run) ? document.body.scrollHeight : 0);
+    // poll reads the items after the last one. A send or a decision calls
+    // it at once, so the chat shows the change without a pop-up.
+    ctx.poll = async () => {
+      const next = await api.items(ctx.id, {from: ctx.cursor});
+      if (S.run !== ctx) return;
+      this.apply(ctx, next);
+      ctx.idle = !isActive(next.run) && !next.next;
+    };
+    every(2000, async () => {
+      if (!ctx.idle) return ctx.poll();
+      // A model can write the title of a run after it finishes. For two
+      // minutes after the finish, the run is read every ten seconds, and
+      // only its title changes on the screen.
+      ctx.doneAt = ctx.doneAt || Date.parse(ctx.run.updatedAt) || Date.now();
+      if (Date.now() - ctx.doneAt > 120000 || Date.now() - (ctx.titleAt || 0) < 10000) return;
+      ctx.titleAt = Date.now();
+      const page = await api.items(ctx.id, {from: ctx.cursor, limit: 1});
+      if (S.run === ctx && page.run) this.title(ctx, workTitle(page.run));
+    });
+  },
+  apply(ctx, page) {
+    const chat = $('#chat', ctx.el);
+    if (!chat) return;
+    const stick = window.innerHeight + window.scrollY >= document.body.scrollHeight - 60;
+    const items = page.items || [];
+    for (const it of items) if (it.seq >= ctx.cursor) this.add(ctx, chat, it);
+    ctx.cursor = page.next || Math.max(ctx.cursor, ...items.map(it => it.seq + 1));
+    const run = page.run || ctx.run;
+    ctx.run = run;
+    this.title(ctx, workTitle(run));
+    const c = $('#cancel', ctx.el); if (c) c.hidden = !isActive(run);
+    // While the agent works, a typing bubble ends the chat, as in Messages.
+    const working = run.state === 'queued' || run.state === 'running';
+    const typing = $('#typing', chat);
+    if (working && !typing) chat.insertAdjacentHTML('beforeend', '<div class="typing" id="typing" role="status" aria-label="The agent is working"><i></i><i></i><i></i></div>');
+    else if (!working && typing) typing.remove();
+    this.status(ctx);
+    // The result changes with the state, the pending decision, and, once
+    // the run stops, each new event.
+    const key = [run.state, run.pending ? run.pending.id : '', isActive(run) ? '' : run.seq].join('|');
+    if (key !== ctx.rkey) { ctx.rkey = key; this.result(ctx).catch(fail); }
+    if (stick && items.length) window.scrollTo(0, document.body.scrollHeight);
+  },
+  // title shows a new title, such as the one that a model writes a few
+  // seconds after the start, in the heading, the bar, and the back button.
+  title(ctx, t) {
+    const h = $('#work-title', ctx.el), b = $('.bar .title', ctx.el);
+    if (!t || !h || h.textContent === t) return;
+    h.textContent = t;
+    if (b) b.textContent = t;
+    const s = S.stack.find(x => x.view === 'run' && x.id === ctx.id);
+    if (s) s.title = t;
+  },
+  // status draws the quiet line under the title: the agent, the status, the
+  // time, the helpers, the member, and the person who started it.
+  status(ctx) {
+    const run = ctx.run, el = $('#status', ctx.el);
+    if (!el) return;
+    const st = ctx.res && ctx.resState === run.state && ctx.res.status ? ctx.res.status : statusOf(run);
+    const agent = isBuilder(run) ? ''
+      : `<button class="agent-link" data-action="agent" data-name="${esc(run.agent)}" data-member="${esc(run.member || '')}" aria-label="${esc(run.agent)}. Open the agent">${face(run.agent, 16)}${esc(run.agent)}</button>`;
+    const h = ctx.helpers;
+    const text = [esc(timeWords(run, st)),
+      h.length ? 'with ' + esc(h.length > 2 ? h.slice(0, 2).join(', ') + ' and ' + (h.length - 2) + ' more' : h.join(' and ')) : '',
+      run.member ? 'on ' + esc(run.member) : '', run.principal && me() && run.principal !== me() ? 'by ' + esc(who(run.principal)) : ''];
+    const html = `<span class="parts">${[agent, badge(st)].filter(Boolean).concat(text.filter(Boolean)).map(x => `<span>${x}</span>`).join('')}</span>`;
+    // The face makes new markup each time, so the key leaves it out.
+    const key = html.replace(/<span class="face"[\s\S]*?<\/svg><\/span>/g, '');
+    if (el.dataset.key !== key) { el.dataset.key = key; morph(el, html); }
+  },
+  // result reads the result of the run, then draws the decision that waits
+  // and what the run produced. A fleet member without the result route
+  // gets the decision from the run.
+  async result(ctx) {
+    const n = ++ctx.rn;
+    let res = null;
+    try { res = await api.result(ctx.id); } catch (e) { if (e && e.signin) throw e; res = null; }
+    if (S.run !== ctx || n !== ctx.rn) return;
+    ctx.res = res; ctx.resState = ctx.run.state;
+    if (res && res.title) this.title(ctx, res.title);
+    this.status(ctx);
+    const d = res ? res.pending || null : decisionOf(ctx.run);
+    this.decision(ctx, d && d.id !== ctx.decided ? d : null);
+    const out = $('#outcome', ctx.el), html = outcomeHTML(ctx.run, res);
+    if (out && out.dataset.key !== html) { out.dataset.key = html; morph(out, html); }
+  },
+  // decision draws the card of the decision that waits. The same decision
+  // keeps its card and changes in place, so a form that the person fills
+  // in stays as it is. The bar above the composer points to the card while
+  // its buttons are out of view.
+  decision(ctx, d) {
+    const box = $('#decision', ctx.el), pin = $('#pinned', ctx.el);
+    if (!box) return;
+    const cur = $('.decide', box);
+    if (d && cur && cur.dataset.ask === d.id) { morph(box, decisionCard(ctx.run, d)); return; }
+    if (!d && !cur) return;
+    box.innerHTML = d ? decisionCard(ctx.run, d) : '';
+    if (ctx.io) { ctx.io.disconnect(); ctx.io = null; }
+    pin.innerHTML = '';
+    const form = $('.decide form', box) || $('.decide .do', box);
+    if (!form || !('IntersectionObserver' in window)) return;
+    pin.innerHTML = `<button class="jump" type="button" data-action="to-decision" hidden><svg viewBox="0 0 10 10" aria-hidden="true">${ICON['needs-you']}</svg>${esc(runName(ctx.run))} ${d.connect ? 'waits for you to connect ' + esc(connectTitle(d.connect)) : d.question ? 'waits for your answer' : 'waits for your decision'}</button>`;
+    ctx.io = new IntersectionObserver(([e]) => { const j = $('.jump', pin); if (j) j.hidden = e.isIntersecting; });
+    ctx.io.observe(form);
+  },
+  // older loads the page of items in front of the chat and puts it above,
+  // with its own state, then keeps the item that the person reads where it
+  // was on the screen.
+  async older(ctx) {
+    if (!ctx || !ctx.prev || ctx.loadingOlder) return;
+    ctx.loadingOlder = true;
+    try {
+      const page = await api.items(ctx.id, {before: ctx.prev, limit: PAGE});
+      if (S.run !== ctx) return;
+      const chat = $('#chat', ctx.el), box = document.createElement('div');
+      const sub = {id: ctx.id, run: ctx.run, el: ctx.el, group: null, lastAt: 0, prev: page.prev || 0, orphans: ctx.orphans, helpers: [], kidsSoon: true};
+      for (const it of page.items || []) this.add(sub, box, it);
+      // The anchor is the first item on the screen. A time line can go, so
+      // it is no anchor.
+      const anchor = [...chat.children].find(n => !n.classList.contains('when') && n.getBoundingClientRect().bottom > 0);
+      const y = anchor ? anchor.getBoundingClientRect().top : 0;
+      const first = chat.firstElementChild;
+      document.documentElement.style.overflowAnchor = 'none';
+      chat.prepend(...box.childNodes);
+      // A time line that follows the new items closely is one too many.
+      if (first && first.classList.contains('when') && sub.lastAt && +first.dataset.at - sub.lastAt < 15 * 60000) first.remove();
+      ctx.prev = page.prev || 0;
+      $('#earlier', ctx.el).hidden = !ctx.prev;
+      if (anchor) window.scrollBy(0, anchor.getBoundingClientRect().top - y);
+      requestAnimationFrame(() => { document.documentElement.style.overflowAnchor = ''; });
+      // The results whose calls were on this page find them now.
+      ctx.replaying = true;
+      for (const it of ctx.orphans.splice(0)) this.add(ctx, chat, it);
+      ctx.replaying = false;
+      const drafts = chat.querySelectorAll('.draft:not([hidden])');
+      drafts.forEach((x, i) => x.classList.toggle('old', i < drafts.length - 1));
+      this.kids(ctx).catch(() => {});
+    } finally { ctx.loadingOlder = false; }
+  },
+  add(ctx, chat, it) {
+    // put adds html before the typing bubble and returns the new element.
+    // A result that comes back to its call goes right after the call.
+    const put = (html, keep, after) => {
+      if (!keep) ctx.group = null;
+      if (after) { after.insertAdjacentHTML('afterend', html); return after.nextElementSibling; }
+      const t = $('#typing', chat);
+      if (t) { t.insertAdjacentHTML('beforebegin', html); return t.previousElementSibling; }
+      chat.insertAdjacentHTML('beforeend', html);
+      return chat.lastElementChild;
+    };
+    // An item whose call is on an earlier page waits for that page.
+    const orphan = () => { if (ctx.prev) ctx.orphans.push(it); return null; };
+    // A time line opens the chat and every pause of 15 minutes or more.
+    const when = () => {
+      const at = new Date(it.time).getTime();
+      if (!ctx.lastAt || at - ctx.lastAt >= 15 * 60000) put(`<p class="when" data-at="${at}">${whenWords(it.time)}</p>`, true);
+      ctx.lastAt = at;
+    };
+    const step = id => id ? chat.querySelector(`.step[data-call="${CSS.escape(id)}"]`) : null;
+    // A question of ask_user is a message of the agent, and the answer is a
+    // message of the person, as in Messages. The card in the result asks.
+    const question = id => id ? chat.querySelector(`.say[data-call="${CSS.escape(id)}"]`) : null;
+    switch (it.kind) {
+      case 'user': {
+        when();
+        if (it.who && S.me && S.me.principal && it.who !== S.me.principal.subject) put(`<p class="who">${esc(it.who)}</p>`);
+        if (it.files && it.files.length) loadPics(ctx.id, put(attHTML(ctx.id, it.files)));
+        return it.text ? put(`<div class="mine">${esc(it.text)}</div>`) : null;
+      }
+      case 'assistant': when(); return put(`<div class="say">${md(it.text)}</div>`);
+      case 'tool': {
+        if (it.tool === 'spawn_task') {
+          const d = obj(it.input) || {}; // a cut input names no helper
+          const helper = d.agent || 'default';
+          const el = put(`<button class="hand" data-call="${esc(it.callId)}" data-helper="${esc(helper)}">${face(helper, 20)}<span>Asked ${esc(helper)}: ${esc(firstLine(d.input))}</span></button>`);
+          el.dataset.input = String(d.input || '');
+          if (!ctx.kidsSoon) ctx.kidsSoon = setTimeout(() => { ctx.kidsSoon = null; this.kids(ctx).catch(() => {}); }, 300);
+          return el;
+        }
+        if (it.tool === 'propose_agent') {
+          // The server makes the profile of the proposal. The card shows
+          // once the tool accepts it. A field without a value stays out.
+          if (!it.profile) return null;
+          const el = put(`<div class="draft" data-call="${esc(it.callId)}" hidden></div>`);
+          el.dataset.profile = JSON.stringify(clean(it.profile));
+          return el;
+        }
+        if (it.tool === 'ask_user') {
+          const q = (obj(it.input) || {}).question || ''; // a cut input shows no question
+          ctx.group = null;
+          when();
+          return q ? put(`<div class="say" data-call="${esc(it.callId)}">${md(q)}</div>`) : null;
+        }
+        if (!ctx.group) ctx.group = put('<details class="steps"><summary></summary></details>');
+        ctx.group.insertAdjacentHTML('beforeend', `<div class="step" data-call="${esc(it.callId)}" data-allow="${esc(allowWords(it.input))}"><header>${esc(stepWords(it.tool, it.input))}<span>Running</span></header>${it.input ? `<pre class="io">${preview(it.input, true)}</pre>` : ''}</div>`);
+        return this.sum(ctx.group);
+      }
+      case 'result': {
+        const hand = it.callId ? chat.querySelector(`.hand[data-call="${CSS.escape(it.callId)}"]`) : null;
+        if (hand) {
+          const helper = hand.dataset.helper, at = ctx.replaying ? hand : null;
+          // A child that works in the background answers through await_task.
+          if (/^Started child run /.test(it.text || '')) return null;
+          if (it.isError) return put(`<p class="cap err">${esc(helper)} did not finish. ${esc(it.text || '')}</p>`, true, at);
+          const name = put(`<p class="who them">${esc(helper)}</p>`, false, at);
+          return put(`<div class="from">${face(helper, 28)}<div class="say">${md(it.text || '')}</div></div>`, false, at ? name : null);
+        }
+        const dr = it.callId ? chat.querySelector(`.draft[data-call="${CSS.escape(it.callId)}"]`) : null;
+        if (dr) {
+          if (it.isError) { dr.remove(); return null; }
+          chat.querySelectorAll('.draft').forEach(x => { if (x !== dr) x.classList.add('old'); });
+          dr.hidden = false;
+          fillDraft(dr).catch(e => { dr.innerHTML = `<p class="err">${esc(e.message)}</p>`; });
+          return dr;
+        }
+        const q = question(it.callId);
+        if (q) {
+          if (it.isError) return null;
+          const at = ctx.replaying ? q : null;
+          const by = q.dataset.who && q.dataset.who !== me() ? put(`<p class="who">${esc(q.dataset.who)}</p>`, false, at) : null;
+          let titles = {};
+          try { titles = JSON.parse(q.dataset.titles || '{}'); } catch (e) { /* keys name the fields */ }
+          return put(`<div class="mine">${esc(answerText(it.text, titles))}</div>`, false, at ? by || q : null);
+        }
+        const el = step(it.callId);
+        if (!el) return orphan();
+        el.classList.toggle('err', !!it.isError);
+        const st = $('header span', el);
+        if (!/^(Denied|Skipped)/.test(st.textContent)) st.textContent = it.isError ? 'Failed' : 'Done';
+        if (it.text) el.insertAdjacentHTML('beforeend', `<pre class="io${it.isError ? ' err' : ''}">${esc(it.text)}</pre>`);
+        return this.sum(el.closest('.steps'));
+      }
+      case 'file': {
+        const el = step(it.callId);
+        const group = el ? el.closest('.steps') : ctx.group;
+        let box = group && group.nextElementSibling;
+        if (!box || !box.classList.contains('files')) {
+          if (group) { group.insertAdjacentHTML('afterend', '<div class="files"></div>'); box = group.nextElementSibling; }
+          else box = put('<div class="files"></div>', true);
+        }
+        return fileRow(ctx.id, box, it);
+      }
+      case 'ask': {
+        const q = question(it.callId);
+        if (q) {
+          q.dataset.ask = it.id;
+          q.dataset.titles = JSON.stringify(Object.fromEntries((formOf(it.schema) || []).map(f => [f.key, f.title])));
+          return null;
+        }
+        const el = step(it.callId);
+        if (el) {
+          $('header span', el).textContent = 'Waiting for you';
+          el.dataset.ask = it.id;
+          if (it.connect) el.dataset.connect = connectTitle(it.connect);
+          return this.sum(el.closest('.steps'));
+        }
+        // The card in the result shows the decision, so the chat adds none.
+        return orphan();
+      }
+      case 'decided': {
+        const q = chat.querySelector(`.say[data-ask="${CSS.escape(it.id || '')}"]`);
+        if (q) {
+          q.dataset.who = it.who || '';
+          return it.text === 'allow' ? null : put(`<p class="cap">${esc(it.who && it.who !== me() ? it.who + ' declined to answer' : 'You declined to answer')}</p>`, true, ctx.replaying ? q : null);
+        }
+        const el = chat.querySelector(`.step[data-ask="${CSS.escape(it.id || '')}"]`);
+        // A connect ends as Connected or Skipped, not as a permission.
+        const conn = it.connect || (el && el.dataset.connect);
+        const by = it.who && it.who !== me() ? ' by ' + it.who : '';
+        const word = conn ? (it.text === 'allow' ? 'Connected' : 'Skipped') + by : (it.text === 'allow' ? 'Allowed' : 'Denied') + (it.who ? ' by ' + it.who : '');
+        if (conn && !el) {
+          const line = (it.text === 'allow' ? 'Connected ' : 'Skipped ') + (typeof conn === 'string' ? conn : connectTitle(conn)) + by;
+          return ctx.prev ? orphan() : ctx.replaying ? null : put(`<p class="cap">${esc(line)}</p>`, true);
+        }
+        if (el) { $('header span', el).textContent = word; return this.sum(el.closest('.steps')); }
+        if (ctx.prev) return orphan();
+        return ctx.replaying ? null : put(`<p class="cap">${esc(word + (it.detail ? '. ' + it.detail : ''))}</p>`, true);
+      }
+      case 'tools': {
+        // A run that an inline profile gives more tools than its agent has
+        // says so under the first message. The builder gets its own tool.
+        if (isBuilder(ctx.run)) return null;
+        const names = (it.text || '').split(',').filter(Boolean);
+        const el = put(`<p class="cap notice">${esc(extraText(ctx.run.agent, names))}</p>`, true);
+        if (!ctx.run.member) api.agent(ctx.run.agent).then(a => { el.textContent = extraText(ctx.run.agent, names, a.abilities); }).catch(() => {});
+        return el;
+      }
+      case 'note': {
+        const t = $('#typing', chat), last = t ? t.previousElementSibling : chat.lastElementChild;
+        if (last && last.classList.contains('cap') && last.textContent === it.text) return;
+        return put(`<p class="cap${it.isError ? ' err' : ''}">${esc(it.text)}</p>`, true);
+      }
+      case 'end': {
+        // A turn that finished needs no line, as in Messages. A failed or a
+        // canceled turn says so.
+        if (it.text === 'completed' && !it.isError) return null;
+        const word = {completed: 'Finished', failed: 'Failed', canceled: 'Canceled'}[it.text] || cap(it.text);
+        const at = new Date(it.time).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+        return put(`<p class="cap${it.isError ? ' err' : ''}">${esc(word)} at ${esc(at)}${it.detail && it.detail !== it.text ? '. ' + esc(it.detail) : ''}</p>`);
+      }
+    }
+  },
+  // sum words a group of steps without tool names, in the words of the
+  // decision card: "Waits for you to allow a command", "Working on a
+  // step", or "Took 3 steps".
+  sum(group) {
+    const steps = [...group.querySelectorAll('.step')];
+    const word = s => $('header span', s).textContent;
+    const count = (n, one) => n === 1 ? one : n + ' steps';
+    const waiting = steps.filter(s => word(s) === 'Waiting for you');
+    let text;
+    if (waiting.length === 1 && waiting[0].dataset.connect) text = 'Waits for you to connect ' + waiting[0].dataset.connect;
+    else if (waiting.length) text = 'Waits for you to allow ' + (waiting.length === 1 ? waiting[0].dataset.allow || 'this step' : waiting.length + ' steps');
+    else if (steps.some(s => word(s) === 'Running')) text = 'Working on ' + count(steps.length, 'a step');
+    else {
+      const denied = steps.filter(s => /^Denied/.test(word(s))).length, skipped = steps.filter(s => /^Skipped/.test(word(s))).length;
+      const failed = steps.filter(s => s.classList.contains('err') && !/^(Denied|Skipped)/.test(word(s))).length;
+      text = 'Took ' + count(steps.length, '1 step') + (failed ? `, ${failed} failed` : '') + (denied ? `, ${denied} denied` : '') + (skipped ? `, ${skipped} skipped` : '');
+    }
+    $('summary', group).innerHTML = svg.chev + esc(text);
+  },
+  // kids links each handoff in the chat to its child run, by agent and task,
+  // names the helpers in the status line, and lists the child runs that no
+  // handoff shows.
+  async kids(ctx) {
+    const r = await api.runs({parent: ctx.id, limit: 50});
+    if (S.run !== ctx) return;
+    const kids = (r.runs || []).filter(k => k.parent === ctx.id).sort((x, y) => String(x.createdAt).localeCompare(String(y.createdAt)));
+    const left = [...kids];
+    for (const h of ctx.el.querySelectorAll('.hand')) {
+      const i = left.findIndex(k => k.id === h.dataset.id || (!h.dataset.id && k.agent === h.dataset.helper && k.input === h.dataset.input));
+      if (i < 0) continue;
+      h.dataset.action = 'run';
+      h.dataset.id = left[i].id;
+      left.splice(i, 1);
+    }
+    ctx.helpers = [...new Set(kids.map(k => k.agent))];
+    this.status(ctx);
+    const el = $('#kids', ctx.el);
+    if (el) morph(el, left.length ? `<h2 class="sec">Subtasks</h2><div class="group">${left.map(runRow).join('')}</div>` : '');
+  },
+};
+// activity reads the event lines of the open run when the person opens
+// Activity.
+async function activity(box) {
+  const ctx = S.run;
+  if (!ctx) return;
+  const ol = $('.evl', box);
+  ol.innerHTML = `<li><span>${esc('Loading')}</span></li>`;
+  const lines = await api.activity(ctx.id);
+  if (S.run !== ctx) return;
+  const t = ts => new Date(ts).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit', second: '2-digit'});
+  ol.innerHTML = lines.map(l => `<li><time>${esc(t(l.time))}</time><span>${esc(cap(l.line))}</span></li>`).join('') || '<li><span>Nothing happened yet.</span></li>';
+  box.scrollIntoView({block: 'nearest', behavior: smooth()});
+}
+function toDecision() {
+  const card = $('#decision .decide');
+  if (!card) return;
+  card.scrollIntoView({block: 'center', behavior: smooth()});
+  const f = card.querySelector('input, select, textarea, .pick .btn, .btn.primary');
+  if (f) f.focus({preventScroll: true});
+}
+
+// face draws the face of an agent, as a contact has a picture: a circle in
+// two colors with eyes and a mouth. A hash of the name picks each part, so
+// an agent keeps its face everywhere, and two agents rarely share one.
+let faceSeq = 0;
+function face(name, size) {
+  let h = 2166136261;
+  for (const ch of String(name || '?')) h = Math.imul(h ^ ch.codePointAt(0), 16777619) >>> 0;
+  let x = h || 1;
+  const pick = n => { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; return x % n; };
+  // Calm hues, as the system colors: blue, indigo, purple, pink, red,
+  // orange, teal, cyan, and green. Greens and cyans go a little deeper, so
+  // the white face keeps its contrast.
+  const HUES = [205, 228, 252, 276, 300, 330, 352, 16, 172, 190, 148];
+  const hue = HUES[pick(HUES.length)], hue2 = hue + 10 + pick(18), deep = hue > 140 && hue < 200 ? 6 : 0;
+  const gap = 9 + pick(4), ey = 26 + pick(4), my = 40 + pick(3);
+  const W = 'fill="#fff"', L = 'fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"';
+  const eyes = pick(4), mouth = pick(4), blush = pick(3) === 0;
+  const eye = cx => [
+    `<circle cx="${cx}" cy="${ey}" r="3.3" ${W}/>`,
+    `<ellipse cx="${cx}" cy="${ey}" rx="2.7" ry="4.1" ${W}/>`,
+    `<path d="M${cx - 4} ${ey + 1.5}q4-5.5 8 0" ${L}/>`,
+    `<path d="M${cx - 3.5} ${ey}h7" ${L}/>`,
+  ][eyes];
+  const mouths = [
+    `<path d="M24 ${my}q8 7 16 0" ${L}/>`,
+    `<path d="M23 ${my - 1}q9 11 18 0z" ${W}/>`,
+    `<path d="M28.5 ${my}q3.5 3.5 7 0" ${L}/>`,
+    `<path d="M27 ${my + 1}q5 3 10 0" ${L}/>`,
+  ];
+  // Each face gets its own gradient id: a face in a hidden menu does not
+  // render its gradient, so a later face must not point to it.
+  const id = 'f' + h.toString(36) + '-' + (++faceSeq);
+  const art = `<svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">`
+    + `<stop offset="0" stop-color="hsl(${hue} 70% ${66 - deep}%)"/><stop offset="1" stop-color="hsl(${hue2 % 360} 64% ${50 - deep}%)"/></linearGradient></defs>`
+    + `<circle cx="32" cy="32" r="32" fill="url(#${id})"/>`
+    + (blush ? `<g fill="#fff" opacity=".22"><circle cx="${32 - gap - 6}" cy="${ey + 9}" r="4"/><circle cx="${32 + gap + 6}" cy="${ey + 9}" r="4"/></g>` : '')
+    + eye(32 - gap) + eye(32 + gap) + mouths[mouth] + '</svg>';
+  return `<span class="face" style="--s:${size}px">${art}</span>`;
+}
+// whenWords writes the time line of a chat: "Today 5:38 PM", a weekday
+// in the last week, and a date before that.
+function whenWords(ts) {
+  const d = new Date(ts), now = new Date();
+  const time = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+  const days = Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5);
+  const day = days === 0 ? 'Today' : days === 1 ? 'Yesterday' : days < 7 ? d.toLocaleDateString([], {weekday: 'long'})
+    : d.toLocaleDateString([], {month: 'short', day: 'numeric', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric'});
+  return `<b>${esc(day)}</b> ${esc(time)}`;
+}
+const isPicture = mt => /^image\/(png|jpeg|gif|webp|bmp)$/.test(mt || '');
+// attHTML shows the files of a user message: each image as a picture, and
+// any other file as a document. A tap opens the file.
+function attHTML(id, files) {
+  return `<div class="att">${files.map(f => {
+    const name = f.name || f.path.split('/').pop(), at = `data-action="file" data-id="${esc(id)}" data-path="${esc(f.path)}"`;
+    return isPicture(f.mediaType) ? `<button class="pic" ${at} aria-label="${esc(name)}"><img alt="${esc(name)}" data-pic="${esc(f.path)}"></button>`
+      : `<button class="doc" ${at}>${svg.doc}<span><b>${esc(name)}</b><small>${esc(bytes(f.size))}</small></span></button>`;
+  }).join('')}</div>`;
+}
+// loadPics fills the pictures in el from the files of the run.
+function loadPics(id, el) {
+  for (const img of el.querySelectorAll('img[data-pic]')) {
+    api.file(id, img.dataset.pic).then(v => { if (v && v.data) img.src = `data:${v.mediaType};base64,${v.data}`; }).catch(() => {});
+  }
+}
+
+/* ---------- attachments of the next message ---------- */
+const MAX_FILES = 20, MAX_FILE_BYTES = 32e6;
+// prepare reads a file for sending. A photo over 2 MB becomes a JPEG of at
+// most 2048 pixels on its long side, as Messages sends it.
+async function prepare(file) {
+  let blob = file, name = file.name || 'file';
+  if (/^image\/(png|jpeg|webp)$/.test(file.type) && file.size > 2e6 && 'createImageBitmap' in window) {
+    try {
+      const img = await createImageBitmap(file);
+      const k = Math.min(1, 2048 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      const out = await new Promise(r => c.toBlob(r, 'image/jpeg', .88));
+      if (out && out.size < file.size) { blob = out; name = name.replace(/\.[^.]*$/, '') + '.jpg'; }
+    } catch (e) { /* send the original */ }
+  }
+  const data = await new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(',')[1] || '');
+    r.onerror = () => rej(new Error('The file ' + name + ' could not be read.'));
+    r.readAsDataURL(blob);
+  });
+  return {name, type: blob.type || file.type, size: blob.size, data};
+}
+async function addFiles(files) {
+  for (const file of files) {
+    if (S.attach.length >= MAX_FILES) throw new Error('A message holds at most ' + MAX_FILES + ' files.');
+    const f = await prepare(file);
+    if (S.attach.reduce((n, x) => n + x.size, f.size) > MAX_FILE_BYTES) throw new Error('The files of a message hold at most 32 MB.');
+    S.attach.push(f);
+    draft.saveFiles(S.draft);
+    drawTray();
+  }
+}
+// drawTray shows the files of the next message in its message bar.
+function drawTray() {
+  const t = $('#tray');
+  if (!t) return;
+  t.innerHTML = S.attach.map((f, i) => {
+    const x = `<button type="button" class="x" data-action="unattach" data-i="${i}" aria-label="Remove ${esc(f.name)}">${svg.x}</button>`;
+    return isPicture(f.type) ? `<div class="chip"><img alt="${esc(f.name)}" src="data:${esc(f.type)};base64,${f.data}">${x}</div>`
+      : `<div class="chip file-chip">${svg.doc}<span><b>${esc(f.name)}</b><small>${esc(bytes(f.size))}</small></span>${x}</div>`;
+  }).join('');
+  const f = t.closest('form');
+  if (f && $('[data-send]', f)) $('[data-send]', f).disabled = !canSend(f);
+}
+
+// fileRow puts one changed file in the card of its steps. A file that the
+// steps created and then edited stays "Created".
+function fileRow(id, box, it) {
+  const old = box.querySelector(`.file[data-path="${CSS.escape(it.path)}"]`);
+  const op = old && old.dataset.op === 'created' && it.text === 'changed' ? 'created' : it.text;
+  const name = it.path.split('/').pop(), dir = it.path.slice(0, -name.length - 1);
+  const html = `<button class="file${op === 'removed' ? ' gone' : ''}" data-action="file" data-id="${esc(id)}" data-path="${esc(it.path)}" data-op="${esc(op)}">${svg.doc}<span class="fn"><b>${esc(name)}</b>${dir ? `<small>${esc(dir)}</small>` : ''}</span><span class="fo">${esc(OPS[op] || cap(op))}</span></button>`;
+  if (old) old.outerHTML = html; else box.insertAdjacentHTML('beforeend', html);
+  const was = it.text === 'renamed' && it.detail && box.querySelector(`.file[data-path="${CSS.escape(it.detail)}"]`);
+  if (was) was.remove();
+}
+
+screens.file = {
+  async open(s, el, dir) {
+    const v = await api.file(s.id, s.path);
+    const name = s.path.split('/').pop();
+    s.title = name;
+    let body;
+    if (v.gone) body = `<p class="note">${v.op === 'removed' ? 'The agent removed this file.' : 'This file is gone. It was removed after the run.'}</p>`;
+    else if (v.data) body = `<img class="shot" alt="${esc(name)}" src="data:${esc(v.mediaType)};base64,${v.data}">`;
+    else if (v.large) body = `<p class="note">This file is too large to show here. Download it to read it.</p>`;
+    else if (v.binary) body = `<p class="note">This file is not text or an image, so it does not show here. Download it to open it.</p>`;
+    else body = `<pre class="lines">${(v.text || '').replace(/\n$/, '').split('\n').map(l => `<span>${esc(l)}</span>`).join('')}</pre>` + (v.cut ? '<p class="meta-line">The file is longer. This is its start.</p>' : '');
+    const dl = v.gone ? '' : `<button class="btn plain strong" data-action="download" data-id="${esc(s.id)}" data-path="${esc(s.path)}">Download</button>`;
+    mount(el, bar(s, dl) + alert() + `<p class="path">${esc(s.path)}</p>`
+      + (v.changed && !v.gone ? '<p class="note">This file changed after the run. You see the current version.</p>' : '') + body
+      + (v.gone ? '' : `<p class="meta-line">${esc(v.tool ? OPS[v.op] || cap(v.op) : 'Attached')} in this run. ${esc(bytes(v.size))}.</p>`), dir);
+  },
+};
+
+// abilityGroups sorts what an agent can do by verdict: on its own, asks
+// first, the control plane decides, and cannot.
+function abilityGroups(all) {
+  const groups = [['allow', 'On its own'], ['ask', 'Asks you first'], ['external', 'Your control plane decides'], ['deny', 'Cannot']];
+  return groups.map(([v, title]) => ({title, rows: (all || []).filter(x => x.verdict === v || (v === 'deny' && x.verdict === 'none'))})).filter(g => g.rows.length);
+}
+// abilities says what an agent can do, in the groups of its verdicts. A
+// pattern rule, such as "Never runs git push*", is the second line.
+function abilities(all) {
+  const html = abilityGroups(all).map(g => `<p class="sub">${g.title}</p><div class="group">${g.rows.map(x => `<div class="row can"><span class="main"><span>${esc(x.text)}</span>${(x.notes || []).map(n => `<span class="s">${esc(n)}</span>`).join('')}</span></div>`).join('')}</div>`).join('');
+  return html ? `<h2 class="sec">What it can do</h2>${html}` : '';
+}
+// fillDraft checks a proposal on the server and draws it as the contact card
+// of the agent. A proposal that matches a saved agent shows Start run.
+async function fillDraft(el) {
+  const p = JSON.parse(el.dataset.profile);
+  const d = await api.previewAgent(p);
+  let made = false;
+  if (d.exists) {
+    const cur = await api.agent(p.name).catch(() => null);
+    made = !!cur && (cur.system || '') === (p.system || '') && (cur.description || '') === (p.description || '') && (cur.tools || []).join() === (p.tools || []).join();
+  }
+  const lim = limits(d.budget);
+  el.innerHTML = `${face(d.name, 48)}<h3>${esc(d.name)}</h3><p>${esc(d.description || '')}</p><div class="can">`
+    // What it cannot do is one sentence, so the card stays short.
+    + abilityGroups(d.abilities).map(g => `<p class="k">${g.title}</p>` + (g.title === 'Cannot'
+      ? `<ul><li>${esc(g.rows.map((x, i) => i ? lower(x.text) : x.text).join(', '))}</li></ul>`
+      : `<ul>${g.rows.map(x => `<li>${esc(x.text)}${(x.notes || []).map(n => `<small>${esc(n)}</small>`).join('')}</li>`).join('')}</ul>`)).join('')
+    + (lim ? `<p class="k">Limits</p><ul><li>${esc(cap(lim))}</li></ul>` : '') + '</div>'
+    + `<div class="do">${made ? `<button class="btn primary" data-action="start" data-agent="${esc(d.name)}">Start run</button><button class="btn" data-action="agent" data-name="${esc(d.name)}">Open agent</button>`
+      : `<button class="btn primary" data-action="create-draft">${d.exists ? 'Replace ' + esc(d.name) : 'Create agent'}</button>`}</div>`;
+}
+// limits words a budget: working time, turns, tokens, tool calls, and cost.
+function limits(b) {
+  if (!b) return '';
+  const plural = (n, one) => `${num(n)} ${one}${n === 1 ? '' : 's'}`;
+  const time = ns => { const m = Math.round(ns / 6e10); return m < 1 ? plural(Math.max(1, Math.round(ns / 1e9)), 'second') : m < 120 ? plural(m, 'minute') : plural(Math.round(m / 60), 'hour'); };
+  return [b.deadline > 0 && time(b.deadline) + ' of work', b.maxTurns && plural(b.maxTurns, 'turn'), b.maxTokens && plural(b.maxTokens, 'token'),
+    b.maxToolCalls && plural(b.maxToolCalls, 'tool call'), b.maxCostUSD && '$' + b.maxCostUSD.toFixed(2)].filter(Boolean).join(', ');
+}
+
+// create asks what the new agent handles and starts a conversation with the
+// agent builder. Set it up by hand opens the editor.
+screens.create = {
+  open(s, el, dir) {
+    mount(el, bar(s, `<button class="btn plain strong" type="submit" form="create-form">Next</button>`) + alert() + `
+      <form class="form" id="create-form" data-form="create" data-draft="create" style="margin-top:12px">
+        <div class="group"><div class="field"><label for="c-input">What should this agent handle?</label><textarea id="c-input" name="input" required placeholder="Review our pull requests for security problems. Explain each finding. Never push changes."></textarea></div></div>
+        <p class="hint">Say what it must never do, too. You see what it can do before it exists.</p>
+      </form>
+      <div class="group" style="margin-top:30px"><button class="row link" data-action="edit"><span class="main"><span class="t">Set it up by hand</span></span></button></div>`, dir);
+    restoreDraft($('#create-form', el));
+    const f = $('#c-input', el); if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
+  },
+};
+
+screens.agent = {
+  async open(s, el, dir) {
+    s.title = s.name;
+    const remote = !!s.member;
+    const m = remote ? (await loadMembers()).find(x => x.name === s.member) || {} : {};
+    const a = remote ? Object.assign({name: s.name}, (m.agents || []).find(x => x.name === s.name)) : await api.agent(s.name);
+    const runs = ((await api.runs({agent: s.name, member: s.member, limit: 20}).catch(() => ({}))).runs || []).filter(r => !r.parent);
+    if (top() !== s) return;
+    const acc = a.access || {};
+    const row = (k, v) => v ? `<div class="row kv"><span class="main">${esc(k)}</span><span class="end">${esc(v)}</span></div>` : '';
+    const reach = !remote || m.canForward;
+    mount(el, bar(s, '', true) + alert() + `<div class="card-top">${face(a.name, 64)}<h1>${esc(a.name)}</h1>
+      <p>${esc(a.description || (remote ? 'Runs on ' + s.member + '.' : 'No description yet.'))}</p>
+      ${canRun(a.role) && reach ? `<button class="btn primary" data-action="start" data-agent="${esc(a.name)}" data-member="${esc(s.member || '')}">Start run</button>` : ''}</div>
+      ${abilities(a.abilities)}
+      ${runs.length ? `<h2 class="sec">Recent work</h2><div class="group">${runs.map(r => runRow(r)).join('')}</div>` : ''}
+      <h2 class="sec">About</h2><div class="group">${row('Your role', cap(a.role || 'none'))}${row('Model', [a.model || (remote ? '' : 'Default'), a.effort ? a.effort + ' effort' : ''].filter(Boolean).join(', '))}
+        ${a.abilities ? '' : row('Tools', a.tools && a.tools.length ? a.tools.join(', ') : remote ? '' : 'Every tool')}${row('Skills', a.skills ? (a.skills.length ? a.skills.join(', ') : 'None') : remote ? '' : 'Every skill')}
+        ${row('Limits', limits(a.budget))}${row('Time zone', a.timeZone)}${row('Teams', (a.teams || []).join(', '))}${row('Fleet member', remote ? s.member + ', ' + memberWord(m) : '')}</div>
+      <h2 class="sec">Access</h2><div class="group">${row('Owners', (acc.owners || []).join(', ') || 'Not set. Everyone who can run agents here can use it.')}${row('Operators', (acc.operators || []).join(', '))}${row('Viewers', (acc.viewers || []).join(', '))}</div>
+      ${a.role === 'owner' && !remote ? a.locked ? '<p class="hint" style="margin-top:30px">The configuration file defines this agent. Change it there.</p>' : `<div class="group" style="margin-top:30px"><button class="row link" data-action="edit" data-name="${esc(a.name)}"><span class="main"><span class="t">Edit agent</span></span></button>
+        <button class="row danger" data-action="delete" data-name="${esc(a.name)}"><span class="main"><span class="t">Delete agent</span></span></button></div>` : ''}`, dir);
+  },
+};
+
+screens.start = {
+  async open(s, el, dir) {
+    await loadMembers().catch(() => null);
+    let agents = s.member ? ((members().find(x => x.name === s.member) || {}).agents || []) : members().filter(x => x.self).flatMap(x => x.agents || []);
+    if (!agents.length && !s.member) agents = await api.agents();
+    agents = agents.filter(a => canRun(a.role));
+    const cur = s.agent || (agents[0] && agents[0].name) || '';
+    mount(el, bar(s, `<button class="btn plain strong" type="submit" form="start-form">Start run</button>`) + alert() + `
+      <form class="form" id="start-form" data-form="start" style="margin-top:12px"><input type="hidden" name="member" value="${esc(s.member || '')}">
+        <div class="group"><div class="field"><label for="f-agent">Agent</label><select id="f-agent" name="agent">${agents.map(a => `<option${a.name === cur ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
+        <div class="field"><label for="f-input">Message</label><textarea id="f-input" name="input" required placeholder="What should the agent do?"></textarea></div></div>
+        ${s.member ? `<p class="hint">The run starts on ${esc(s.member)}, which checks that you can start it.</p>` : ''}
+        <div class="group"><div class="field"><label for="f-instr">Instructions for this run</label><textarea id="f-instr" name="instructions" placeholder="Optional. The agent reads them after its own instructions."></textarea></div></div>
+      </form>`, dir);
+    const f = $('#f-input', el); if (f) f.focus();
+  },
+};
+
+// edit leads with what the agent handles and how: its name, its
+// responsibility, its instructions, and what it can do. The model, the
+// globs, the access patterns, and the JSON sit under Advanced.
+screens.edit = {
+  async open(s, el, dir) {
+    const a = s.name ? await api.agent(s.name) : {name: ''};
+    s.title = s.name ? 'Edit agent' : 'New agent';
+    const acc = a.access || {};
+    const more = clean({instructions: a.instructions, policy: a.policy, budget: a.budget});
+    const field = (id, label, value, extra) => `<div class="field"><label for="e-${id}">${label}</label><input id="e-${id}" name="${id}" value="${esc(value || '')}"${extra || ''}></div>`;
+    const area = (id, label, value, extra) => `<div class="field"><label for="e-${id}">${label}</label><textarea id="e-${id}" name="${id}"${extra || ''}>${esc(value || '')}</textarea></div>`;
+    const can = abilities(a.abilities);
+    mount(el, bar(s, `<button class="btn plain strong" type="submit" form="edit-form">${s.name ? 'Save changes' : 'Create agent'}</button>`) + alert() + `
+      <form class="form" id="edit-form" data-form="edit" data-new="${s.name ? '' : '1'}" style="margin-top:12px">
+        <div class="group">${field('name', 'Name', a.name, s.name ? ' readonly' : ' required pattern="[A-Za-z0-9_][A-Za-z0-9_.-]*" maxlength="64" placeholder="pr-reviewer"')}
+          ${area('description', 'What does this agent handle?', a.description, ' class="short" placeholder="Reviews pull requests for security problems."')}</div>
+        <div class="group">${area('system', 'Instructions', a.system, ' placeholder="You review pull requests for security problems. Explain each finding. Never push changes."')}</div>
+        <p class="hint">The agent reads its instructions at the start of every run. Say what it must never do, too.</p>
+        ${can ? can + '<p class="hint">Tools and rules change under Advanced.</p>' : ''}
+        <details class="advanced"><summary>${svg.chev}Advanced</summary>
+          <div class="group">${field('model', 'Model', a.model, ' placeholder="Default"')}<div class="field"><label for="e-effort">Effort</label><select id="e-effort" name="effort">${['', 'low', 'medium', 'high', 'xhigh', 'max'].map(v => `<option value="${v}"${v === (a.effort || '') ? ' selected' : ''}>${v ? cap(v) : 'Default'}</option>`).join('')}</select></div>
+            <div class="field"><label for="e-timeZone">Time zone</label><input id="e-timeZone" name="timeZone" value="${esc(a.timeZone || '')}" placeholder="Like the configuration, or America/Chicago"></div></div>
+          <div class="group">${field('tools', 'Tools', (a.tools || []).join(', '), ' placeholder="Every tool"')}${field('skills', 'Skills', a.skills ? (a.skills.length ? a.skills.join(', ') : 'none') : '', ' placeholder="Every skill"')}</div>
+          <p class="hint">Tools and skills are globs, separated by commas.</p>
+          <div class="group">${field('owners', 'Owners', (acc.owners || []).join(', '))}${field('operators', 'Operators', (acc.operators || []).join(', '))}${field('viewers', 'Viewers', (acc.viewers || []).join(', '))}</div>
+          <p class="hint">A subject, a glob, group:name, kind:workload, or *. ${s.name ? 'Leave all three empty to keep access as it is.' : 'Leave all three empty to own the agent yourself.'}</p>
+          <div class="group"><div class="field"><label for="e-more">More instructions, policy, and budget (JSON)</label><textarea id="e-more" name="more" class="mono">${esc(JSON.stringify(more, null, 2))}</textarea></div></div>
+        </details>
+      </form>`, dir);
+  },
+};
+
+// others lists the runs by people outside the teams of the person, grouped
+// by person (section 13.6).
+screens.others = {
+  async open(s, el, dir) {
+    const runs = ((await api.runs({limit: 200, by: 'others'})).runs || []).filter(r => !r.parent);
+    if (top() !== s) return;
+    const people = new Map();
+    for (const r of runs) {
+      const k = r.principal || '';
+      if (!people.has(k)) people.set(k, []);
+      people.get(k).push(r);
+    }
+    const groups = [...people].map(([p, rs]) => `<p class="sub">${esc(p ? who(p) : 'The process itself')}</p><div class="group">${rs.map(r => runRow(r, true)).join('')}</div>`).join('');
+    mount(el, bar(s, '', true) + alert() + `<h1 class="large">Runs by others</h1>` + (groups || '<div class="group"><p class="empty">No other person has a run that you can see.</p></div>'), dir);
+  },
+};
+
+// operator is the view of the processes that serve the page: the members
+// of the fleet, and where the metrics are.
+screens.operator = {
+  async open(s, el, dir) {
+    const all = fleetOn() ? (await api.fleet()).members || [] : [];
+    if (top() !== s) return;
+    const seen = m => m.self ? 'Serves this page' : cap(memberWord(m)) + (m.state === 'live' ? '' : ', last seen ' + ago(m.lastSeen));
+    const rows = all.length ? all.map(m => `<div class="row"><span class="main"><span class="t">${esc(m.name)}</span>
+      <span class="s">${esc(seen(m) + (m.self || m.canForward ? '' : '. Read-only from here'))}</span></span>
+      <span class="end">${m.inputRequired ? `${badge('needs-you')} ${num(m.inputRequired)}` : m.active ? num(m.active) + ' working' : ''}</span></div>`).join('')
+      : '<div class="row"><span class="main"><span class="t">This process</span><span class="s">Serves this page. The fleet is off.</span></span></div>';
+    mount(el, bar(s, '', true) + alert() + `<h1 class="large">Operator view</h1>
+      <p class="lede">${all.length > 1 ? num(all.length) + ' members share this fleet. Each one runs its own agents.' : 'The process that serves this page.'}</p>
+      <h2 class="sec">${all.length ? 'Fleet members' : 'Process'}</h2><div class="group">${rows}</div>
+      <h2 class="sec">Metrics</h2><p class="hint" style="margin-left:4px;font-size:15px;line-height:21px">fw exports tokens, cost, latency, errors, and run outcomes as Prometheus metrics at /metrics. Your monitoring stack reads them there.</p>`, dir);
+  },
+};
+
+// signin asks the person to sign in. With browser sign-in on, Sign in goes
+// to the issuer and comes back to the same screen. The token form stays as
+// a quiet way in for a developer, or the only way when sign-in is off.
+screens.signin = {
+  open(s, el) {
+    const n = S.next || nextStore.get(), next = n.startsWith('#') ? n : '#home';
+    const lede = S.expired ? 'Your sign-in ended. Sign in again to go on. Your drafts stay.' : 'Sign in to see your work.';
+    const form = `<form class="form" data-form="token"><div class="group"><div class="field"><label for="tok">Access token</label><input id="tok" name="token" type="password" autocomplete="off" required></div></div>
+      <button class="btn${S.signinUrl ? '' : ' primary'} wide" type="submit">Continue</button></form>`;
+    const url = S.signinUrl + (S.signinUrl.includes('?') ? '&' : '?') + 'next=' + enc(next);
+    mount(el, `<div class="signin"><span class="brand" role="img" aria-label="featherweight">${svg.feather}</span><h1 class="large">Sign in</h1>
+      <p class="lede">${S.signinUrl ? esc(lede) : 'Paste your access token to see your work.'}</p>${alert()}
+      ${S.signinUrl ? `<a class="btn primary wide" href="${esc(url)}" id="signin-go">Sign in</a>
+        <details class="token-way"${S.error ? ' open' : ''}><summary>Use an access token</summary>${form}</details>` : form}</div>`);
+    const f = S.signinUrl ? $('#signin-go', el) : $('#tok', el);
+    if (f) f.focus();
+  },
+};
+
+// connections lists the services that act for the person, connected or
+// not, with one action each: Connect or Disconnect.
+screens.connections = {
+  async open(s, el, dir) {
+    const all = await api.connections();
+    if (top() !== s) return;
+    const state = c => c.connected ? (c.account ? 'Connected as ' + c.account : c.signIn ? 'Connected with your sign-in' : 'Connected') : 'Not connected';
+    const rows = all.map(c => `<div class="row" data-key="conn:${esc(c.server)}"><span class="main"><span class="t">${esc(connectTitle(c))}</span>`
+      + `<span class="s${c.connected ? ' on' : ''}">${esc(state(c))}</span></span>`
+      + (c.connected ? `<button class="btn small danger" data-action="disconnect" data-server="${esc(c.server)}">Disconnect</button>`
+        : `<button class="btn small" data-action="connect" data-server="${esc(c.server)}" data-next="#connections">Connect</button>`) + '</div>').join('');
+    mount(el, bar(s, '', true) + alert() + `<h1 class="large">Connections</h1>
+      <p class="lede">${all.length ? 'Your agents act as you in these services.' : 'No service here acts as you.'}</p>`
+      + (rows ? `<div class="group conn">${rows}</div>` : ''), dir);
+  },
+};
+
+// connect is where a link to connect a service lands, from the chat, a
+// home row, or an MCP host: #connect/<server>/<run>. The person taps
+// Connect, signs in at the service, and comes back to the run, or to
+// Connected. A run that waits for the service also offers Skip.
+screens.connect = {
+  async open(s, el, dir) {
+    const server = s.id, runId = s.member || '';
+    if (!person()) {
+      mount(el, bar(s, '', true) + `<div class="solo"><span class="mark">${svg.link}</span><h1 class="large">Connect ${esc(server)}</h1>
+        <p class="lede">Only a signed-in person can connect a service. Sign in with your own account, then open this link again.</p></div>`, dir);
+      return;
+    }
+    const [all, res] = await Promise.all([api.connections(), runId ? api.result(runId).catch(() => null) : null]);
+    if (top() !== s) return;
+    const c = all.find(x => x.server === server);
+    if (!c) {
+      mount(el, bar(s, '', true) + alert() + `<div class="solo"><span class="mark">${svg.link}</span><h1 class="large">Connect ${esc(server)}</h1>
+        <p class="lede">No service named ${esc(server)} acts as you here.</p><button class="btn wide" data-action="go" data-view="connections">Connections</button></div>`, dir);
+      return;
+    }
+    const title = connectTitle(c);
+    const p = res && res.pending && res.pending.connect && res.pending.connect.server === server ? res.pending : null;
+    const agent = res ? res.agent : '';
+    s.title = 'Connect ' + title;
+    if (c.connected && !p) {
+      mount(el, bar(s, '', true) + alert() + `<div class="solo"><span class="mark ok">${svg.done}</span><h1 class="large">${esc(title)} is connected</h1>
+        <p class="lede">${esc(c.account ? 'Your agents act as ' + c.account + ' there.' : 'Your agents act as you there.')}</p>
+        ${runId ? `<button class="btn primary wide" data-action="run" data-id="${esc(runId)}">Open the run</button>` : '<button class="btn primary wide" data-action="nav" data-view="home">Done</button>'}</div>`, dir);
+      return;
+    }
+    const expired = p && p.connect.reason === 'expired';
+    const lede = p && agent ? (expired ? `${agent} needs your sign-in at ${title} to go on acting as you there.` : `${agent} wants to act as you in ${title}.`)
+      : `Let your agents act as you in ${title}.`;
+    mount(el, bar(s, '', true) + alert() + `<div class="solo"><span class="mark">${svg.link}</span>
+      <h1 class="large">${esc(expired ? 'Sign in to ' + title + ' again' : 'Connect ' + title)}</h1><p class="lede">${esc(lede)} You sign in at ${esc(title)}.</p>
+      <button class="btn primary wide" data-action="connect" data-server="${esc(server)}" data-run="${esc(runId)}">Connect</button>
+      ${p ? `<button class="btn plain wide" data-action="skip" data-id="${esc(runId)}" data-approval="${esc(p.id)}" data-back="1">Skip</button>` : ''}
+      <p class="hint">You can disconnect it at any time in Connections.</p></div>`, dir);
+  },
+};
+
+// connected is where a connection comes back to when no run waits for it.
+screens.connected = {
+  async open(s, el, dir) {
+    const all = await api.connections().catch(() => []);
+    if (top() !== s) return;
+    const c = all.find(x => x.server === s.id) || {server: s.id};
+    const title = connectTitle(c);
+    mount(el, bar(s, '', true) + alert() + `<div class="solo"><span class="mark ok">${svg.done}</span><h1 class="large">${esc(title)} is connected</h1>
+      <p class="lede">${esc(c.account ? 'Your agents act as ' + c.account + ' there. ' : 'Your agents act as you there. ')}Work that waited for ${esc(title)} goes on now.</p>
+      <button class="btn primary wide" data-action="nav" data-view="home">Done</button></div>`, dir);
+  },
+};
+
+/* ---------- actions ---------- */
+// save hands a file of the run to the person as a download. Inside an MCP
+// host the frame can block downloads, and the page cannot see that, so it
+// says what to do then.
+function save(blob, name, el) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  const scr = el && el.closest('.screen');
+  if (S.mode === 'mcp' && scr && !$('.dl-note', scr)) {
+    $('.path', scr).insertAdjacentHTML('afterend', '<p class="dl-note" role="status">If no download starts, this host blocks downloads, and this screen stays the way to read the file.</p>');
+  }
+}
+// busy disables a button while its action runs.
+async function busy(el, fn) {
+  el.disabled = true;
+  try { return await fn(); } finally { if (el.isConnected) el.disabled = false; }
+}
+const actions = {
+  back,
+  dismiss: () => { S.error = ''; document.querySelectorAll('.alert').forEach(a => a.remove()); },
+  retry: () => { S.error = ''; show(); },
+  go: d => go(d.view, {}),
+  nav: d => { S.error = ''; go(d.view, {}); },
+  menu: (d, el) => openMenu(el),
+  'pick-agent': d => {
+    S.agent = {name: d.name, member: d.member || ''};
+    store.set('fw.agent', S.agent);
+    closeMenus();
+    drawChip();
+    const t = $('form[data-form="intent"] textarea'); if (t) t.focus();
+  },
+  run: d => go('run', {id: d.id}),
+  file: d => go('file', {id: d.id, path: d.path}),
+  download: (d, el) => busy(el, async () => save(await api.download(d.id, d.path), d.path.split('/').pop(), el)),
+  attach: (d, el) => { const i = $('input[name="pick"]', el.closest('form')); if (i) i.click(); },
+  unattach: d => { S.attach.splice(+d.i, 1); draft.saveFiles(S.draft); drawTray(); },
+  agent: d => go('agent', {name: d.name, member: d.member || ''}),
+  start: d => go('start', {agent: d.agent || '', member: d.member || ''}),
+  edit: d => go('edit', {name: d.name || ''}),
+  earlier: (d, el) => busy(el, () => screens.run.older(S.run)),
+  'to-decision': toDecision,
+  // connect opens the connection of a service. From a run, the person
+  // comes back to that run.
+  connect: (d, el) => busy(el, () => openConnect(d.server, d.next || (d.run ? '#run/' + d.run : ''), el)),
+  // skip lets a run go on without the service that it waits for.
+  skip: (d, el) => busy(el, async () => {
+    await api.decide(d.id, d.approval, 'deny');
+    if (d.back) return go('run', {id: d.id}, 'replace');
+    if (S.run) {
+      S.run.decided = d.approval;
+      screens.run.decision(S.run, null);
+      S.run.idle = false;
+      S.run.poll().catch(() => {});
+    }
+  }),
+  disconnect: (d, el) => busy(el, async () => { await api.disconnect(d.server); show(); }),
+  next: (d, el) => {
+    const ctx = S.run;
+    if (!ctx) return;
+    switch (d.kind) {
+      case 'review': {
+        // One changed file opens. Several files come into view.
+        const all = ctx.el.querySelectorAll('#outcome .file');
+        if (all.length === 1) return go('file', {id: ctx.id, path: all[0].dataset.path});
+        if (all.length) { all[0].scrollIntoView({block: 'center', behavior: smooth()}); all[0].focus({preventScroll: true}); }
+        return;
+      }
+      case 'reply': { const t = $('#composer textarea', ctx.el); if (t) t.focus(); return; }
+      case 'save-agent': return busy(el, async () => go('run', {id: runIdOf(await api.builder({fromRun: ctx.id}))}));
+      case 'retry': return busy(el, async () => go('run', {id: runIdOf(await api.start(clean({agent: ctx.run.agent, input: ctx.run.input, member: ctx.run.member})))}));
+    }
+    toDecision();
+  },
+  'create-draft': async (d, el) => {
+    const card = el.closest('.draft');
+    await busy(el, () => api.putAgent(JSON.parse(card.dataset.profile)));
+    agentsChanged();
+    await fillDraft(card);
+  },
+  // Sign out forgets the token. The server then answers 401, and the page
+  // shows the sign-in screen that the server offers.
+  signout: () => { native.clearToken(); S.me = null; S.next = location.hash; boot().catch(fail); },
+  cancel: async (d, el) => { el.disabled = true; await api.cancel(d.id); if (S.run) { S.run.idle = false; S.run.poll().catch(() => {}); } },
+  delete: async (d, el) => {
+    if (!el.dataset.armed) { el.dataset.armed = '1'; $('.t', el).textContent = 'Tap again to delete ' + d.name; return; }
+    await api.deleteAgent(d.name);
+    S.members = null;
+    go('agents');
+  },
+};
+const forms = {
+  // A pasted token opens the screen that the person came from.
+  token: f => {
+    native.setToken(f.token.value.trim());
+    S.error = '';
+    S.tokenTry = true;
+    const n = S.next || nextStore.get();
+    history.replaceState(null, '', location.pathname + (n && n !== '#home' ? n : ''));
+    return boot();
+  },
+  intent: async f => {
+    const input = f.content.value.trim();
+    const a = chosen();
+    if (!input || !a) return;
+    const files = S.attach.map(x => ({name: x.name, data: x.data}));
+    const run = await api.start(clean({agent: a.name, input, files: files.length ? files : undefined, member: a.member}));
+    store.set('fw.agent', {name: a.name, member: a.member});
+    draft.clear('home');
+    S.attach = draft.files('home');
+    go('run', {id: runIdOf(run)});
+  },
+  send: async f => {
+    const content = f.content.value.trim();
+    const files = S.attach.map(x => ({name: x.name, data: x.data}));
+    if (!content && !files.length) return;
+    await api.send(f.dataset.id, content, files);
+    f.content.value = '';
+    f.content.style.height = '';
+    draft.clear(f.dataset.draft);
+    S.attach = draft.files(f.dataset.draft);
+    drawTray();
+    if (S.run) { S.run.idle = false; S.run.poll().catch(() => {}); }
+  },
+  decide: async (f, b) => {
+    const decision = b && b.value === 'deny' ? 'deny' : 'allow';
+    const raw = f.note ? f.note.value.trim() : '';
+    let note = raw, content;
+    if (f.dataset.question && decision === 'allow' && raw) {
+      try { const o = JSON.parse(raw); if (o && typeof o === 'object') { content = o; note = ''; } } catch (e) { /* plain text goes in the note */ }
+    }
+    // A choice button answers with its value. A form answers with its fields.
+    if (decision === 'allow' && b && b.dataset.pick) content = {[b.dataset.key]: JSON.parse(b.dataset.pick)};
+    else if (decision === 'allow' && f.querySelector('[data-key]')) {
+      content = {};
+      for (const el of f.querySelectorAll('[data-key]')) {
+        const k = el.dataset.key, t = el.dataset.type;
+        if (el.type === 'checkbox') content[k] = el.checked;
+        else if (el.value.trim() === '') continue;
+        else if (el.tagName === 'SELECT') content[k] = JSON.parse(el.value);
+        else content[k] = t === 'number' || t === 'integer' ? Number(el.value) : el.value;
+      }
+    }
+    await api.decide(f.dataset.id, f.dataset.approval, decision, note || undefined, content);
+    if (S.run) {
+      S.run.decided = f.dataset.approval;
+      screens.run.decision(S.run, null);
+      S.run.idle = false;
+      S.run.poll().catch(() => {});
+    }
+  },
+  create: async f => {
+    const run = await api.builder({input: f.input.value.trim()});
+    draft.clear('create');
+    S.stack.pop();
+    go('run', {id: runIdOf(run)});
+  },
+  start: async f => {
+    const run = await api.start(clean({agent: f.agent.value, input: f.input.value.trim(), instructions: f.instructions.value.trim(), member: f.member.value}));
+    S.stack.pop();
+    go('run', {id: runIdOf(run)});
+  },
+  edit: async f => {
+    let more = {};
+    if (f.more.value.trim()) { try { more = JSON.parse(f.more.value); } catch (e) { throw new Error('The JSON under Advanced is not valid: ' + e.message); } }
+    const p = Object.assign({}, more, clean({name: f.name.value.trim(), description: f.description.value.trim(), model: f.model.value.trim(), effort: f.effort.value, timeZone: f.timeZone.value.trim(), system: f.system.value}));
+    const tools = list(f.tools.value); if (tools.length) p.tools = tools;
+    const skills = f.skills.value.trim(); if (skills.toLowerCase() === 'none') p.skills = []; else if (skills) p.skills = list(skills);
+    const access = {owners: list(f.owners.value), operators: list(f.operators.value), viewers: list(f.viewers.value)};
+    if (access.owners.length || access.operators.length || access.viewers.length) p.access = access;
+    const saved = await api.putAgent(p);
+    agentsChanged();
+    S.stack.pop();
+    if (f.dataset.new) go('agent', {name: saved.name}); else show('pop');
+  },
+};
+document.addEventListener('click', ev => {
+  if (!ev.target.closest('.pop')) closeMenus();
+  const el = ev.target.closest('[data-action]');
+  if (!el) return;
+  ev.preventDefault();
+  S.kbd = ev.detail === 0; // a click from Enter or Space
+  const fn = actions[el.dataset.action];
+  if (fn) Promise.resolve(fn(el.dataset, el)).catch(fail);
+});
+
+/* ---------- the keyboard ---------- */
+// ITEMS are the rows that the arrow keys and j and k move between.
+const ITEMS = '.row[data-action]:not([disabled]), .file[data-action], .hand[data-action], .menu > button:not([disabled])';
+const shown = n => n.getClientRects().length > 0;
+// moveFocus moves the focus to the next or the previous row of the list
+// that has it: a menu, the side pane, or the screen. With no row in focus,
+// the first row of the side pane, else of the screen, takes it.
+function moveFocus(el, dir) {
+  const inList = el && el.matches && el.matches(ITEMS);
+  // A heading or the page itself has no row, so the open row, else the
+  // first row, is where the move starts.
+  if (!inList && el.matches && el.matches('a, button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')) return false;
+  const scope = inList ? el.closest('.menu') || el.closest('.side, .detail') : (S.wide && $('#side .screen')) || $('#detail .screen');
+  const items = scope ? [...scope.querySelectorAll(ITEMS)].filter(shown) : [];
+  if (!items.length) return false;
+  const from = inList ? el : $('.row.sel', scope);
+  const n = from ? items[items.indexOf(from) + dir] : items[dir > 0 ? 0 : items.length - 1];
+  if (n) { n.focus(); n.scrollIntoView({block: 'nearest'}); }
+  return true;
+}
+// focusComposer puts the focus in the composer of home, and opens home
+// first when the composer is not on the screen.
+function focusComposer() {
+  const t = $('form[data-form="intent"] textarea');
+  if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); return; }
+  S.focusComposer = true;
+  go('home', {});
+}
+document.addEventListener('keydown', ev => {
+  const el = ev.target, plain = !ev.metaKey && !ev.ctrlKey && !ev.altKey;
+  const open = $('.menu:not([hidden])');
+  if (ev.key === 'Escape' && open) {
+    const b = open.previousElementSibling;
+    closeMenus();
+    if (b) b.focus();
+    return;
+  }
+  // Cmd or Ctrl+Enter sends a message, starts work, or submits the form.
+  if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey) && el.form) {
+    ev.preventDefault();
+    if (!$('[data-send]', el.form) || canSend(el.form)) el.form.requestSubmit();
+    return;
+  }
+  if (el.name === 'content' && ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); if (canSend(el.form)) el.form.requestSubmit(); return; }
+  // Escape leaves a text field, so the keys of the lists work again.
+  if (el.matches('input, textarea, select, [contenteditable]')) { if (ev.key === 'Escape') el.blur(); return; }
+  // The arrow keys open a menu from its button and move in the menu.
+  if (open && el.matches('[data-action="menu"]') && (ev.key === 'ArrowDown' || ev.key === 'ArrowUp')) {
+    ev.preventDefault();
+    const items = [...open.querySelectorAll('button')];
+    if (items.length) items[ev.key === 'ArrowDown' ? 0 : items.length - 1].focus();
+    return;
+  }
+  if (plain && ev.key === '/') { ev.preventDefault(); focusComposer(); return; }
+  if (plain && ['ArrowDown', 'ArrowUp', 'j', 'k'].includes(ev.key)) {
+    if (moveFocus(el, ev.key === 'ArrowDown' || ev.key === 'j' ? 1 : -1)) ev.preventDefault();
+    return;
+  }
+  if (ev.key === 'Escape' && S.stack.length > 1) back();
+});
+// A menu closes when the focus leaves it.
+document.addEventListener('focusout', ev => {
+  const pop = ev.target.closest && ev.target.closest('.pop');
+  if (!pop || pop.contains(ev.relatedTarget)) return;
+  const m = $('.menu:not([hidden])', pop);
+  if (m) { m.hidden = true; m.previousElementSibling.setAttribute('aria-expanded', 'false'); }
+});
+// Typing keeps the draft of its place and marks a decision form as edited,
+// so a poll leaves the form alone.
+function edited(ev) {
+  const el = ev.target, f = el.form;
+  if (!f) return;
+  if (f.dataset.form === 'decide') f.dataset.dirty = '1';
+  if (f.dataset.draft && (el.name === 'content' || el.name === 'input')) draft.saveText(f.dataset.draft, el.value);
+  if (el.name !== 'content') return;
+  grow(el);
+  const b = $('[data-send]', f); if (b) b.disabled = !canSend(f);
+}
+document.addEventListener('input', edited);
+// Activity reads its lines when the person opens it.
+document.addEventListener('toggle', ev => { if (ev.target.id === 'activity' && ev.target.open) activity(ev.target).catch(fail); }, true);
+// Files reach a message bar from the + button, a paste, or a drop.
+document.addEventListener('paste', ev => {
+  const files = [...((ev.clipboardData && ev.clipboardData.files) || [])];
+  if (ev.target.name !== 'content' || !files.length) return;
+  ev.preventDefault();
+  addFiles(files).catch(fail);
+});
+const dragged = ev => [...((ev.dataTransfer && ev.dataTransfer.types) || [])].includes('Files');
+document.addEventListener('dragover', ev => {
+  const c = $('#composer');
+  if (!c || !dragged(ev)) return;
+  ev.preventDefault();
+  c.classList.add('drop');
+});
+document.addEventListener('dragleave', ev => { if (!ev.relatedTarget && $('#composer')) $('#composer').classList.remove('drop'); });
+document.addEventListener('drop', ev => {
+  const c = $('#composer');
+  if (!c || !dragged(ev)) return;
+  ev.preventDefault();
+  c.classList.remove('drop');
+  addFiles([...ev.dataTransfer.files]).catch(fail);
+});
+document.addEventListener('submit', ev => {
+  const f = ev.target;
+  const fn = forms[f.dataset.form];
+  if (!fn) return;
+  ev.preventDefault();
+  const btns = [...f.querySelectorAll('button[type=submit]'), ...(f.id ? document.querySelectorAll(`button[form="${f.id}"]`) : [])];
+  btns.forEach(b => { b.disabled = true; });
+  Promise.resolve(fn(f, ev.submitter)).catch(fail).finally(() => btns.forEach(b => { b.disabled = b.hasAttribute('data-send') && !canSend(f); }));
+});
+document.addEventListener('change', ev => {
+  const f = ev.target.form;
+  if (f && f.dataset.form === 'decide') f.dataset.dirty = '1';
+  if (ev.target.name !== 'pick') return;
+  const files = [...ev.target.files];
+  ev.target.value = '';
+  addFiles(files).catch(fail);
+});
+// Scrolling up to Load earlier loads the earlier messages.
+let lastY = 0;
+window.addEventListener('scroll', () => {
+  const y = window.scrollY, up = y < lastY;
+  lastY = y;
+  const ctx = S.run, e = ctx && $('#earlier', ctx.el);
+  if (!up || !e || e.hidden || ctx.loadingOlder) return;
+  const r = e.getBoundingClientRect();
+  if (r.bottom > 0 && r.top < window.innerHeight) screens.run.older(ctx).catch(fail);
+}, {passive: true});
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.refresh) S.refresh().catch(() => {}); });
+window.matchMedia('(min-width: 960px)').addEventListener('change', () => { if (S.booted) show(); });
+
+/* ---------- the host ---------- */
+function applyHost(ctx) {
+  if (!ctx) return;
+  if (ctx.theme === 'light' || ctx.theme === 'dark') document.documentElement.dataset.theme = ctx.theme;
+  // Inline, the page fits its content. Fullscreen and pip keep the window.
+  if (ctx.displayMode) document.documentElement.dataset.mode = ctx.displayMode;
+  const v = ctx.styles && ctx.styles.variables;
+  if (v && v['--font-sans']) document.documentElement.style.setProperty('--font', v['--font-sans']);
+}
+// The result of the dashboard tool opens the screen that its view names.
+// Only that tool names the page, so the host shows the page once. Usage is
+// no screen any more, so its view opens home.
+function applyResult(res) {
+  const d = res && res.structuredContent;
+  if (!d || !d.view) return;
+  if (d.whoami) S.me = d.whoami;
+  S.booted = true;
+  if (d.view === 'run' && d.run) return go('run', {id: d.run.id}, 'replace');
+  if (d.view === 'agent' && d.agent) return go('agent', {name: d.agent.name}, 'replace');
+  if (d.view === 'agents') return go('agents');
+  if (d.view === 'fleet') return go('operator', {}, 'replace');
+  go('home');
+}
+bridge.on('ui/notifications/tool-input', () => {});
+bridge.on('ui/notifications/tool-result', applyResult);
+bridge.on('ui/notifications/tool-cancelled', p => fail(new Error('The host canceled the call. ' + (p.reason || ''))));
+bridge.on('ui/notifications/host-context-changed', applyHost);
+bridge.on('ui/resource-teardown', () => { stop(); return {}; });
+bridge.on('ping', () => ({}));
+function watchSize() {
+  if (!('ResizeObserver' in window)) return;
+  let last = '', t = null;
+  const send = () => {
+    const w = document.documentElement.scrollWidth, h = document.documentElement.scrollHeight;
+    if (w + 'x' + h === last) return;
+    last = w + 'x' + h;
+    bridge.notify('ui/notifications/size-changed', {width: w, height: h});
+  };
+  new ResizeObserver(() => { clearTimeout(t); t = setTimeout(send, 120); }).observe(document.body);
+}
+
+/* ---------- boot ---------- */
+// In a browser, the address keeps the screen: #run/<id>, #agent/<name>,
+// #agents. A link or a pasted address that changes it opens that screen. An
+// old link to a screen that is gone, such as #usage, opens home. The page
+// sets the address with replaceState, which fires no hashchange.
+function fromHash() {
+  let [view, key, member] = location.hash.slice(1).split('/').map(decodeURIComponent);
+  if (view === 'fleet') view = 'operator';
+  if (PLACES.includes(view)) S.stack = [{view}];
+  else if (view === 'agent' || view === 'edit') S.stack = [{view: 'agents'}, {view, name: key, member}];
+  else if (!screens[view] || ['signin', 'file', 'compose'].includes(view)) S.stack = [{view: 'home'}];
+  else S.stack = [{view: 'home'}, {view, id: key, name: key, member}];
+}
+window.addEventListener('hashchange', () => { if (S.mode === 'native' && S.booted) { fromHash(); show(); } });
+async function boot() {
+  stop();
+  if (!S.mode) {
+    S.mode = 'native';
+    if (window.parent && window.parent !== window) {
+      try {
+        const r = await bridge.request('ui/initialize', {protocolVersion: '2026-01-26', appInfo: {name: 'fw', version: '2'},
+          appCapabilities: {availableDisplayModes: ['inline', 'fullscreen']}}, 2000);
+        S.mode = 'mcp';
+        api = mcp;
+        applyHost(r && r.hostContext);
+        bridge.notify('ui/notifications/initialized', {});
+        watchSize();
+      } catch (e) { /* not inside a host: the native API */ }
+    }
+  }
+  try { S.me = await api.whoami(); S.tokenTry = false; nextStore.set(''); } catch (e) {
+    if (e.signin && S.mode === 'native') return toSignin(e);
+    S.error = e.message;
+  }
+  S.members = null;
+  if (S.mode === 'native') { fromHash(); S.booted = true; return show(); }
+  // Inside a host, the tool result that opened the page picks the screen.
+  setTimeout(() => { if (!S.booted) { S.booted = true; show(); } }, 1200);
+}
+boot().catch(fail);
+})();
+</script>
+</body>
+</html>

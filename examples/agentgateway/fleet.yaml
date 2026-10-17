@@ -1,0 +1,352 @@
+# A fleet of fw agents behind agentgateway, on one public URL.
+#
+# Replace these placeholders before you apply the file:
+#   fleet.example.com          the public host of the gateway
+#   https://idp.example.com    the OIDC issuer that signs the tokens of your people
+#   https://models.example.com/v1, MODEL   an OpenAI-compatible model server and model id
+#   ghcr.io/bdubs00/featherweight-workbench:static, :toolbox   the fw-workbench images
+#
+# Install agentgateway v1.6.0 and its CRDs first (see README.md).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fw-fleet
+---
+# NATS with JetStream carries the records of the fleet. fw keeps them in the
+# key-value bucket FW_RETAINED. The WebSocket listener is for members in a
+# sandbox whose egress allows HTTP only, such as ax Tasks.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats
+  namespace: fw-fleet
+data:
+  nats.conf: |
+    port: 4222
+    http_port: 8222
+    jetstream {
+      store_dir: /data
+      max_file_store: 1GB
+    }
+    websocket {
+      port: 8080
+      no_tls: true
+    }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  namespace: fw-fleet
+spec:
+  serviceName: nats
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: nats}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: nats}
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.12-alpine
+          args: ["-c", "/etc/nats/nats.conf"]
+          ports:
+            - {name: client, containerPort: 4222}
+            - {name: ws, containerPort: 8080}
+            - {name: monitor, containerPort: 8222}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8222}
+          volumeMounts:
+            - {name: config, mountPath: /etc/nats}
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: config
+          configMap: {name: nats}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  namespace: fw-fleet
+spec:
+  selector: {app.kubernetes.io/name: nats}
+  ports:
+    - {name: client, port: 4222, targetPort: client}
+    - {name: ws, port: 8080, targetPort: ws}
+---
+# The settings that every fw process of the fleet shares. The audience is the
+# public /mcp URL: one token is good on every process, so a front can pass the
+# token of a person on to the member that owns a run.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fw-fleet
+  namespace: fw-fleet
+data:
+  FW_AUTH_MODE: oidc
+  FW_AUTH_OIDC_ISSUER: https://idp.example.com
+  FW_AUTH_OIDC_AUDIENCE: https://fleet.example.com/mcp
+  FW_AUTH_OIDC_NAME_CLAIM: email
+  FW_MCP_AUTH_AUDIENCE: https://fleet.example.com/mcp
+  FW_BUS_DRIVER: nats
+  FW_BUS_URL: nats://nats.fw-fleet.svc.cluster.local:4222
+  FW_FLEET_SUBJECT: fw.fleet
+  FW_FLEET_FORWARD: http://*.fw-fleet.svc.cluster.local:8080
+---
+# The Secret fw-front holds the key that signs the approval retries of MCP
+# and the browser sign-in. This file does not hold it, so no deployment
+# runs with a known key. Create it before you apply this file:
+#
+#   kubectl -n fw-fleet create secret generic fw-front \
+#     --from-literal=FW_MCP_STATE_KEY="$(openssl rand -hex 32)"
+# The front: fw with no agents of its own. It serves the whole fleet to
+# everyone who comes through the gateway, and it forwards each action to the
+# member that owns the run. Any replica can answer any request.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fw-front
+  namespace: fw-fleet
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: fw-front}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fw-front
+        # The front is always on, so Prometheus scrapes it (examples/observability). Never put this label on an ax Task.
+        fw.dev/scrape: "true"
+    spec:
+      containers:
+        - name: fw
+          image: ghcr.io/bdubs00/featherweight-workbench:static
+          args: ["serve"]
+          envFrom:
+            - configMapRef: {name: fw-fleet}
+          env:
+            - {name: FW_HOME, value: /data}
+            # Each replica is its own member, so it needs its own name.
+            - name: FW_FLEET_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            # Replicas must share this key. A signed approval retry or a
+            # sign-in callback can then reach either replica.
+            - name: FW_MCP_STATE_KEY
+              valueFrom: {secretKeyRef: {name: fw-front, key: FW_MCP_STATE_KEY}}
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+# The MCP side of the front. agentgateway finds it by the label, and the
+# appProtocol tells the gateway to speak MCP to it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fw-front-mcp
+  namespace: fw-fleet
+  labels: {fw.dev/mcp: front}
+spec:
+  selector: {app.kubernetes.io/name: fw-front}
+  ports:
+    - {name: mcp, port: 8080, targetPort: http, appProtocol: agentgateway.dev/mcp}
+---
+# The plain HTTP side of the front: the dashboard at /ui and the API at /v1.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fw-front
+  namespace: fw-fleet
+spec:
+  selector: {app.kubernetes.io/name: fw-front}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+# One member with one agent. Add a member per team or per workload. The
+# access block names the owners of the agent.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reviewer
+  namespace: fw-fleet
+data:
+  fw.yaml: |
+    access:
+      default: closed
+    agents:
+      reviewer:
+        description: Reviews pull requests.
+        access:
+          owners: ["group:platform-team"]
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: model
+  namespace: fw-fleet
+stringData:
+  OPENAI_API_KEY: replace-me
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reviewer
+  namespace: fw-fleet
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: reviewer}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: reviewer}
+    spec:
+      containers:
+        - name: fw
+          image: ghcr.io/bdubs00/featherweight-workbench:toolbox
+          args: ["serve"]
+          envFrom:
+            - configMapRef: {name: fw-fleet}
+            - secretRef: {name: model}
+          env:
+            - {name: FW_HOME, value: /data}
+            - {name: FW_CONFIG, value: /etc/fw/fw.yaml}
+            - {name: FW_FLEET_NAME, value: reviewer}
+            - {name: FW_FLEET_URL, value: "http://reviewer.fw-fleet.svc.cluster.local:8080"}
+            - {name: FW_MODEL, value: "openai/MODEL"}
+            - {name: OPENAI_BASE_URL, value: "https://models.example.com/v1"}
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: config, mountPath: /etc/fw}
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: config
+          configMap: {name: reviewer}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reviewer
+  namespace: fw-fleet
+spec:
+  selector: {app.kubernetes.io/name: reviewer}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: fleet
+  namespace: agentgateway-system
+spec:
+  gatewayClassName: agentgateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      hostname: fleet.example.com
+      allowedRoutes:
+        namespaces: {from: All}
+---
+# Exactly one target. With two or more, agentgateway adds a prefix to the
+# tool names and rewrites ui:// in the tool list, and the dashboard breaks.
+# Stateful routing keeps each MCP session on the replica that holds it.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: fw-mcp
+  namespace: fw-fleet
+spec:
+  mcp:
+    targets:
+      - name: fw
+        selector:
+          services:
+            matchLabels: {fw.dev/mcp: front}
+    sessionRouting: Stateful
+---
+# /mcp and its discovery documents go through the MCP backend, where the
+# login policy below applies.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: fleet-mcp
+  namespace: fw-fleet
+spec:
+  parentRefs:
+    - {name: fleet, namespace: agentgateway-system}
+  hostnames: [fleet.example.com]
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /mcp}
+        - path: {type: PathPrefix, value: /.well-known/oauth-protected-resource/mcp}
+        - path: {type: PathPrefix, value: /.well-known/oauth-authorization-server/mcp}
+      backendRefs:
+        - {group: agentgateway.dev, kind: AgentgatewayBackend, name: fw-mcp}
+---
+# The gateway checks the token and answers the 401 that starts the login of an
+# MCP host. Passthrough hands the same token to fw, which checks it again and
+# decides what each person sees and does.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: fleet-mcp-auth
+  namespace: fw-fleet
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: fleet-mcp}
+  traffic:
+    jwtAuthentication:
+      mode: Strict
+      providers:
+        - issuer: https://idp.example.com
+          audiences: [https://fleet.example.com/mcp]
+          jwks:
+            remote:
+              # A Service that reaches the issuer. For an issuer outside the
+              # cluster, use an ExternalName Service and a BackendTLSPolicy for
+              # https. The test of this example used an issuer in the cluster.
+              jwksPath: /.well-known/jwks.json
+              backendRef: {name: idp, kind: Service, namespace: idp, port: 443}
+      mcp:
+        resourceMetadata:
+          resource: https://fleet.example.com/mcp
+          bearerMethodsSupported: [header]
+  backend:
+    auth:
+      passthrough: {}
+---
+# The dashboard page and the API go to fw as plain HTTP. fw checks the token.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: fleet-http
+  namespace: fw-fleet
+spec:
+  parentRefs:
+    - {name: fleet, namespace: agentgateway-system}
+  hostnames: [fleet.example.com]
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /ui}
+        - path: {type: PathPrefix, value: /v1}
+      backendRefs:
+        - {name: fw-front, port: 8080}

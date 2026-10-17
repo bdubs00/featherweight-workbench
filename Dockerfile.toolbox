@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+# fw-workbench:toolbox. The same binary on a Debian base with git and common
+# tools, for coding agents that use the bash tool. Build with:
+#   docker buildx build --build-context kernel=../featherweight-kernel \
+#     -f Dockerfile.toolbox -t ghcr.io/bdubs00/featherweight-workbench:toolbox .
+ARG GO_VERSION=1.27
+FROM golang:${GO_VERSION} AS build
+WORKDIR /src/featherweight-workbench
+COPY --from=kernel go.mod go.sum /src/featherweight-kernel/
+COPY go.mod go.sum ./
+RUN go mod download
+COPY --from=kernel . /src/featherweight-kernel
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/usr/local/bin/fw-workbench ./cmd/fw-workbench \
+ && ln -s fw-workbench /out/usr/local/bin/ax-task-runner \
+ && ln -s fw-workbench /out/usr/local/bin/fw
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash ca-certificates curl git jq openssh-client procps \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/ /
+EXPOSE 80 8080
+ENTRYPOINT ["/usr/local/bin/fw-workbench"]
+CMD ["serve"]

@@ -1,0 +1,8 @@
+bin/
+.fw/
+*.test
+coverage.out
+CLAUDE.md
+go.work
+go.work.sum
+e2e/
