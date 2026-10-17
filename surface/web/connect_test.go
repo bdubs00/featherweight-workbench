@@ -137,7 +137,6 @@ func newConnectEnv(t *testing.T, m fw.Model, change func(*fw.Config)) *connectEn
 		fw.WithBus(fw.NewMemBus()),
 		fw.WithGrantStore(fw.NewMemGrantStore()),
 		fw.WithToolSources(e.fc),
-		fw.WithTitles(fw.TitlesInput),
 		fw.WithLogger(slog.New(slog.NewTextHandler(e.log, &slog.HandlerOptions{Level: slog.LevelDebug}))),
 		fw.WithSurfaces(native.NewWith(newExtension(e.clock.now))),
 	)

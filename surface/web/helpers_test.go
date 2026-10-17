@@ -18,6 +18,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/titles"
 )
 
 // script returns canned responses in order and records every request.
@@ -89,6 +90,9 @@ func rmTool(calls *atomic.Int32) fw.Tool {
 
 func newAgent(t *testing.T, m fw.Model, opts ...fw.Option) *fw.Agent {
 	t.Helper()
+	// A test with a scripted model asks for no title, or a title call
+	// takes an answer of the script.
+	t.Setenv(titles.EnvTitles, titles.ModeInput)
 	t.Setenv("FW_ATESPACE", "")
 	base := []fw.Option{
 		fw.WithoutDefaults(),
@@ -99,7 +103,7 @@ func newAgent(t *testing.T, m fw.Model, opts ...fw.Option) *fw.Agent {
 		fw.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
 		fw.WithSurfaces(native.New()),
 	}
-	a, err := fw.New(append(append(base, fw.WithTitles(fw.TitlesInput)), opts...)...)
+	a, err := fw.New(append(base, opts...)...)
 	if err != nil {
 		t.Fatalf("fw.New: %v", err)
 	}

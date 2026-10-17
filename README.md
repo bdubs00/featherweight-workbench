@@ -7,7 +7,7 @@ This repository holds the workbench for people on top of the kernel, featherweig
 - the MCP server at `/mcp` and over standard input and output, for desktop clients and MCP App hosts
 - the fleet, one view of many `fw` processes over retained bus records
 - connections, with which an MCP server of the kernel acts for the person who started a run
-- the `propose_agent` tool and model titles for runs
+- the `propose_agent` tool and the titles that a model writes for runs
 
 `fw-workbench` takes every verb of `fw`, with the same flags and the same configuration. The design is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The kernel design is in the architecture of the kernel.
 
@@ -73,7 +73,7 @@ An MCP server entry of the kernel with `auth.oauth.grant: user` acts for the per
 
 ## Titles
 
-Each run gets a title that a model writes, such as "Fix checkout retries". The workbench sets `titles: model` by default. The kernel default is `titles: input`, the first sentence of the input, with no extra model call. Set `titles: input` here to save that call.
+Each run gets a title that a model writes, such as "Fix checkout retries", the first time that the workbench shows it. The kernel gives a run the first sentence of its input as a title and makes no call. Set `titles: input` in the block `workbench` of `fw.yaml`, or `FW_WORKBENCH_TITLES=input`, to save that call.
 
 ## The fleet
 
@@ -84,7 +84,7 @@ Each process with `fleet.subject` publishes a record of itself and of its runs o
 The workbench changes no kernel code. It uses three hooks of the kernel:
 
 1. `native.Extend` mounts the routes of `surface/web` on the native surface of the kernel, behind the same authentication.
-2. `fw.RegisterDefaults` turns on the `mcp` surface, adds the `propose_agent` tool, and sets `titles: model`.
+2. `fw.RegisterDefaults` turns on the `mcp` surface and adds the `propose_agent` tool.
 3. Package `cli` gives the verbs of `fw`, and `cmd/fw-workbench` adds the MCP server to the verb `mcp`.
 
 ## Layout

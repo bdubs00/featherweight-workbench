@@ -19,6 +19,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/teams"
+	"github.com/bdubs00/featherweight-workbench/titles"
 )
 
 // Status words of a work item. They come from the run alone, so a list
@@ -115,6 +116,7 @@ type Home struct {
 // HomeOf builds the home of the caller in ctx from every run that the
 // caller can see (dashboard.Runs with the fleet scope), at the time now.
 func HomeOf(ctx context.Context, a *fw.Agent, runs []*fw.Run, now time.Time) (Home, error) {
+	titles.Want(a, runs...)
 	top := make([]*fw.Run, 0, len(runs))
 	for _, r := range runs {
 		if r != nil && r.Parent == "" {
@@ -291,6 +293,7 @@ func ResultOf(ctx context.Context, a *fw.Agent, id string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	titles.Want(a, run)
 	specs, err := a.ToolSpecs(ctx)
 	if err != nil {
 		return Result{}, fmt.Errorf("dashboard: list the tools: %w", err)

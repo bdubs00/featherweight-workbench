@@ -29,7 +29,7 @@ func TestProposeAgent(t *testing.T) {
 	fake := func(name, title string) fw.Tool {
 		return fw.NewTool(fw.ToolSpec{Name: name, Title: title}, func(context.Context, json.RawMessage) (fw.ToolResult, error) { return fw.TextResult("ok"), nil })
 	}
-	a, err := fw.New(fw.WithTitles(fw.TitlesInput), fw.WithoutDefaults(), fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithAuthn(fw.NoAuthn{}),
+	a, err := fw.New(fw.WithoutDefaults(), fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithAuthn(fw.NoAuthn{}),
 		fw.WithModel(fw.ModelFunc{GenerateFn: func(context.Context, *fw.Request) (*fw.Response, error) { return &fw.Response{}, nil }}),
 		fw.WithTools(fake("ask_user", "Ask you questions"), fake("bash", "Run shell commands"), tool))
 	if err != nil {

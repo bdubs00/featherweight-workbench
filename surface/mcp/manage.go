@@ -23,6 +23,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/teams"
+	"github.com/bdubs00/featherweight-workbench/titles"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -570,6 +571,7 @@ func (s *server) visibleRuns(ctx context.Context, agent, state, principal, by, s
 	if err != nil {
 		return runsResult{}, err
 	}
+	titles.Want(s.a, all...)
 	if all, err = teams.By(ctx, s.a.Config(), all, by); err != nil {
 		return runsResult{}, err
 	}

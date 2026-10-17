@@ -232,7 +232,7 @@ func signinAgent(t *testing.T, e *signinEnv, change func(*fw.Config), opts ...fw
 		fw.WithLogger(slog.New(slog.NewTextHandler(e.log, &slog.HandlerOptions{Level: slog.LevelDebug}))),
 		fw.WithSurfaces(native.NewWith(newExtension(e.clock.now))),
 	}
-	a, err := fw.New(append(append(base, fw.WithTitles(fw.TitlesInput)), opts...)...)
+	a, err := fw.New(append(base, opts...)...)
 	if err != nil {
 		return nil, err
 	}

@@ -6,7 +6,6 @@ package main
 
 import (
 	"github.com/bdubs00/featherweight-kernel/cli"
-	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/a2a"
 	"github.com/bdubs00/featherweight-kernel/telemetry"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
@@ -27,6 +26,7 @@ import (
 	_ "github.com/bdubs00/featherweight-workbench/authn/oidc"
 	_ "github.com/bdubs00/featherweight-workbench/fleet"
 	_ "github.com/bdubs00/featherweight-workbench/surface/web"
+	_ "github.com/bdubs00/featherweight-workbench/titles"
 	_ "github.com/bdubs00/featherweight-workbench/tools/builder"
 
 	// A sandbox image has no zone files, and ax sets no TZ, so the binary
@@ -35,9 +35,6 @@ import (
 )
 
 func init() {
-	// The workbench names each run with a title that a model writes. The
-	// kernel takes the first sentence of the input, with no extra call.
-	fw.RegisterDefaults(func(c *fw.Config) { c.Titles = fw.TitlesModel })
 	cli.NewLogger = telemetry.Logger
 	cli.SetBuildInfo = telemetry.SetBuildInfo
 	cli.ServeMCPStdio = mcp.ServeStdio

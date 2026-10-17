@@ -11,7 +11,7 @@ The kernel is a separate repository, featherweight-kernel. Its document `docs/AR
 The workbench changes no kernel code. It plugs in through five extension points of the kernel:
 
 - `native.Extend` adds routes to the native surface of the kernel, on the same listener and behind the same authentication. The package `surface/web` registers one extension in `init`. Its routes get a `*native.Kit`, so they answer errors and forward the runs of other fleet members as the run routes do.
-- `fw.RegisterDefaults` changes the default configuration in `init`. The package `surface/mcp` adds `mcp` to `surfaces`, and the package `tools/builder` adds `propose_agent` to the built-in tools. The file `cmd/fw-workbench/drivers.go` sets `titles: model`. A file or a variable still overrides each default.
+- `fw.RegisterDefaults` changes the default configuration in `init`. The package `surface/mcp` adds `mcp` to `surfaces`, and the package `tools/builder` adds `propose_agent` to the built-in tools. A file or a variable still overrides each default.
 - The package `cli` of the kernel holds the command line. `cmd/fw-workbench` calls `cli.Run`, so `fw-workbench` takes every verb of `fw`. It sets `cli.ServeMCPStdio`, so the verb `mcp` serves the MCP server over stdio.
 - `fw.RegisterExtension` claims a top-level block of `fw.yaml` for the workbench. The package `teams` claims the block `workbench`, and `fw.Config.Extension` decodes it (section 8).
 - `fw.RegisterRunAnnotator` adds metadata to every run that the kernel queues. The package `teams` records the teams of the person who starts a run this way (section 8).
@@ -498,7 +498,6 @@ The split did not change the contract of the package `fw`. That contract still h
 - The fleet: `fw.Fleet`, `fw.FleetConfig`, `fw.RegisterFleet`, `fw.WithFleet`, `Agent.Fleet`, and `fw.Retainer`. The native surface of the kernel forwards a request about a run of another member, and its metrics surface reports the fleet gauges.
 - The connections: `fw.GrantStore`, `fw.Connection`, `fw.ConnectStart`, `fw.Connector`, `fw.ConnectRequest`, and `fw.RequestConnect`. `Agent` holds the methods `Connections`, `BeginConnect`, `FinishConnect`, `Disconnect`, and `Grants`. The MCP client of the kernel, `tools/mcp`, still acts for a person (the kernel architecture, section 7.11).
 - The management of agents: `fw.ProfileStore`, `fw.ProfileLocker`, and the methods `PutProfile`, `DeleteProfile`, `CheckProfile`, and `ProfileGrants` of `Agent`.
-- The titles: `fw.MetaTitle`, `fw.TitleFrom`, `fw.CleanTitle`, `fw.WithTitles`, `fw.TitlesModel`, and the event `fw.run.titled` (the kernel architecture, section 8.2).
 - The configuration blocks that the workbench reads: `mcp`, `fleet`, and `auth.oidc`.
 
 The next step moves these hooks out of the kernel.
@@ -533,3 +532,18 @@ The runs lists of the workbench take `by`, which keeps a part of the runs that t
 | `others` | Every other run that the caller can see |
 
 The MCP tool `runs_list` takes `by`, and the sentence and the counts of its answer cover the same runs. Home (`GET /v1/home`) holds the runs of `by=team`, and `GET /v1/home/others` holds the top-level runs of `by=others`. The row and the status line of a run of a teammate name that person, for example "by alice". In the conversation, a message of another person shows the name of that person above it. In the Agents place, the agents that the caller owns come first, then the agents of the caller's teams, then the rest. If other people have runs that the caller can see, a last row on home reads "Runs by others" with their number. It opens their runs, grouped by person. A person with no team sees only their own runs on home and the rest behind that row.
+
+## 9. Titles
+
+A run has a title, such as "Fix checkout retries", so a list names the work and not only the worker. The kernel gives a run the title of its request, or else the first sentence of its input, and makes no title call (the kernel architecture, section 8.2). The package `titles` asks a model for a title of a few words the first time that the workbench shows a run that has none: on home, in the result of a run, and in the list of the tool `runs_list`. A run that nobody looks at costs no call.
+
+The call goes to `compaction.model` when it is set, else to the model of the agent of the run. `titles.Clean` turns the answer into one line of at most 64 characters. The package records the title on the run with `fw.Agent.Annotate`, as the metadata `fw.title`, together with the usage, the provider, and the model of the call. The usage and the cost of the run include the call, and the metrics count it. A call that yields no title still records its usage, because the tokens cost. A top-level run of this process gets one call per process, whatever the outcome. A child run, a run of another fleet member, a run whose request set a title, a replay, and a run without text in its input get no call.
+
+The mode comes from the block `workbench` of `fw.yaml`, or from the variable `FW_WORKBENCH_TITLES`, which wins:
+
+```yaml
+workbench:
+  titles: model   # model, the default, or input: the first sentence of the input, with no call
+```
+
+A title that arrives after a run finished changes only the title and the usage of the run. The run stays finished, in the metrics, in the traces, in the ledger file, and across a restart.

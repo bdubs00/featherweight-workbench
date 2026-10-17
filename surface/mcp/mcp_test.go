@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/titles"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -110,6 +111,9 @@ func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard
 
 func newAgent(t *testing.T, m fw.Model, opts ...fw.Option) *fw.Agent {
 	t.Helper()
+	// A test with a scripted model asks for no title, or a title call
+	// takes an answer of the script.
+	t.Setenv(titles.EnvTitles, titles.ModeInput)
 	t.Setenv("FW_ATESPACE", "")
 	// A temporary home keeps the state key file out of the source tree. A
 	// later WithConfig replaces it.
@@ -122,7 +126,7 @@ func newAgent(t *testing.T, m fw.Model, opts ...fw.Option) *fw.Agent {
 		fw.WithBus(fw.NewMemBus()),
 		fw.WithLogger(quietLogger()),
 	}
-	a, err := fw.New(append(append(base, fw.WithTitles(fw.TitlesInput)), opts...)...)
+	a, err := fw.New(append(base, opts...)...)
 	if err != nil {
 		t.Fatalf("fw.New: %v", err)
 	}

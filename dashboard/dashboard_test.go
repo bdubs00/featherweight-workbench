@@ -13,6 +13,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
+	"github.com/bdubs00/featherweight-workbench/titles"
 )
 
 func TestPage(t *testing.T) {
@@ -44,6 +45,9 @@ func TestPage(t *testing.T) {
 
 func newAgent(t *testing.T, opts ...fw.Option) *fw.Agent {
 	t.Helper()
+	// A test with a scripted model asks for no title, or a title call
+	// takes an answer of the script.
+	t.Setenv(titles.EnvTitles, titles.ModeInput)
 	t.Setenv("FW_ATESPACE", "")
 	model := fw.ModelFunc{GenerateFn: func(context.Context, *fw.Request) (*fw.Response, error) {
 		return &fw.Response{Content: []fw.Block{fw.Text("ok")}, StopReason: fw.StopEndTurn, Usage: fw.Usage{InputTokens: 10, OutputTokens: 5}}, nil
@@ -56,7 +60,7 @@ func newAgent(t *testing.T, opts ...fw.Option) *fw.Agent {
 		fw.WithBus(fw.NewMemBus()),
 		fw.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
 	}
-	a, err := fw.New(append(append(base, fw.WithTitles(fw.TitlesInput)), opts...)...)
+	a, err := fw.New(append(base, opts...)...)
 	if err != nil {
 		t.Fatalf("fw.New: %v", err)
 	}
