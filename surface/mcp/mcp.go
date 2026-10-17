@@ -63,6 +63,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/connections"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -255,6 +256,7 @@ func NewServer(a *fw.Agent) (*sdk.Server, error) {
 	s.addWorkTools()
 	s.addManageTools()
 	s.addConnectionTools()
+	s.addBatchTools()
 	s.addResources()
 	s.addPrompts()
 	if len(cfg.MCP.Expose) > 0 {
@@ -311,6 +313,9 @@ Prompts: there is one prompt per profile. It holds the system prompt of the prof
 Connections: some tools act for the person who started the run, at a service such as an issue tracker. If that person has not connected the service, or the service refused the grant, the run waits in input-required, and pending.connect names the service. A client with URL elicitation gets the address to open in the browser. Otherwise the text of the run gives it. The run goes on by itself when the person connects. To go on without the service, deny the approval. The approve tool cannot allow it. connections lists the services that act for the caller, with the address that connects each one, and disconnect removes one.`)
 	}
 	b.WriteString(fleetInstructions(a))
+	if c, err := fleet.Load(a.Config()); err == nil && c.Intake != "" {
+		b.WriteString("\n\nJobs: enqueue sends a job to the fleet, one run per item, on the queue of an agent profile; the workers of that profile take the runs, and every run acts as the caller and carries the batch name in its metadata. batch tells how a job goes, and runs_list with batch lists its runs.")
+	}
 	return b.String()
 }
 

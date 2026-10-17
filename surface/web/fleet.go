@@ -43,8 +43,8 @@ func (s *server) fleet(w http.ResponseWriter, r *http.Request) {
 // the caller can see, in the shape of GET /v1/runs of the kernel. The query
 // parameter scope is fleet, the default, or local. The parameter member
 // narrows the list to one member, and parent lists the children of a run of
-// any member. The parameters agent, state, principal, and limit narrow the
-// list as on GET /v1/runs.
+// any member. The parameters agent, state, principal, batch, and limit
+// narrow the list as on GET /v1/runs.
 func (s *server) fleetRuns(w http.ResponseWriter, r *http.Request) {
 	if fleet.Of(s.a) == nil {
 		problem(w, r, http.StatusNotFound, fleetOff)
@@ -71,7 +71,7 @@ func (s *server) fleetRuns(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	matched := view.Filter(runs, q.Get("agent"), q.Get("state"), q.Get("principal"), 0)
+	matched := view.FilterBatch(view.Filter(runs, q.Get("agent"), q.Get("state"), q.Get("principal"), 0), q.Get("batch"))
 	glance, total := view.GlanceOf(matched, time.Now()), len(matched)
 	if limit > 0 && len(matched) > limit {
 		matched = matched[:limit]

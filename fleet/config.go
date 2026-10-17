@@ -32,6 +32,9 @@ const (
 	// between them, and the egress stream of the workers.
 	EnvAtespaces = "FW_WORKBENCH_FLEET_ATESPACES"
 	EnvEgress    = "FW_WORKBENCH_FLEET_EGRESS"
+	// EnvIntake names the subject prefix of the intake queues of the workers
+	// (enqueue.go).
+	EnvIntake = "FW_WORKBENCH_FLEET_INTAKE"
 )
 
 // Config configures the fleet. An empty Subject turns the fleet off.
@@ -51,7 +54,10 @@ const (
 // Atespaces names the atespaces whose Tasks are members, read from the ax
 // API at ax.server at every Interval, and Egress names the subject prefix
 // of the egress stream of the workers, bus.egress on each of them. With
-// either set, a member needs no record of its own (platform.go).
+// either set, a member needs no record of its own (platform.go). Intake
+// names the subject prefix of the intake queues of the workers: a worker
+// that runs the profile <agent> sets bus.intake to "<intake>.<agent>", and
+// the front puts the run requests of a job there (enqueue.go).
 type Config struct {
 	Subject   string        `yaml:"subject"`
 	Name      string        `yaml:"name"`
@@ -61,6 +67,7 @@ type Config struct {
 	Expire    time.Duration `yaml:"expire"`
 	Atespaces []string      `yaml:"atespaces"`
 	Egress    string        `yaml:"egress"`
+	Intake    string        `yaml:"intake"`
 }
 
 // block is the part of the workbench block that this package reads.
@@ -99,6 +106,9 @@ func Load(cfg *fw.Config) (Config, error) {
 	if v, ok := lookup(EnvEgress); ok {
 		c.Egress = v
 	}
+	if v, ok := lookup(EnvIntake); ok {
+		c.Intake = v
+	}
 	if v, ok := lookup(EnvForward); ok {
 		c.Forward = nil
 		for _, g := range strings.Split(v, ",") {
@@ -119,7 +129,7 @@ func Load(cfg *fw.Config) (Config, error) {
 			*e.dst = d
 		}
 	}
-	c.Subject, c.Name, c.URL, c.Egress = strings.TrimSpace(c.Subject), strings.TrimSpace(c.Name), strings.TrimSpace(c.URL), strings.TrimSpace(c.Egress)
+	c.Subject, c.Name, c.URL, c.Egress, c.Intake = strings.TrimSpace(c.Subject), strings.TrimSpace(c.Name), strings.TrimSpace(c.URL), strings.TrimSpace(c.Egress), strings.TrimSpace(c.Intake)
 	if c.Interval <= 0 {
 		c.Interval = DefaultInterval
 	}
@@ -209,6 +219,14 @@ func check(c Config) []string {
 		for _, t := range strings.Split(e, ".") {
 			if t == "" || strings.ContainsAny(t, " \t*>") {
 				p = append(p, fmt.Sprintf("workbench.fleet.egress %q is not a subject prefix: it holds an empty token, a space, or a wildcard", e))
+				break
+			}
+		}
+	}
+	if e := c.Intake; e != "" {
+		for _, t := range strings.Split(e, ".") {
+			if t == "" || strings.ContainsAny(t, " \t*>") {
+				p = append(p, fmt.Sprintf("workbench.fleet.intake %q is not a subject prefix: it holds an empty token, a space, or a wildcard", e))
 				break
 			}
 		}

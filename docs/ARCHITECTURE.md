@@ -271,6 +271,7 @@ The fleet reads the block `fleet` under the key `workbench` of `fw.yaml`, which 
 | `workbench.fleet.expire` | `FW_WORKBENCH_FLEET_EXPIRE` | The age after which the view ignores a record | `168h` |
 | `workbench.fleet.atespaces` | `FW_WORKBENCH_FLEET_ATESPACES` | The atespaces whose Tasks are members, read from the ax API at `ax.server`, with commas between them (section 4.8) | none |
 | `workbench.fleet.egress` | `FW_WORKBENCH_FLEET_EGRESS` | The subject prefix of the egress stream of the workers, `bus.egress` on each of them (section 4.8) | none |
+| `workbench.fleet.intake` | `FW_WORKBENCH_FLEET_INTAKE` | The subject prefix of the intake queues of the workers: a worker that runs the profile `<agent>` sets `bus.intake` to `<intake>.<agent>` (section 4.9) | none |
 
 Under ax, three variables on each Task make a fleet: `FW_BUS_DRIVER=nats`, `FW_BUS_URL`, and `FW_WORKBENCH_FLEET_SUBJECT=fw.fleet`. Outside ax, each member also sets the URL, and each member that serves a view sets the forward globs:
 
@@ -310,6 +311,14 @@ The kernel repository, KERNEL_SPLIT.md section 7, defines a worker as a bare ker
 When a Task starts to run, the front reads its runs once through the router, with the static token of the fleet, so the runs that started before the front listened are in the view. A running Task is awake, so the read wakes nobody, and a suspended Task holds no active run. After that read the front lives on the stream. A worker outside ax that publishes events is visible too, under its node name, without an address.
 
 The view treats such a member as a record that the front computes: the agents are the ones that its runs name, each with the access block of the profile of that name in the configuration of the front, and the authorization is the one of the front, which runs the same `fw.yaml` as the workers. A member that still publishes a record of its own wins over the computed one while the record lasts, so a fleet moves to the bare worker one member at a time. The gauges, the forwarding, and the token broker read the same view.
+
+### 4.9 Jobs
+
+A job is many pieces of the same work, one run each, spread over the workers that run one profile. The front sends a job with the MCP tool `enqueue`: it takes the profile, the items, and a batch name, and it puts one run request per item on the intake queue of the profile, `<workbench.fleet.intake>.<agent>`. Each worker that runs that profile sets `bus.intake` to that queue and takes requests from it, as many at a time as its `maxRuns` allows, so the fleet scales with the number of workers and nobody assigns work by hand. The call returns at once with the batch name, the queue, and the count.
+
+Every request names the person who sent the job, so the run on the worker acts as that person, and it carries the batch name in the metadata key `fw.batch`, which a child run inherits in this process or in a child Task. The idempotency key of each request is the batch name and the position of the item, so a job that is sent twice starts each run once. The tool `batch` tells how a job goes: the runs of the batch by state, the members that hold them, the runs that wait for the person, and the runs that failed with their errors. `runs_list` and `GET /v1/fleet/runs` take `batch` as a filter, and `GET /v1/runs` of a worker takes it too. The view of the front sees the runs of a job through the egress stream or the records, as section 4.8 describes, so a run appears when a worker takes it.
+
+A batch name is at most 128 characters without spaces. Without one, `enqueue` makes an id. One call takes at most 500 items; a larger job goes in several calls under one batch name.
 
 ## 5. Browser sign-in
 
@@ -369,7 +378,9 @@ The MCP server carries these management tools beside the work tools:
 | `whoami` | The principal of the caller, its role on every agent that it can see, and its teams (section 8) |
 | `agents_list`, `agent_get` | The agents that the caller can see, and one agent with the words of what it can do |
 | `agent_put`, `agent_delete` | Create, change, or remove an agent. `dryRun` checks a profile and changes nothing. |
-| `runs_list` | The runs that the caller can see, with `scope`, `member`, and `by` (section 8) |
+| `runs_list` | The runs that the caller can see, with `scope`, `member`, `batch`, and `by` (section 8) |
+| `enqueue` | Send a job to the fleet: one run per item on the intake queue of a profile, as the caller, under one batch name (section 4.9) |
+| `batch` | How a job goes: the runs of a batch by state, the members that hold them, the runs that wait, and the runs that failed (section 4.9) |
 | `run_events` | One page of the events of a run as chat items. `from` reads forward, and `before` reads back. |
 | `run_result` | What a run produced and what it needs next. The text is the result as a person reads it. |
 | `run_file` | A file that a run changed. With `raw` true, it returns the bytes up to 4 MiB (the kernel architecture, section 7.9). |

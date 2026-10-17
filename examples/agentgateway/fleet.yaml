@@ -106,6 +106,9 @@ data:
   # them, so a member needs no record of its own.
   FW_BUS_EGRESS: fw.events
   FW_WORKBENCH_FLEET_EGRESS: fw.events
+  # The front puts jobs on fw.jobs.<agent>, and each member takes the queue
+  # of its profile.
+  FW_WORKBENCH_FLEET_INTAKE: fw.jobs
 ---
 # The Secret fw-front holds the key that signs the approval retries of MCP
 # and the browser sign-in. This file does not hold it, so no deployment
@@ -245,6 +248,7 @@ spec:
             - name: FW_API_TOKEN
               valueFrom: {secretKeyRef: {name: fw-fleet-token, key: FW_API_TOKEN}}
             - {name: FW_TOKENS_URL, value: "http://fw-front.fw-fleet.svc.cluster.local:8080"}
+            - {name: FW_BUS_INTAKE, value: fw.jobs.reviewer}
             - {name: FW_MODEL, value: "openai/MODEL"}
             - {name: OPENAI_BASE_URL, value: "https://models.example.com/v1"}
           ports:

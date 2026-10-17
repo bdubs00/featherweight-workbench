@@ -42,7 +42,8 @@ var workTools = map[string]bool{
 // connection tool when a tool source acts for a person.
 func (s *server) reserved(name string) bool {
 	return workTools[name] || (name == toolFleet && fleet.Of(s.a) != nil) ||
-		((name == toolConnections || name == toolDisconnect) && connections.Of(s.a) != nil)
+		((name == toolConnections || name == toolDisconnect) && connections.Of(s.a) != nil) ||
+		((name == toolEnqueue || name == toolBatch) && s.intakeOn())
 }
 
 // Input schemas of the work tools.

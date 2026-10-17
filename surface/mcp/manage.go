@@ -78,6 +78,7 @@ const (
 		"principal":{"type":"string","description":"Only the runs that this principal started, by subject."},
 		"by":{"type":"string","enum":["me","team","others"],"description":"Only a part of the runs: me keeps the runs that you started, team adds the runs of people on your teams, and others keeps every other run. The glance counts the same runs."},
 		"parent":{"type":"string","description":"Only the child runs of this run."},
+		"batch":{"type":"string","description":"Only the runs of this job, by the metadata fw.batch that enqueue sets."},
 		"limit":{"type":"integer","minimum":1,"maximum":500,"description":"The most runs to return, newest first; the default is 50."}`
 
 	runsListSchema = `{"type":"object","properties":{` + runsListProps + `}}`
@@ -194,6 +195,7 @@ type (
 		Scope     string `json:"scope,omitempty"`
 		Member    string `json:"member,omitempty"`
 		Parent    string `json:"parent,omitempty"`
+		Batch     string `json:"batch,omitempty"`
 	}
 	runEventsArgs struct {
 		RunID  string `json:"runId"`
@@ -548,7 +550,7 @@ func (s *server) runsList(ctx context.Context, req *sdk.CallToolRequest, in runs
 	if in.Parent != "" {
 		runs, err = s.childRuns(withCredential(ctx, req), in.Parent, in.Agent, in.State, in.Principal, in.By, in.Limit)
 	} else {
-		runs, err = s.visibleRuns(ctx, in.Agent, in.State, in.Principal, in.By, in.Scope, in.Member, in.Limit)
+		runs, err = s.visibleRuns(ctx, in.Agent, in.State, in.Principal, in.By, in.Scope, in.Member, in.Batch, in.Limit)
 	}
 	if err != nil {
 		return failResult(err), nil, nil
@@ -568,11 +570,12 @@ func (s *server) runsList(ctx context.Context, req *sdk.CallToolRequest, in runs
 // visibleRuns lists the runs that the caller can view after the filters.
 // With the fleet on, the scope fleet, the default, adds the runs of the
 // other members, and member keeps the runs of one member.
-func (s *server) visibleRuns(ctx context.Context, agent, state, principal, by, scope, member string, limit int) (runsResult, error) {
+func (s *server) visibleRuns(ctx context.Context, agent, state, principal, by, scope, member, batch string, limit int) (runsResult, error) {
 	all, err := dashboard.Runs(ctx, s.a, scope, member)
 	if err != nil {
 		return runsResult{}, err
 	}
+	all = view.FilterBatch(all, batch)
 	titles.Want(s.a, all...)
 	if all, err = teams.By(ctx, s.a.Config(), all, by); err != nil {
 		return runsResult{}, err
