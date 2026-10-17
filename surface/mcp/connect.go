@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/connections"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -311,7 +312,7 @@ const disconnectSchema = `{"type":"object","properties":{` +
 // connectionItem is one connection in the result of connections, with the
 // address that connects it.
 type connectionItem struct {
-	fw.Connection
+	connections.Connection
 	ConnectURL string `json:"connectUrl,omitempty"`
 }
 
@@ -328,7 +329,7 @@ type disconnectArgs struct {
 // addConnectionTools adds connections and disconnect when a tool source
 // acts for a person, so a configuration without one keeps its tool list.
 func (s *server) addConnectionTools() {
-	if len(s.a.Connectors()) == 0 {
+	if c := connections.Of(s.a); c == nil || len(c.Connectors()) == 0 {
 		return
 	}
 	sdk.AddTool(s.srv, &sdk.Tool{
@@ -350,16 +351,16 @@ func (s *server) addConnectionTools() {
 // connectError is the text of an error of the connection tools.
 func connectError(err error) *sdk.CallToolResult {
 	switch {
-	case errors.Is(err, fw.ErrNotConnectable):
+	case errors.Is(err, connections.ErrNotPerson):
 		return errorResult("Forbidden: only a signed-in person can connect a service. Sign in with your own account, not a token of the agent or of a workload.")
-	case errors.Is(err, fw.ErrConnectorNotFound):
+	case errors.Is(err, connections.ErrUnknownService):
 		return errorResult("Not found: no service of that name acts for a person. Read the names with the connections tool.")
 	}
 	return failResult(err)
 }
 
 func (s *server) connections(ctx context.Context, req *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
-	conns, err := s.a.Connections(ctx, fw.PrincipalFrom(ctx))
+	conns, err := connections.List(ctx, s.a, fw.PrincipalFrom(ctx))
 	if err != nil {
 		return connectError(err), nil, nil
 	}
@@ -413,11 +414,11 @@ func (s *server) disconnect(ctx context.Context, req *sdk.CallToolRequest, in di
 		return errorResult("Invalid request: the argument server is required."), nil, nil
 	}
 	p := fw.PrincipalFrom(ctx)
-	if err := s.a.Disconnect(ctx, p, server); err != nil {
+	if err := connections.Disconnect(ctx, s.a, p, server); err != nil {
 		return connectError(err), nil, nil
 	}
 	s.log.Info("mcp connection removed", "server", server, "subject", p.Subject)
-	conns, err := s.a.Connections(ctx, p)
+	conns, err := connections.List(ctx, s.a, p)
 	if err != nil {
 		return connectError(err), nil, nil
 	}

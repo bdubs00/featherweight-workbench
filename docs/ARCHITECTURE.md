@@ -17,6 +17,7 @@ The workbench changes no kernel code. It plugs in through the extension points o
 - `fw.RegisterRunAnnotator` adds metadata to every run that the kernel queues. The package `teams` records the teams of the person who starts a run this way (section 8).
 - `fw.Agent.SetProfiles` replaces the profiles of the kernel at runtime, and `cli.AgentsPut` and `cli.AgentsDelete` give the verb `agents` its writes. The package `agents` uses them (section 10).
 - `fw.RegisterService` runs work beside the agent for as long as it lives, `Kit.SetRelay` of the native surface answers a request about a run of another process, `metrics.RegisterCollector` adds series to the metrics surface, and `cli.RegisterDoctorCheck` adds a line to `fw doctor`. The package `fleet` uses all four (section 4).
+- `fw.Agent.SetPersonTokens` gives the tool sources of the kernel the access tokens of people, and `fw.Agent.Connected` resumes the calls that wait for a connection. The package `connections` uses both (section 11).
 
 Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `authn/oidc` registers the mode `oidc`, `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary.
 
@@ -83,13 +84,13 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `POST /v1/builder` | Start the conversation that creates an agent. Body fields: `input` or `fromRun`, and `files`. See below. |
 | `GET /v1/fleet` | The members of the fleet that the caller can see (section 4.7). |
 | `GET /v1/usage` | Deprecated. See below. |
-| `GET /v1/connections` | The services that act for the caller, connected or not, as `{"connections": [...]}` (the kernel architecture, section 7.11). |
+| `GET /v1/connections` | The services that act for the caller, connected or not, as `{"connections": [...]}` (section 11). |
 | `POST /v1/connections/{server}` | Start a connection. Body field: `next`, a place in the page to return to. The answer holds `url`, the authorization request, and sets the cookie of the callback. |
 | `DELETE /v1/connections/{server}` | Remove the grant of the caller for the service. |
 
 ### 2.1 Connections
 
-The three routes under `/v1/connections` need a person, a principal of the kind `user`. Any other caller gets a 403 with this text: `Only a signed-in person can connect a service.` Each `fw.Connection` has the server, its title, whether the caller is connected, the account name at the service, and the times of the grant. It never holds a token.
+The three routes under `/v1/connections` need a person, a principal of the kind `user`. Any other caller gets a 403 with this text: `Only a signed-in person can connect a service.` Each `connections.Connection` has the server, its title, whether the caller is connected, the account name at the service, and the times of the grant. It never holds a token.
 
 `POST /v1/connections/{server}` sets the cookie `fw_connect`. The cookie holds the start of the connection: the state, the PKCE verifier, the redirect address, and `next`. It also holds the subject and the name of the person. It is signed with the key of the sign-in cookie (section 5), under a label of its own. It is HttpOnly, SameSite=Lax, limited to the path `/ui/connect`, and Secure over https. It lasts 10 minutes.
 
@@ -167,7 +168,7 @@ If the client declares neither tasks nor elicitation, `run` returns the run obje
 
 ### 3.4 Connections over MCP
 
-A run can wait for the person to connect a service (the kernel architecture, section 7.11). MCP revision 2025-11-25 added URL-mode elicitation for such flows outside the client, such as an OAuth sign-in. The client opens a URL in a browser, and the server learns the result on its own. The URL is `<base>/ui#connect/<server>/<run>`. The base is the public address of the page, from `mcp.auth.audience` or `a2a.url`. Without it, the base is the origin of the request, as a proxy forwards it. The URL holds no secret.
+A run can wait for the person to connect a service (section 11). MCP revision 2025-11-25 added URL-mode elicitation for such flows outside the client, such as an OAuth sign-in. The client opens a URL in a browser, and the server learns the result on its own. The URL is `<base>/ui#connect/<server>/<run>`. The base is the public address of the page, from `mcp.auth.audience` or `a2a.url`. Without it, the base is the origin of the request, as a proxy forwards it. The URL holds no secret.
 
 `fw` asks in the shape that the client declares:
 
@@ -364,7 +365,7 @@ The MCP server carries these management tools beside the work tools:
 | `capabilities` | The tools of the runtime, each with a plain phrase, built-in tools first. This is the MCP form of `GET /v1/tools`. |
 | `dashboard` | The MCP App, and the home of the caller as text |
 | `usage` | Deprecated. The result does not change, and the description points to the Prometheus metrics (the kernel architecture, section 10). |
-| `connections` | The services that act for the caller, connected or not, each with its connect link (the kernel architecture, section 7.11) |
+| `connections` | The services that act for the caller, connected or not, each with its connect link (section 11) |
 | `disconnect` | Remove the grant of the caller for one service |
 
 `run_events` refuses `from` and `before` together. Its result has `prev`, the value of `before` for the page in front. If the page starts at the first event, the result has no `prev`. For a run of another member, the server turns `before` into `from` and `limit` on the events route of that member. The sequence numbers of a run have no gaps, so the page is the same.
@@ -500,12 +501,9 @@ To follow a run to its result:
 
 ## 7. What still lives in the kernel
 
-The split did not change the contract of the package `fw`. That contract still holds the hooks that the workbench drivers plug into:
+The split did not change the contract of the package `fw`. The kernel keeps the primitive of a connection: `fw.ConnectRequest`, `fw.RequestConnect`, `fw.PersonTokens`, and `Agent.Connected` (the kernel architecture, section 7.11). The MCP client of the kernel, `tools/mcp`, still acts for a person with the tokens that the package `connections` gives it (section 11).
 
-- The connections: `fw.GrantStore`, `fw.Connection`, `fw.ConnectStart`, `fw.Connector`, `fw.ConnectRequest`, and `fw.RequestConnect`. `Agent` holds the methods `Connections`, `BeginConnect`, `FinishConnect`, `Disconnect`, and `Grants`. The MCP client of the kernel, `tools/mcp`, still acts for a person (the kernel architecture, section 7.11).
-- The configuration blocks that the workbench reads: `mcp`, `fleet`, and `auth.oidc`.
-
-The next step moves these hooks out of the kernel.
+The workbench still reads three parts of the kernel configuration: the block `mcp` of its server surface, the OAuth setup of each `tools.mcp` entry with `auth.oauth.grant: user`, and `auth.oidc`. Everything else of the workbench lives in the block `workbench` of `fw.yaml`: `teams`, `titles`, `fleet`, and `grants`.
 
 ## 8. Teams
 
@@ -560,3 +558,121 @@ The kernel reads its agent profiles from the configuration and writes none (the 
 A principal that creates a profile without an `access` block becomes its first owner. An individual or a group therefore owns the agents that they make. A replaced profile that names no access block keeps the access block it had, so an edit never drops the owners by accident. A profile that the configuration defines, in `fw.yaml`, in a variable, or through a Go option, cannot change here, because the configuration wins over the file at the next start. The kernel reports such a profile as locked, and the page says so before a person edits it.
 
 The routes `PUT` and `DELETE /v1/agents/{name}`, the MCP tools `agent_put` and `agent_delete`, and the verbs `fw-workbench agents put <file.yaml>` and `fw-workbench agents delete <name>` all go through the package. `PUT /v1/agents/{name}?dryRun=true` and `agent_put` with `dryRun` check a profile as a save does and change nothing. They answer an `agents.Draft`: the view of the profile, what the agent would do, and whether saving it replaces an agent that exists. The agent builder proposes a profile and never saves one; `agent_put` saves it with the rights of the caller (section 6.4).
+
+## 11. Connections
+
+A tools.mcp entry of the kernel with `auth.oauth.grant: user` acts for the person who started the run (the kernel architecture, section 7.11). A grant is the permission that a person gives the workbench at one authorization server. In OAuth terms, it is a refresh token (RFC 6749, section 6), with its scopes and its client. The workbench keeps one grant per person, per authorization server, and per client. With a grant, a run goes on for hours or days after the access token of the person expired. The grant also survives a restart of the process.
+
+The package `connections` holds all of it. It is a service of the kernel (`fw.RegisterService`), so a process that serves has it and a verb that runs one piece of work does not. It is the `fw.PersonTokens` of the agent: the MCP client of the kernel asks it for the access token of a person at a service, and it answers from its store and the authorization server. It serves the Connect flow through the routes of section 2.1 and the tools of section 3.4, and it resumes the paused calls of a person with `fw.Agent.Connected` when a connection ends. It adds the `connections` line to `fw-workbench doctor`.
+
+### 11.1 Configuration
+
+The entries of `tools.mcp` carry the OAuth setup of each service: the client, the issuer, the scopes, and the exchange (the kernel architecture, section 7.11). The store of the grants is the block `grants` under the key `workbench` of `fw.yaml`. Each variable wins over the file.
+
+| Key | Variable | Meaning | Default |
+|---|---|---|---|
+| `workbench.grants.store` | `FW_WORKBENCH_GRANTS_STORE` | `file`, `memory`, or a registered driver | `file` |
+| `workbench.grants.dir` | `FW_WORKBENCH_GRANTS_DIR` | The directory of the file store | `<home>/grants` |
+| `workbench.grants.key` | `FW_WORKBENCH_GRANTS_KEY` | The `Secrets` name of the key that encrypts the file store | `FW_GRANT_KEY` |
+
+An entry with `grant: user` needs an HTTP endpoint. `auth.mode` must include `oidc`, because only a person with an OpenID Connect identity can connect. An entry without a client of its own also needs `auth.oidc.clientId`. With the browser sign-in of the workbench on (the workbench architecture, section 5), a person who opens a connect link signs in first. Without it, that person pastes a token first. The `connections` line of `fw-workbench doctor` reports each of these conditions.
+
+### 11.2 Two kinds of service
+
+A service can trust the sign-in issuer: its authorization server is the issuer of `auth.oidc`. Such an entry needs no client of its own. It uses the client of the browser sign-in, and the person connects once for all such entries.
+
+A service can also have an authorization server of its own, such as a hosted product. The entry then names its client with `clientId` and `clientSecret`. If `issuer` is empty, `fw` reads the protected resource metadata of the MCP server (RFC 9728) to find the authorization server. Then it reads the metadata of that server (RFC 8414, or OpenID Connect discovery). The person connects each such service on its own.
+
+Each authorization server registers one more redirect address: `/ui/connect/callback` on the public address of the page (section 2.1).
+
+### 11.3 How a person connects
+
+The kernel pauses the call (the kernel architecture, section 7.11). The workbench keeps the grant, serves the Connect card, the routes under `/v1/connections`, and the callback `/ui/connect/callback` (sections 2.1, 3.4, and 6.2), and resumes the call with `fw.Agent.Connected`. A program that embeds the kernel without the workbench sets its own `fw.PersonTokens`. The flow has these steps:
+
+1. A call needs a grant that the person does not have, or the server refused the grant. The call pauses. The kernel appends `fw.approval.requested` with `connect`: the server, its title, and the reason, `missing` or `expired`. The run moves to `input-required`.
+2. Every surface shows the request. The dashboard shows a card with Connect and Skip in the run, and a row under Needs you on the home. An MCP client gets a URL-mode elicitation (the workbench architecture, section 3.4).
+3. Connect opens `/ui#connect/<server>/<run>`. If the person is not signed in, the page signs the person in first.
+4. The page calls `POST /v1/connections/<server>` and sends the browser to the authorization request in the answer. The request uses the authorization code flow with PKCE, a `state`, the scopes, and the `resource` of the MCP server (RFC 8707).
+5. The authorization server sends the browser to `GET /ui/connect/callback`. The workbench exchanges the code and stores the grant. Then it resumes every paused call of the person for every service that is now connected.
+6. The browser returns to the page, which says Connected and offers the run.
+
+The answer of the code exchange must hold a refresh token. Without one, the connection fails, and the message asks for offline access. Skip denies the request. The call then fails with a plain message to the model, and the run does not ask again for that service. The kernel refuses a decision that allows a connect request, because a click is not a grant. Only the end of a connection allows it.
+
+### 11.4 Tokens for a server
+
+Each call needs an access token of the person for its server. The MCP client of the kernel asks for it through `fw.PersonTokens` (the kernel architecture, section 7.11). Without `exchange`, the workbench refreshes the grant with the `resource` parameter of the server (RFC 8707). The authorization server then issues a token for that server alone, as the MCP authorization specification requires. With `exchange`, the workbench refreshes the grant once for a token of its own client. Then it exchanges that token for a token with the configured `audience` (RFC 8693). Use `exchange` with an authorization server that ignores `resource`.
+
+Access tokens stay in memory until shortly before they expire. A token that the server refused goes at once, and the next request gets a new one. When the server keeps refusing the tokens of a person, the grant goes, and the person connects again.
+
+### 11.5 Rules that keep a grant alive
+
+Many authorization servers rotate refresh tokens (RFC 9700, section 4.14). Each refresh returns a new refresh token and ends the old one. If an old refresh token comes back, the server cannot tell a thief from the client. It then revokes the grant, and some servers revoke more. The workbench therefore follows four rules with every server:
+
+1. A grant has one holder: the grant store of one process.
+2. One refresh of a grant runs at a time, for all the runs of the person.
+3. The workbench stores the new refresh token durably before it uses the new access token.
+4. If the server refuses a grant, the workbench deletes it, and the next call asks the person to connect again.
+
+A lost grant is safe, because the person connects again. An old copy of a grant is not safe, because its refresh token counts as a reuse.
+
+By default, the workbench asks for the scope `offline_access` (OpenID Connect Core 1.0, section 11). A plain refresh token usually belongs to the browser session of the person. If the person signs out, or if that session reaches its time limit, the refresh token ends. Each refresh from the workbench also keeps that browser session alive. An offline grant has a session of its own, and the person can revoke it at the authorization server. Some servers have no such scope. Google is one: set `offline: false` and give `authParams` the values `access_type: offline` and `prompt: consent`.
+
+### 11.6 The grant store
+
+`connections.Store` keeps the grants. Each write of a grant gets a new revision number. A write can name the revision that it replaces, so a shared store can refuse a stale write.
+
+The default store, `file`, keeps one file per grant under `workbench.grants.dir`. The file name is a hash, so no subject or issuer appears in a directory listing. AES-256-GCM encrypts each file. The key comes from the secret `FW_GRANT_KEY`. Without that secret, the store creates a random key in the file `grant.key`, with mode 0600. A write goes to a temporary file. The store syncs that file, renames it over the old file, and syncs the directory. After the write returns, the grant is therefore whole and durable.
+
+The store `memory` keeps the grants in the process, and a stop of the process forgets them. `connections.RegisterStore` adds a driver. Tests use `connections.NewMemStore()`, or install a `connections.Connector` of their own with `connections.Install`.
+
+### 11.7 Restarts and ax
+
+A call that waits for a connection survives a restart (the kernel architecture, section 7.11). Under ax, the home directory is on the durable volume. A suspend saves that volume and then kills the process (section 11.5). A refresh after the save is lost on resume, so the store holds the old refresh token. A server with rotation then refuses the grant, and the person connects again. A resume from an older snapshot, or a copy of an actor, has the same effect. The person sees one more Connect card. If the workbench has a client of its own, no other grant of the person breaks (see the example below).
+
+### 11.8 Example: Keycloak
+
+Keycloak is a common OpenID Connect issuer, and it shows each rule. Give the workbench a client of its own at the issuer, for example `fw`:
+
+- Make it a confidential client with the standard flow. Token exchange needs a confidential client.
+- Register `https://fw.example.com/ui/callback` and `https://fw.example.com/ui/connect/callback` as its redirect URIs.
+- Keep the client scope `offline_access` on the client. Keycloak assigns it by default.
+- For each MCP server with `exchange`, turn on standard token exchange on the `fw` client. Set `exchange.audience` to the client id of the MCP server.
+
+Keycloak keeps a grant with `offline_access` as an offline session. The offline session survives the sign-out of the person. By default, the setting Offline Session Idle ends it after 30 days without a refresh. The person sees it under Applications in the account console and can revoke it there.
+
+At the issuer, the setting Revoke Refresh Token turns rotation on. It is off by default. The setting Refresh Token Max Reuse says how many times an old refresh token still works. With rotation on, a reuse past that number gets `invalid_grant`. Keycloak also detaches the client session from the user session, which ends every refresh token of that client for that person. A dedicated client therefore limits the damage to the grants of the workbench, and the other applications of the person keep their sessions. The workbench assumes rotation with a reuse count of 0, the strictest case, so it works with every setting.
+
+The MCP guide of Keycloak lists Resource Indicators (RFC 8707) as not supported. Keycloak therefore ignores `resource`, and a refreshed token does not name the MCP server in its audience. Use one of two ways:
+
+- Set `exchange.audience` to the MCP server. Keycloak then issues a token for that server alone.
+- Add an audience mapper to the `fw` client that names the MCP server. Every token of the client then works at that server. Each server then gets a token that also works at the other servers.
+
+```yaml
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://id.example.com/realms/main
+    audience: [fw]
+    clientId: fw
+    clientSecret: FW_OIDC_CLIENT_SECRET
+tools:
+  mcp:
+    - name: tickets
+      title: Tickets
+      endpoint: https://tickets.example.com/mcp
+      auth:
+        oauth:
+          grant: user
+          exchange:
+            audience: tickets-mcp
+```
+
+### 11.9 Security
+
+- No refresh token, access token, code, or PKCE verifier enters a ledger event, a log line, or an error message. The ledger holds the connect request and its decision. The decider is the person, and the note is `connected`.
+- The file store encrypts every grant. Keep `FW_GRANT_KEY` in a secret store, apart from the volume of the grants. A key in `grant.key` beside the grants protects only a copy of the grant files that leaves the key behind.
+- A cookie binds each connection to the browser that started it. The cookie holds the PKCE verifier, so it is HttpOnly and signed, and it lasts 10 minutes. A link from another person therefore cannot connect their account to your runs.
+- For a service that trusts the sign-in issuer, the ID token of the connection must name the person of the run. A browser that is signed in at the issuer as another person cannot connect.
+- Disconnect deletes the grant. If the authorization server offers revocation (RFC 7009), the workbench also revokes the grant there.
+- In a fleet, a grant lives on the member that handled the callback. A run on another member does not see that grant. A grant store that members share is future work.
+- The workbench has no device flow for the command line yet. A person connects in the dashboard or through an MCP client. The verbs that run one piece of work start no service, so they keep no connections.

@@ -71,6 +71,8 @@ With `auth.oidc.clientId`, a person signs in to the page through the issuer, wit
 
 An MCP server entry of the kernel with `auth.oauth.grant: user` acts for the person who started the run. The first call that needs the service pauses the run. The page shows a Connect card, and an MCP client gets a link through URL-mode elicitation. The person signs in at the authorization server once, and every paused run of that person goes on. An entry without a `clientId` uses the client of the browser sign-in, so one connection covers every such entry.
 
+The workbench keeps each grant, a refresh token, in an encrypted store under `<home>/grants`. The block `grants` under `workbench` in `fw.yaml`, or `FW_WORKBENCH_GRANTS_STORE`, `FW_WORKBENCH_GRANTS_DIR`, and `FW_WORKBENCH_GRANTS_KEY`, choose the store. Set `FW_GRANT_KEY` to hold the key in a secret store. One refresh of a grant runs at a time, and the workbench stores the new refresh token before it uses the new access token, so a server that rotates refresh tokens gets each one once. Section 11 of the architecture has the rules and a Keycloak example.
+
 ## Titles
 
 Each run gets a title that a model writes, such as "Fix checkout retries", the first time that the workbench shows it. The kernel gives a run the first sentence of its input as a title and makes no call. Set `titles: input` in the block `workbench` of `fw.yaml`, or `FW_WORKBENCH_TITLES=input`, to save that call.

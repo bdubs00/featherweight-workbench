@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/connections"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -24,46 +25,65 @@ var connectPeople = tokenMap{
 var alice = &fw.Principal{Subject: "alice", Kind: fw.KindUser}
 
 // ticketsSource is a tool source with one tool that acts for the person of
-// the run. It connects anybody whose code is "good".
-type ticketsSource struct{}
-
-func (ticketsSource) ConnectName() string { return "tickets" }
-
-func ticketsKey(subject string) fw.GrantKey {
-	return fw.GrantKey{Subject: subject, Issuer: "https://id.example", ClientID: "fw"}
+// the run, and the connections.Connector of that service. It connects
+// anybody whose code is "good".
+type ticketsSource struct {
+	mu        sync.Mutex
+	connected map[string]time.Time
 }
 
-func (ticketsSource) Connection(ctx context.Context, subject string) (fw.Connection, error) {
-	c := fw.Connection{Server: "tickets", Title: "Tickets"}
-	if g, _, err := fw.AgentFrom(ctx).Grants().Get(ctx, ticketsKey(subject)); err == nil {
-		c.Connected, c.Account, c.Since = true, g.Account, g.Created
+func newTickets() *ticketsSource { return &ticketsSource{connected: map[string]time.Time{}} }
+
+func (*ticketsSource) Name() string { return "tickets" }
+
+func (ts *ticketsSource) Connection(_ context.Context, subject string) (connections.Connection, error) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	c := connections.Connection{Server: "tickets", Title: "Tickets"}
+	if since, ok := ts.connected[subject]; ok {
+		c.Connected, c.Account, c.Since = true, subject+"@tickets", since
 	}
 	return c, nil
 }
 
-func (ticketsSource) BeginConnect(_ context.Context, _, redirect string) (fw.ConnectStart, error) {
-	return fw.ConnectStart{Server: "tickets", URL: "https://id.example/authorize?state=s1", State: "s1", Verifier: "v", Redirect: redirect}, nil
+func (*ticketsSource) Begin(_ context.Context, _, redirect string) (connections.Attempt, error) {
+	return connections.Attempt{Server: "tickets", URL: "https://id.example/authorize?state=s1", State: "s1", Verifier: "v", Redirect: redirect}, nil
 }
 
-func (t ticketsSource) FinishConnect(ctx context.Context, subject string, _ fw.ConnectStart, code string) (fw.Connection, error) {
+func (ts *ticketsSource) Finish(ctx context.Context, subject string, _ connections.Attempt, code string) (connections.Connection, error) {
 	if code != "good" {
-		return fw.Connection{}, errors.New("bad code")
+		return connections.Connection{}, errors.New("bad code")
 	}
-	g := fw.Grant{Subject: subject, Issuer: "https://id.example", ClientID: "fw", RefreshToken: "rt", Account: subject + "@tickets", Created: time.Now()}
-	if _, err := fw.AgentFrom(ctx).Grants().Put(ctx, g, 0); err != nil {
-		return fw.Connection{}, err
-	}
-	return t.Connection(ctx, subject)
+	ts.mu.Lock()
+	ts.connected[subject] = time.Now()
+	ts.mu.Unlock()
+	return ts.Connection(ctx, subject)
 }
 
-func (ticketsSource) Disconnect(ctx context.Context, subject string) error {
-	return fw.AgentFrom(ctx).Grants().Delete(ctx, ticketsKey(subject))
+func (ts *ticketsSource) Disconnect(_ context.Context, subject string) error {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	delete(ts.connected, subject)
+	return nil
 }
 
-func (ticketsSource) Tools(context.Context) ([]fw.Tool, error) {
+func (ts *ticketsSource) Token(_ context.Context, subject string) (string, error) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if _, ok := ts.connected[subject]; !ok {
+		return "", fw.ErrNotConnected
+	}
+	return "at-" + subject, nil
+}
+
+func (*ticketsSource) Reject(context.Context, string, string) {}
+
+func (ts *ticketsSource) Forget(ctx context.Context, subject string) { _ = ts.Disconnect(ctx, subject) }
+
+func (ts *ticketsSource) Tools(context.Context) ([]fw.Tool, error) {
 	return []fw.Tool{fw.NewTool(fw.ToolSpec{Name: "tickets.list", Source: "tickets", ReadOnly: true}, func(ctx context.Context, _ json.RawMessage) (fw.ToolResult, error) {
 		info := fw.RunInfoFrom(ctx)
-		if _, _, err := fw.AgentFrom(ctx).Grants().Get(ctx, ticketsKey(info.Principal)); err != nil {
+		if _, err := ts.Token(ctx, info.Principal); err != nil {
 			if err := fw.RequestConnect(ctx, fw.ConnectRequest{Server: "tickets", Title: "Tickets", Reason: fw.ConnectMissing}); err != nil {
 				return fw.ErrorResult("not run: " + err.Error()), nil
 			}
@@ -72,15 +92,19 @@ func (ticketsSource) Tools(context.Context) ([]fw.Tool, error) {
 	})}, nil
 }
 
+// withTickets installs the tickets source as the connections of a.
+func withTickets(a *fw.Agent, ts *ticketsSource) *fw.Agent {
+	connections.Install(a, connections.New(a, ts))
+	return a
+}
+
 // connectAgent is an agent with the tickets source, whose model calls
 // tickets.list once and then ends with "done".
 func connectAgent(t *testing.T) (*fw.Agent, *script) {
 	t.Helper()
 	s := newScript(toolUse("c1", "tickets.list", `{}`), endTurn("done"))
-	return newAgent(t, s.model(),
-		fw.WithAuthn(connectPeople),
-		fw.WithToolSources(ticketsSource{}),
-		fw.WithGrantStore(fw.NewMemGrantStore())), s
+	ts := newTickets()
+	return withTickets(newAgent(t, s.model(), fw.WithAuthn(connectPeople), fw.WithToolSources(ts)), ts), s
 }
 
 // connectNow connects tickets for alice, as the callback of the browser
@@ -88,13 +112,13 @@ func connectAgent(t *testing.T) (*fw.Agent, *script) {
 func connectNow(t *testing.T, a *fw.Agent) {
 	t.Helper()
 	ctx := context.Background()
-	start, err := a.BeginConnect(ctx, alice, "tickets", "https://fw.example/ui/connect/callback")
+	start, err := connections.Begin(ctx, a, alice, "tickets", "https://fw.example/ui/connect/callback")
 	if err != nil {
-		t.Errorf("BeginConnect: %v", err)
+		t.Errorf("Begin: %v", err)
 		return
 	}
-	if _, err := a.FinishConnect(ctx, alice, start, "good"); err != nil {
-		t.Errorf("FinishConnect: %v", err)
+	if _, err := connections.Finish(ctx, a, alice, start, "good"); err != nil {
+		t.Errorf("Finish: %v", err)
 	}
 }
 
@@ -374,8 +398,8 @@ func TestConnectURLUsesThePageURL(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.A2A.URL = "https://fw.example.com/a2a"
 	s := newScript(toolUse("c1", "tickets.list", `{}`), endTurn("done"))
-	a := newAgent(t, s.model(), fw.WithConfig(cfg), fw.WithAuthn(connectPeople),
-		fw.WithToolSources(ticketsSource{}), fw.WithGrantStore(fw.NewMemGrantStore()))
+	ts := newTickets()
+	a := withTickets(newAgent(t, s.model(), fw.WithConfig(cfg), fw.WithAuthn(connectPeople), fw.WithToolSources(ts)), ts)
 	cs := as(t, ctx, serveAgent(t, a, nil).URL, "alice-token")
 	res := callTool(t, ctx, cs, "run", map[string]any{"input": "list my tickets"})
 	r := runOf(t, res)

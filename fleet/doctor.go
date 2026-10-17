@@ -12,7 +12,7 @@ import (
 // off, on a bus that only this process sees, or on a shared bus, with the
 // address where other members reach this one. cmd/fw-workbench registers
 // it.
-func DoctorCheck(ctx context.Context, cfg *fw.Config, timeout time.Duration) (bool, string) {
+func DoctorCheck(ctx context.Context, cfg *fw.Config, _ fw.Secrets, timeout time.Duration) (bool, string) {
 	c, err := Load(cfg)
 	if err != nil {
 		return false, "fleet: " + err.Error()

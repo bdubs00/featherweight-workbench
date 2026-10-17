@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/connections"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -41,7 +42,7 @@ var workTools = map[string]bool{
 // connection tool when a tool source acts for a person.
 func (s *server) reserved(name string) bool {
 	return workTools[name] || (name == toolFleet && fleet.Of(s.a) != nil) ||
-		((name == toolConnections || name == toolDisconnect) && len(s.a.Connectors()) > 0)
+		((name == toolConnections || name == toolDisconnect) && connections.Of(s.a) != nil)
 }
 
 // Input schemas of the work tools.

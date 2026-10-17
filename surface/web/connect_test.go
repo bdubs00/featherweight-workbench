@@ -15,6 +15,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/connections"
 )
 
 // Values that must never reach a log line.
@@ -26,30 +27,28 @@ const (
 )
 
 // fakeConnector is a tool source with one tool, tickets.list, that acts
-// for the person of the run. It connects a person who brings testCode with
-// the verifier of the start.
+// for the person of the run, and the connections.Connector of that
+// service. It connects a person who brings testCode with the verifier of
+// the start.
 type fakeConnector struct {
 	mu        sync.Mutex
+	connected map[string]bool
 	redirects []string
-	finished  []fw.ConnectStart
+	finished  []connections.Attempt
 	url       string // the authorization request, or "" for the default
 }
 
-func (f *fakeConnector) ConnectName() string { return "tickets" }
+func newFakeConnector() *fakeConnector { return &fakeConnector{connected: map[string]bool{}} }
 
-func (f *fakeConnector) key(subject string) fw.GrantKey {
-	return fw.GrantKey{Subject: subject, Issuer: "https://id.example", ClientID: "fw"}
+func (f *fakeConnector) Name() string { return "tickets" }
+
+func (f *fakeConnector) Connection(_ context.Context, subject string) (connections.Connection, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return connections.Connection{Server: "tickets", Title: "Tickets", Connected: f.connected[subject]}, nil
 }
 
-func (f *fakeConnector) Connection(ctx context.Context, subject string) (fw.Connection, error) {
-	c := fw.Connection{Server: "tickets", Title: "Tickets"}
-	if _, _, err := fw.AgentFrom(ctx).Grants().Get(ctx, f.key(subject)); err == nil {
-		c.Connected = true
-	}
-	return c, nil
-}
-
-func (f *fakeConnector) BeginConnect(_ context.Context, _, redirect string) (fw.ConnectStart, error) {
+func (f *fakeConnector) Begin(_ context.Context, _, redirect string) (connections.Attempt, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.redirects = append(f.redirects, redirect)
@@ -57,26 +56,41 @@ func (f *fakeConnector) BeginConnect(_ context.Context, _, redirect string) (fw.
 	if u == "" {
 		u = "https://id.example/authorize?state=" + testState + "&redirect_uri=" + url.QueryEscape(redirect)
 	}
-	return fw.ConnectStart{Server: "tickets", URL: u, State: testState, Verifier: testVerifier, Nonce: testNonce, Redirect: redirect}, nil
+	return connections.Attempt{Server: "tickets", URL: u, State: testState, Verifier: testVerifier, Nonce: testNonce, Redirect: redirect}, nil
 }
 
-func (f *fakeConnector) FinishConnect(ctx context.Context, subject string, start fw.ConnectStart, code string) (fw.Connection, error) {
+func (f *fakeConnector) Finish(ctx context.Context, subject string, at connections.Attempt, code string) (connections.Connection, error) {
 	f.mu.Lock()
-	f.finished = append(f.finished, start)
+	f.finished = append(f.finished, at)
 	f.mu.Unlock()
-	if code != testCode || start.Verifier != testVerifier {
-		return fw.Connection{}, errors.New("mcp: server tickets: oauth: token endpoint refused: invalid_grant")
+	if code != testCode || at.Verifier != testVerifier {
+		return connections.Connection{}, errors.New("connections: server tickets: oauth: token endpoint refused: invalid_grant")
 	}
-	g := fw.Grant{Subject: subject, Issuer: "https://id.example", ClientID: "fw", RefreshToken: "rt-secret"}
-	if _, err := fw.AgentFrom(ctx).Grants().Put(ctx, g, 0); err != nil {
-		return fw.Connection{}, err
-	}
+	f.mu.Lock()
+	f.connected[subject] = true
+	f.mu.Unlock()
 	return f.Connection(ctx, subject)
 }
 
-func (f *fakeConnector) Disconnect(ctx context.Context, subject string) error {
-	return fw.AgentFrom(ctx).Grants().Delete(ctx, f.key(subject))
+func (f *fakeConnector) Disconnect(_ context.Context, subject string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.connected, subject)
+	return nil
 }
+
+func (f *fakeConnector) Token(_ context.Context, subject string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.connected[subject] {
+		return "", fw.ErrNotConnected
+	}
+	return "at-" + subject, nil
+}
+
+func (f *fakeConnector) Reject(context.Context, string, string) {}
+
+func (f *fakeConnector) Forget(ctx context.Context, subject string) { _ = f.Disconnect(ctx, subject) }
 
 func (f *fakeConnector) lastRedirect() string {
 	f.mu.Lock()
@@ -90,7 +104,7 @@ func (f *fakeConnector) lastRedirect() string {
 func (f *fakeConnector) Tools(context.Context) ([]fw.Tool, error) {
 	return []fw.Tool{fw.NewTool(fw.ToolSpec{Name: "tickets.list", Source: "tickets"}, func(ctx context.Context, _ json.RawMessage) (fw.ToolResult, error) {
 		info := fw.RunInfoFrom(ctx)
-		if _, _, err := fw.AgentFrom(ctx).Grants().Get(ctx, f.key(info.Principal)); err != nil {
+		if _, err := f.Token(ctx, info.Principal); err != nil {
 			if err := fw.RequestConnect(ctx, fw.ConnectRequest{Server: "tickets", Title: "Tickets", Reason: fw.ConnectMissing}); err != nil {
 				return fw.ToolResult{}, err
 			}
@@ -122,7 +136,7 @@ func newConnectEnv(t *testing.T, m fw.Model, change func(*fw.Config)) *connectEn
 	t.Setenv("FW_ATESPACE", "")
 	t.Setenv(sharedKeySecret, "")
 	t.Setenv(sharedKeySecret+"_FILE", "")
-	e := &connectEnv{fc: &fakeConnector{}, clock: &testClock{t: time.Now()}, log: &lockedBuffer{}}
+	e := &connectEnv{fc: newFakeConnector(), clock: &testClock{t: time.Now()}, log: &lockedBuffer{}}
 	cfg := fw.DefaultConfig()
 	cfg.Home = t.TempDir()
 	if change != nil {
@@ -135,7 +149,6 @@ func newConnectEnv(t *testing.T, m fw.Model, change func(*fw.Config)) *connectEn
 		fw.WithModel(m),
 		fw.WithLedger(fw.NewMemLedger()),
 		fw.WithBus(fw.NewMemBus()),
-		fw.WithGrantStore(fw.NewMemGrantStore()),
 		fw.WithToolSources(e.fc),
 		fw.WithLogger(slog.New(slog.NewTextHandler(e.log, &slog.HandlerOptions{Level: slog.LevelDebug}))),
 		fw.WithSurfaces(native.NewWith(newExtension(e.clock.now))),
@@ -143,6 +156,7 @@ func newConnectEnv(t *testing.T, m fw.Model, change func(*fw.Config)) *connectEn
 	if err != nil {
 		t.Fatal(err)
 	}
+	connections.Install(a, connections.New(a, e.fc))
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -241,7 +255,7 @@ func TestConnectionsNeedAPerson(t *testing.T) {
 	decodeProblem(t, resp, b, http.StatusUnauthorized)
 
 	resp, b = do(t, "GET", e.url+"/v1/connections", "", "Authorization", "Bearer alice-token")
-	var list struct{ Connections []fw.Connection }
+	var list struct{ Connections []connections.Connection }
 	decodeJSON(t, resp, b, http.StatusOK, &list)
 	if len(list.Connections) != 1 || list.Connections[0].Server != "tickets" || list.Connections[0].Connected {
 		t.Fatalf("connections = %s", b)
@@ -296,7 +310,7 @@ func TestConnectResumesThePausedRun(t *testing.T) {
 	}
 
 	resp, b = do(t, "GET", e.url+"/v1/connections", "", alice...)
-	var list struct{ Connections []fw.Connection }
+	var list struct{ Connections []connections.Connection }
 	decodeJSON(t, resp, b, http.StatusOK, &list)
 	if !list.Connections[0].Connected {
 		t.Fatalf("connections = %s", b)
@@ -350,7 +364,7 @@ func TestConnectCallbackFailures(t *testing.T) {
 
 	// A cookie that another process signed with its own key.
 	other := forged
-	st := connectState{Start: fw.ConnectStart{Server: "tickets", State: testState, Verifier: testVerifier, Redirect: e.url + "/ui/connect/callback"},
+	st := connectState{Start: connections.Attempt{Server: "tickets", State: testState, Verifier: testVerifier, Redirect: e.url + "/ui/connect/callback"},
 		Subject: "alice", Kind: fw.KindUser, Expires: time.Now().Add(time.Minute).Unix()}
 	other.Value = sealer{key: randomKey(), domain: connectDomain}.seal(st)
 	resp, body = e.callback(t, goodQuery(), &other)
@@ -378,7 +392,7 @@ func TestConnectCallbackFailures(t *testing.T) {
 	resp, body = e.callback(t, goodQuery(), cookie)
 	check("expired", resp, body, http.StatusBadRequest, "longer than 10 minutes")
 
-	if conns, _ := e.a.Connections(context.Background(), connectPeople["alice-token"]); conns[0].Connected {
+	if conns, _ := connections.List(context.Background(), e.a, connectPeople["alice-token"]); conns[0].Connected {
 		t.Fatal("a failed callback connected")
 	}
 	e.noSecrets(t)

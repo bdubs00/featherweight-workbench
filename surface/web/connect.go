@@ -1,8 +1,8 @@
 package web
 
-// This file serves connections: a person gives fw a grant to act for them
-// at an outside service, such as an MCP server whose entry has
-// auth.oauth.grant: user (see fw.Connector).
+// This file serves connections: a person gives the workbench a grant to
+// act for them at an outside service, such as an MCP server whose entry
+// has auth.oauth.grant: user (the package connections).
 //
 //   - GET /v1/connections lists the services that act for the caller.
 //   - POST /v1/connections/{server} starts a connection. It answers the
@@ -30,12 +30,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/connections"
 )
 
 // Routes, the cookie, and the limits of a connection.
@@ -51,13 +53,13 @@ const (
 // connectState is the content of the connect cookie. Start has no URL:
 // the browser already went there, and the cookie stays small.
 type connectState struct {
-	Start   fw.ConnectStart `json:"c"`
-	Subject string          `json:"u"`
-	Kind    string          `json:"k"`
-	Name    string          `json:"m,omitempty"`
-	Issuer  string          `json:"i,omitempty"`
-	Next    string          `json:"x,omitempty"`
-	Expires int64           `json:"e"` // Unix seconds
+	Start   connections.Attempt `json:"c"`
+	Subject string              `json:"u"`
+	Kind    string              `json:"k"`
+	Name    string              `json:"m,omitempty"`
+	Issuer  string              `json:"i,omitempty"`
+	Next    string              `json:"x,omitempty"`
+	Expires int64               `json:"e"` // Unix seconds
 }
 
 // Errors of the connect cookie.
@@ -158,13 +160,13 @@ func (c *connects) derivedRedirect() bool {
 // listConnections answers GET /v1/connections with every service that
 // acts for the caller and its state.
 func (s *server) listConnections(w http.ResponseWriter, r *http.Request) {
-	conns, err := s.a.Connections(r.Context(), fw.PrincipalFrom(r.Context()))
+	conns, err := connections.List(r.Context(), s.a, fw.PrincipalFrom(r.Context()))
 	if err != nil {
-		s.fail(w, r, err)
+		s.failConnect(w, r, err)
 		return
 	}
 	if conns == nil {
-		conns = []fw.Connection{}
+		conns = []connections.Connection{}
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{"connections": conns})
@@ -192,9 +194,9 @@ func (s *server) startConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	server := r.PathValue("server")
-	start, err := s.a.BeginConnect(r.Context(), p, server, s.connects.redirectURI(r))
+	start, err := connections.Begin(r.Context(), s.a, p, server, s.connects.redirectURI(r))
 	if err != nil {
-		s.fail(w, r, err)
+		s.failConnect(w, r, err)
 		return
 	}
 	target, perr := url.Parse(start.URL)
@@ -230,8 +232,8 @@ func (s *server) startConnection(w http.ResponseWriter, r *http.Request) {
 // forgets the grant of the caller.
 func (s *server) deleteConnection(w http.ResponseWriter, r *http.Request) {
 	p := fw.PrincipalFrom(r.Context())
-	if err := s.a.Disconnect(r.Context(), p, r.PathValue("server")); err != nil {
-		s.fail(w, r, err)
+	if err := connections.Disconnect(r.Context(), s.a, p, r.PathValue("server")); err != nil {
+		s.failConnect(w, r, err)
 		return
 	}
 	s.a.Logger().Info("native: connection deleted", "subject", p.Subject, "server", r.PathValue("server"))
@@ -296,12 +298,12 @@ func (s *server) connectCallback(w http.ResponseWriter, r *http.Request) {
 	// server issued is not lost.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), time.Minute)
 	defer cancel()
-	if _, err := s.a.FinishConnect(ctx, p, st.Start, code); err != nil {
+	if _, err := connections.Finish(ctx, s.a, p, st.Start, code); err != nil {
 		log.Warn("native: connection failed", "subject", st.Subject, "server", st.Start.Server, "error", err)
 		switch {
-		case errors.Is(err, fw.ErrConnectorNotFound):
+		case errors.Is(err, connections.ErrUnknownService):
 			connectFailed(w, http.StatusNotFound, "This agent has no service named "+st.Start.Server+" that acts for a person.")
-		case errors.Is(err, fw.ErrNotConnectable):
+		case errors.Is(err, connections.ErrNotPerson):
 			connectFailed(w, http.StatusForbidden, connectNotPerson)
 		default:
 			connectFailed(w, http.StatusBadGateway, "Connecting "+st.Start.Server+" failed: "+connectCause(err))
@@ -317,11 +319,23 @@ func (s *server) connectCallback(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusSeeOther)
 }
 
+// failConnect writes the problem of an error of the connection routes.
+func (s *server) failConnect(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, connections.ErrNotPerson):
+		problem(w, r, http.StatusForbidden, connectNotPerson)
+	case errors.Is(err, connections.ErrUnknownService):
+		problem(w, r, http.StatusNotFound, "no service named "+strconv.Quote(r.PathValue("server"))+" acts for a person")
+	default:
+		s.fail(w, r, err)
+	}
+}
+
 // connectCause is the error of a connection as a sentence for the person,
 // without the package prefixes.
 func connectCause(err error) string {
 	msg := err.Error()
-	for _, prefix := range []string{"fw: ", "mcp: "} {
+	for _, prefix := range []string{"fw: ", "mcp: ", "connections: "} {
 		msg = strings.TrimPrefix(msg, prefix)
 	}
 	if msg == "" {

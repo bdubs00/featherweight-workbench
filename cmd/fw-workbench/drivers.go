@@ -12,6 +12,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/surface/a2a"
 	"github.com/bdubs00/featherweight-kernel/telemetry"
 	"github.com/bdubs00/featherweight-workbench/agents"
+	"github.com/bdubs00/featherweight-workbench/connections"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 
@@ -46,6 +47,7 @@ func init() {
 		return err
 	}
 	cli.AgentsDelete = agents.Delete
+	cli.RegisterDoctorCheck(connections.DoctorCheck)
 	cli.RegisterDoctorCheck(fleet.DoctorCheck)
 	cli.NewLogger = telemetry.Logger
 	cli.SetBuildInfo = telemetry.SetBuildInfo

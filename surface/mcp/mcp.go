@@ -61,6 +61,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/connections"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -304,7 +305,7 @@ Retries: pass requestId to make a retried run call return the same run instead o
 Resources: fw://runs/{id} is the run object as JSON. fw://runs/{id}/ledger is the event log of the run as JSONL. fw://runs/{id}/files/{path} is a file that the run changed, up to 4 MiB. These three read the runs of this process only. fw://skills/{name} is the SKILL.md file of a skill from the skills directories of the configuration; the resource list names every skill.
 
 Prompts: there is one prompt per profile. It holds the system prompt of the profile and the optional argument input.`)
-	if len(a.Connectors()) > 0 {
+	if c := connections.Of(a); c != nil && len(c.Connectors()) > 0 {
 		b.WriteString(`
 
 Connections: some tools act for the person who started the run, at a service such as an issue tracker. If that person has not connected the service, or the service refused the grant, the run waits in input-required, and pending.connect names the service. A client with URL elicitation gets the address to open in the browser. Otherwise the text of the run gives it. The run goes on by itself when the person connects. To go on without the service, deny the approval. The approve tool cannot allow it. connections lists the services that act for the caller, with the address that connects each one, and disconnect removes one.`)
