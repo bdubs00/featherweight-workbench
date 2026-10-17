@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/teams"
 )
 
 // cutMark ends a text that the record cut.
@@ -41,7 +42,7 @@ func (f *Fleet) record() (fw.FleetRecord, error) {
 	}
 	rec.Agents = make([]fw.FleetAgent, 0, len(profiles))
 	for _, p := range profiles {
-		rec.Agents = append(rec.Agents, fw.FleetAgent{Name: p.Name, Description: p.Description, Access: p.Access, Teams: f.a.AgentTeamsOf("", p.Name, p.Access)})
+		rec.Agents = append(rec.Agents, fw.FleetAgent{Name: p.Name, Description: p.Description, Access: p.Access, Teams: teams.OfAgent(teams.Patterns(f.a.Config()), p.Access)})
 	}
 	runs, err := f.a.List(bg)
 	if err != nil {

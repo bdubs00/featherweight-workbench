@@ -8,11 +8,13 @@ The kernel is a separate repository, featherweight-kernel. Its document `docs/AR
 
 ### 1.1 How the workbench builds on the kernel
 
-The workbench changes no kernel code. It plugs in through three extension points of the kernel:
+The workbench changes no kernel code. It plugs in through five extension points of the kernel:
 
 - `native.Extend` adds routes to the native surface of the kernel, on the same listener and behind the same authentication. The package `surface/web` registers one extension in `init`. Its routes get a `*native.Kit`, so they answer errors and forward the runs of other fleet members as the run routes do.
 - `fw.RegisterDefaults` changes the default configuration in `init`. The package `surface/mcp` adds `mcp` to `surfaces`, and the package `tools/builder` adds `propose_agent` to the built-in tools. The file `cmd/fw-workbench/drivers.go` sets `titles: model`. A file or a variable still overrides each default.
 - The package `cli` of the kernel holds the command line. `cmd/fw-workbench` calls `cli.Run`, so `fw-workbench` takes every verb of `fw`. It sets `cli.ServeMCPStdio`, so the verb `mcp` serves the MCP server over stdio.
+- `fw.RegisterExtension` claims a top-level block of `fw.yaml` for the workbench. The package `teams` claims the block `workbench`, and `fw.Config.Extension` decodes it (section 8).
+- `fw.RegisterRunAnnotator` adds metadata to every run that the kernel queues. The package `teams` records the teams of the person who starts a run this way (section 8).
 
 Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `authn/oidc` registers the mode `oidc`, `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary.
 
@@ -69,7 +71,9 @@ The package `surface/web` mounts the routes for people on the native surface of 
 
 | Method and path | Purpose |
 |---|---|
+| `GET /v1/whoami` | The caller: the principal, its role on every agent that it can see, and its teams (section 8). |
 | `GET /v1/home` | The home of the caller: the runs that need the caller, the runs in progress, and the recent results (section 6.3). |
+| `GET /v1/home/others` | The top-level runs of the people outside the teams of the caller, newest first, at most 200, as `{"runs": [...]}` (section 8). |
 | `GET /v1/runs/{id}/result` | What the run produced and what it needs next (section 6.3). The read authorizes the caller as `GET /v1/runs/{id}` does. |
 | `GET /v1/runs/{id}/transcript` | The conversation of a run as chat items, one page at a time. See below. |
 | `POST /v1/builder` | Start the conversation that creates an agent. Body fields: `input` or `fromRun`, and `files`. See below. |
@@ -342,10 +346,10 @@ The MCP server carries these management tools beside the work tools:
 
 | Tool | What it does |
 |---|---|
-| `whoami` | The principal of the caller and its role on every agent that it can see |
+| `whoami` | The principal of the caller, its role on every agent that it can see, and its teams (section 8) |
 | `agents_list`, `agent_get` | The agents that the caller can see, and one agent with the words of what it can do |
 | `agent_put`, `agent_delete` | Create, change, or remove an agent. `dryRun` checks a profile and changes nothing. |
-| `runs_list` | The runs that the caller can see, with `scope`, `member`, and `by` (the kernel architecture, section 13.6) |
+| `runs_list` | The runs that the caller can see, with `scope`, `member`, and `by` (section 8) |
 | `run_events` | One page of the events of a run as chat items. `from` reads forward, and `before` reads back. |
 | `run_result` | What a run produced and what it needs next. The text is the result as a person reads it. |
 | `run_file` | A file that a run changed. With `raw` true, it returns the bytes up to 4 MiB (the kernel architecture, section 7.9). |
@@ -426,7 +430,7 @@ No status says that the work passed its checks. A model that ends a run proves n
 
 A view names the work, not the worker. `TitleOf` takes the title of the run (the kernel architecture, section 8.2), else a title from the input, else the agent name. A run of an older fleet member has no title, so the view makes one. A builder run is "New agent", unless its metadata `fw.title` names another title.
 
-Home is `GET /v1/home` and the `home` of the `dashboard` tool. It holds the top-level runs of the caller and of the caller's teams, as `by=team` does (the kernel architecture, section 13.6). A child run works for its parent, and its parent shows it. Home reads the runs of the whole fleet that the caller can view. It has three lists:
+Home is `GET /v1/home` and the `home` of the `dashboard` tool. It holds the top-level runs of the caller and of the caller's teams, as `by=team` does (section 8). A child run works for its parent, and its parent shows it. Home reads the runs of the whole fleet that the caller can view. It has three lists:
 
 - Needs you: the runs that wait for a person, newest first.
 - In progress: the runs that work, newest first.
@@ -494,8 +498,38 @@ The split did not change the contract of the package `fw`. That contract still h
 - The fleet: `fw.Fleet`, `fw.FleetConfig`, `fw.RegisterFleet`, `fw.WithFleet`, `Agent.Fleet`, and `fw.Retainer`. The native surface of the kernel forwards a request about a run of another member, and its metrics surface reports the fleet gauges.
 - The connections: `fw.GrantStore`, `fw.Connection`, `fw.ConnectStart`, `fw.Connector`, `fw.ConnectRequest`, and `fw.RequestConnect`. `Agent` holds the methods `Connections`, `BeginConnect`, `FinishConnect`, `Disconnect`, and `Grants`. The MCP client of the kernel, `tools/mcp`, still acts for a person (the kernel architecture, section 7.11).
 - The management of agents: `fw.ProfileStore`, `fw.ProfileLocker`, and the methods `PutProfile`, `DeleteProfile`, `CheckProfile`, and `ProfileGrants` of `Agent`.
-- The teams: `Agent.TeamsOf`, `Agent.AgentTeamsOf`, the teams in `fw.run.queued`, and `by` on the runs lists (the kernel architecture, section 13.6).
 - The titles: `fw.MetaTitle`, `fw.TitleFrom`, `fw.CleanTitle`, `fw.WithTitles`, `fw.TitlesModel`, and the event `fw.run.titled` (the kernel architecture, section 8.2).
 - The configuration blocks that the workbench reads: `mcp`, `fleet`, and `auth.oidc`.
 
 The next step moves these hooks out of the kernel.
+
+## 8. Teams
+
+A team is a group of people and agents that work together. The dashboard shows the work of a person and of the person's teams first. The runs of other people sit behind one row. A team groups the view and grants no access: the access blocks of the kernel, or its control plane, still decide who can do what. The package `teams` holds the rules, and the kernel knows no team (the kernel architecture, section 13.6).
+
+The admins keep the teams upstream, in the identity provider:
+
+| Source | The teams of a person | The teams of an agent |
+|---|---|---|
+| The rules of the kernel | The groups of the principal, from the groups claim of OIDC, that match the patterns | The groups that the access block of the profile names as `group:<name>` and that match the patterns |
+
+The patterns come from the block `workbench` of `fw.yaml`, which the package claims with `fw.RegisterExtension`:
+
+```yaml
+workbench:
+  teams: ["team-*"]   # glob patterns over group names; empty makes every group a team
+```
+
+The variable `FW_WORKBENCH_TEAMS`, with commas between the patterns, wins over the file. An empty list, which is the default, makes every group a team. A team name is an opaque string. With `access.external`, the kernel asks a control plane about access, and the teams still come from the groups. A later revision moves `access.external` to the workbench and lets the control plane name the teams again.
+
+A run keeps the teams of the person who started it. The package registers a run annotator with the kernel (the kernel architecture, section 12.4). When the kernel queues a run that a person starts, the annotator writes the teams of the person into the metadata of the run, under the key `workbench.teams`, with commas between the names. A child run that the process starts keeps the teams of its parent. The teams of a run therefore stay as they were at the start, and every fleet member reads them from the run record. `GET /v1/whoami` and the tool `whoami` return the teams of the caller. A fleet record names the teams of each agent. Without a fleet, the page knows the teams of an agent that the person shares, from the access block of the agent.
+
+The runs lists of the workbench take `by`, which keeps a part of the runs that the caller can see:
+
+| `by` | The runs |
+|---|---|
+| `me` | The runs that the caller started |
+| `team` | The runs that the caller started, and the runs that a person on a team of the caller started |
+| `others` | Every other run that the caller can see |
+
+The MCP tool `runs_list` takes `by`, and the sentence and the counts of its answer cover the same runs. Home (`GET /v1/home`) holds the runs of `by=team`, and `GET /v1/home/others` holds the top-level runs of `by=others`. The row and the status line of a run of a teammate name that person, for example "by alice". In the conversation, a message of another person shows the name of that person above it. In the Agents place, the agents that the caller owns come first, then the agents of the caller's teams, then the rest. If other people have runs that the caller can see, a last row on home reads "Runs by others" with their number. It opens their runs, grouped by person. A person with no team sees only their own runs on home and the rest behind that row.

@@ -45,7 +45,9 @@ func (s *server) mount() error {
 		pattern string
 		h       http.HandlerFunc
 	}{
+		{"GET /v1/whoami", s.whoami},
 		{"GET /v1/home", s.home},
+		{"GET /v1/home/others", s.others},
 		{"POST /v1/builder", s.builder},
 		{"GET /v1/runs/{id}/result", s.k.Remote(s.result)},
 		{"GET /v1/runs/{id}/transcript", s.k.Remote(s.transcript)},

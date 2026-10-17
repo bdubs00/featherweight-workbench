@@ -18,6 +18,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
+	"github.com/bdubs00/featherweight-workbench/teams"
 )
 
 // Status words of a work item. They come from the run alone, so a list
@@ -120,11 +121,11 @@ func HomeOf(ctx context.Context, a *fw.Agent, runs []*fw.Run, now time.Time) (Ho
 			top = append(top, r)
 		}
 	}
-	team, err := view.By(ctx, a, top, view.ByTeam)
+	team, err := teams.By(ctx, a.Config(), top, teams.ByTeam)
 	if err != nil {
 		return Home{}, err
 	}
-	others, err := view.By(ctx, a, top, view.ByOthers)
+	others, err := teams.By(ctx, a.Config(), top, teams.ByOthers)
 	if err != nil {
 		return Home{}, err
 	}

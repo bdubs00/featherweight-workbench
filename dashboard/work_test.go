@@ -15,6 +15,7 @@ import (
 	"weak"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/teams"
 )
 
 // scripted is a fake model that answers with the responses in order and
@@ -117,7 +118,7 @@ func TestHomeOf(t *testing.T) {
 	waitNew := run("wait-new", "alice", fw.StateInputRequired, time.Minute)
 	// A run of a teammate on another member of the fleet: no title, and
 	// the teams of the person.
-	fleet := &fw.Run{ID: "fleet", Agent: "fixer", Principal: "bob", Teams: []string{"pay"}, Member: "m2", State: fw.StateRunning, Input: "Fix checkout retries. Then more.", UpdatedAt: now.Add(-2 * time.Minute)}
+	fleet := &fw.Run{ID: "fleet", Agent: "fixer", Principal: "bob", Metadata: map[string]string{teams.MetaKey: "pay"}, Member: "m2", State: fw.StateRunning, Input: "Fix checkout retries. Then more.", UpdatedAt: now.Add(-2 * time.Minute)}
 	paused := run("paused", "alice", fw.StateSuspended, 3*time.Hour)
 	ready := run("ready", "alice", fw.StateCompleted, time.Hour)
 	ready.Output = "All good."

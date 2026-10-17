@@ -22,6 +22,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/teams"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -209,7 +210,7 @@ type (
 type (
 	whoamiResult struct {
 		View string `json:"view"`
-		view.Whoami
+		dashboard.Whoami
 	}
 	agentsResult struct {
 		View   string           `json:"view"`
@@ -248,7 +249,7 @@ type (
 	}
 	dashboardResult struct {
 		View    string           `json:"view"`
-		Whoami  view.Whoami      `json:"whoami"`
+		Whoami  dashboard.Whoami `json:"whoami"`
 		Glance  view.Glance      `json:"glance"`
 		Agents  []view.AgentView `json:"agents"`
 		Runs    []*fw.Run        `json:"runs"`
@@ -422,7 +423,7 @@ func explain(err error) string {
 }
 
 func (s *server) whoami(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
-	w, err := view.WhoamiOf(ctx, s.a)
+	w, err := dashboard.WhoamiOf(ctx, s.a)
 	if err != nil {
 		return failResult(err), nil, nil
 	}
@@ -569,7 +570,7 @@ func (s *server) visibleRuns(ctx context.Context, agent, state, principal, by, s
 	if err != nil {
 		return runsResult{}, err
 	}
-	if all, err = view.By(ctx, s.a, all, by); err != nil {
+	if all, err = teams.By(ctx, s.a.Config(), all, by); err != nil {
 		return runsResult{}, err
 	}
 	return listOf(all, agent, state, principal, limit), nil
@@ -582,7 +583,7 @@ func (s *server) childRuns(ctx context.Context, parent, agent, state, principal,
 	if err != nil {
 		return runsResult{}, err
 	}
-	if kids, err = view.By(ctx, s.a, kids, by); err != nil {
+	if kids, err = teams.By(ctx, s.a.Config(), kids, by); err != nil {
 		return runsResult{}, err
 	}
 	return listOf(kids, agent, state, principal, limit), nil
@@ -763,7 +764,7 @@ func (s *server) dashboard(ctx context.Context, req *sdk.CallToolRequest, in das
 	default:
 		return failResult(fmt.Errorf("%w: the which %q is not home, run, or agent", fw.ErrInvalidRequest, in.View)), nil, nil
 	}
-	who, err := view.WhoamiOf(ctx, s.a)
+	who, err := dashboard.WhoamiOf(ctx, s.a)
 	if err != nil {
 		return failResult(err), nil, nil
 	}

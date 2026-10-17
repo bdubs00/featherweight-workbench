@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/teams"
 )
 
 // settleMax bounds the wait for the retained records when the view starts.
@@ -204,7 +205,7 @@ func (f *Fleet) Members(ctx context.Context) ([]fw.FleetMember, error) {
 			if roles[i] != "" {
 				ag.Role = roles[i]
 				// The teams that this process knows win over the record.
-				if t := f.a.AgentTeamsOf(r.rec.Name, ag.Name, ag.Access); t != nil {
+				if t := teams.OfAgent(teams.Patterns(f.a.Config()), ag.Access); t != nil {
 					ag.Teams = t
 				}
 				m.Agents = append(m.Agents, ag)
@@ -259,7 +260,7 @@ func (f *Fleet) self(ctx context.Context) (fw.FleetMember, error) {
 		if roles[i] == "" {
 			continue
 		}
-		m.Agents = append(m.Agents, fw.FleetAgent{Name: p.Name, Description: p.Description, Access: p.Access, Teams: f.a.AgentTeamsOf("", p.Name, p.Access), Role: roles[i]})
+		m.Agents = append(m.Agents, fw.FleetAgent{Name: p.Name, Description: p.Description, Access: p.Access, Teams: teams.OfAgent(teams.Patterns(f.a.Config()), p.Access), Role: roles[i]})
 	}
 	runs, err := f.a.List(ctx)
 	if err != nil {

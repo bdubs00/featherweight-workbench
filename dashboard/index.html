@@ -712,6 +712,7 @@ const mcp = (() => {
     putAgent: p => call('agent_put', p).then(r => r.agent),
     deleteAgent: name => call('agent_delete', {name}),
     runs: f => call('runs_list', clean(f)),
+    others: () => call('runs_list', {limit: 200, by: 'others'}),
     result: id => call('run_result', {runId: id}).then(r => r.result),
     items: (id, o) => call('run_events', clean({runId: id, from: o && o.from, before: o && o.before, limit: (o && o.limit) || 500})),
     activity: id => call('run_events', {runId: id, limit: 200}).then(r => r.events || []),
@@ -780,6 +781,7 @@ const native = (() => {
     putAgent: p => req('PUT', '/v1/agents/' + enc(p.name), p),
     deleteAgent: name => req('DELETE', '/v1/agents/' + enc(name)),
     runs: f => req('GET', '/v1/runs' + qs(f)),
+    others: () => req('GET', '/v1/home/others'),
     result: id => req('GET', run(id) + '/result'),
     items: (id, o) => req('GET', run(id) + '/transcript' + qs({from: o && o.from, before: o && o.before, limit: (o && o.limit) || 500})),
     activity: id => req('GET', run(id) + '/events?limit=200').then(r => (r && r.lines) || []),
@@ -817,10 +819,15 @@ const TITLES = {home: 'Work', agents: 'Agents', operator: 'Operator view', signi
 // person reports whether the caller is a signed-in person, the only kind
 // of caller that can connect a service.
 const person = () => !!(S.me && S.me.principal && S.me.principal.kind === 'user');
-// me is the subject of the person, and myTeams the teams (section 13.6).
+// me is the subject of the person, and myTeams the teams (the workbench
+// architecture, section 8).
 const me = () => (S.me && S.me.principal && S.me.principal.subject) || '';
 const myTeams = () => (S.me && S.me.teams) || [];
 const sharesTeam = teams => (teams || []).some(t => myTeams().includes(t));
+// agentTeams lists the teams of an agent that the page knows: the teams of
+// a fleet record, else the teams of the person that the access block of the
+// agent names as group:<name>.
+const agentTeams = a => (a.teams && a.teams.length) ? a.teams : ['owners', 'operators', 'viewers'].flatMap(k => ((a.access || {})[k] || []).filter(e => e.startsWith('group:') && myTeams().includes(e.slice(6))).map(e => e.slice(6)));
 // who names a principal for a person: the part before the @ of an email,
 // or the last part of a SPIFFE id.
 const who = subject => String(subject || '').replace(/^local:/, '').split('@')[0].split('/').pop();
@@ -1122,7 +1129,7 @@ screens.agents = {
     const n = m.reduce((k, x) => k + (x.agents || []).length, 0);
     const groups = m.map(x => {
       // The agents of the person come first, then those of the person's teams.
-      const rank = a => a.role === 'owner' ? 0 : sharesTeam(a.teams) ? 1 : 2;
+      const rank = a => a.role === 'owner' ? 0 : sharesTeam(agentTeams(a)) ? 1 : 2;
       const agents = [...(x.agents || [])].sort((a, z) => rank(a) - rank(z) || a.name.localeCompare(z.name));
       if (!agents.length) return '';
       const mem = x.self ? '' : x.name;
@@ -1955,7 +1962,7 @@ screens.agent = {
       ${runs.length ? `<h2 class="sec">Recent work</h2><div class="group">${runs.map(r => runRow(r)).join('')}</div>` : ''}
       <h2 class="sec">About</h2><div class="group">${row('Your role', cap(a.role || 'none'))}${row('Model', [a.model || (remote ? '' : 'Default'), a.effort ? a.effort + ' effort' : ''].filter(Boolean).join(', '))}
         ${a.abilities ? '' : row('Tools', a.tools && a.tools.length ? a.tools.join(', ') : remote ? '' : 'Every tool')}${row('Skills', a.skills ? (a.skills.length ? a.skills.join(', ') : 'None') : remote ? '' : 'Every skill')}
-        ${row('Limits', limits(a.budget))}${row('Time zone', a.timeZone)}${row('Teams', (a.teams || []).join(', '))}${row('Fleet member', remote ? s.member + ', ' + memberWord(m) : '')}</div>
+        ${row('Limits', limits(a.budget))}${row('Time zone', a.timeZone)}${row('Teams', agentTeams(a).join(', '))}${row('Fleet member', remote ? s.member + ', ' + memberWord(m) : '')}</div>
       <h2 class="sec">Access</h2><div class="group">${row('Owners', (acc.owners || []).join(', ') || 'Not set. Everyone who can run agents here can use it.')}${row('Operators', (acc.operators || []).join(', '))}${row('Viewers', (acc.viewers || []).join(', '))}</div>
       ${a.role === 'owner' && !remote ? a.locked ? '<p class="hint" style="margin-top:30px">The configuration file defines this agent. Change it there.</p>' : `<div class="group" style="margin-top:30px"><button class="row link" data-action="edit" data-name="${esc(a.name)}"><span class="main"><span class="t">Edit agent</span></span></button>
         <button class="row danger" data-action="delete" data-name="${esc(a.name)}"><span class="main"><span class="t">Delete agent</span></span></button></div>` : ''}`, dir);
@@ -2013,10 +2020,10 @@ screens.edit = {
 };
 
 // others lists the runs by people outside the teams of the person, grouped
-// by person (section 13.6).
+// by person (the workbench architecture, section 8).
 screens.others = {
   async open(s, el, dir) {
-    const runs = ((await api.runs({limit: 200, by: 'others'})).runs || []).filter(r => !r.parent);
+    const runs = ((await api.others()).runs || []).filter(r => !r.parent);
     if (top() !== s) return;
     const people = new Map();
     for (const r of runs) {

@@ -12,6 +12,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/teams"
 )
 
 // usageDocs is the documentation of the metrics that replace GET
@@ -59,6 +60,46 @@ func (s *server) home(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, h)
+}
+
+// whoami answers GET /v1/whoami with the caller: the principal, its role
+// on every agent that it can see, and its teams (dashboard.Whoami).
+func (s *server) whoami(w http.ResponseWriter, r *http.Request) {
+	who, err := dashboard.WhoamiOf(r.Context(), s.a)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, who)
+}
+
+// othersLimit bounds the runs that GET /v1/home/others lists.
+const othersLimit = 200
+
+// others answers GET /v1/home/others with the top-level runs of people
+// outside the teams of the caller, newest first, at most othersLimit, as
+// {"runs": [...]}. The page groups them by person behind one row of home.
+func (s *server) others(w http.ResponseWriter, r *http.Request) {
+	runs, err := view.Runs(r.Context(), s.a, "", "")
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	top := make([]*fw.Run, 0, len(runs))
+	for _, run := range runs {
+		if run != nil && run.Parent == "" {
+			top = append(top, run)
+		}
+	}
+	out, err := teams.By(r.Context(), s.a.Config(), top, teams.ByOthers)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if len(out) > othersLimit {
+		out = out[:othersLimit]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": out})
 }
 
 // result answers GET /v1/runs/{id}/result with what the run produced and
