@@ -123,7 +123,9 @@ func testPromptsFollowProfileChanges(t *testing.T, protocol string) {
 		t.Fatalf("updated prompt = %q", got)
 	}
 	// Changes outside the MCP server also take effect on the next request.
-	if err := a.PutProfile(ctx, fw.AgentProfile{Name: "fresh", System: "Private now.", Access: &fw.Access{Owners: []string{"alice"}}}); err != nil {
+	next := a.ProfileSet()
+	next["fresh"] = fw.AgentProfile{Name: "fresh", System: "Private now.", Access: &fw.Access{Owners: []string{"alice"}}}
+	if err := a.SetProfiles(next); err != nil {
 		t.Fatal(err)
 	}
 	unknownPrompt(t, ctx, bob, "fresh")

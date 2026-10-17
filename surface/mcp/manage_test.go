@@ -61,6 +61,9 @@ func manageAgent(t *testing.T, m fw.Model, opts ...fw.Option) *fw.Agent {
 	cfg := testConfig(t)
 	cfg.Access.Default = "closed"
 	cfg.Access.Creators = []string{"alice"}
+	// The profiles stand in for files under <home>/agents, so a person can
+	// change them. A profile that the configuration defines is locked.
+	cfg.FileProfiles = map[string]bool{"reviewer": true, "shared": true, "private": true}
 	base := []fw.Option{
 		fw.WithConfig(cfg),
 		fw.WithAuthn(people),

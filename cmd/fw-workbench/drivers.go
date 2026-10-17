@@ -5,9 +5,13 @@ package main
 // and the packages of the workbench on top.
 
 import (
+	"context"
+
 	"github.com/bdubs00/featherweight-kernel/cli"
+	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/a2a"
 	"github.com/bdubs00/featherweight-kernel/telemetry"
+	"github.com/bdubs00/featherweight-workbench/agents"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 
 	_ "github.com/bdubs00/featherweight-kernel/authn/spiffe"
@@ -35,6 +39,13 @@ import (
 )
 
 func init() {
+	// The kernel writes no agent profile; the verbs put and delete of
+	// fw-workbench agents do, through the package agents.
+	cli.AgentsPut = func(ctx context.Context, a *fw.Agent, p fw.AgentProfile) error {
+		_, _, err := agents.Put(ctx, a, p)
+		return err
+	}
+	cli.AgentsDelete = agents.Delete
 	cli.NewLogger = telemetry.Logger
 	cli.SetBuildInfo = telemetry.SetBuildInfo
 	cli.ServeMCPStdio = mcp.ServeStdio

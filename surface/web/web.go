@@ -46,6 +46,8 @@ func (s *server) mount() error {
 		h       http.HandlerFunc
 	}{
 		{"GET /v1/whoami", s.whoami},
+		{"PUT /v1/agents/{name}", s.putAgent},
+		{"DELETE /v1/agents/{name}", s.deleteAgent},
 		{"GET /v1/home", s.home},
 		{"GET /v1/home/others", s.others},
 		{"POST /v1/builder", s.builder},

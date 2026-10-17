@@ -21,6 +21,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
+	"github.com/bdubs00/featherweight-workbench/agents"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/teams"
 	"github.com/bdubs00/featherweight-workbench/titles"
@@ -223,8 +224,8 @@ type (
 		Created bool           `json:"created,omitempty"`
 	}
 	draftResult struct {
-		View  string     `json:"view"`
-		Draft view.Draft `json:"draft"`
+		View  string       `json:"view"`
+		Draft agents.Draft `json:"draft"`
 	}
 	deletedResult struct {
 		View    string `json:"view"`
@@ -508,7 +509,7 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 	}
 	p.Name, p.Description, p.Access = in.Name, in.Description, in.Access
 	if in.DryRun {
-		d, err := view.Preview(ctx, s.a, p)
+		d, err := agents.Preview(ctx, s.a, p)
 		if err != nil {
 			return failResult(err), nil, nil
 		}
@@ -519,7 +520,7 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 		text := fmt.Sprintf("Checked the agent profile %s. Saving it would %s the agent. Nothing is saved.\n%s", d.Name, verb, agentText(d.AgentView))
 		return result(text, draftResult{View: viewDraft, Draft: d}), nil, nil
 	}
-	v, created, err := view.Put(ctx, s.a, p)
+	v, created, err := agents.Put(ctx, s.a, p)
 	if err != nil {
 		return failResult(err), nil, nil
 	}
@@ -533,7 +534,7 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 }
 
 func (s *server) agentDelete(ctx context.Context, _ *sdk.CallToolRequest, in agentNameArgs) (*sdk.CallToolResult, any, error) {
-	if err := s.a.DeleteProfile(ctx, in.Name); err != nil {
+	if err := agents.Delete(ctx, s.a, in.Name); err != nil {
 		return failResult(err), nil, nil
 	}
 	s.log.Info("mcp profile deleted", "profile", in.Name, "principal", subjectOf(ctx))

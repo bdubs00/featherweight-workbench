@@ -8,13 +8,14 @@ The kernel is a separate repository, featherweight-kernel. Its document `docs/AR
 
 ### 1.1 How the workbench builds on the kernel
 
-The workbench changes no kernel code. It plugs in through five extension points of the kernel:
+The workbench changes no kernel code. It plugs in through six extension points of the kernel:
 
 - `native.Extend` adds routes to the native surface of the kernel, on the same listener and behind the same authentication. The package `surface/web` registers one extension in `init`. Its routes get a `*native.Kit`, so they answer errors and forward the runs of other fleet members as the run routes do.
 - `fw.RegisterDefaults` changes the default configuration in `init`. The package `surface/mcp` adds `mcp` to `surfaces`, and the package `tools/builder` adds `propose_agent` to the built-in tools. A file or a variable still overrides each default.
 - The package `cli` of the kernel holds the command line. `cmd/fw-workbench` calls `cli.Run`, so `fw-workbench` takes every verb of `fw`. It sets `cli.ServeMCPStdio`, so the verb `mcp` serves the MCP server over stdio.
 - `fw.RegisterExtension` claims a top-level block of `fw.yaml` for the workbench. The package `teams` claims the block `workbench`, and `fw.Config.Extension` decodes it (section 8).
 - `fw.RegisterRunAnnotator` adds metadata to every run that the kernel queues. The package `teams` records the teams of the person who starts a run this way (section 8).
+- `fw.Agent.SetProfiles` replaces the profiles of the kernel at runtime, and `cli.AgentsPut` and `cli.AgentsDelete` give the verb `agents` its writes. The package `agents` uses them (section 10).
 
 Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `authn/oidc` registers the mode `oidc`, `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary.
 
@@ -72,6 +73,8 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | Method and path | Purpose |
 |---|---|
 | `GET /v1/whoami` | The caller: the principal, its role on every agent that it can see, and its teams (section 8). |
+| `PUT /v1/agents/{name}` | Create or replace an agent profile. The body is an `fw.AgentProfile`. `?dryRun=true` checks it and saves nothing (section 10). |
+| `DELETE /v1/agents/{name}` | Remove an agent profile (section 10). |
 | `GET /v1/home` | The home of the caller: the runs that need the caller, the runs in progress, and the recent results (section 6.3). |
 | `GET /v1/home/others` | The top-level runs of the people outside the teams of the caller, newest first, at most 200, as `{"runs": [...]}` (section 8). |
 | `GET /v1/runs/{id}/result` | What the run produced and what it needs next (section 6.3). The read authorizes the caller as `GET /v1/runs/{id}` does. |
@@ -338,7 +341,7 @@ The key is an HMAC-SHA256 of its source with a label for this purpose. It theref
 
 ## 6. Managing agents
 
-The kernel creates, changes, and removes a profile through `PutProfile` and `DeleteProfile` (the kernel architecture, section 13.3). The workbench adds the MCP tools, the page, the shared views, and the agent builder on top.
+The package `agents` creates, changes, and removes a profile (section 10). The workbench adds the MCP tools, the page, the shared views, and the agent builder on top.
 
 ### 6.1 The MCP tools
 
@@ -497,7 +500,6 @@ The split did not change the contract of the package `fw`. That contract still h
 
 - The fleet: `fw.Fleet`, `fw.FleetConfig`, `fw.RegisterFleet`, `fw.WithFleet`, `Agent.Fleet`, and `fw.Retainer`. The native surface of the kernel forwards a request about a run of another member, and its metrics surface reports the fleet gauges.
 - The connections: `fw.GrantStore`, `fw.Connection`, `fw.ConnectStart`, `fw.Connector`, `fw.ConnectRequest`, and `fw.RequestConnect`. `Agent` holds the methods `Connections`, `BeginConnect`, `FinishConnect`, `Disconnect`, and `Grants`. The MCP client of the kernel, `tools/mcp`, still acts for a person (the kernel architecture, section 7.11).
-- The management of agents: `fw.ProfileStore`, `fw.ProfileLocker`, and the methods `PutProfile`, `DeleteProfile`, `CheckProfile`, and `ProfileGrants` of `Agent`.
 - The configuration blocks that the workbench reads: `mcp`, `fleet`, and `auth.oidc`.
 
 The next step moves these hooks out of the kernel.
@@ -547,3 +549,11 @@ workbench:
 ```
 
 A title that arrives after a run finished changes only the title and the usage of the run. The run stays finished, in the metrics, in the traces, in the ledger file, and across a restart.
+
+## 10. Managing agents
+
+The kernel reads its agent profiles from the configuration and writes none (the kernel architecture, section 13.3). The package `agents` creates, changes, and removes profiles for people. It normalizes a profile, checks it with `fw.Agent.CheckProfile`, authorizes the caller with the kernel's actions, writes the file under `<home>/agents` through the store of the config package, and hands the kernel the new set with `fw.Agent.SetProfiles`, so a run can name the profile at once. A new profile needs `agent.create`, a change needs `agent.edit`, and a removal needs `agent.delete`.
+
+A principal that creates a profile without an `access` block becomes its first owner. An individual or a group therefore owns the agents that they make. A replaced profile that names no access block keeps the access block it had, so an edit never drops the owners by accident. A profile that the configuration defines, in `fw.yaml`, in a variable, or through a Go option, cannot change here, because the configuration wins over the file at the next start. The kernel reports such a profile as locked, and the page says so before a person edits it.
+
+The routes `PUT` and `DELETE /v1/agents/{name}`, the MCP tools `agent_put` and `agent_delete`, and the verbs `fw-workbench agents put <file.yaml>` and `fw-workbench agents delete <name>` all go through the package. `PUT /v1/agents/{name}?dryRun=true` and `agent_put` with `dryRun` check a profile as a save does and change nothing. They answer an `agents.Draft`: the view of the profile, what the agent would do, and whether saving it replaces an agent that exists. The agent builder proposes a profile and never saves one; `agent_put` saves it with the rights of the caller (section 6.4).

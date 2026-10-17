@@ -81,11 +81,13 @@ Each process with `fleet.subject` publishes a record of itself and of its runs o
 
 ## How the workbench builds on the kernel
 
-The workbench changes no kernel code. It uses three hooks of the kernel:
+The workbench changes no kernel code. It uses these hooks of the kernel:
 
 1. `native.Extend` mounts the routes of `surface/web` on the native surface of the kernel, behind the same authentication.
 2. `fw.RegisterDefaults` turns on the `mcp` surface and adds the `propose_agent` tool.
-3. Package `cli` gives the verbs of `fw`, and `cmd/fw-workbench` adds the MCP server to the verb `mcp`.
+3. Package `cli` gives the verbs of `fw`, and `cmd/fw-workbench` adds the MCP server to the verb `mcp` and the writes to the verb `agents`.
+4. `fw.RegisterExtension` claims the block `workbench` of `fw.yaml`, and `fw.RegisterRunAnnotator` records the teams of a run.
+5. `fw.Agent.Annotate` records a title that a model wrote, and `fw.Agent.SetProfiles` makes a saved agent profile live.
 
 ## Layout
 
