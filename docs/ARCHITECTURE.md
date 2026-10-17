@@ -206,6 +206,8 @@ The `server/discover` and `tools/list` results carry `ttlMs` and `cacheScope`, s
 
 ## 4. Fleet
 
+The fleet is changing shape (the kernel repository, KERNEL_SPLIT.md section 7). A worker becomes a bare kernel that publishes no record, and the front reads the Task list from the ax API and the state of the runs from the egress stream of the workers. The record and the heartbeat below stay until every worker runs the bare binary. The view, the forwarding, and the authorization by the rules of the owner stay as they are.
+
 A fleet is a set of `fw` processes that share one bus and one fleet subject. Each process in the fleet is a member. A member publishes a record of itself and of its runs on the bus. Every member reads the records of the others. Any member therefore serves one view of the whole fleet through its native API, its MCP server, and its dashboard. No member leads the others, and no election takes place.
 
 A fleet is not a set of replicas. Replicas of one agent share one ledger and serve the same runs (section 3.6). Each member of a fleet keeps its own ledger. A member knows the runs of another member from the record only, and it acts on such a run through the member that owns it.
