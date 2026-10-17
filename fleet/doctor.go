@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
@@ -40,5 +41,21 @@ func DoctorCheck(ctx context.Context, cfg *fw.Config, _ fw.Secrets, timeout time
 	if c.URL != "" {
 		reach = "other members reach this one at " + c.URL
 	}
-	return true, "fleet: " + c.Subject + " on the " + cfg.Bus.Driver + " bus, which " + keeps + "; " + reach
+	sources := ""
+	if len(c.Atespaces) > 0 {
+		sources += "; reads the Tasks of " + strings.Join(c.Atespaces, ", ") + " from " + firstNonEmpty(cfg.AX.Server, "ax.server")
+	}
+	if c.Egress != "" {
+		sources += "; reads the events of the workers on " + c.Egress
+	}
+	return true, "fleet: " + c.Subject + " on the " + cfg.Bus.Driver + " bus, which " + keeps + "; " + reach + sources
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }

@@ -62,17 +62,20 @@ const (
 // out. Interval is the interval of the member, so a view judges its
 // heartbeats by its own setting.
 type Record struct {
-	Version   int           `json:"version"`
-	Name      string        `json:"name"`
-	URL       string        `json:"url,omitempty"`
-	Atespace  string        `json:"atespace,omitempty"`
-	Interval  time.Duration `json:"interval,omitempty"`
-	Access    Access        `json:"access"`
-	Agents    []RecordAgent `json:"agents"`
-	Runs      []*fw.Run     `json:"runs"`
-	Omitted   int           `json:"omitted,omitempty"`
-	Stopped   bool          `json:"stopped,omitempty"`
-	UpdatedAt time.Time     `json:"updatedAt"`
+	Version  int           `json:"version"`
+	Name     string        `json:"name"`
+	URL      string        `json:"url,omitempty"`
+	Atespace string        `json:"atespace,omitempty"`
+	Interval time.Duration `json:"interval,omitempty"`
+	Access   Access        `json:"access"`
+	Agents   []RecordAgent `json:"agents"`
+	Runs     []*fw.Run     `json:"runs"`
+	Omitted  int           `json:"omitted,omitempty"`
+	Stopped  bool          `json:"stopped,omitempty"`
+	// State is the state of the member when a platform says it, such as the
+	// phase of an ax Task, in place of the judgment by heartbeats.
+	State     string    `json:"state,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // Access is the authorization of a member. Default and Admins are set in

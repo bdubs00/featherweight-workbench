@@ -102,6 +102,10 @@ data:
   FW_BUS_URL: nats://nats.fw-fleet.svc.cluster.local:4222
   FW_WORKBENCH_FLEET_SUBJECT: fw.fleet
   FW_WORKBENCH_FLEET_FORWARD: http://*.fw-fleet.svc.cluster.local:8080
+  # Every member publishes its lifecycle events here, and the front reads
+  # them, so a member needs no record of its own.
+  FW_BUS_EGRESS: fw.events
+  FW_WORKBENCH_FLEET_EGRESS: fw.events
 ---
 # The Secret fw-front holds the key that signs the approval retries of MCP
 # and the browser sign-in. This file does not hold it, so no deployment

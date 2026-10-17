@@ -27,6 +27,11 @@ const (
 	EnvForward  = "FW_WORKBENCH_FLEET_FORWARD"
 	EnvInterval = "FW_WORKBENCH_FLEET_INTERVAL"
 	EnvExpire   = "FW_WORKBENCH_FLEET_EXPIRE"
+	// EnvAtespaces and EnvEgress name the platforms that the view reads
+	// (platform.go): the atespaces whose Tasks are members, with commas
+	// between them, and the egress stream of the workers.
+	EnvAtespaces = "FW_WORKBENCH_FLEET_ATESPACES"
+	EnvEgress    = "FW_WORKBENCH_FLEET_EGRESS"
 )
 
 // Config configures the fleet. An empty Subject turns the fleet off.
@@ -42,13 +47,20 @@ const (
 // URL. A URL with user information, a query, or a fragment never receives
 // a credential. Interval is the time between two heartbeats, and Expire is
 // the age after which the view ignores a record.
+//
+// Atespaces names the atespaces whose Tasks are members, read from the ax
+// API at ax.server at every Interval, and Egress names the subject prefix
+// of the egress stream of the workers, bus.egress on each of them. With
+// either set, a member needs no record of its own (platform.go).
 type Config struct {
-	Subject  string        `yaml:"subject"`
-	Name     string        `yaml:"name"`
-	URL      string        `yaml:"url"`
-	Forward  []string      `yaml:"forward"`
-	Interval time.Duration `yaml:"interval"`
-	Expire   time.Duration `yaml:"expire"`
+	Subject   string        `yaml:"subject"`
+	Name      string        `yaml:"name"`
+	URL       string        `yaml:"url"`
+	Forward   []string      `yaml:"forward"`
+	Interval  time.Duration `yaml:"interval"`
+	Expire    time.Duration `yaml:"expire"`
+	Atespaces []string      `yaml:"atespaces"`
+	Egress    string        `yaml:"egress"`
 }
 
 // block is the part of the workbench block that this package reads.
@@ -76,6 +88,17 @@ func Load(cfg *fw.Config) (Config, error) {
 	if v, ok := lookup(EnvURL); ok {
 		c.URL = v
 	}
+	if v, ok := lookup(EnvAtespaces); ok {
+		c.Atespaces = nil
+		for _, a := range strings.Split(v, ",") {
+			if a = strings.TrimSpace(a); a != "" {
+				c.Atespaces = append(c.Atespaces, a)
+			}
+		}
+	}
+	if v, ok := lookup(EnvEgress); ok {
+		c.Egress = v
+	}
 	if v, ok := lookup(EnvForward); ok {
 		c.Forward = nil
 		for _, g := range strings.Split(v, ",") {
@@ -96,7 +119,7 @@ func Load(cfg *fw.Config) (Config, error) {
 			*e.dst = d
 		}
 	}
-	c.Subject, c.Name, c.URL = strings.TrimSpace(c.Subject), strings.TrimSpace(c.Name), strings.TrimSpace(c.URL)
+	c.Subject, c.Name, c.URL, c.Egress = strings.TrimSpace(c.Subject), strings.TrimSpace(c.Name), strings.TrimSpace(c.URL), strings.TrimSpace(c.Egress)
 	if c.Interval <= 0 {
 		c.Interval = DefaultInterval
 	}
@@ -181,6 +204,22 @@ func check(c Config) []string {
 	}
 	if c.Interval < 0 {
 		p = append(p, fmt.Sprintf("workbench.fleet.interval %s is negative", c.Interval))
+	}
+	if e := c.Egress; e != "" {
+		for _, t := range strings.Split(e, ".") {
+			if t == "" || strings.ContainsAny(t, " \t*>") {
+				p = append(p, fmt.Sprintf("workbench.fleet.egress %q is not a subject prefix: it holds an empty token, a space, or a wildcard", e))
+				break
+			}
+		}
+	}
+	for i, a := range c.Atespaces {
+		if strings.TrimSpace(a) == "" || strings.ContainsAny(a, " \t/") {
+			p = append(p, fmt.Sprintf("workbench.fleet.atespaces[%d] %q is not an atespace", i, a))
+		}
+	}
+	if (len(c.Atespaces) > 0 || c.Egress != "") && c.Subject == "" {
+		p = append(p, "workbench.fleet.atespaces and workbench.fleet.egress need workbench.fleet.subject, the subject of the records of this process")
 	}
 	if c.Expire < 0 {
 		p = append(p, fmt.Sprintf("workbench.fleet.expire %s is negative", c.Expire))

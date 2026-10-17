@@ -155,6 +155,18 @@ func (f *Fleet) remotes(now time.Time) []remote {
 		out = append(out, remote{rec: rec, seen: seen})
 	}
 	f.mu.RUnlock()
+	if f.platform != nil {
+		have := map[string]bool{}
+		for _, r := range out {
+			have[r.rec.Name] = true
+		}
+		for _, r := range f.platform.records(now) {
+			// A record that the member publishes itself wins while it lasts.
+			if !have[r.rec.Name] && (r.rec.State != "" || now.Sub(r.seen) <= f.expire) {
+				out = append(out, r)
+			}
+		}
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].rec.Name < out[j].rec.Name })
 	return out
 }
@@ -168,6 +180,8 @@ func (f *Fleet) state(r remote, now time.Time) string {
 		interval = f.interval
 	}
 	switch {
+	case r.rec.State != "":
+		return r.rec.State
 	case r.rec.Stopped:
 		return MemberStopped
 	case now.Sub(r.seen) <= QuietAfter*interval:

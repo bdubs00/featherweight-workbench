@@ -132,6 +132,10 @@ type Fleet struct {
 	mu      sync.RWMutex
 	records map[string]*Record   // the newest record of each other member
 	alive   map[string]time.Time // the newest heartbeat of each other member
+
+	// The members that the platforms know, nil when the configuration
+	// names no atespace and no egress stream (platform.go).
+	platform *platform
 }
 
 // Open builds the fleet of an agent from a configuration that Load filled,
@@ -179,6 +183,16 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 		f.log.Warn("the fleet uses the mem bus, which reaches this process only; set bus.driver to nats or redis", "subject", subject)
 	}
 	f.ctx, f.cancel = context.WithCancel(context.Background())
+	if len(fc.Atespaces) > 0 || strings.TrimSpace(fc.Egress) != "" {
+		tokenEnv := strings.TrimSpace(cfg.Auth.TokenEnv)
+		if tokenEnv == "" {
+			tokenEnv = "FW_API_TOKEN"
+		}
+		if err := f.startPlatform(fc.Atespaces, fc.Egress, cfg.AX.Server, tokenEnv); err != nil {
+			f.cancel()
+			return nil, err
+		}
+	}
 	a.Observe(fw.ObserverFunc(f.observe))
 	// The loop publishes the first record, so a bus that is not reachable
 	// yet, as under ax before the sandbox opens its egress, does not hold
@@ -346,6 +360,7 @@ func (f *Fleet) Close() error {
 			stop()
 		}
 		f.stops = nil
+		f.closePlatform()
 		f.viewMu.Unlock()
 		f.cancel()
 		f.client.CloseIdleConnections()

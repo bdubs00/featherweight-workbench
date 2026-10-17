@@ -269,6 +269,8 @@ The fleet reads the block `fleet` under the key `workbench` of `fw.yaml`, which 
 | `workbench.fleet.forward` | `FW_WORKBENCH_FLEET_FORWARD` | Globs over the URLs that can receive the credential of a caller, with commas between them | empty |
 | `workbench.fleet.interval` | `FW_WORKBENCH_FLEET_INTERVAL` | The time between two heartbeats | `30s` |
 | `workbench.fleet.expire` | `FW_WORKBENCH_FLEET_EXPIRE` | The age after which the view ignores a record | `168h` |
+| `workbench.fleet.atespaces` | `FW_WORKBENCH_FLEET_ATESPACES` | The atespaces whose Tasks are members, read from the ax API at `ax.server`, with commas between them (section 4.8) | none |
+| `workbench.fleet.egress` | `FW_WORKBENCH_FLEET_EGRESS` | The subject prefix of the egress stream of the workers, `bus.egress` on each of them (section 4.8) | none |
 
 Under ax, three variables on each Task make a fleet: `FW_BUS_DRIVER=nats`, `FW_BUS_URL`, and `FW_WORKBENCH_FLEET_SUBJECT=fw.fleet`. Outside ax, each member also sets the URL, and each member that serves a view sets the forward globs:
 
@@ -300,6 +302,14 @@ A record carries the inputs, the outputs, and the tool inputs of runs, cut to si
 ### 4.9 What the fleet does not do
 
 The fleet shares no ledger, elects no leader, and schedules no work. Bus intake (the kernel architecture, section 9.3) spreads work across the processes that consume one queue. A2A peers (the kernel architecture, section 7.4) let one agent ask another.
+
+### 4.8 The platforms as sources
+
+The kernel repository, KERNEL_SPLIT.md section 7, defines a worker as a bare kernel that publishes no record. The front sees such a worker through two sources that the configuration names. `workbench.fleet.atespaces` names the atespaces whose Tasks are members: at every interval the front lists them on the ax API at `ax.server`, and each Task is a member named `<atespace>/<task>` with the address `ax:<atespace>/<task>` and the state of its phase, live when it runs, quiet when it is suspended or pending, stopped otherwise. A Task that leaves the list leaves the view. `workbench.fleet.egress` names the subject prefix of the egress stream of the workers, `bus.egress` on each of them. The front subscribes to that stream and projects every run from its events with the projection of the kernel, so the state, the title, the pending approval, and the turns of a run are those of the ledger of the worker. Every event names its process in `node`, which the kernel sets from `node` of its configuration and the package `ax` sets to `ax:<atespace>/<task>`, so the front knows which member holds the run. A worker sets `bus.egressTypes` to the list `fleet.EgressTypes`, which carries the state of a run and nothing of its content.
+
+When a Task starts to run, the front reads its runs once through the router, with the static token of the fleet, so the runs that started before the front listened are in the view. A running Task is awake, so the read wakes nobody, and a suspended Task holds no active run. After that read the front lives on the stream. A worker outside ax that publishes events is visible too, under its node name, without an address.
+
+The view treats such a member as a record that the front computes: the agents are the ones that its runs name, each with the access block of the profile of that name in the configuration of the front, and the authorization is the one of the front, which runs the same `fw.yaml` as the workers. A member that still publishes a record of its own wins over the computed one while the record lasts, so a fleet moves to the bare worker one member at a time. The gauges, the forwarding, and the token broker read the same view.
 
 ## 5. Browser sign-in
 
