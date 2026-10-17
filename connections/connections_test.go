@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/tokens"
 )
 
 // fakeConnector connects the service tickets for anybody whose code is
@@ -147,6 +148,18 @@ func TestFinishResumesThePausedCall(t *testing.T) {
 	if _, err := Finish(ctx, a, ada, at, "bad"); err == nil {
 		t.Fatal("Finish took a bad code")
 	}
+	notices := make(chan tokens.Connected, 1)
+	stop, err := a.Bus().Subscribe(ctx, fw.DefaultTokensSubject, func(e fw.Event) error {
+		var n tokens.Connected
+		if e.Type == tokens.EvConnected && e.Decode(&n) == nil {
+			notices <- n
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
 	conns, err = Finish(ctx, a, ada, at, "good")
 	if err != nil || len(conns) != 1 || !conns[0].Connected {
 		t.Fatalf("Finish = %+v, %v", conns, err)
@@ -154,6 +167,15 @@ func TestFinishResumesThePausedCall(t *testing.T) {
 	r, err = a.Wait(ctx, r.ID)
 	if err != nil || r.State != fw.StateCompleted {
 		t.Fatalf("Wait = %+v, %v", r, err)
+	}
+	// The other members learn about the connection from the bus.
+	select {
+	case n := <-notices:
+		if n.Subject != "ada" || len(n.Servers) != 1 || n.Servers[0] != "tickets" {
+			t.Fatalf("notice = %+v", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no notice of the connection on the bus")
 	}
 	fk.mu.Lock()
 	results := strings.Join(fk.results, ",")

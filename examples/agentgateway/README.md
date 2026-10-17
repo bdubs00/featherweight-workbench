@@ -24,11 +24,12 @@ The file `fleet.yaml` holds these parts:
 
 2. If the proxy pod cannot pull its image from `cr.agentgateway.dev`, add `--set proxy.image.registry=ghcr.io/agentgateway` to the second command. The same image is on GHCR.
 3. Replace the placeholders that the top of `fleet.yaml` names.
-4. Create the namespace and the Secret `fw-front` with a random key that the two replicas share:
+4. Create the namespace, the Secret `fw-front` with a random key that the two replicas share, and the Secret `fw-fleet-token` with the static token that the members present to the front:
 
    ```
    kubectl create namespace fw-fleet
    kubectl -n fw-fleet create secret generic fw-front --from-literal=FW_MCP_STATE_KEY="$(openssl rand -hex 32)"
+   kubectl -n fw-fleet create secret generic fw-fleet-token --from-literal=FW_API_TOKEN="$(openssl rand -hex 32)"
    ```
 
 5. Apply the file: `kubectl apply -f fleet.yaml`.

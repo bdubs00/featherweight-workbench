@@ -252,6 +252,21 @@ func (k *connector) Token(ctx context.Context, subject string) (string, error) {
 	return k.u.broker.token(ctx, k.u, k.store, subject)
 }
 
+// TokenExpiry returns the expiry of the cached token of a person at this
+// server, for the token broker. It reports false when no token is cached
+// or the server gave no lifetime.
+func (k *connector) TokenExpiry(ctx context.Context, subject string) (time.Time, bool) {
+	m, err := k.u.ensureMeta(ctx)
+	if err != nil {
+		return time.Time{}, false
+	}
+	b := k.u.broker
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	t, ok := b.tokens[tokenKey{grant: k.u.key(m, subject), server: k.u.server}]
+	return t.exp, ok && !t.exp.IsZero()
+}
+
 // Reject implements Connector: it drops a token that the MCP server
 // refused.
 func (k *connector) Reject(ctx context.Context, subject, used string) {

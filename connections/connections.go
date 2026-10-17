@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/tokens"
 )
 
 func init() {
@@ -196,8 +197,52 @@ func (c *Connections) Finish(ctx context.Context, p *fw.Principal, at Attempt, c
 	}
 	if c.a != nil && len(connected) > 0 {
 		c.a.Connected(subject, connected...)
+		c.announce(ctx, subject, connected)
 	}
 	return conns, nil
+}
+
+// announce tells the other processes of the fleet that the person connected
+// the services, through the bus notice of the token broker (the kernel
+// package tokens). Each member turns it into fw.Agent.Connected.
+func (c *Connections) announce(ctx context.Context, subject string, servers []string) {
+	bus := c.a.Bus()
+	if bus == nil {
+		return
+	}
+	topic := strings.TrimSpace(c.a.Config().Tokens.Subject)
+	if topic == "" {
+		topic = fw.DefaultTokensSubject
+	}
+	ev, err := fw.NewEvent("", tokens.EvConnected, tokens.Connected{Subject: subject, Servers: servers})
+	if err == nil {
+		err = bus.Publish(context.WithoutCancel(ctx), topic, ev)
+	}
+	if err != nil {
+		c.log.Warn("the notice of a connection did not reach the bus", "subject", subject, "error", err)
+	}
+}
+
+// TokenInfo is Token with the expiry of the token, when the connector
+// knows it. The token broker gives the expiry to the members.
+func (c *Connections) TokenInfo(ctx context.Context, subject, server string) (string, time.Time, error) {
+	k, err := c.connector(server)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	tok, err := k.Token(ctx, subject)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	var exp time.Time
+	if e, ok := k.(interface {
+		TokenExpiry(ctx context.Context, subject string) (time.Time, bool)
+	}); ok {
+		if at, known := e.TokenExpiry(ctx, subject); known {
+			exp = at
+		}
+	}
+	return tok, exp, nil
 }
 
 // Disconnect deletes the grant of p for server.

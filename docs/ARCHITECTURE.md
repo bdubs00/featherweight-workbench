@@ -667,12 +667,20 @@ tools:
             audience: tickets-mcp
 ```
 
-### 11.9 Security
+### 11.9 The token broker
+
+In a fleet, every run must act as the person who started it, on whatever member holds it, and a grant has one holder. The front therefore keeps every grant and runs every refresh, and each member gets the tokens of a person from the front. The kernel package `tokens` is the client: a member with `tokens.url` set asks the front, and the kernel architecture, section 7.11, has its side. This package serves the routes, through `native.Extend`, on the authenticated listener of the front.
+
+`POST /v1/tokens` takes the subject of the person, the server, and the id of the run of that person. The caller must be the static token of the fleet or a workload, never a person: a person could ask for the tokens of others. The front looks the run up in its fleet records as the process itself, waits a moment for a run that another member started just now, and refuses when the fleet does not know the run or the person did not start it. Then it answers with the token of the person at the server and the expiry of the token, from the same grants and the same broker that its own tool calls use. A refusal is a JSON body with a `reason`: `forbidden`, `unknown-run`, `unknown-service`, `not-connected`, `expired`, `no-fleet`, `invalid-request`, or `error`. `POST /v1/tokens/reject` drops a token that the service refused, and `POST /v1/tokens/forget` drops the grant of the person at the server.
+
+When a connection ends, `Finish` resumes the paused calls of this process with `fw.Agent.Connected` and publishes `fw.connection.connected` on the bus subject of `tokens.subject`, `fw.connections` by default, with the subject and the connected services. The client of each member turns the notice into `Agent.Connected` there. The members of a fleet therefore need the bus, the shared static token, and `tokens.url`; `examples/agentgateway/fleet.yaml` shows all three.
+
+### 11.10 Security
 
 - No refresh token, access token, code, or PKCE verifier enters a ledger event, a log line, or an error message. The ledger holds the connect request and its decision. The decider is the person, and the note is `connected`.
 - The file store encrypts every grant. Keep `FW_GRANT_KEY` in a secret store, apart from the volume of the grants. A key in `grant.key` beside the grants protects only a copy of the grant files that leaves the key behind.
 - A cookie binds each connection to the browser that started it. The cookie holds the PKCE verifier, so it is HttpOnly and signed, and it lasts 10 minutes. A link from another person therefore cannot connect their account to your runs.
 - For a service that trusts the sign-in issuer, the ID token of the connection must name the person of the run. A browser that is signed in at the issuer as another person cannot connect.
 - Disconnect deletes the grant. If the authorization server offers revocation (RFC 7009), the workbench also revokes the grant there.
-- In a fleet, a grant lives on the member that handled the callback. A run on another member does not see that grant. A grant store that members share is future work.
+- In a fleet, the grants live on the front, and a member gets an access token of a person only for a run that the person started on it (section 11.9). A member never holds a refresh token, so a suspend or a restore of a Task touches no grant.
 - The workbench has no device flow for the command line yet. A person connects in the dashboard or through an MCP client. The verbs that run one piece of work start no service, so they keep no connections.

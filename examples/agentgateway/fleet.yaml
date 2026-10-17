@@ -91,7 +91,9 @@ metadata:
   name: fw-fleet
   namespace: fw-fleet
 data:
-  FW_AUTH_MODE: oidc
+  # People sign in with OIDC. The members of the fleet present the shared
+  # static token when they ask the front for the tokens of a person.
+  FW_AUTH_MODE: oidc,token
   FW_AUTH_OIDC_ISSUER: https://idp.example.com
   FW_AUTH_OIDC_AUDIENCE: https://fleet.example.com/mcp
   FW_AUTH_OIDC_NAME_CLAIM: email
@@ -107,6 +109,13 @@ data:
 #
 #   kubectl -n fw-fleet create secret generic fw-front \
 #     --from-literal=FW_MCP_STATE_KEY="$(openssl rand -hex 32)"
+#
+# The Secret fw-fleet-token holds the static token that every member of the
+# fleet presents to the front, so the front gives it the tokens of the
+# people whose runs it holds (the token broker). Create it the same way:
+#
+#   kubectl -n fw-fleet create secret generic fw-fleet-token \
+#     --from-literal=FW_API_TOKEN="$(openssl rand -hex 32)"
 # The front: fw with no agents of its own. It serves the whole fleet to
 # everyone who comes through the gateway, and it forwards each action to the
 # member that owns the run. Any replica can answer any request.
@@ -134,6 +143,8 @@ spec:
             - configMapRef: {name: fw-fleet}
           env:
             - {name: FW_HOME, value: /data}
+            - name: FW_API_TOKEN
+              valueFrom: {secretKeyRef: {name: fw-fleet-token, key: FW_API_TOKEN}}
             # Each replica is its own member, so it needs its own name.
             - name: FW_WORKBENCH_FLEET_NAME
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
@@ -226,6 +237,10 @@ spec:
             - {name: FW_CONFIG, value: /etc/fw/fw.yaml}
             - {name: FW_WORKBENCH_FLEET_NAME, value: reviewer}
             - {name: FW_WORKBENCH_FLEET_URL, value: "http://reviewer.fw-fleet.svc.cluster.local:8080"}
+            # The front keeps the grants of people and gives this member their tokens.
+            - name: FW_API_TOKEN
+              valueFrom: {secretKeyRef: {name: fw-fleet-token, key: FW_API_TOKEN}}
+            - {name: FW_TOKENS_URL, value: "http://fw-front.fw-fleet.svc.cluster.local:8080"}
             - {name: FW_MODEL, value: "openai/MODEL"}
             - {name: OPENAI_BASE_URL, value: "https://models.example.com/v1"}
           ports:
