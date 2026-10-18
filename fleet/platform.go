@@ -398,9 +398,10 @@ func memberOf(node string) (name, u, atespace string) {
 
 // records returns the members of the platforms as records, for the view.
 // Each record carries the runs of the member, the newest finished runs
-// first cut to FinishedRuns, and the agents that those runs name, with the
-// access block that this process has for each agent, because the front
-// decides for a worker with its own configuration.
+// first cut to FinishedRuns, and the agents that the member serves and
+// that its runs name, with the access block that this process has for
+// each agent, because the front decides for a worker with its own
+// configuration.
 func (p *platform) records(now time.Time) []remote {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -438,17 +439,26 @@ func (p *platform) records(now time.Time) []remote {
 			State:     m.state,
 			UpdatedAt: m.seen,
 		}
+		// The agents of a member are the profiles that it serves, read
+		// from the Task once (backfill), and the ones that its runs name,
+		// so an idle Task is visible to the people who can use it.
 		seenAgent := map[string]bool{}
-		for _, r := range runs {
-			if r.Agent == "" || seenAgent[r.Agent] {
-				continue
+		addAgent := func(name string) {
+			if name == "" || seenAgent[name] {
+				return
 			}
-			seenAgent[r.Agent] = true
-			ag := RecordAgent{Name: r.Agent}
-			if prof, ok := p.f.a.ProfileNamed(r.Agent); ok {
+			seenAgent[name] = true
+			ag := RecordAgent{Name: name}
+			if prof, ok := p.f.a.ProfileNamed(name); ok {
 				ag.Description, ag.Access = prof.Description, prof.Access
 			}
 			rec.Agents = append(rec.Agents, ag)
+		}
+		for name := range m.agents {
+			addAgent(name)
+		}
+		for _, r := range runs {
+			addAgent(r.Agent)
 		}
 		sort.Slice(rec.Agents, func(i, j int) bool { return rec.Agents[i].Name < rec.Agents[j].Name })
 		seen := m.seen
