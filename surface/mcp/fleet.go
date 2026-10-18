@@ -266,7 +266,13 @@ func (s *server) memberRun(ctx context.Context, member, method, path string, bod
 	if err := s.callMember(ctx, member, method, path, body, idemKey, &r); err != nil {
 		return nil, err
 	}
-	r.Member = member
+	// A member names another member for a run that it only knows about,
+	// such as a branch in a child Task; the name of the view applies.
+	if r.Member != "" {
+		r.Member = fleet.MemberName(r.Member)
+	} else {
+		r.Member = member
+	}
 	return &r, nil
 }
 

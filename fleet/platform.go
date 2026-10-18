@@ -45,6 +45,7 @@ const listPage = 500
 var EgressTypes = []string{
 	fw.EvRunQueued, fw.EvRunStarted, fw.EvRunResumed, fw.EvRunSuspended, fw.EvRunFinished,
 	fw.EvApprovalRequested, fw.EvApprovalDecided, fw.EvRunAnnotated, fw.EvTurnStarted, fw.EvMessageReceived,
+	fw.EvRunChild,
 }
 
 // platform is the view of the members that the platforms know.
@@ -56,11 +57,23 @@ type platform struct {
 	prices    fw.Prices
 	tokenEnv  string // the Secrets name of the static token for the first read of a running Task
 
-	mu      sync.Mutex
-	members map[string]*platformMember // by member name
-	runs    map[string]*platformRun    // by run id
-	conn    *grpc.ClientConn
-	client  v1alpha1.AXClient
+	mu       sync.Mutex
+	members  map[string]*platformMember // by member name
+	runs     map[string]*platformRun    // by run id
+	children map[string]childLink       // by the id of the child
+	conn     *grpc.ClientConn
+	client   v1alpha1.AXClient
+}
+
+// childLink is where a child of a run lives, from the fw.run.child event
+// of its parent: a child of spawn_task or a branch in a Task of its own
+// (the kernel architecture, sections 4.7 and 11.9). The view relates the
+// child to its parent through it, and answers for a child whose own events
+// have not arrived yet.
+type childLink struct {
+	parent string    // the run that started the child
+	member string    // the member that runs the child
+	at     time.Time // when the parent recorded it
 }
 
 // platformMember is one member as a platform reports it. State is empty
@@ -109,6 +122,7 @@ func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv strin
 		tokenEnv:  tokenEnv,
 		members:   map[string]*platformMember{},
 		runs:      map[string]*platformRun{},
+		children:  map[string]childLink{},
 	}
 	if len(p.atespaces) > 0 {
 		if p.server == "" {
@@ -465,7 +479,21 @@ func (p *platform) onEvent(e fw.Event) error {
 	r.run.Apply(e, p.prices)
 	r.member, r.updated = name, now
 	m.serves(r.run.Agent)
+	if e.Type == fw.EvRunChild {
+		var d fw.RunChildData
+		if e.Decode(&d) == nil && d.Child != "" {
+			child, _, _ := memberOf(d.Member)
+			p.children[d.Child] = childLink{parent: e.Subject, member: child, at: now}
+		}
+	}
 	return nil
+}
+
+// MemberName turns the node of a kernel, "ax:<atespace>/<task>" for a Task,
+// into the name of the member in the view.
+func MemberName(node string) string {
+	name, _, _ := memberOf(node)
+	return name
 }
 
 // memberOf turns the node of an event into a member name, an address, and
@@ -495,12 +523,45 @@ func (p *platform) records(now time.Time) []remote {
 			delete(p.runs, id)
 		}
 	}
+	for id, l := range p.children {
+		if _, ok := p.runs[id]; !ok && now.Sub(l.at) > p.f.expire {
+			delete(p.children, id) // a child that never spoke
+		}
+	}
 	byMember := map[string][]*fw.Run{}
-	for _, r := range p.runs {
+	for id, r := range p.runs {
 		if r.run.ID == "" {
 			continue
 		}
-		byMember[r.member] = append(byMember[r.member], r.run)
+		run := r.run
+		if l, ok := p.children[id]; ok && run.Parent == "" {
+			// A child in another process has no parent in its own ledger;
+			// the parent recorded it, so the view shows it under the
+			// parent.
+			c := *run
+			c.Parent, c.Depth = l.parent, 1
+			if src := p.runs[l.parent]; src != nil {
+				c.Depth = src.run.Depth + 1
+			}
+			run = &c
+		}
+		byMember[r.member] = append(byMember[r.member], run)
+	}
+	for id, l := range p.children {
+		// A child that its process does not have yet, for example a branch
+		// whose Task is starting, is a queued run of its parent's member,
+		// so a person finds it and the parent answers for it.
+		src := p.runs[l.parent]
+		if _, ok := p.runs[id]; ok || src == nil || src.run.ID == "" {
+			continue
+		}
+		stub := &fw.Run{ID: id, Agent: src.run.Agent, State: fw.StateQueued, Principal: src.run.Principal,
+			Parent: l.parent, Depth: src.run.Depth + 1, CreatedAt: l.at, UpdatedAt: l.at,
+			Metadata: map[string]string{fw.MetaParent: l.parent}}
+		if src.run.Metadata[fw.MetaBatch] != "" {
+			stub.Metadata[fw.MetaBatch] = src.run.Metadata[fw.MetaBatch]
+		}
+		byMember[src.member] = append(byMember[src.member], stub)
 	}
 	cfg := p.f.a.Config()
 	out := make([]remote, 0, len(p.members))

@@ -908,14 +908,33 @@ func (s *server) fork(ctx context.Context, req *sdk.CallToolRequest, in forkArgs
 	if err != nil {
 		if res := s.elsewhere(withCredential(ctx, req), in.RunID, err, func(ctx context.Context, member string) *sdk.CallToolResult {
 			body := map[string]any{"seq": in.Seq, "input": in.Input, "model": in.Model, "metadata": in.Metadata, "spawn": in.Spawn}
-			return remoteResult(s.memberRun(ctx, member, http.MethodPost, "/v1/runs/"+url.PathEscape(in.RunID)+"/fork", body, ""))
+			return branchResult(s.memberRun(ctx, member, http.MethodPost, "/v1/runs/"+url.PathEscape(in.RunID)+"/fork", body, ""))
 		}); res != nil {
 			return res, nil, nil
 		}
 		return workError("", err), nil, nil
 	}
 	s.log.Info("mcp run branched", "run", in.RunID, "branch", branch.ID, "spawn", in.Spawn, "principal", principalOf(ctx, req))
-	return s.status(ctx, req, branch.ID), nil, nil
+	r, err := s.a.Get(ctx, branch.ID)
+	if err != nil {
+		return workError("", err), nil, nil
+	}
+	return branchResult(r, nil), nil, nil
+}
+
+// branchResult is the result of fork. A branch in a Task of its own is
+// queued until that Task takes it; the text says where it is and what
+// happens if the Task does not take it.
+func branchResult(r *fw.Run, err error) *sdk.CallToolResult {
+	if err != nil {
+		return failResult(err)
+	}
+	res := runResult(r)
+	if r.State == fw.StateQueued && r.Member != "" {
+		res.Content = []sdk.Content{&sdk.TextContent{Text: fmt.Sprintf("Run %s is the branch. It is queued on %s, a Task of its own that is starting, and it goes on there. "+
+			"Read it with run_status or the resource fw://runs/%s. If the Task does not take it, the run fails with the reason. Stop it with the cancel tool.", r.ID, r.Member, r.ID)}}
+	}
+	return res
 }
 
 func (s *server) send(ctx context.Context, req *sdk.CallToolRequest, in sendArgs) (*sdk.CallToolResult, any, error) {

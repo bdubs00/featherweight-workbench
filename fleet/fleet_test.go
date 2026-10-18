@@ -87,7 +87,7 @@ func newMember(t *testing.T, bus fw.Bus, name string, mut func(*fw.Config, *Conf
 
 // newWorkerWith is a bare kernel on the bus with a model of its own: no
 // fleet, an egress stream, and a node name.
-func newWorkerWith(t *testing.T, bus fw.Bus, node string, m fw.Model) *fw.Agent {
+func newWorkerWith(t *testing.T, bus fw.Bus, node string, m fw.Model, opts ...fw.Option) *fw.Agent {
 	t.Helper()
 	cfg := fw.DefaultConfig()
 	cfg.Home = t.TempDir()
@@ -95,8 +95,9 @@ func newWorkerWith(t *testing.T, bus fw.Bus, node string, m fw.Model) *fw.Agent 
 	cfg.Bus.Egress = "fw.events"
 	cfg.Bus.EgressTypes = EgressTypes
 	cfg.Agents = map[string]fw.AgentProfile{"default": {}}
-	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(fw.NoAuthn{}), fw.WithModel(m),
-		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(bus), fw.WithLogger(quietLogger()))
+	base := []fw.Option{fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(fw.NoAuthn{}), fw.WithModel(m),
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(bus), fw.WithLogger(quietLogger())}
+	a, err := fw.New(append(base, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
