@@ -100,10 +100,11 @@ data:
   FW_MCP_AUTH_AUDIENCE: https://fleet.example.com/mcp
   FW_BUS_DRIVER: nats
   FW_BUS_URL: nats://nats.fw-fleet.svc.cluster.local:4222
-  FW_WORKBENCH_FLEET_SUBJECT: fw.fleet
-  FW_WORKBENCH_FLEET_FORWARD: http://*.fw-fleet.svc.cluster.local:8080
-  # Every member publishes its lifecycle events here, and the front reads
-  # them, so a member needs no record of its own.
+  # Every worker publishes its lifecycle events here, and the front reads
+  # them. A worker publishes nothing else about itself. On ax, the front
+  # also lists the Tasks of an atespace: set FW_WORKBENCH_FLEET_ATESPACES
+  # and FW_AX_SERVER, and the front can act on those Tasks through the
+  # router and suspend them when they idle.
   FW_BUS_EGRESS: fw.events
   FW_WORKBENCH_FLEET_EGRESS: fw.events
   # The front puts jobs on fw.jobs.<agent>, and each member takes the queue
@@ -242,8 +243,12 @@ spec:
           env:
             - {name: FW_HOME, value: /data}
             - {name: FW_CONFIG, value: /etc/fw/fw.yaml}
-            - {name: FW_WORKBENCH_FLEET_NAME, value: reviewer}
-            - {name: FW_WORKBENCH_FLEET_URL, value: "http://reviewer.fw-fleet.svc.cluster.local:8080"}
+            # The node names this worker in every event, so the front shows
+            # it under that name. A worker outside ax has no address: the
+            # front sees its runs but cannot act on them. Run the workers as
+            # ax Tasks for that.
+            - {name: FW_NODE, value: reviewer}
+            - {name: FW_BUS_INTAKE, value: fw.jobs.reviewer}
             # The front keeps the grants of people and gives this member their tokens.
             - name: FW_API_TOKEN
               valueFrom: {secretKeyRef: {name: fw-fleet-token, key: FW_API_TOKEN}}

@@ -1,24 +1,20 @@
 // Package fleet is the fleet of the workbench (docs/ARCHITECTURE.md
-// section 4): a set of fw processes that share one bus and one subject. It
-// runs as a service of the kernel (fw.RegisterService), answers requests
-// about the runs of other members through the relay of the native surface
-// (native.Relay), and adds its gauges to the metrics surface
-// (metrics.RegisterCollector). The kernel knows no fleet.
-//
-// Each process publishes a record of itself and of its runs to a retained
-// subject on the bus, and a heartbeat when nothing changed. The view of the
-// other members starts at the first request that needs it. It watches the
-// records, decides what a caller sees from the rules that each owner
-// published, and forwards a request about a run of another member to that
-// member with the credential of the caller.
+// section 4): one view of the workers of a fleet, read from the platforms.
+// The ax API gives the Tasks, the egress stream of the workers gives the
+// state of every run, and the front projects both into one view with the
+// projection of the kernel. The package runs as a service of the kernel
+// (fw.RegisterService), answers requests about the runs of other members
+// through the relay of the native surface (native.Relay), forwards an
+// action to the Task that owns the run through the atenet router
+// (forward.go), puts the pieces of a job on the intake queues of the
+// workers (enqueue.go), and suspends the Tasks that idle (suspend.go). The
+// kernel knows no fleet, and a worker publishes nothing about itself: it
+// is a bare kernel, and the platforms keep the state.
 package fleet
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -41,15 +37,16 @@ func init() {
 }
 
 // Start is the service of the fleet (fw.Service). When the configuration
-// sets a subject, it opens the fleet of the agent and attaches the View, so
-// the surfaces and the relay find it through Of. Without a subject it does
+// names a source, the atespaces of the Tasks or the egress stream of the
+// workers, it opens the fleet of the agent and attaches the View, so the
+// surfaces and the relay find it through Of. Without a source it does
 // nothing.
 func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	c, err := Load(a.Config())
 	if err != nil {
 		return nil, err
 	}
-	if c.Subject == "" {
+	if !c.On() {
 		return nil, nil
 	}
 	f, err := Open(ctx, a, c)
@@ -71,105 +68,56 @@ func (s service) Close() error {
 	return s.f.Close()
 }
 
-// debounce is the time between a change of a run and the record that
-// publishes it. A burst of events therefore gives one record.
-const debounce = time.Second
-
-// closeTimeout limits the last record at shutdown.
-const closeTimeout = 5 * time.Second
-
-// changes are the ledger events that change a run object in a record.
-var changes = map[string]bool{
-	fw.EvRunQueued:         true,
-	fw.EvRunStarted:        true,
-	fw.EvApprovalRequested: true,
-	fw.EvApprovalDecided:   true,
-	fw.EvTurnFinished:      true,
-	fw.EvRunSuspended:      true,
-	fw.EvRunResumed:        true,
-	fw.EvRunFinished:       true,
-	fw.EvMessageReceived:   true,
-}
-
 // Fleet is the default View. Build it with Open.
 type Fleet struct {
 	a        *fw.Agent
 	log      *slog.Logger
-	bus      fw.Bus
-	ret      fw.Retainer // nil when the bus keeps no event
+	bus      fw.Bus // nil when the configuration names no egress stream and the agent has no bus
 	name     string
-	url      string
-	subject  string
 	atespace string
 	interval time.Duration
 	expire   time.Duration
 	// suspendAfter is the grace period of the suspend controller, zero
 	// when it is off (suspend.go).
 	suspendAfter time.Duration
-	forward      []string
 	router       string
 	client       *http.Client
 
-	ctx    context.Context // ends at Close; the watches live in it
+	ctx    context.Context // ends at Close; the sources live in it
 	cancel context.CancelFunc
 
-	// The publisher.
-	dirty     chan struct{}
-	stop      chan struct{}
-	done      chan struct{}
-	pubMu     sync.Mutex // one publish at a time
-	last      []byte     // the content of the last record, see contentKey
 	closeOnce sync.Once
 	closed    atomic.Bool
+	viewMu    sync.Mutex // guards stops
+	stops     []func()
 
-	// The view.
-	viewMu   sync.Mutex // guards viewOn and stops
-	viewOn   bool
-	stops    []func()
-	markMu   sync.Mutex    // guards mark and markDone
-	mark     time.Time     // the time of the heartbeat that settle waits for
-	markDone chan struct{} // closed when that heartbeat arrives
-
-	mu      sync.RWMutex
-	records map[string]*Record   // the newest record of each other member
-	alive   map[string]time.Time // the newest heartbeat of each other member
-
-	// The members that the platforms know, nil when the configuration
-	// names no atespace and no egress stream (platform.go).
+	// The members that the platforms know (platform.go).
 	platform *platform
 }
 
-// Open builds the fleet of an agent from a configuration that Load filled,
-// publishes the first record, and starts the publisher. A bus that does not
-// answer at start is a warning, not a failure, so a member boots while the
-// bus is down.
+// Open builds the fleet of an agent from a configuration that Load filled
+// and starts its sources: the Task list of the atespaces, read from the ax
+// API at every interval, and the egress stream of the workers. A bus that
+// is not reachable yet does not hold up the start.
 func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 	cfg := a.Config()
-	subject := strings.TrimSpace(fc.Subject)
-	if subject == "" {
-		return nil, errors.New("fleet: workbench.fleet.subject is empty")
+	if !fc.On() {
+		return nil, errors.New("fleet: workbench.fleet.atespaces or workbench.fleet.egress must name a source")
 	}
-	if a.Bus() == nil {
-		return nil, errors.New("fleet: the agent has no bus")
+	egress := strings.TrimSpace(fc.Egress)
+	if egress != "" && a.Bus() == nil {
+		return nil, errors.New("fleet: workbench.fleet.egress needs a bus, and the agent has none")
 	}
 	f := &Fleet{
 		a:        a,
 		log:      a.Logger().With("component", "fleet"),
 		bus:      a.Bus(),
 		name:     fc.Name,
-		url:      strings.TrimSpace(fc.URL),
-		subject:  subject,
 		atespace: atespace(),
 		interval: fc.Interval,
 		expire:   fc.Expire,
-		forward:  append([]string(nil), fc.Forward...),
 		router:   strings.TrimSpace(cfg.AX.Router),
 		client:   newClient(),
-		dirty:    make(chan struct{}, 1),
-		stop:     make(chan struct{}),
-		done:     make(chan struct{}),
-		records:  map[string]*Record{},
-		alive:    map[string]time.Time{},
 	}
 	if f.interval <= 0 {
 		f.interval = DefaultInterval
@@ -178,29 +126,18 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 		f.expire = DefaultExpire
 	}
 	f.suspendAfter = fc.suspendAfter()
-	if r, ok := f.bus.(fw.Retainer); ok {
-		f.ret = r
-	}
-	if _, ok := f.bus.(*fw.MemBus); ok {
-		f.log.Warn("the fleet uses the mem bus, which reaches this process only; set bus.driver to nats or redis", "subject", subject)
+	if _, ok := f.bus.(*fw.MemBus); ok && egress != "" {
+		f.log.Warn("the fleet reads the egress stream on the mem bus, which reaches this process only; set bus.driver to nats or redis", "egress", egress)
 	}
 	f.ctx, f.cancel = context.WithCancel(context.Background())
-	if len(fc.Atespaces) > 0 || strings.TrimSpace(fc.Egress) != "" {
-		tokenEnv := strings.TrimSpace(cfg.Auth.TokenEnv)
-		if tokenEnv == "" {
-			tokenEnv = "FW_API_TOKEN"
-		}
-		if err := f.startPlatform(fc.Atespaces, fc.Egress, cfg.AX.Server, tokenEnv); err != nil {
-			f.cancel()
-			return nil, err
-		}
+	tokenEnv := strings.TrimSpace(cfg.Auth.TokenEnv)
+	if tokenEnv == "" {
+		tokenEnv = "FW_API_TOKEN"
 	}
-	a.Observe(fw.ObserverFunc(f.observe))
-	// The loop publishes the first record, so a bus that is not reachable
-	// yet, as under ax before the sandbox opens its egress, does not hold
-	// up the start.
-	go f.loop()
-	f.log.Info("fleet member started", "name", f.name, "subject", subject, "url", f.url, "retained", f.ret != nil)
+	if err := f.startPlatform(fc.Atespaces, egress, cfg.AX.Server, tokenEnv); err != nil {
+		f.cancel()
+		return nil, err
+	}
 	return f, nil
 }
 
@@ -215,148 +152,10 @@ func atespace() string {
 // Name implements View.
 func (f *Fleet) Name() string { return f.name }
 
-// observe marks the record dirty after an event that changes a run.
-func (f *Fleet) observe(e fw.Event) {
-	if !changes[e.Type] {
-		return
-	}
-	select {
-	case f.dirty <- struct{}{}:
-	default:
-	}
-}
-
-// loop publishes the first record, then each change at once, but at most
-// once per debounce, and a record or a heartbeat at every interval. A new
-// run therefore reaches the other members right away.
-func (f *Fleet) loop() {
-	defer close(f.done)
-	f.publishLogged(publishChange)
-	last := time.Now()
-	tick := time.NewTicker(f.interval)
-	defer tick.Stop()
-	var timer *time.Timer
-	var due <-chan time.Time
-	defer func() {
-		if timer != nil {
-			timer.Stop()
-		}
-	}()
-	for {
-		select {
-		case <-f.stop:
-			return
-		case <-f.dirty:
-			if timer != nil {
-				break // a publish is due already
-			}
-			if wait := debounce - time.Since(last); wait > 0 {
-				timer = time.NewTimer(wait)
-				due = timer.C
-				break
-			}
-			f.publishLogged(publishChange)
-			last = time.Now()
-		case <-due:
-			timer, due = nil, nil
-			f.publishLogged(publishChange)
-			last = time.Now()
-		case <-tick.C:
-			f.publishLogged(publishTick)
-		}
-	}
-}
-
-// Kinds of a publish.
-type publishKind int
-
-const (
-	publishChange  publishKind = iota // a run changed: the record when it differs
-	publishTick                       // the interval: the record when it differs, else a heartbeat
-	publishStopped                    // the last record at shutdown
-)
-
-func (f *Fleet) publishLogged(kind publishKind) {
-	ctx, cancel := context.WithTimeout(f.ctx, f.interval)
-	defer cancel()
-	if err := f.publish(ctx, kind); err != nil {
-		f.log.Warn("publish failed", "error", err)
-	}
-}
-
-// publish builds a fresh record and sends it when its content changed, or
-// for the last record. At the interval, an unchanged record gives a
-// heartbeat. On a bus without Retainer, the interval sends the full record,
-// because a later view has no other way to learn it.
-func (f *Fleet) publish(ctx context.Context, kind publishKind) error {
-	f.pubMu.Lock()
-	defer f.pubMu.Unlock()
-	rec, err := f.record()
-	if err != nil {
-		return err
-	}
-	rec.Stopped = kind == publishStopped
-	key, err := contentKey(rec)
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	if kind != publishStopped && bytes.Equal(key, f.last) {
-		if kind != publishTick {
-			return nil
-		}
-		if f.ret != nil {
-			return f.send(ctx, AliveSubject(f.subject, f.name), EvAlive, Alive{Name: f.name, At: now})
-		}
-	}
-	rec.UpdatedAt = now
-	if err := f.send(ctx, RecordSubject(f.subject, f.name), EvRecord, rec); err != nil {
-		return err
-	}
-	f.last = key
-	return nil
-}
-
-// send publishes one event, retained when the bus keeps events.
-func (f *Fleet) send(ctx context.Context, subject, typ string, data any) error {
-	e, err := fw.NewEvent(f.name, typ, data)
-	if err != nil {
-		return fmt.Errorf("fleet: %w", err)
-	}
-	e.Source = "fw://" + f.atespace + "/fleet"
-	if f.ret != nil {
-		err = f.ret.Retain(ctx, subject, e)
-	} else {
-		err = f.bus.Publish(ctx, subject, e)
-	}
-	if err != nil {
-		return fmt.Errorf("fleet: publish %s: %w", subject, err)
-	}
-	return nil
-}
-
-// contentKey is the JSON of a record without its time, so two records with
-// the same facts compare equal.
-func contentKey(rec Record) ([]byte, error) {
-	rec.UpdatedAt = time.Time{}
-	b, err := json.Marshal(rec)
-	if err != nil {
-		return nil, fmt.Errorf("fleet: encode the record: %w", err)
-	}
-	return b, nil
-}
-
-// Close stops the publisher, publishes the last record with Stopped set,
-// and stops the view. A second call does nothing.
+// Close stops the sources. A second call does nothing.
 func (f *Fleet) Close() error {
-	var err error
 	f.closeOnce.Do(func() {
 		f.closed.Store(true)
-		close(f.stop)
-		<-f.done
-		ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
-		err = f.publish(ctx, publishStopped)
-		cancel()
 		f.viewMu.Lock()
 		for _, stop := range f.stops {
 			stop()
@@ -367,5 +166,5 @@ func (f *Fleet) Close() error {
 		f.cancel()
 		f.client.CloseIdleConnections()
 	})
-	return err
+	return nil
 }

@@ -105,7 +105,7 @@ func (rl *Relay) startOn(w http.ResponseWriter, r *http.Request, member string) 
 	f := Of(rl.a)
 	switch {
 	case f == nil:
-		native.WriteProblem(w, r, http.StatusBadRequest, "the query parameter member needs the fleet, and the fleet is off; set workbench.fleet.subject ("+EnvSubject+") to turn it on")
+		native.WriteProblem(w, r, http.StatusBadRequest, "the query parameter member needs the fleet, and the fleet is off; set workbench.fleet.atespaces ("+EnvAtespaces+") or workbench.fleet.egress to turn it on")
 		return true
 	case member == f.Name():
 		return false

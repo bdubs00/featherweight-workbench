@@ -40,7 +40,7 @@ func Runs(ctx context.Context, a *fw.Agent, scope, member string) ([]*fw.Run, er
 	f := fleet.Of(a)
 	if f == nil {
 		if member != "" {
-			return nil, fmt.Errorf("%w: the fleet is off, so no member has the name %q; set workbench.fleet.subject to turn it on", fw.ErrInvalidRequest, member)
+			return nil, fmt.Errorf("%w: the fleet is off, so no member has the name %q; set workbench.fleet.atespaces or workbench.fleet.egress to turn it on", fw.ErrInvalidRequest, member)
 		}
 		return a.List(ctx)
 	}

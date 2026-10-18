@@ -193,12 +193,11 @@ func TestPlatformSources(t *testing.T) {
 }
 
 func TestPlatformConfig(t *testing.T) {
-	for _, e := range []string{EnvSubject, EnvAtespaces, EnvEgress, EnvName, EnvURL} {
+	for _, e := range []string{EnvAtespaces, EnvEgress, EnvName} {
 		t.Setenv(e, "")
 	}
 	t.Setenv("FW_ATESPACE", "")
 	cfg := fw.DefaultConfig()
-	t.Setenv(EnvSubject, "fw.fleet")
 	t.Setenv(EnvAtespaces, "team, lab ,")
 	t.Setenv(EnvEgress, "fw.events")
 	c, err := Load(cfg)
@@ -213,11 +212,6 @@ func TestPlatformConfig(t *testing.T) {
 	t.Setenv(EnvAtespaces, "team/x")
 	if _, err := Load(cfg); err == nil || !strings.Contains(err.Error(), "atespaces[0]") {
 		t.Fatalf("bad atespace = %v", err)
-	}
-	t.Setenv(EnvAtespaces, "team")
-	t.Setenv(EnvSubject, "")
-	if _, err := Load(cfg); err == nil || !strings.Contains(err.Error(), "need workbench.fleet.subject") {
-		t.Fatalf("no subject = %v", err)
 	}
 	if name, u, space := memberOf("ax:team/alpha"); name != "team/alpha" || u != "ax:team/alpha" || space != "team" {
 		t.Fatalf("memberOf ax = %q %q %q", name, u, space)

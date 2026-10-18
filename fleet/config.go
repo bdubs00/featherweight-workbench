@@ -7,7 +7,6 @@ package fleet
 import (
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -21,13 +20,10 @@ const Block = "workbench"
 
 // Variables that set the configuration. Each wins over the file.
 const (
-	EnvSubject  = "FW_WORKBENCH_FLEET_SUBJECT"
 	EnvName     = "FW_WORKBENCH_FLEET_NAME"
-	EnvURL      = "FW_WORKBENCH_FLEET_URL"
-	EnvForward  = "FW_WORKBENCH_FLEET_FORWARD"
 	EnvInterval = "FW_WORKBENCH_FLEET_INTERVAL"
 	EnvExpire   = "FW_WORKBENCH_FLEET_EXPIRE"
-	// EnvAtespaces and EnvEgress name the platforms that the view reads
+	// EnvAtespaces and EnvEgress name the sources of the view
 	// (platform.go): the atespaces whose Tasks are members, with commas
 	// between them, and the egress stream of the workers.
 	EnvAtespaces = "FW_WORKBENCH_FLEET_ATESPACES"
@@ -40,36 +36,27 @@ const (
 	EnvSuspendAfter = "FW_WORKBENCH_FLEET_SUSPEND_AFTER"
 )
 
-// Config configures the fleet. An empty Subject turns the fleet off.
+// Config configures the fleet. The fleet is on when Atespaces or Egress
+// names a source (On).
 //
-// Name is the name of this member. The default is "<atespace>/<task>"
-// under ax, else "<host>:<port>". URL is the address where other members
-// reach this one: an http or https URL, or "ax:<atespace>/<task>" for an
-// ax Task, which the atenet router at ax.router reaches. An empty URL makes
-// this member read-only to the others. Forward lists globs over the http
-// and https URLs that can receive the credential of a caller; an ax
-// address always can. In such a glob, "*" matches any text without a
-// slash, and the glob matches the scheme, the host, and the path of the
-// URL. A URL with user information, a query, or a fragment never receives
-// a credential. Interval is the time between two heartbeats, and Expire is
-// the age after which the view ignores a record.
+// Name is the name of this process in the view. The default is
+// "<atespace>/<task>" under ax, else "<host>:<port>". Interval is the time
+// between two reads of the Task list, and Expire is the age after which the
+// view forgets a worker that only the stream knows and a finished run.
 //
 // Atespaces names the atespaces whose Tasks are members, read from the ax
 // API at ax.server at every Interval, and Egress names the subject prefix
-// of the egress stream of the workers, bus.egress on each of them. With
-// either set, a member needs no record of its own (platform.go). Intake
-// names the subject prefix of the intake queues of the workers: a worker
-// that runs the profile <agent> sets bus.intake to "<intake>.<agent>", and
-// the front puts the run requests of a job there (enqueue.go).
+// of the egress stream of the workers, bus.egress on each of them
+// (platform.go). Intake names the subject prefix of the intake queues of
+// the workers: a worker that runs the profile <agent> sets bus.intake to
+// "<intake>.<agent>", and the front puts the run requests of a job there
+// (enqueue.go).
 //
 // SuspendAfter is how long a Task of those atespaces stays idle before the
 // front suspends it (suspend.go). Nil means the default of ten minutes when
 // Atespaces is set, and zero turns the controller off.
 type Config struct {
-	Subject   string        `yaml:"subject"`
 	Name      string        `yaml:"name"`
-	URL       string        `yaml:"url"`
-	Forward   []string      `yaml:"forward"`
 	Interval  time.Duration `yaml:"interval"`
 	Expire    time.Duration `yaml:"expire"`
 	Atespaces []string      `yaml:"atespaces"`
@@ -78,6 +65,9 @@ type Config struct {
 
 	SuspendAfter *time.Duration `yaml:"suspendAfter"`
 }
+
+// On reports whether the configuration names a source of members.
+func (c Config) On() bool { return len(c.Atespaces) > 0 || strings.TrimSpace(c.Egress) != "" }
 
 // suspendAfter returns the grace period of the suspend controller, or zero
 // when it is off.
@@ -104,14 +94,8 @@ func Load(cfg *fw.Config) (Config, error) {
 		}
 	}
 	c := b.Fleet
-	if v, ok := lookup(EnvSubject); ok {
-		c.Subject = v
-	}
 	if v, ok := lookup(EnvName); ok {
 		c.Name = v
-	}
-	if v, ok := lookup(EnvURL); ok {
-		c.URL = v
 	}
 	if v, ok := lookup(EnvAtespaces); ok {
 		c.Atespaces = nil
@@ -137,14 +121,6 @@ func Load(cfg *fw.Config) (Config, error) {
 		}
 		c.SuspendAfter = &d
 	}
-	if v, ok := lookup(EnvForward); ok {
-		c.Forward = nil
-		for _, g := range strings.Split(v, ",") {
-			if g = strings.TrimSpace(g); g != "" {
-				c.Forward = append(c.Forward, g)
-			}
-		}
-	}
 	for _, e := range []struct {
 		env string
 		dst *time.Duration
@@ -157,7 +133,7 @@ func Load(cfg *fw.Config) (Config, error) {
 			*e.dst = d
 		}
 	}
-	c.Subject, c.Name, c.URL, c.Egress, c.Intake = strings.TrimSpace(c.Subject), strings.TrimSpace(c.Name), strings.TrimSpace(c.URL), strings.TrimSpace(c.Egress), strings.TrimSpace(c.Intake)
+	c.Name, c.Egress, c.Intake = strings.TrimSpace(c.Name), strings.TrimSpace(c.Egress), strings.TrimSpace(c.Intake)
 	if c.Interval <= 0 {
 		c.Interval = DefaultInterval
 	}
@@ -168,8 +144,8 @@ func Load(cfg *fw.Config) (Config, error) {
 		d := DefaultSuspendAfter
 		c.SuspendAfter = &d
 	}
-	if c.Subject != "" {
-		c.Name, c.URL = defaults(c.Name, c.URL, cfg)
+	if c.On() {
+		c.Name = defaults(c.Name, cfg)
 	}
 	if problems := check(c); len(problems) > 0 {
 		return Config{}, fmt.Errorf("fleet: %s", strings.Join(problems, "; "))
@@ -183,82 +159,48 @@ func lookup(name string) (string, bool) {
 	return v, ok && v != ""
 }
 
-// defaults fills the name and the URL of this member. Under ax, the Task
-// gives both. Elsewhere, the name is "<host>:<port>" from the host name and
-// the port of the listener, and the URL stays empty.
-func defaults(name, u string, cfg *fw.Config) (string, string) {
+// defaults fills the name of this process. Under ax, the Task gives it.
+// Elsewhere, the name is "<host>:<port>" from the host name and the port of
+// the listener.
+func defaults(name string, cfg *fw.Config) string {
+	if name != "" {
+		return name
+	}
 	if task, _ := ax.Stashed(); task != nil {
 		if atespace, taskName := ax.Identity(task); atespace != "" && taskName != "" {
-			if name == "" {
-				name = atespace + "/" + taskName
-			}
-			if u == "" {
-				u = "ax:" + atespace + "/" + taskName
-			}
+			return atespace + "/" + taskName
 		}
 	}
-	if name == "" {
-		host, _ := os.Hostname()
-		if host == "" {
-			host = "fw"
-		}
-		name = host
-		if cfg != nil {
-			if _, port, err := net.SplitHostPort(cfg.Listen); err == nil && port != "" {
-				name = host + ":" + port
-			}
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "fw"
+	}
+	if cfg != nil {
+		if _, port, err := net.SplitHostPort(cfg.Listen); err == nil && port != "" {
+			return host + ":" + port
 		}
 	}
-	return name, u
+	return host
 }
 
-// check lists the problems of a configuration: the subject has no empty
-// token, space, or wildcard; the name has no space and at most 128
-// characters; the URL is http, https, or ax:<atespace>/<task>; each forward
-// glob is over http or https URLs; and the durations are not negative.
+// check lists the problems of a configuration: the name has no space and
+// at most 128 characters; each subject prefix has no empty token, space, or
+// wildcard; each atespace is a name; and the durations are not negative.
 func check(c Config) []string {
 	var p []string
-	if subj := c.Subject; subj != "" {
-		for _, t := range strings.Split(subj, ".") {
-			if t == "" || strings.ContainsAny(t, " \t*>") {
-				p = append(p, fmt.Sprintf("workbench.fleet.subject %q is not a subject: it holds an empty token, a space, or a wildcard", subj))
-				break
-			}
-		}
-	}
 	if n := c.Name; n != "" && (len(n) > 128 || strings.ContainsAny(n, " \t\r\n")) {
 		p = append(p, fmt.Sprintf("workbench.fleet.name %q holds a space or is longer than 128 characters", n))
-	}
-	if raw := c.URL; raw != "" {
-		if target, ok := strings.CutPrefix(raw, "ax:"); ok {
-			space, task, ok := strings.Cut(target, "/")
-			if !ok || space == "" || task == "" || strings.Contains(task, "/") {
-				p = append(p, fmt.Sprintf("workbench.fleet.url %q is not ax:<atespace>/<task>", raw))
-			}
-		} else if u, err := url.Parse(raw); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			p = append(p, fmt.Sprintf("workbench.fleet.url %q is neither an http or https URL nor ax:<atespace>/<task>", raw))
-		}
-	}
-	for i, g := range c.Forward {
-		if !strings.HasPrefix(g, "http://") && !strings.HasPrefix(g, "https://") {
-			p = append(p, fmt.Sprintf("workbench.fleet.forward[%d] %q is not a glob over http or https URLs", i, g))
-		}
 	}
 	if c.Interval < 0 {
 		p = append(p, fmt.Sprintf("workbench.fleet.interval %s is negative", c.Interval))
 	}
-	if e := c.Egress; e != "" {
-		for _, t := range strings.Split(e, ".") {
-			if t == "" || strings.ContainsAny(t, " \t*>") {
-				p = append(p, fmt.Sprintf("workbench.fleet.egress %q is not a subject prefix: it holds an empty token, a space, or a wildcard", e))
-				break
-			}
+	for _, s := range []struct{ key, val string }{{"egress", c.Egress}, {"intake", c.Intake}} {
+		if s.val == "" {
+			continue
 		}
-	}
-	if e := c.Intake; e != "" {
-		for _, t := range strings.Split(e, ".") {
+		for _, t := range strings.Split(s.val, ".") {
 			if t == "" || strings.ContainsAny(t, " \t*>") {
-				p = append(p, fmt.Sprintf("workbench.fleet.intake %q is not a subject prefix: it holds an empty token, a space, or a wildcard", e))
+				p = append(p, fmt.Sprintf("workbench.fleet.%s %q is not a subject prefix: it holds an empty token, a space, or a wildcard", s.key, s.val))
 				break
 			}
 		}
@@ -267,9 +209,6 @@ func check(c Config) []string {
 		if strings.TrimSpace(a) == "" || strings.ContainsAny(a, " \t/") {
 			p = append(p, fmt.Sprintf("workbench.fleet.atespaces[%d] %q is not an atespace", i, a))
 		}
-	}
-	if (len(c.Atespaces) > 0 || c.Egress != "") && c.Subject == "" {
-		p = append(p, "workbench.fleet.atespaces and workbench.fleet.egress need workbench.fleet.subject, the subject of the records of this process")
 	}
 	if c.Expire < 0 {
 		p = append(p, fmt.Sprintf("workbench.fleet.expire %s is negative", c.Expire))

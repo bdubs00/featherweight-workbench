@@ -206,56 +206,40 @@ The `server/discover` and `tools/list` results carry `ttlMs` and `cacheScope`, s
 
 ## 4. Fleet
 
-The fleet splits into workers and a front (`docs/PRODUCT_DIRECTION.md` and the kernel repository, `docs/ROADMAP.md` section 2). A worker becomes a bare kernel that publishes no record, and the front reads the Task list from the ax API and the state of the runs from the egress stream of the workers. The record and the heartbeat below stay until every worker runs the bare binary. The view, the forwarding, and the authorization by the rules of the owner stay as they are.
+A fleet is a set of workers and one front. A worker is a bare kernel, `fw`, in one ax Task: it takes run requests from its intake queue, publishes the lifecycle events of its runs on the egress stream, and publishes nothing about itself. The front is `fw-workbench` outside the sandboxes: it reads the Task list from the ax API and the state of every run from the egress stream, projects both into one view, and serves people through its native API, its MCP server, and its page. The platforms keep the state, and the front keeps nothing of its own but the OAuth grants of people (section 11). No member leads the others, and no election takes place.
 
-A fleet is a set of `fw` processes that share one bus and one fleet subject. Each process in the fleet is a member. A member publishes a record of itself and of its runs on the bus. Every member reads the records of the others. Any member therefore serves one view of the whole fleet through its native API, its MCP server, and its dashboard. No member leads the others, and no election takes place.
+A fleet is not a set of replicas. Replicas of one agent share one ledger and serve the same runs (section 3.6). Each worker keeps its own ledger. The front knows the runs of a worker from the stream, and it acts on such a run through the Task that owns it.
 
-A fleet is not a set of replicas. Replicas of one agent share one ledger and serve the same runs (section 3.6). Each member of a fleet keeps its own ledger. A member knows the runs of another member from the record only, and it acts on such a run through the member that owns it.
+### 4.1 The sources
 
-### 4.1 The member record
+The front reads two sources, which the configuration names (section 4.6). `workbench.fleet.atespaces` names the atespaces whose Tasks are members: at every interval the front lists them on the ax API at `ax.server`, and each Task is a member named `<atespace>/<task>` with the address `ax:<atespace>/<task>` and the state of its phase, live when it runs, quiet when it is suspended or pending, stopped otherwise. A Task that leaves the list leaves the view. `workbench.fleet.egress` names the subject prefix of the egress stream of the workers, `bus.egress` on each of them. The front subscribes to that stream and projects every run from its events with the projection of the kernel, so the state, the title, the pending approval, and the turns of a run are those of the ledger of the worker. Each event names its node (the kernel architecture, section 9.4), so the front knows which Task holds the run.
 
-Each member has a name and a URL. Under ax, the name is `<atespace>/<task>` and the URL is `ax:<atespace>/<task>`. Elsewhere, the name is `<host>:<port>`, and the URL is empty until `workbench.fleet.url` sets it. A member without a URL is read-only to the other members. The name must be unique in the fleet.
+When a Task starts to run, the front reads its runs and its agents once through the router, with the static token of the fleet, so the runs that started before the front listened are in the view and the front knows which profiles the Task serves. A running Task is awake, so the reads wake nobody, and a suspended Task holds no active run. After that read the front lives on the stream. A worker outside ax that publishes events is visible too, under its node name, without an address, and it leaves the view when no event arrived for `workbench.fleet.expire`.
 
-The record of a member holds these facts:
+### 4.2 The record of a member
 
-- The name, the URL, and the interval.
-- The authorization mode: `rules`, `external` for `access.external`, or `custom` for `fw.WithAuthz`. In `rules` mode, the record also holds `access.default` and `access.admins`.
-- Each agent profile with its description and its `access` block.
-- Every run that is not finished, and the 50 newest finished runs, as run objects.
-
-A process that configures no agent profile offers no agent to the fleet. A front that only serves the view is such a process, so a person never sees it as a member.
-
-The run objects in a record are short. The input, the output, and the error of a run are cut to 2 KB. If the input of a pending tool call is larger than 4 KB, the record leaves it out. A record is at most 512 KB, and the oldest finished runs are left out first. When a person opens a run of another member, the view reads the full run from its owner.
-
-A member publishes its record to `<subject>.members.<token>`. The token is the name with each character other than a letter, a digit, `-`, or `_` changed to `_`. One second after an event that changes a run object, the member publishes again. Such events are a new run, an approval request, a decision, the end of a turn, and the end of a run. Every interval, the member builds a fresh record and compares it with the last one. If the two differ, for example after a profile change, it publishes the record. Otherwise it publishes a heartbeat to `<subject>.alive.<token>`. When the process stops on `SIGTERM`, it publishes a last record with `stopped: true`.
-
-### 4.2 Retained subjects
-
-The bus keeps the last record of each member. A member that starts later therefore sees the whole fleet at once. Under ax, this matters, because a Task that sleeps publishes nothing, but its last record still shows its runs. A bus driver that keeps events in this way implements `fw.Retainer` (the kernel architecture, section 9.1). The `nats` driver keeps them in the key-value bucket `FW_RETAINED`. The `redis` driver keeps them in the hash `fw:retained`, and the `mem` driver keeps them in memory. On a bus without `Retainer`, the fleet uses plain publish and subscribe. A member then publishes its full record at every interval instead of a heartbeat.
+The front computes a record for each member from the sources: the name, the address, the atespace, the state, the agents that its runs name, and its runs. Every run that is not finished and the 50 newest finished runs are in it, as run objects whose input, output, and error are cut to 2 KB; a pending tool input larger than 4 KB is left out. When a person opens a run, the view reads the full run from its owner. The record names the authorization of the front, not of the worker: the front runs the same `fw.yaml` as the workers and decides for every worker with its own `access` block and agent profiles. A process that configures no agent profile offers no agent, so a person never sees the front itself as a member with agents.
 
 ### 4.3 The view
 
-A member starts its view at the first request that needs the fleet. The view watches both subjects and reads the retained records. A member that never serves such a request spends no work on the view. The first such request starts the view, and it can wait up to 2 s for the retained records. The view gives each member one of three states. A member that published within three of its intervals is `live`. A member that did not is `quiet`, and a member that sent a last record is `stopped`. Under ax, a quiet member is usually a Task that sleeps. The view ignores a record that is older than `workbench.fleet.expire`.
+The view gives each member one of three states. A Task is `live` when its phase is Running, `quiet` when it is Suspended or Pending, and `stopped` otherwise. A worker that only the stream knows is `live` within three intervals of its last event and `quiet` after that. Under ax, a quiet member is usually a Task that sleeps, and the suspend controller (section 4.12) is what put it to sleep.
 
 ### 4.4 Who sees what
 
-The view decides as the owner decides, from the facts in the record:
+The view decides as the front decides, with its own configuration:
 
-- For a member in `rules` mode, the view applies the access rules (the kernel architecture, section 13.2). It applies them to the published `access.default`, `access.admins`, and agent access blocks. Whoever started a run sees that run. Whoever sees a run sees its children.
-- For a member in `external` or `custom` mode, the view asks the `Authz` of its own process. The target names the member, and a request to `access.external` carries `member` in each check (the kernel architecture, section 13.5). The default rules refuse a target in another member. A view without a decision point therefore shows no run of such a member. The view has no local fallback.
+- In `rules` mode, the view applies the access rules (the kernel architecture, section 13.2) with its own `access.default`, `access.admins`, and the access blocks of its agent profiles, to the agents and the runs of every member. Whoever started a run sees that run. Whoever sees a run sees its children.
+- In `external` or `custom` mode, the view asks the `Authz` of its own process. The target names the member, and a request to `access.external` carries `member` in each check (the kernel architecture, section 13.5). A view without a decision point shows no run of another member. The view has no local fallback.
 
-A record can be one interval old. When an owner removes a viewer, that viewer can see the short run objects in other views for up to one interval more. Every action goes to the owner, and the owner decides with its current rules.
+Every action goes to the owner of the run, and the owner decides with its current rules.
 
 ### 4.5 Acting on a run of another member
 
-Run ids are unique across the fleet. A request can name a run that the process does not have but the view knows. Then the process forwards the request to the owner. This applies to the native routes under `/v1/runs/{id}`. It also applies to the MCP tools `run_status`, `run_events`, `run_result`, `run_file`, `approve`, `cancel`, and `send`. `POST /v1/builder` and the MCP tool `agent_builder` with a `fromRun` of another member start the builder on that member. `POST /v1/runs?member=<name>` and the `member` argument of the MCP tool `run` start a run on another member. Through MCP, such a run does not wait, and the client follows it with `run_status`.
+Run ids are unique across the fleet. A request can name a run that the process does not have but the view knows. Then the process forwards the request to the Task that owns it. This applies to the native routes under `/v1/runs/{id}`. It also applies to the MCP tools `run_status`, `run_events`, `run_result`, `run_file`, `approve`, `cancel`, and `send`. `POST /v1/builder` and the MCP tool `agent_builder` with a `fromRun` of another member start the builder on that member. `POST /v1/runs?member=<name>` and the `member` argument of the MCP tool `run` start a run on another member. Through MCP, such a run does not wait, and the client follows it with `run_status`.
 
-The forwarded request carries the bearer credential of the caller. The owner authenticates the caller again and authorizes the action in its kernel. The view therefore never acts under an identity of its own, and the owner records the real decider in its ledger. A credential goes to two kinds of address only:
+The forwarded request carries the bearer credential of the caller. The owner authenticates the caller again and authorizes the action in its kernel. The view therefore never acts under an identity of its own, and the owner records the real decider in its ledger. A credential goes to one kind of address only: an ax address, through the router at `ax.router` with the header `ate-target-actor`. The router wakes a Task that sleeps, so an approval reaches a sleeping member, and the front then makes the phase of the Task follow (section 4.12). A worker that only the stream knows has no address, so no credential can reach it.
 
-- An ax address, through the router at `ax.router` with the header `ate-target-actor`. The router wakes a Task that sleeps, so an approval reaches a sleeping member.
-- A URL that matches a glob in `workbench.fleet.forward`. In such a glob, `*` matches any text without a slash. The glob matches the scheme, the host, and the path of the URL. A URL with user information, a query, or a fragment never receives a credential.
-
-A record therefore cannot send a credential to any other address. The relay of the native surface, which the package registers with `Kit.SetRelay`, does the forwarding for the run routes of the kernel, and the MCP server does it for its work tools. For the owner to accept the credential, both members trust the same issuer and the same `auth.oidc.audience`, or share the static token. A caller with an X.509 client certificate, or over stdio, carries no bearer credential. Such a caller sees the fleet but acts only on the runs of the member that it reached. If the owner refuses the credential, the view answers 403, and if the owner does not answer, the view answers 502. A forwarded request carries the header `Fw-Fleet-Via` with the name of the view. A member never forwards such a request again, so a stale record cannot cause a loop.
+The relay of the native surface, which the package registers with `Kit.SetRelay`, does the forwarding for the run routes of the kernel, and the MCP server does it for its work tools. For the owner to accept the credential, the front and the workers trust the same issuer and the same `auth.oidc.audience`, or share the static token. A caller with an X.509 client certificate, or over stdio, carries no bearer credential. Such a caller sees the fleet but acts only on the runs of the front. If the owner refuses the credential, the view answers 403, and if the owner does not answer, the view answers 502. A forwarded request carries the header `Fw-Fleet-Via` with the name of the front, and a member never forwards such a request again.
 
 ### 4.6 Configuration
 
@@ -263,26 +247,25 @@ The fleet reads the block `fleet` under the key `workbench` of `fw.yaml`, which 
 
 | Key | Variable | Meaning | Default |
 |---|---|---|---|
-| `workbench.fleet.subject` | `FW_WORKBENCH_FLEET_SUBJECT` | The subject prefix of the fleet. Empty turns the fleet off. | empty |
-| `workbench.fleet.name` | `FW_WORKBENCH_FLEET_NAME` | The name of this member | `<atespace>/<task>` under ax, else `<host>:<port>` |
-| `workbench.fleet.url` | `FW_WORKBENCH_FLEET_URL` | The address where other members reach this one | `ax:<atespace>/<task>` under ax, else empty |
-| `workbench.fleet.forward` | `FW_WORKBENCH_FLEET_FORWARD` | Globs over the URLs that can receive the credential of a caller, with commas between them | empty |
-| `workbench.fleet.interval` | `FW_WORKBENCH_FLEET_INTERVAL` | The time between two heartbeats | `30s` |
-| `workbench.fleet.expire` | `FW_WORKBENCH_FLEET_EXPIRE` | The age after which the view ignores a record | `168h` |
-| `workbench.fleet.atespaces` | `FW_WORKBENCH_FLEET_ATESPACES` | The atespaces whose Tasks are members, read from the ax API at `ax.server`, with commas between them (section 4.8) | none |
-| `workbench.fleet.egress` | `FW_WORKBENCH_FLEET_EGRESS` | The subject prefix of the egress stream of the workers, `bus.egress` on each of them (section 4.8) | none |
+| `workbench.fleet.name` | `FW_WORKBENCH_FLEET_NAME` | The name of this process in the view | `<atespace>/<task>` under ax, else `<host>:<port>` |
+| `workbench.fleet.interval` | `FW_WORKBENCH_FLEET_INTERVAL` | The time between two reads of the Task list | `30s` |
+| `workbench.fleet.expire` | `FW_WORKBENCH_FLEET_EXPIRE` | The age after which the view forgets a finished run and a worker that only the stream knows | `168h` |
+| `workbench.fleet.atespaces` | `FW_WORKBENCH_FLEET_ATESPACES` | The atespaces whose Tasks are members, read from the ax API at `ax.server`, with commas between them (section 4.1). This or `egress` turns the fleet on. | none |
+| `workbench.fleet.egress` | `FW_WORKBENCH_FLEET_EGRESS` | The subject prefix of the egress stream of the workers, `bus.egress` on each of them (section 4.1) | none |
 | `workbench.fleet.intake` | `FW_WORKBENCH_FLEET_INTAKE` | The subject prefix of the intake queues of the workers: a worker that runs the profile `<agent>` sets `bus.intake` to `<intake>.<agent>` (section 4.9) | none |
 | `workbench.fleet.suspendAfter` | `FW_WORKBENCH_FLEET_SUSPEND_AFTER` | How long a Task stays idle before the front suspends it, a duration such as `10m`, or `off` (section 4.12) | `10m` with atespaces, else off |
 
-Under ax, three variables on each Task make a fleet: `FW_BUS_DRIVER=nats`, `FW_BUS_URL`, and `FW_WORKBENCH_FLEET_SUBJECT=fw.fleet`. Outside ax, each member also sets the URL, and each member that serves a view sets the forward globs:
+A worker needs no key of this block: it sets `bus.driver`, `bus.url`, `bus.egress`, `bus.intake`, and `tokens.url` of the kernel. The front names its sources:
 
 ```yaml
 bus: { driver: nats, url: "nats://nats.agents.svc:4222" }
+ax: { server: "ax-server.ax-system.svc.cluster.local:8080" }
 workbench:
   fleet:
-    subject: fw.fleet
-    url: "http://reviewer.agents.svc:8080"
-    forward: ["http://*.agents.svc:8080"]
+    atespaces: [default]
+    egress: fw.events
+    intake: fw.jobs
+    suspendAfter: 10m
 ```
 
 The fleet is a service of the kernel (`fw.RegisterService`), and the commands that do not serve, for example `fw-workbench run`, `fw-workbench mcp`, and `fw-workbench agents`, start no service, so they never join a fleet. `fw-workbench doctor` has a line about the fleet.
@@ -299,11 +282,7 @@ The A2A server and the MCP resources `fw://runs/{id}`, `fw://runs/{id}/ledger`, 
 
 ### 4.8 The platforms as sources
 
-A worker in the target fleet is a bare kernel that publishes no record (`docs/PRODUCT_DIRECTION.md`). The front sees such a worker through two sources that the configuration names. `workbench.fleet.atespaces` names the atespaces whose Tasks are members: at every interval the front lists them on the ax API at `ax.server`, and each Task is a member named `<atespace>/<task>` with the address `ax:<atespace>/<task>` and the state of its phase, live when it runs, quiet when it is suspended or pending, stopped otherwise. A Task that leaves the list leaves the view. `workbench.fleet.egress` names the subject prefix of the egress stream of the workers, `bus.egress` on each of them. The front subscribes to that stream and projects every run from its events with the projection of the kernel, so the state, the title, the pending approval, and the turns of a run are those of the ledger of the worker. Every event names its process in `node`, which the kernel sets from `node` of its configuration and the package `ax` sets to `ax:<atespace>/<task>`, so the front knows which member holds the run. A worker sets `bus.egressTypes` to the list `fleet.EgressTypes`, which carries the state of a run and nothing of its content.
-
-When a Task starts to run, the front reads its runs once through the router, with the static token of the fleet, so the runs that started before the front listened are in the view. A running Task is awake, so the read wakes nobody, and a suspended Task holds no active run. After that read the front lives on the stream. A worker outside ax that publishes events is visible too, under its node name, without an address.
-
-The view treats such a member as a record that the front computes: the agents are the ones that its runs name, each with the access block of the profile of that name in the configuration of the front, and the authorization is the one of the front, which runs the same `fw.yaml` as the workers. A member that still publishes a record of its own wins over the computed one while the record lasts, so a fleet moves to the bare worker one member at a time. The gauges, the forwarding, and the token broker read the same view.
+Section 4.1 describes the two sources. The front reads the Task list from the ax API and the runs from the egress stream, reads a running Task once when it appears, and lives on the stream after that; it never polls a Task, because a request wakes a Task that sleeps. The gauges that the collector carries, the forwarding, the token broker, and the suspend controller read the same view.
 
 ### 4.9 Jobs
 
@@ -315,7 +294,7 @@ A batch name is at most 128 characters without spaces. Without one, `enqueue` ma
 
 ### 4.10 Security
 
-A record carries the inputs, the outputs, and the tool inputs of runs, cut to size. The `Redact` middleware removes secrets before an event enters the ledger, so no secret reaches a record. Limit publish and subscribe on the fleet subject to `fw` workloads, for example with NATS accounts or Redis ACLs. A process that can publish on the fleet subject can show false runs in a view. It cannot send a credential to an address outside `fleet.forward`, and it cannot act on a real run, because the owner decides.
+The events of the stream carry the inputs, the outputs, and the tool inputs of runs, cut to size. The `Redact` middleware removes secrets before an event enters the ledger, so no secret reaches the stream. Limit publish and subscribe on the egress and the intake subjects to `fw` workloads, for example with NATS accounts. A process that can publish on the egress subject can show false runs in a view, and a process that can publish on an intake queue can give a worker work; it cannot act on a real run, because the owner decides, and a credential goes to the router only.
 
 ### 4.11 What the fleet does not do
 

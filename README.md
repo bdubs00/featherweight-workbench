@@ -5,7 +5,7 @@ This repository holds the workbench for people on top of the kernel, featherweig
 - the page at `/ui`, with the home, the result of a run, the conversation, and the agent builder
 - browser sign-in with OpenID Connect, the `oidc` authentication mode
 - the MCP server at `/mcp` and over standard input and output, for desktop clients and MCP App hosts
-- the fleet, one view of many `fw` workers from the ax API, the bus egress stream, and retained bus records
+- the fleet, one view of many `fw` workers from the ax API and the bus egress stream, with jobs, a token broker, and a suspend controller
 - connections, with which an MCP server of the kernel acts for the person who started a run
 - the `propose_agent` tool and the titles that a model writes for runs
 
@@ -79,7 +79,7 @@ Each run gets a title that a model writes, such as "Fix checkout retries", the f
 
 ## The fleet
 
-Each process with `workbench.fleet.subject` publishes a record of itself and of its runs on the bus. Any process serves one view of the whole fleet. A request about a run of another process goes to that process with the credential of the caller. [examples/agentgateway](examples/agentgateway/README.md) runs a fleet behind agentgateway on one public URL.
+A worker is a bare `fw` in an ax Task, and the front is `fw-workbench` outside the sandboxes. The front reads the Tasks from the ax API (`workbench.fleet.atespaces`) and the runs from the egress stream of the workers (`workbench.fleet.egress`), and it serves one view of the whole fleet. A request about a run of a worker goes to its Task through the atenet router with the credential of the caller, a job goes to the intake queue of a profile with `enqueue`, and a Task that idles is suspended until the next request wakes it. [examples/agentgateway](examples/agentgateway/README.md) runs a fleet behind agentgateway on one public URL.
 
 ## How the workbench builds on the kernel
 

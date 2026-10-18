@@ -6,9 +6,9 @@ agents and runs. The same URL serves the dashboard at `/ui` and the API at `/v1`
 
 The file `fleet.yaml` holds these parts:
 
-- NATS with JetStream, which carries the record of each fleet member.
-- `fw-front`, two fw replicas with no agents. They serve the whole fleet and forward each action to the member that owns the run. The Secret `fw-front` holds the key that the two replicas share.
-- `reviewer`, one member with one agent. Add more members in the same way.
+- NATS with JetStream, which carries the events of the workers to the front and the jobs of the front to the workers.
+- `fw-front`, two fw replicas with no agents. They serve the whole fleet from the events of the workers and forward each action to the Task that owns the run. The Secret `fw-front` holds the key that the two replicas share.
+- `reviewer`, one worker with one agent, as a Deployment. The front sees its runs through the events; to act on a worker and to suspend it when it idles, run the workers as ax Tasks and name the atespace in `FW_WORKBENCH_FLEET_ATESPACES`.
 - agentgateway routes: `/mcp` through an MCP backend with a login policy, and `/ui` and `/v1` as plain HTTP.
 
 ## Install

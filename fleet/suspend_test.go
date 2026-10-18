@@ -206,12 +206,11 @@ func TestWakeForTeachesTheFrontAboutUnknownTasks(t *testing.T) {
 // The configuration turns the controller off with 0 or off, defaults to
 // ten minutes with atespaces, and refuses the controller without them.
 func TestSuspendAfterConfig(t *testing.T) {
-	for _, e := range []string{EnvSubject, EnvAtespaces, EnvEgress, EnvName, EnvURL, EnvSuspendAfter} {
+	for _, e := range []string{EnvAtespaces, EnvEgress, EnvName, EnvSuspendAfter} {
 		t.Setenv(e, "")
 	}
 	t.Setenv("FW_ATESPACE", "")
 	cfg := fw.DefaultConfig()
-	t.Setenv(EnvSubject, "fw.fleet")
 	t.Setenv(EnvAtespaces, "team")
 	c, err := Load(cfg)
 	if err != nil || c.suspendAfter() != DefaultSuspendAfter {

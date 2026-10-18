@@ -11,180 +11,42 @@ import (
 	"github.com/bdubs00/featherweight-workbench/teams"
 )
 
-// settleMax bounds the wait for the retained records when the view starts.
-const settleMax = 2 * time.Second
-
 // maxLineage bounds a walk up the parents of a run inside a record.
 const maxLineage = 64
 
-// startView watches the records and the heartbeats of the other members,
-// at the first call that needs them. After a failure, the next call tries
-// again.
-func (f *Fleet) startView(ctx context.Context) error {
-	f.viewMu.Lock()
-	defer f.viewMu.Unlock()
-	if f.viewOn {
-		return nil
-	}
-	if f.closed.Load() {
-		return errors.New("fleet: the fleet is closed")
-	}
-	watch := f.bus.Subscribe
-	if f.ret != nil {
-		watch = f.ret.Watch
-	}
-	// One watch covers both subjects, so one marker shows the end of the
-	// kept events (see settle).
-	stop, err := watch(f.ctx, f.subject+".>", f.onEvent)
-	if err != nil {
-		return fmt.Errorf("fleet: watch %s.>: %w", f.subject, err)
-	}
-	f.stops = []func(){stop}
-	f.viewOn = true
-	if f.ret != nil {
-		f.settle(ctx)
-	}
-	f.log.Info("fleet view started", "subject", f.subject)
-	return nil
-}
-
-// settle waits until the watch delivered the kept records. Watch delivers
-// the kept events first and each new event after them, so the view sends a
-// heartbeat of its own and waits until the watch delivers it.
-func (f *Fleet) settle(ctx context.Context) {
-	at := time.Now().UTC()
-	done := make(chan struct{})
-	f.markMu.Lock()
-	f.mark, f.markDone = at, done
-	f.markMu.Unlock()
-	defer func() {
-		f.markMu.Lock()
-		f.markDone = nil
-		f.markMu.Unlock()
-	}()
-	if err := f.send(ctx, AliveSubject(f.subject, f.name), EvAlive, Alive{Name: f.name, At: at}); err != nil {
-		f.log.Warn("the view starts without the retained records", "error", err)
-		return
-	}
-	timer := time.NewTimer(settleMax)
-	defer timer.Stop()
-	select {
-	case <-done:
-	case <-timer.C:
-		f.log.Warn("the retained records did not arrive in time", "wait", settleMax)
-	case <-ctx.Done():
-	}
-}
-
-// onEvent sends each event of the fleet subject to its handler.
-func (f *Fleet) onEvent(e fw.Event) error {
-	switch e.Type {
-	case EvRecord:
-		f.onRecord(e)
-	case EvAlive:
-		f.onAlive(e)
-	}
-	return nil
-}
-
-// onRecord keeps the newest record of each other member.
-func (f *Fleet) onRecord(e fw.Event) {
-	var rec Record
-	if err := e.Decode(&rec); err != nil {
-		f.log.Warn("a record does not decode", "id", e.ID, "error", err)
-		return
-	}
-	if rec.Name == "" || rec.Name == f.name {
-		return
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if old, ok := f.records[rec.Name]; ok && old.UpdatedAt.After(rec.UpdatedAt) {
-		return
-	}
-	f.records[rec.Name] = &rec
-}
-
-// onAlive keeps the newest heartbeat of each other member. Its own
-// heartbeat ends the wait of settle.
-func (f *Fleet) onAlive(e fw.Event) {
-	var hb Alive
-	if err := e.Decode(&hb); err != nil {
-		f.log.Warn("a heartbeat does not decode", "id", e.ID, "error", err)
-		return
-	}
-	if hb.Name == f.name {
-		f.markMu.Lock()
-		if f.markDone != nil && hb.At.Equal(f.mark) {
-			close(f.markDone)
-			f.markDone = nil
-		}
-		f.markMu.Unlock()
-		return
-	}
-	if hb.Name == "" {
-		return
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if hb.At.After(f.alive[hb.Name]) {
-		f.alive[hb.Name] = hb.At
-	}
-}
-
-// remote is one other member at one moment. The record is never changed
-// after it arrives, so a remote can be read without a lock.
+// remote is one other member at one moment. The record is computed from
+// the platforms and never changed after that, so a remote can be read
+// without a lock.
 type remote struct {
 	rec  *Record
 	seen time.Time
 }
 
-// remotes returns the other members whose last sign of life is newer than
-// fleet.expire, sorted by name.
+// remotes returns the other members, sorted by name: the Tasks of the
+// atespaces, whatever their phase, and the workers that only the stream
+// knows while their last event is newer than fleet.expire.
 func (f *Fleet) remotes(now time.Time) []remote {
-	f.mu.RLock()
-	out := make([]remote, 0, len(f.records))
-	for name, rec := range f.records {
-		seen := rec.UpdatedAt
-		if a := f.alive[name]; a.After(seen) {
-			seen = a
-		}
-		if now.Sub(seen) > f.expire {
-			continue
-		}
-		out = append(out, remote{rec: rec, seen: seen})
+	if f.platform == nil {
+		return nil
 	}
-	f.mu.RUnlock()
-	if f.platform != nil {
-		have := map[string]bool{}
-		for _, r := range out {
-			have[r.rec.Name] = true
-		}
-		for _, r := range f.platform.records(now) {
-			// A record that the member publishes itself wins while it lasts.
-			if !have[r.rec.Name] && (r.rec.State != "" || now.Sub(r.seen) <= f.expire) {
-				out = append(out, r)
-			}
+	var out []remote
+	for _, r := range f.platform.records(now) {
+		if r.rec.State != "" || now.Sub(r.seen) <= f.expire {
+			out = append(out, r)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].rec.Name < out[j].rec.Name })
 	return out
 }
 
-// state names the state of a member: stopped after a last record, live
-// within QuietAfter of its intervals, else quiet. A record without
-// an interval is judged by the interval of this process.
+// state names the state of a member: the phase of its Task when the ax API
+// gives one, else live within QuietAfter intervals of its last event, else
+// quiet.
 func (f *Fleet) state(r remote, now time.Time) string {
-	interval := r.rec.Interval
-	if interval <= 0 {
-		interval = f.interval
-	}
 	switch {
 	case r.rec.State != "":
 		return r.rec.State
-	case r.rec.Stopped:
-		return MemberStopped
-	case now.Sub(r.seen) <= QuietAfter*interval:
+	case now.Sub(r.seen) <= QuietAfter*f.interval:
 		return MemberLive
 	}
 	return MemberQuiet
@@ -192,9 +54,6 @@ func (f *Fleet) state(r remote, now time.Time) string {
 
 // Members implements View.
 func (f *Fleet) Members(ctx context.Context) ([]Member, error) {
-	if err := f.startView(ctx); err != nil {
-		return nil, err
-	}
 	self, err := f.self(ctx)
 	if err != nil {
 		return nil, err
@@ -251,7 +110,6 @@ func (f *Fleet) Members(ctx context.Context) ([]Member, error) {
 func (f *Fleet) self(ctx context.Context) (Member, error) {
 	m := Member{
 		Name:       f.name,
-		URL:        f.url,
 		Self:       true,
 		State:      MemberLive,
 		LastSeen:   time.Now().UTC(),
@@ -293,9 +151,6 @@ func (f *Fleet) self(ctx context.Context) (Member, error) {
 
 // Runs implements View.
 func (f *Fleet) Runs(ctx context.Context) ([]*fw.Run, error) {
-	if err := f.startView(ctx); err != nil {
-		return nil, err
-	}
 	var out []*fw.Run
 	for _, r := range f.remotes(time.Now()) {
 		ok, _, err := f.allow(ctx, r.rec, r.rec.Runs, false)
@@ -319,9 +174,6 @@ func (f *Fleet) Runs(ctx context.Context) ([]*fw.Run, error) {
 
 // Run implements View.
 func (f *Fleet) Run(ctx context.Context, id string) (*fw.Run, error) {
-	if err := f.startView(ctx); err != nil {
-		return nil, err
-	}
 	owner, found := f.find(id)
 	// A run that another member started a moment ago, for example through
 	// this view, is in no record yet. Its id holds its start time, so the

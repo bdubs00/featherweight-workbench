@@ -18,7 +18,7 @@ import (
 )
 
 // fleetOff is the problem detail of a fleet route without a fleet.
-const fleetOff = "the fleet is off; set workbench.fleet.subject (FW_WORKBENCH_FLEET_SUBJECT) to turn it on"
+const fleetOff = "the fleet is off; set workbench.fleet.atespaces (FW_WORKBENCH_FLEET_ATESPACES) or workbench.fleet.egress to turn it on"
 
 // fleet answers GET /v1/fleet with the name of this member and the members
 // that the caller can see.

@@ -1,15 +1,14 @@
 package fleet
 
-// This file is the contract of the fleet: the record that a member
-// publishes, the member as a view shows it, the View that the surfaces
-// read, and the registry that ties a View to an agent. The kernel knows
-// none of it. See docs/ARCHITECTURE.md section 4.
+// This file is the contract of the fleet: the record of a member as the
+// front computes it from the platforms, the member as a view shows it, the
+// View that the surfaces read, and the registry that ties a View to an
+// agent. The kernel knows none of it. See docs/ARCHITECTURE.md section 4.
 
 import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,7 +23,6 @@ const (
 	// value (suspend.go).
 	DefaultSuspendAfter = 10 * time.Minute
 	DefaultExpire       = 7 * 24 * time.Hour
-	Version             = 1 // the version of the record shape
 
 	// FinishedRuns is how many finished runs a record holds, newest first.
 	FinishedRuns = 50
@@ -37,47 +35,37 @@ const (
 	// RecordLimit is the largest record in bytes. The oldest finished runs
 	// are left out first.
 	RecordLimit = 512 << 10
-	// QuietAfter is how many intervals without a message make a member
-	// quiet.
+	// QuietAfter is how many intervals without an event make a member that
+	// only the stream knows quiet.
 	QuietAfter = 3
 )
 
 // HeaderVia names the view that forwarded a request. A member never
-// forwards a request that carries it, so a stale record cannot cause a loop.
+// forwards a request that carries it, so a loop cannot form.
 const HeaderVia = "Fw-Fleet-Via"
-
-// Bus event types of the fleet. The data of EvRecord is a Record, and the
-// data of EvAlive is an Alive.
-const (
-	EvRecord = "fw.fleet.record"
-	EvAlive  = "fw.fleet.alive"
-)
 
 // States of a member in the view.
 const (
-	MemberLive    = "live"    // published within QuietAfter intervals
-	MemberQuiet   = "quiet"   // did not; under ax usually a Task that sleeps
-	MemberStopped = "stopped" // sent a last record at shutdown
+	MemberLive    = "live"    // the Task runs, or an event arrived within QuietAfter intervals
+	MemberQuiet   = "quiet"   // the Task sleeps or is pending, or no event arrived in time
+	MemberStopped = "stopped" // the Task is in a phase that does not run again
 )
 
-// Record is what a member publishes about itself. Runs holds every run
-// that is not finished and the newest finished runs, cut to size (see the
-// limits above). Omitted counts the finished runs that the record leaves
-// out. Interval is the interval of the member, so a view judges its
-// heartbeats by its own setting.
+// Record is one member as the front computes it from the platforms
+// (platform.go). Runs holds every run that is not finished and the newest
+// finished runs, cut to size (see the limits above). Omitted counts the
+// finished runs that the record leaves out. Access is the authorization of
+// the front, which decides for every worker with its own configuration.
 type Record struct {
-	Version  int           `json:"version"`
 	Name     string        `json:"name"`
 	URL      string        `json:"url,omitempty"`
 	Atespace string        `json:"atespace,omitempty"`
-	Interval time.Duration `json:"interval,omitempty"`
 	Access   Access        `json:"access"`
 	Agents   []RecordAgent `json:"agents"`
 	Runs     []*fw.Run     `json:"runs"`
 	Omitted  int           `json:"omitted,omitempty"`
-	Stopped  bool          `json:"stopped,omitempty"`
 	// State is the state of the member when a platform says it, such as the
-	// phase of an ax Task, in place of the judgment by heartbeats.
+	// phase of an ax Task. A member that only the stream knows has none.
 	State     string    `json:"state,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
@@ -99,12 +87,6 @@ type RecordAgent struct {
 	Access      *fw.Access `json:"access,omitempty"`
 	Teams       []string   `json:"teams,omitempty"` // the teams of the agent (section 8)
 	Role        string     `json:"role,omitempty"`
-}
-
-// Alive is the heartbeat of a member.
-type Alive struct {
-	Name string    `json:"name"`
-	At   time.Time `json:"at"`
 }
 
 // Member is one member as the view shows it to a caller. Agents holds the
@@ -181,27 +163,3 @@ func Attach(a *fw.Agent, v View) {
 	}
 	views.Store(a, v)
 }
-
-// Token turns a member name into one subject token: each character other
-// than a letter, a digit, "-", or "_" becomes "_".
-func Token(name string) string {
-	var b strings.Builder
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	if b.Len() == 0 {
-		return "_"
-	}
-	return b.String()
-}
-
-// RecordSubject is the subject of the record of a member.
-func RecordSubject(prefix, name string) string { return prefix + ".members." + Token(name) }
-
-// AliveSubject is the subject of the heartbeat of a member.
-func AliveSubject(prefix, name string) string { return prefix + ".alive." + Token(name) }

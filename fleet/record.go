@@ -2,58 +2,17 @@ package fleet
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
-	"github.com/bdubs00/featherweight-workbench/teams"
 )
+
+// This file cuts the runs of a member to the size that a record holds
+// (platform.go) and lists the profiles that a process offers.
 
 // cutMark ends a text that the record cut.
 const cutMark = "…"
-
-// record builds the record of this process. It reads the runs and the
-// profiles with no principal, so it sees all of them. The kernel returns
-// copies, and record changes only its own copies.
-func (f *Fleet) record() (Record, error) {
-	cfg := f.a.Config()
-	rec := Record{
-		Version:  Version,
-		Name:     f.name,
-		URL:      f.url,
-		Atespace: f.atespace,
-		Interval: f.interval,
-		Access:   Access{Mode: f.a.AccessMode()},
-	}
-	if rec.Access.Mode == fw.AccessModeRules {
-		rec.Access.Default = "open"
-		if strings.EqualFold(strings.TrimSpace(cfg.Access.Default), "closed") {
-			rec.Access.Default = "closed"
-		}
-		rec.Access.Admins = append([]string(nil), cfg.Access.Admins...)
-	}
-	// A context without a principal reads every profile and every run.
-	bg := context.Background()
-	profiles, err := f.profiles(bg)
-	if err != nil {
-		return rec, err
-	}
-	rec.Agents = make([]RecordAgent, 0, len(profiles))
-	for _, p := range profiles {
-		rec.Agents = append(rec.Agents, RecordAgent{Name: p.Name, Description: p.Description, Access: p.Access, Teams: teams.OfAgent(teams.Patterns(f.a.Config()), p.Access)})
-	}
-	runs, err := f.a.List(bg)
-	if err != nil {
-		return rec, fmt.Errorf("fleet: list the runs: %w", err)
-	}
-	rec.Runs, rec.Omitted = pickRuns(runs)
-	if err := fit(&rec); err != nil {
-		return rec, err
-	}
-	return rec, nil
-}
 
 // pickRuns keeps every run that is not finished and the newest finished
 // runs, each cut to size. runs is newest first, and so is the result. The
@@ -107,30 +66,6 @@ func cut(s string, n int) string {
 		i--
 	}
 	return s[:i] + cutMark
-}
-
-// fit drops runs until the record is at most RecordLimit bytes:
-// the oldest finished runs first, then the oldest runs of any state. Each
-// dropped run counts in Omitted.
-func fit(rec *Record) error {
-	for {
-		b, err := json.Marshal(rec)
-		if err != nil {
-			return fmt.Errorf("fleet: encode the record: %w", err)
-		}
-		if len(b) <= RecordLimit || len(rec.Runs) == 0 {
-			return nil
-		}
-		drop := len(rec.Runs) - 1
-		for i := len(rec.Runs) - 1; i >= 0; i-- {
-			if rec.Runs[i].State.Terminal() {
-				drop = i
-				break
-			}
-		}
-		rec.Runs = append(rec.Runs[:drop:drop], rec.Runs[drop+1:]...)
-		rec.Omitted++
-	}
 }
 
 // profiles lists the agent profiles that the principal in ctx can view. It

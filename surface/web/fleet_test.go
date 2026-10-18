@@ -161,7 +161,7 @@ func runIDs(runs []*fw.Run) string {
 func TestFleetOff(t *testing.T) {
 	srv := serve(t, newAgent(t, newScript().model()))
 	resp, b := do(t, "GET", srv.URL+"/v1/fleet", "")
-	if p := decodeProblem(t, resp, b, http.StatusNotFound); !strings.Contains(p.Detail, "fleet.subject") {
+	if p := decodeProblem(t, resp, b, http.StatusNotFound); !strings.Contains(p.Detail, "fleet.atespaces") {
 		t.Errorf("detail = %q", p.Detail)
 	}
 	resp, b = do(t, "GET", srv.URL+"/v1/fleet/runs", "")

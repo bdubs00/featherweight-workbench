@@ -428,11 +428,9 @@ func (p *platform) records(now time.Time) []remote {
 		})
 		kept, omitted := pickRuns(runs)
 		rec := &Record{
-			Version:   Version,
 			Name:      m.name,
 			URL:       m.url,
 			Atespace:  m.atespace,
-			Interval:  p.f.interval,
 			Access:    Access{Mode: p.f.a.AccessMode(), Default: cfg.Access.Default, Admins: cfg.Access.Admins},
 			Agents:    []RecordAgent{},
 			Runs:      kept,

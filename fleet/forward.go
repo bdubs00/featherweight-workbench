@@ -61,9 +61,6 @@ func (f *Fleet) Forward(ctx context.Context, member string, req *http.Request) (
 	if !strings.HasPrefix(path, "/v1/") {
 		return nil, fmt.Errorf("fleet: forward to %s: the path %q is not under /v1/", member, path)
 	}
-	if err := f.startView(ctx); err != nil {
-		return nil, err
-	}
 	var rec *Record
 	for _, r := range f.remotes(time.Now()) {
 		if r.rec.Name == member {
@@ -122,71 +119,35 @@ func (f *Fleet) Forward(ctx context.Context, member string, req *http.Request) (
 	return resp, nil
 }
 
-// canForward reports whether a URL of a record can receive a credential.
+// canForward reports whether this process can send a request to a member.
 func (f *Fleet) canForward(raw string) bool {
 	_, _, err := f.route(raw)
 	return err == nil
 }
 
-// route returns the base URL of a member and, for an ax address, the value
-// of the header ate-target-actor. It refuses an empty URL, a malformed one,
-// and an http or https URL that no glob of fleet.forward names.
+// route returns the base URL of the router and the value of the header
+// ate-target-actor for the address of a member. A member is reached through
+// the atenet router only, under its address "ax:<atespace>/<task>": a
+// worker that only the stream knows has no address and cannot be reached.
 func (f *Fleet) route(raw string) (*url.URL, string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil, "", fmt.Errorf("the member has no URL; set fleet.url on it")
+		return nil, "", fmt.Errorf("the member has no address; only a Task of an atespace has one")
 	}
-	if target, ok := strings.CutPrefix(raw, "ax:"); ok {
-		space, task, ok := strings.Cut(target, "/")
-		if !ok || space == "" || task == "" || strings.Contains(task, "/") {
-			return nil, "", fmt.Errorf("the URL %q is not ax:<atespace>/<task>", raw)
-		}
-		if f.router == "" {
-			return nil, "", fmt.Errorf("ax.router is empty")
-		}
-		base, err := url.Parse("http://" + f.router)
-		if err != nil || base.Host == "" || base.User != nil {
-			return nil, "", fmt.Errorf("ax.router %q is not a host", f.router)
-		}
-		return base, target, nil
+	target, ok := strings.CutPrefix(raw, "ax:")
+	if !ok {
+		return nil, "", fmt.Errorf("the address %q is not ax:<atespace>/<task>", raw)
 	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, "", fmt.Errorf("the URL %q is neither an http or https URL nor an ax address", raw)
+	space, task, ok := strings.Cut(target, "/")
+	if !ok || space == "" || task == "" || strings.Contains(task, "/") {
+		return nil, "", fmt.Errorf("the address %q is not ax:<atespace>/<task>", raw)
 	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
-		return nil, "", fmt.Errorf("the URL %q carries user information, a query, or a fragment", raw)
+	if f.router == "" {
+		return nil, "", fmt.Errorf("ax.router is empty")
 	}
-	canon := u.Scheme + "://" + u.Host + strings.TrimSuffix(u.EscapedPath(), "/")
-	for _, g := range f.forward {
-		if globMatch(strings.TrimSuffix(strings.TrimSpace(g), "/"), canon) {
-			return u, "", nil
-		}
+	base, err := url.Parse("http://" + f.router)
+	if err != nil || base.Host == "" || base.User != nil {
+		return nil, "", fmt.Errorf("ax.router %q is not a host", f.router)
 	}
-	return nil, "", fmt.Errorf("the URL %s matches no glob of fleet.forward", canon)
-}
-
-// globMatch matches a glob over a URL. A "*" matches any text without a
-// slash, so a glob over a host never matches a path that ends like a host.
-// Every other character matches itself, and case does not matter.
-func globMatch(glob, s string) bool {
-	glob, s = strings.ToLower(glob), strings.ToLower(s)
-	// match[j] reports whether the glob so far matches s[:j].
-	match := make([]bool, len(s)+1)
-	match[0] = true
-	for i := 0; i < len(glob); i++ {
-		next := make([]bool, len(s)+1)
-		if glob[i] == '*' {
-			next[0] = match[0]
-			for j := 1; j <= len(s); j++ {
-				next[j] = match[j] || (next[j-1] && s[j-1] != '/')
-			}
-		} else {
-			for j := 1; j <= len(s); j++ {
-				next[j] = match[j-1] && s[j-1] == glob[i]
-			}
-		}
-		match = next
-	}
-	return match[len(s)]
+	return base, target, nil
 }
