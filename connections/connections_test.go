@@ -295,3 +295,21 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("Load from the variables = %+v, %v", c, err)
 	}
 }
+
+// A member of a fleet keeps no grant: with tokens.url set, the service
+// starts nothing, and the front alone runs the OAuth flows.
+func TestStartKeepsNoGrantsBehindABroker(t *testing.T) {
+	cfg := fw.DefaultConfig()
+	cfg.Auth.Mode = "token"
+	cfg.Tokens.URL = "http://front.example"
+	cfg.Tools.MCP = []fw.MCPServerConfig{{Name: "tickets", Endpoint: "http://tickets.example/mcp", Auth: fw.MCPAuthConfig{OAuth: &fw.OAuthClientConfig{Grant: fw.GrantUser}}}}
+	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(fw.NoAuthn{}), fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close(context.Background())
+	c, err := Start(context.Background(), a)
+	if err != nil || c != nil {
+		t.Fatalf("Start behind a broker = %v, %v; want nothing", c, err)
+	}
+}

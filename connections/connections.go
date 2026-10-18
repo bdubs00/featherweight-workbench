@@ -384,6 +384,13 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
+	if strings.TrimSpace(cfg.Tokens.URL) != "" {
+		// A member of a fleet gets the tokens of people from the front
+		// (the kernel package tokens) and keeps no grant of its own, so the
+		// front alone runs the OAuth flows (docs/ARCHITECTURE.md section 11.9).
+		a.Logger().Info("connections: the front at tokens.url keeps the grants of people; this process keeps none", "url", cfg.Tokens.URL)
+		return nil, nil
+	}
 	if !slices.Contains(cfg.Auth.Modes(), "oidc") {
 		return nil, fmt.Errorf("connections: server %q: auth.oauth.grant user acts for the person who started a run, so auth.mode must include oidc", entries[0].Name)
 	}
