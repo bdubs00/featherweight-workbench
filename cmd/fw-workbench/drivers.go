@@ -11,6 +11,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/a2a"
 	"github.com/bdubs00/featherweight-kernel/telemetry"
+	"github.com/bdubs00/featherweight-workbench/access"
 	"github.com/bdubs00/featherweight-workbench/agents"
 	"github.com/bdubs00/featherweight-workbench/connections"
 	"github.com/bdubs00/featherweight-workbench/fleet"
@@ -50,6 +51,10 @@ func init() {
 	cli.AgentsDelete = agents.Delete
 	cli.RegisterDoctorCheck(connections.DoctorCheck)
 	cli.RegisterDoctorCheck(fleet.DoctorCheck)
+	// With workbench.access.external, a control plane decides who can do
+	// what; every agent of the binary gets the plug, and the verbs know it.
+	cli.AgentOptions = func() []fw.Option { return []fw.Option{fw.WithAuthzFrom(access.Build)} }
+	cli.ExternalAccess = access.Of
 	cli.NewLogger = telemetry.Logger
 	cli.SetBuildInfo = telemetry.SetBuildInfo
 	cli.ServeMCPStdio = mcp.ServeStdio

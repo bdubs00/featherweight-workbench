@@ -55,6 +55,18 @@ func (p *platform) suspendIdle(ctx context.Context, now time.Time) {
 				since = r.updated
 			}
 		}
+		// A child that the member placed in another process, and that has
+		// no events yet, is work of the member: it sends the branch once
+		// the child Task runs, and a sleeping member sends nothing.
+		for id, l := range p.children {
+			if _, ok := p.runs[id]; ok {
+				continue
+			}
+			if src := p.runs[l.parent]; src != nil && src.member == m.name {
+				working = true
+				break
+			}
+		}
 		if !working && now.Sub(since) >= after {
 			idle = append(idle, m)
 		}

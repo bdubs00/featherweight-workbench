@@ -229,7 +229,7 @@ The view gives each member one of three states. A Task is `live` when its phase 
 The view decides as the front decides, with its own configuration:
 
 - In `rules` mode, the view applies the access rules (the kernel architecture, section 13.2) with its own `access.default`, `access.admins`, and the access blocks of its agent profiles, to the agents and the runs of every member. Whoever started a run sees that run. Whoever sees a run sees its children.
-- In `external` or `custom` mode, the view asks the `Authz` of its own process. The target names the member, and a request to `access.external` carries `member` in each check (the kernel architecture, section 13.5). A view without a decision point shows no run of another member. The view has no local fallback.
+- In `external` or `custom` mode, the view asks the `Authz` of its own process. With `workbench.access.external` (section 12), that is the control plane, and each check carries `member`, the access block of the agent, and the lineage of the run. A view without a decision point shows no run of another member. The view has no local fallback.
 
 Every action goes to the owner of the run, and the owner decides with its current rules.
 
@@ -512,7 +512,7 @@ To follow a run to its result:
 
 The split did not change the contract of the package `fw`. The kernel keeps the primitive of a connection: `fw.ConnectRequest`, `fw.RequestConnect`, `fw.PersonTokens`, and `Agent.Connected` (the kernel architecture, section 7.11). The MCP client of the kernel, `tools/mcp`, still acts for a person with the tokens that the package `connections` gives it (section 11).
 
-The workbench still reads three parts of the kernel configuration: the block `mcp` of its server surface, the OAuth setup of each `tools.mcp` entry with `auth.oauth.grant: user`, and `auth.oidc`. Everything else of the workbench lives in the block `workbench` of `fw.yaml`: `teams`, `titles`, `fleet`, and `grants`.
+The workbench still reads three parts of the kernel configuration: the block `mcp` of its server surface, the OAuth setup of each `tools.mcp` entry with `auth.oauth.grant: user`, and `auth.oidc`. Everything else of the workbench lives in the block `workbench` of `fw.yaml`: `teams`, `titles`, `fleet`, `grants`, and `access`.
 
 ## 8. Teams
 
@@ -693,3 +693,43 @@ When a connection ends, `Finish` resumes the paused calls of this process with `
 - Disconnect deletes the grant. If the authorization server offers revocation (RFC 7009), the workbench also revokes the grant there.
 - In a fleet, the grants live on the front, and a member gets an access token of a person only for a run that the person started on it (section 11.9). A member never holds a refresh token, so a suspend or a restore of a Task touches no grant.
 - The workbench has no device flow for the command line yet. A person connects in the dashboard or through an MCP client. The verbs that run one piece of work start no service, so they keep no connections.
+
+## 12. Control-plane authorization
+
+A deployment with many agents and many people often keeps its rules in one control plane. With `workbench.access.external`, the front hands every authorization decision to it: who views an agent, who runs it, who reads or operates a run, who changes a profile, and who is an admin. The front sends the facts of each check in the protocol of the kernel (the kernel architecture, section 13.5) and enforces the answer. It makes no decision of its own, so the control plane is the single source of truth, and a security team changes a rule without a change to `fw.yaml` and without a rebuild.
+
+This is a plug of the front, not of a worker. The kernel of a worker decides with the rules of `access` alone: the static token of the fleet, the person who started a run, `access.admins`, and the access block of each profile. The package `access` builds the plug through `fw.WithAuthzFrom` when the binary starts an agent, so every verb of `fw-workbench` has it, and the kernel reports the mode `external` for it. The verbs `whoami`, `agents`, and `doctor` know the control plane through `cli.ExternalAccess`, and they act as the local principal, so the control plane decides for the local user too.
+
+### 12.1 Configuration
+
+| Key | Variable | Meaning | Default |
+|---|---|---|---|
+| `workbench.access.external.mcp` | `FW_WORKBENCH_ACCESS_EXTERNAL_MCP` | The name of a `tools.mcp` entry. The endpoint, the TLS, and the authentication of that entry apply, and the model never sees its tools. | none |
+| `workbench.access.external.tool` | `FW_WORKBENCH_ACCESS_EXTERNAL_TOOL` | The tool on that server | `authorize` |
+| `workbench.access.external.bus` | `FW_WORKBENCH_ACCESS_EXTERNAL_BUS` | The bus subject that receives the requests | none |
+| `workbench.access.external.timeout` | `FW_WORKBENCH_ACCESS_EXTERNAL_TIMEOUT` | The limit of one request | `5s` |
+
+The block sets exactly one of `mcp` and `bus`, or the process stops at start, and `mcp` must name an entry of `tools.mcp`. With `access.external` set, `access.default`, `access.admins`, and `access.creators` do not apply; the access block of each profile travels in each check as data, and the control plane decides whether it counts. This configuration sends the decisions of the front and the tool-call decisions of the kernel to one MCP server:
+
+```yaml
+tools:
+  mcp:
+    - name: control
+      endpoint: https://control.example.com/mcp
+      auth: { bearer: CONTROL_TOKEN }
+policy:
+  external: { mcp: control }
+workbench:
+  access:
+    external: { mcp: control }
+```
+
+### 12.2 The checks
+
+Each check names an action of the kernel, `agent.view`, `agent.run`, `agent.edit`, `agent.delete`, `agent.create`, `run.view`, `run.operate`, or `admin`, the agent, its access block, and the run with its state, its principal, and its lineage, the ancestors of a child run with the parent first. A check about an agent or a run of another member of the fleet carries `member`, the name of that member, and its access block and lineage come from the view (section 4.4). A listing of runs or agents sends all of its checks in one request, and so does each view of the dashboard. The control plane decides about a child run by itself, from the lineage in the check; after a refusal the front does not ask again for the ancestors.
+
+The answer holds one decision per check, in order, with `allow`, an optional `reason`, and an optional `ttlMs`. `ttlMs` lets the front reuse a decision for that many milliseconds. Zero, the default, means no reuse, so a revocation takes effect at the next request. The cache key holds every fact of the check, so a change to an access block or to a run asks again.
+
+### 12.3 When the control plane does not answer
+
+If the control plane does not answer in time, the front refuses the request with `fw.ErrAuthzUnavailable`. An answer that it cannot read, or that holds the wrong number of decisions, counts as no answer. The native API answers 503 with `Retry-After: 5`, the MCP server returns an error result that says that the service did not answer, and a listing reports the outage instead of an empty list. A caller therefore tells a refusal, a 403, from a control plane that is down. A call from the process itself carries no principal and never asks, so the front keeps reading its sources during an outage. `fw-workbench doctor` prints one line for the control plane, `workbench.access.external`, and asks an MCP decision point whether it lists the tool.
