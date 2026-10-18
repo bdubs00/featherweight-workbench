@@ -21,10 +21,11 @@ type fakeAX struct {
 	v1alpha1.UnimplementedAXServer
 	addr string
 
-	mu        sync.Mutex
-	tasks     map[string]map[string]string // atespace to task name to phase
-	suspended []string                     // the Tasks that SuspendTask moved, in order
-	resumed   []string                     // the Tasks that ResumeTask moved, in order
+	mu         sync.Mutex
+	tasks      map[string]map[string]string // atespace to task name to phase
+	workspaces map[string]string            // atespace/task to the fw.yaml in its Workspace
+	suspended  []string                     // the Tasks that SuspendTask moved, in order
+	resumed    []string                     // the Tasks that ResumeTask moved, in order
 }
 
 func newFakeAX(t *testing.T, tasks map[string]map[string]string) *fakeAX {
@@ -46,9 +47,26 @@ func (f *fakeAX) ListTasks(_ context.Context, req *v1alpha1.ListTasksRequest) (*
 	defer f.mu.Unlock()
 	var out []*v1alpha1.Task
 	for name, phase := range f.tasks[req.GetAtespace()] {
-		out = append(out, &v1alpha1.Task{Metadata: &v1alpha1.ObjectMeta{Name: name, Atespace: req.GetAtespace()}, Status: &v1alpha1.TaskStatus{Phase: phase}})
+		t := &v1alpha1.Task{Metadata: &v1alpha1.ObjectMeta{Name: name, Atespace: req.GetAtespace()}, Status: &v1alpha1.TaskStatus{Phase: phase}}
+		if _, ok := f.workspaces[req.GetAtespace()+"/"+name]; ok {
+			t.Spec = &v1alpha1.TaskSpec{Workspaces: []*v1alpha1.WorkspaceRef{{Name: name + "-ws", Path: "/workspace"}}}
+		}
+		out = append(out, t)
 	}
 	return &v1alpha1.ListTasksResponse{Tasks: out}, nil
+}
+
+// GetWorkspace serves the Workspace of a Task with its fw.yaml.
+func (f *fakeAX) GetWorkspace(_ context.Context, req *v1alpha1.GetWorkspaceRequest) (*v1alpha1.Workspace, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	task := strings.TrimSuffix(req.GetName(), "-ws")
+	content, ok := f.workspaces[req.GetAtespace()+"/"+task]
+	if !ok {
+		return nil, context.Canceled
+	}
+	return &v1alpha1.Workspace{Metadata: &v1alpha1.ObjectMeta{Name: req.GetName(), Atespace: req.GetAtespace()},
+		Spec: &v1alpha1.WorkspaceSpec{Files: []*v1alpha1.File{{Path: ".fw/fw.yaml", Content: content}}}}, nil
 }
 
 func (f *fakeAX) set(atespace, name, phase string) {
@@ -112,6 +130,9 @@ func TestPlatformSources(t *testing.T) {
 	ctx := context.Background()
 	bus := fw.NewMemBus()
 	ax := newFakeAX(t, map[string]map[string]string{"team": {"alpha": "Running", "beta": "Suspended", "gamma": "Running"}})
+	// beta sleeps since before the front started; its Workspace names the
+	// agents that it serves, so a person sees it.
+	ax.workspaces = map[string]string{"team/beta": "model: openai/x\nagents:\n  ops:\n    description: Runs commands.\n  scratch: {}\n"}
 	gammaRun := &fw.Run{ID: "01GAMMA", Agent: "default", State: fw.StateCompleted, Principal: "bob", Seq: 9, CreatedAt: time.Now().Add(-time.Minute), UpdatedAt: time.Now()}
 	router := fakeRouter(t, "team/gamma", []*fw.Run{gammaRun})
 	front := newMember(t, bus, "front", func(cfg *fw.Config, fc *Config) {
@@ -160,10 +181,20 @@ func TestPlatformSources(t *testing.T) {
 		t.Fatalf("Runs as ada = %d, %v", len(runs), err)
 	}
 	ms, _ = front.f.Members(as("ada"))
+	seenBeta := false
 	for _, m := range ms {
 		if m.Name == "team/alpha" && (len(m.Agents) != 1 || m.Agents[0].Name != "default" || m.Active != 0) {
 			t.Fatalf("alpha as ada = %+v", m)
 		}
+		if m.Name == "team/beta" {
+			seenBeta = true
+			if len(m.Agents) != 2 || m.Agents[0].Name != "ops" || m.Agents[1].Name != "scratch" || m.State != MemberQuiet {
+				t.Fatalf("beta as ada = %+v", m)
+			}
+		}
+	}
+	if !seenBeta {
+		t.Fatalf("ada does not see the sleeping Task beta, whose Workspace names its agents: %+v", ms)
 	}
 	// A Task that leaves the list leaves the view, and a Task that wakes up
 	// becomes live.

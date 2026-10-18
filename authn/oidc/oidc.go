@@ -138,6 +138,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -164,6 +165,13 @@ const (
 // notReady is the reason given while discovery has not succeeded.
 const notReady = "OIDC discovery of the issuer has not completed; retry later"
 
+// readyWait is how long a request waits for the first discovery before it
+// gets 401 with notReady. A process that wakes in a sandbox, as a Task
+// does when the router wakes it for a forwarded request, reads the
+// discovery document in its first second, and the request that woke it
+// must not fail for that. Tests shorten it.
+var readyWait = 5 * time.Second
+
 // allAlgs lists the signing algorithms accepted with a fixed keys
 // endpoint, where no discovery document says which ones the issuer uses.
 var allAlgs = []string{
@@ -186,9 +194,11 @@ type Authn struct {
 	log         *slog.Logger
 	now         func() time.Time
 
-	verifier atomic.Pointer[gooidc.IDTokenVerifier] // nil until discovery succeeds
-	cache    *cache
-	verified atomic.Int64 // tokens that reached the verifier, for tests and stats
+	verifier  atomic.Pointer[gooidc.IDTokenVerifier] // nil until discovery succeeds
+	ready     chan struct{}                          // closed when the verifier is in place
+	readyOnce sync.Once
+	cache     *cache
+	verified  atomic.Int64 // tokens that reached the verifier, for tests and stats
 }
 
 // New builds the driver from cfg.Auth.OIDC. It returns an error for a
@@ -228,6 +238,7 @@ func New(ctx context.Context, cfg *fw.Config, _ fw.Secrets) (fw.Authn, error) {
 		log:         log,
 		now:         time.Now,
 		cache:       newCache(cacheSize),
+		ready:       make(chan struct{}),
 	}
 	switch {
 	case len(cleanList(oc.Audience)) > 0:
@@ -244,6 +255,7 @@ func New(ctx context.Context, cfg *fw.Config, _ fw.Secrets) (fw.Authn, error) {
 	if jwksURL != "" {
 		keys := gooidc.NewRemoteKeySet(gooidc.ClientContext(context.Background(), client), jwksURL)
 		a.verifier.Store(gooidc.NewVerifier(issuer, keys, a.verifierConfig(allAlgs)))
+		a.markReady()
 		log.Info("oidc verifies tokens against a fixed keys endpoint", "issuer", issuer, "jwksUrl", jwksURL)
 		return a, nil
 	}
@@ -335,6 +347,7 @@ func (a *Authn) discover(ctx context.Context) error {
 	}
 	keysCtx := gooidc.ClientContext(context.Background(), a.client)
 	a.verifier.Store(p.VerifierContext(keysCtx, a.verifierConfig(nil)))
+	a.markReady()
 	return nil
 }
 
@@ -364,6 +377,26 @@ func (a *Authn) retryDiscovery(ctx context.Context) {
 // discovery succeeds.
 func (a *Authn) Ready() bool { return a.verifier.Load() != nil }
 
+// markReady wakes the requests that wait for the first discovery.
+func (a *Authn) markReady() { a.readyOnce.Do(func() { close(a.ready) }) }
+
+// waitVerifier returns the verifier, after a wait of at most readyWait for
+// the first discovery when the request arrives before it finished. It
+// returns nil when discovery is still running after the wait.
+func (a *Authn) waitVerifier(ctx context.Context) *gooidc.IDTokenVerifier {
+	if v := a.verifier.Load(); v != nil {
+		return v
+	}
+	t := time.NewTimer(readyWait)
+	defer t.Stop()
+	select {
+	case <-a.ready:
+	case <-t.C:
+	case <-ctx.Done():
+	}
+	return a.verifier.Load()
+}
+
 // Authenticate implements fw.Authn. It reads Authorization: Bearer <token>
 // and returns fw.ErrUnauthorized, wrapped with a short reason, for a
 // missing header, a token that is not a JWT, or a token that fails to
@@ -383,7 +416,7 @@ func (a *Authn) Authenticate(r *http.Request) (*fw.Principal, error) {
 		}
 		return nil, unauthorized(e.reason)
 	}
-	v := a.verifier.Load()
+	v := a.waitVerifier(r.Context())
 	if v == nil {
 		return nil, unauthorized(notReady)
 	}

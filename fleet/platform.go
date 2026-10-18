@@ -25,6 +25,7 @@ import (
 	v1alpha1 "github.com/google/ax/pkg/apis/v1alpha1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"gopkg.in/yaml.v3"
 )
 
 // Phases of an ax Task, as the view reads them.
@@ -82,8 +83,11 @@ type platformMember struct {
 	liveSince time.Time
 	// agents names the profiles that the member serves, from its own
 	// list read once and from its runs, so a job for one of them can wake
-	// the member (suspend.go).
-	agents map[string]bool
+	// the member (suspend.go). For a Task that sleeps, the configuration
+	// file in its Workspace names them (learn), so a front that starts
+	// while the Task sleeps still shows it to the people who can use it.
+	agents  map[string]bool
+	learned bool // the Workspaces of the Task were read once
 }
 
 // platformRun is one run of a member, projected from the stream.
@@ -178,6 +182,7 @@ func (p *platform) poll(ctx context.Context) {
 	now := time.Now()
 	seen := map[string]bool{}
 	var fill []*platformMember
+	var learn []*v1alpha1.Task
 	for _, atespace := range p.atespaces {
 		tasks, err := p.listTasks(ctx, client, atespace)
 		if err != nil {
@@ -215,6 +220,10 @@ func (p *platform) poll(ctx context.Context) {
 				m.filled = true
 				fill = append(fill, m)
 			}
+			if !m.learned && len(m.agents) == 0 {
+				m.learned = true
+				learn = append(learn, t)
+			}
 		}
 		p.mu.Unlock()
 	}
@@ -233,7 +242,83 @@ func (p *platform) poll(ctx context.Context) {
 	for _, m := range fill {
 		p.backfill(ctx, m)
 	}
+	for _, t := range learn {
+		p.learn(ctx, client, t)
+	}
 	p.suspendIdle(ctx, now)
+}
+
+// learn reads the profiles that a Task serves from the configuration file
+// in its Workspaces, once, when the Task first appears. A Task that sleeps
+// cannot be asked, and a read through the router would wake it, but its
+// Workspace is a resource of the ax API and costs nothing. The file is the
+// one that FW_CONFIG in the Task names, else .fw/fw.yaml in the first
+// Workspace, as the kernel reads it under ax. A Task without such a file
+// stays unknown until it runs.
+func (p *platform) learn(ctx context.Context, client v1alpha1.AXClient, t *v1alpha1.Task) {
+	atespace, taskName := t.GetMetadata().GetAtespace(), t.GetMetadata().GetName()
+	name := atespace + "/" + taskName
+	config := ""
+	for _, e := range t.GetSpec().GetEnv() {
+		if e.GetName() == "FW_CONFIG" {
+			config = e.GetValue()
+		}
+	}
+	for i, ref := range t.GetSpec().GetWorkspaces() {
+		want := ".fw/fw.yaml"
+		if config != "" {
+			rel, ok := strings.CutPrefix(config, strings.TrimSuffix(ref.GetPath(), "/")+"/")
+			if !ok {
+				continue
+			}
+			want = rel
+		} else if i > 0 {
+			break
+		}
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		ws, err := client.GetWorkspace(cctx, &v1alpha1.GetWorkspaceRequest{Atespace: atespace, Name: ref.GetName()})
+		cancel()
+		if err != nil {
+			p.f.log.Warn("fleet: read the Workspace of a Task", "member", name, "workspace", ref.GetName(), "error", err)
+			return
+		}
+		for _, f := range ws.GetSpec().GetFiles() {
+			if strings.TrimPrefix(f.GetPath(), "./") != want {
+				continue
+			}
+			agents, err := agentsOf([]byte(f.GetContent()))
+			if err != nil {
+				p.f.log.Warn("fleet: read the agents of a Task from its Workspace", "member", name, "file", f.GetPath(), "error", err)
+				return
+			}
+			p.mu.Lock()
+			if m := p.members[name]; m != nil {
+				for _, ag := range agents {
+					m.serves(ag)
+				}
+			}
+			p.mu.Unlock()
+			p.f.log.Info("fleet: learned the agents of a Task from its Workspace", "member", name, "agents", strings.Join(agents, ","))
+			return
+		}
+	}
+}
+
+// agentsOf returns the names under the key agents of a configuration file,
+// sorted.
+func agentsOf(file []byte) ([]string, error) {
+	var doc struct {
+		Agents map[string]any `yaml:"agents"`
+	}
+	if err := yaml.Unmarshal(file, &doc); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(doc.Agents))
+	for name := range doc.Agents {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // listTasks reads every Task of an atespace, page by page.

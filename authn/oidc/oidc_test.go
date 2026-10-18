@@ -481,6 +481,11 @@ func TestChallengeWithoutMetadata(t *testing.T) {
 }
 
 func TestDiscoveryRecovers(t *testing.T) {
+	// A request waits readyWait for the first discovery; the test keeps it
+	// short, because the issuer stays down for a while here.
+	prev := readyWait
+	readyWait = 50 * time.Millisecond
+	t.Cleanup(func() { readyWait = prev })
 	is := newIssuer(t, false)
 	is.healthy.Store(false)
 	a := newAuthn(t, is, nil)
