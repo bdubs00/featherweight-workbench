@@ -166,6 +166,43 @@ func TestSuspendIdleTasksAndWakeForJobs(t *testing.T) {
 	}
 }
 
+// A Task that slept since before the front started has no known profiles,
+// so a job for a profile that no known Task serves wakes it once, and the
+// front learns what it serves.
+func TestWakeForTeachesTheFrontAboutUnknownTasks(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "team")
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
+	t.Setenv(EnvIntake, "fw.jobs")
+	ctx := context.Background()
+	bus := fw.NewMemBus()
+	ax := newFakeAX(t, map[string]map[string]string{"team": {"fresh": "Suspended"}})
+	tasks := newFakeTasks(t)
+	tasks.set("team/fresh", view.Status{Idle: true})
+	front := newMember(t, bus, "front", func(cfg *fw.Config, fc *Config) {
+		fc.Atespaces = []string{"team"}
+		fc.Egress = "fw.events"
+		fc.Interval = 100 * time.Millisecond
+		cfg.AX.Server = ax.addr
+		cfg.AX.Router = strings.TrimPrefix(tasks.srv.URL, "http://")
+	})
+	eventually(t, "the front sees the sleeping Task", func() bool {
+		ms, err := front.f.Members(ctx)
+		return err == nil && memberStates(ms)["team/fresh"] == MemberQuiet
+	})
+	if _, _, err := Enqueue(ctx, front.a, "reviewer", []fw.RunRequest{{Input: "review"}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the unknown sleeper is woken", func() bool { return tasks.count("team/fresh") > 0 })
+	eventually(t, "its phase follows", func() bool { return ax.phase("team", "fresh") == "Running" })
+	eventually(t, "the front learns its profiles", func() bool {
+		p := front.f.platform
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		m := p.members["team/fresh"]
+		return m != nil && m.agents["reviewer"] && m.agents["default"]
+	})
+}
+
 // The configuration turns the controller off with 0 or off, defaults to
 // ten minutes with atespaces, and refuses the controller without them.
 func TestSuspendAfterConfig(t *testing.T) {

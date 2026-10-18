@@ -99,7 +99,11 @@ func taskOf(m *platformMember) string {
 // on the queue of that profile. A Task that sleeps reads no queue, and the
 // router wakes a Task on a request only, so the front sends each one a
 // read of GET /v1/status. The reads run in the background; the caller does
-// not wait for the wakes.
+// not wait for the wakes. When no sleeping Task is known to serve the
+// profile, the front wakes the sleeping Tasks whose profiles it does not
+// know yet, such as the Tasks that slept since before the front started:
+// one of them may serve the profile, and the first wake teaches the front
+// what each one serves.
 func (f *Fleet) WakeFor(agent string) {
 	p := f.platform
 	agent = strings.TrimSpace(agent)
@@ -107,13 +111,22 @@ func (f *Fleet) WakeFor(agent string) {
 		return
 	}
 	p.mu.Lock()
-	var sleeping []*platformMember
+	var sleeping, unknown []*platformMember
 	for _, m := range p.members {
-		if m.atespace != "" && m.state == MemberQuiet && m.agents[agent] {
+		if m.atespace == "" || m.state != MemberQuiet {
+			continue
+		}
+		switch {
+		case m.agents[agent]:
 			sleeping = append(sleeping, m)
+		case len(m.agents) == 0:
+			unknown = append(unknown, m)
 		}
 	}
 	p.mu.Unlock()
+	if len(sleeping) == 0 {
+		sleeping = unknown
+	}
 	for _, m := range sleeping {
 		go p.wake(f.ctx, m, agent)
 	}
