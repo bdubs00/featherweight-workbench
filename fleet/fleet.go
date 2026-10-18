@@ -103,9 +103,12 @@ type Fleet struct {
 	atespace string
 	interval time.Duration
 	expire   time.Duration
-	forward  []string
-	router   string
-	client   *http.Client
+	// suspendAfter is the grace period of the suspend controller, zero
+	// when it is off (suspend.go).
+	suspendAfter time.Duration
+	forward      []string
+	router       string
+	client       *http.Client
 
 	ctx    context.Context // ends at Close; the watches live in it
 	cancel context.CancelFunc
@@ -174,6 +177,7 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 	if f.expire <= 0 {
 		f.expire = DefaultExpire
 	}
+	f.suspendAfter = fc.suspendAfter()
 	if r, ok := f.bus.(fw.Retainer); ok {
 		f.ret = r
 	}

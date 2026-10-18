@@ -19,8 +19,12 @@ import (
 // Defaults and limits of the fleet.
 const (
 	DefaultInterval = 30 * time.Second
-	DefaultExpire   = 7 * 24 * time.Hour
-	Version         = 1 // the version of the record shape
+	// DefaultSuspendAfter is how long a Task stays idle before the front
+	// suspends it, when the configuration names atespaces and no other
+	// value (suspend.go).
+	DefaultSuspendAfter = 10 * time.Minute
+	DefaultExpire       = 7 * 24 * time.Hour
+	Version             = 1 // the version of the record shape
 
 	// FinishedRuns is how many finished runs a record holds, newest first.
 	FinishedRuns = 50

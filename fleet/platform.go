@@ -72,6 +72,14 @@ type platformMember struct {
 	state    string
 	seen     time.Time
 	filled   bool // the runs of the member were read once
+	// liveSince is when the phase of the Task last became Running; the
+	// suspend controller counts idle time from it when the member has
+	// no run (suspend.go).
+	liveSince time.Time
+	// agents names the profiles that the member serves, from its own
+	// list read once and from its runs, so a job for one of them can wake
+	// the member (suspend.go).
+	agents map[string]bool
 }
 
 // platformRun is one run of a member, projected from the stream.
@@ -193,7 +201,11 @@ func (p *platform) poll(ctx context.Context) {
 				m = &platformMember{name: name, url: "ax:" + name, atespace: atespace}
 				p.members[name] = m
 			}
+			was := m.state
 			m.state, m.seen = stateOfPhase(t.GetStatus().GetPhase()), now
+			if m.state == MemberLive && was != MemberLive {
+				m.liveSince = now
+			}
 			if m.state == MemberLive && !m.filled {
 				m.filled = true
 				fill = append(fill, m)
@@ -216,6 +228,7 @@ func (p *platform) poll(ctx context.Context) {
 	for _, m := range fill {
 		p.backfill(ctx, m)
 	}
+	p.suspendIdle(ctx, now)
 }
 
 // listTasks reads every Task of an atespace, page by page.
@@ -246,52 +259,87 @@ func stateOfPhase(phase string) string {
 	return MemberStopped
 }
 
-// backfill reads the runs of a running Task once, with the static token
-// of the fleet, so the view knows the runs that started before the front
-// listened. A running Task is awake, so the read wakes nobody.
+// backfill reads the runs and the agents of a running Task once, with the
+// static token of the fleet, so the view knows the runs that started before
+// the front listened and the profiles that the Task serves. A running Task
+// is awake, so the reads wake nobody.
 func (p *platform) backfill(ctx context.Context, m *platformMember) {
-	token, err := fw.EnvSecrets{}.Get(ctx, p.tokenEnv)
-	if err != nil || strings.TrimSpace(token) == "" {
-		p.f.log.Warn("fleet: no static token to read the runs of a Task; the view starts from the stream", "member", m.name, "secret", p.tokenEnv)
-		return
-	}
-	cctx, cancel := context.WithTimeout(fw.WithCredential(ctx, "Bearer "+strings.TrimSpace(token)), 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, http.MethodGet, "/v1/runs", nil)
-	if err != nil {
-		return
-	}
-	req.Header.Set("Accept", "application/json")
-	resp, err := p.f.Forward(cctx, m.name, req)
-	if err != nil {
-		p.f.log.Warn("fleet: read the runs of a Task", "member", m.name, "error", err)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		p.f.log.Warn("fleet: read the runs of a Task", "member", m.name, "status", resp.StatusCode)
-		return
-	}
-	var body struct {
+	var runs struct {
 		Runs []*fw.Run `json:"runs"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, RecordLimit*4)).Decode(&body); err != nil {
-		p.f.log.Warn("fleet: read the runs of a Task", "member", m.name, "error", err)
-		return
+	if err := p.read(ctx, m, "/v1/runs", &runs); err != nil {
+		p.f.log.Warn("fleet: read the runs of a Task; the view starts from the stream", "member", m.name, "error", err)
+	}
+	var agents struct {
+		Agents []struct {
+			Name string `json:"name"`
+		} `json:"agents"`
+	}
+	if err := p.read(ctx, m, "/v1/agents", &agents); err != nil {
+		p.f.log.Warn("fleet: read the agents of a Task; its runs name them later", "member", m.name, "error", err)
 	}
 	now := time.Now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for _, r := range body.Runs {
+	for _, r := range runs.Runs {
 		if r == nil || r.ID == "" {
 			continue
 		}
+		m.serves(r.Agent)
 		if cur, ok := p.runs[r.ID]; ok && cur.run.Seq >= r.Seq {
 			continue
 		}
 		p.runs[r.ID] = &platformRun{run: r, member: m.name, updated: now}
 	}
+	for _, ag := range agents.Agents {
+		m.serves(ag.Name)
+	}
 }
+
+// serves records that the member serves a profile. The caller holds p.mu.
+func (m *platformMember) serves(agent string) {
+	agent = strings.TrimSpace(agent)
+	if agent == "" {
+		return
+	}
+	if m.agents == nil {
+		m.agents = map[string]bool{}
+	}
+	m.agents[agent] = true
+}
+
+// read makes one GET through the router to a member, with the static token
+// of the fleet, and decodes the JSON answer into out. The caller makes sure
+// that the Task is awake, or means to wake it.
+func (p *platform) read(ctx context.Context, m *platformMember, path string, out any) error {
+	token, err := fw.EnvSecrets{}.Get(ctx, p.tokenEnv)
+	if err != nil || strings.TrimSpace(token) == "" {
+		return fmt.Errorf("no static token in the secret %s", p.tokenEnv)
+	}
+	cctx, cancel := context.WithTimeout(fw.WithCredential(ctx, "Bearer "+strings.TrimSpace(token)), readTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodGet, path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := p.f.Forward(cctx, m.name, req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s answered %d", path, resp.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, RecordLimit*4)).Decode(out); err != nil {
+		return fmt.Errorf("decode %s: %w", path, err)
+	}
+	return nil
+}
+
+// readTimeout bounds one read of a Task through the router. A wake of a
+// sleeping Task takes a few seconds, so it is longer than one request.
+const readTimeout = 60 * time.Second
 
 // onEvent applies one event of the egress stream to the run that it
 // belongs to. An event without a node cannot be placed and is dropped.
@@ -326,6 +374,7 @@ func (p *platform) onEvent(e fw.Event) error {
 	}
 	r.run.Apply(e, p.prices)
 	r.member, r.updated = name, now
+	m.serves(r.run.Agent)
 	return nil
 }
 

@@ -272,6 +272,7 @@ The fleet reads the block `fleet` under the key `workbench` of `fw.yaml`, which 
 | `workbench.fleet.atespaces` | `FW_WORKBENCH_FLEET_ATESPACES` | The atespaces whose Tasks are members, read from the ax API at `ax.server`, with commas between them (section 4.8) | none |
 | `workbench.fleet.egress` | `FW_WORKBENCH_FLEET_EGRESS` | The subject prefix of the egress stream of the workers, `bus.egress` on each of them (section 4.8) | none |
 | `workbench.fleet.intake` | `FW_WORKBENCH_FLEET_INTAKE` | The subject prefix of the intake queues of the workers: a worker that runs the profile `<agent>` sets `bus.intake` to `<intake>.<agent>` (section 4.9) | none |
+| `workbench.fleet.suspendAfter` | `FW_WORKBENCH_FLEET_SUSPEND_AFTER` | How long a Task stays idle before the front suspends it, a duration such as `10m`, or `off` (section 4.12) | `10m` with atespaces, else off |
 
 Under ax, three variables on each Task make a fleet: `FW_BUS_DRIVER=nats`, `FW_BUS_URL`, and `FW_WORKBENCH_FLEET_SUBJECT=fw.fleet`. Outside ax, each member also sets the URL, and each member that serves a view sets the forward globs:
 
@@ -310,7 +311,7 @@ A job is many pieces of the same work, one run each, spread over the workers tha
 
 Every request names the person who sent the job, so the run on the worker acts as that person, and it carries the batch name in the metadata key `fw.batch`, which a child run inherits in this process or in a child Task. The idempotency key of each request is the batch name and the position of the item, so a job that is sent twice starts each run once. The tool `batch` tells how a job goes: the runs of the batch by state, the members that hold them, the runs that wait for the person, and the runs that failed with their errors. `runs_list` and `GET /v1/fleet/runs` take `batch` as a filter, and `GET /v1/runs` of a worker takes it too. The view of the front sees the runs of a job through the egress stream or the records, as section 4.8 describes, so a run appears when a worker takes it.
 
-A batch name is at most 128 characters without spaces. Without one, `enqueue` makes an id. One call takes at most 500 items; a larger job goes in several calls under one batch name.
+A batch name is at most 128 characters without spaces. Without one, `enqueue` makes an id. One call takes at most 500 items; a larger job goes in several calls under one batch name. A worker that sleeps reads no queue, so after the publish the front wakes every suspended Task that serves the profile, with one read of its status through the router (section 4.12).
 
 ### 4.10 Security
 
@@ -319,6 +320,12 @@ A record carries the inputs, the outputs, and the tool inputs of runs, cut to si
 ### 4.11 What the fleet does not do
 
 The fleet shares no ledger, elects no leader, and schedules no work. Bus intake (the kernel architecture, section 9.3) spreads work across the processes that consume one queue. A2A peers (the kernel architecture, section 7.4) let one agent ask another.
+
+### 4.12 The suspend controller
+
+A Task that waits for a person costs compute while it runs, and nothing in it changes until the person answers. The front suspends such a Task. At every interval, after the Task list, the controller looks at every Task of the atespaces whose phase is Running. A Task is a candidate when the view holds no run of it that is queued or running, and when its newest run update, or its last start when it has no run, is older than `workbench.fleet.suspendAfter`. For each candidate the front reads `GET /v1/status` of the Task once through the router, which wakes nobody because the Task runs, and it suspends the Task through `SuspendTask` on the ax API only when the body says `idle` and the idle time is at least the grace period. The body of the Task decides, so a view that missed an event suspends nobody who works. A child Task of the spawner is a Task like any other.
+
+A suspended Task costs nothing. The router wakes it on the next request through the front: an approval, a message, a follow-up, or a run, and the run continues from its ledger. A Task that sleeps reads no queue, so `enqueue` wakes the suspended Tasks that serve the profile of the job, with one status read each; the front learns the profiles of a Task from `GET /v1/agents` when the Task first runs and from the runs on the stream. The grace period defaults to ten minutes when the configuration names atespaces. `off` turns the controller off, and the controller needs atespaces, because the ax API is what suspends a Task. The log of the front names every Task that it suspends and wakes.
 
 ## 5. Browser sign-in
 

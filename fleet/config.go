@@ -35,6 +35,9 @@ const (
 	// EnvIntake names the subject prefix of the intake queues of the workers
 	// (enqueue.go).
 	EnvIntake = "FW_WORKBENCH_FLEET_INTAKE"
+	// EnvSuspendAfter is how long a Task stays idle before the front
+	// suspends it, a duration such as 10m, or off (suspend.go).
+	EnvSuspendAfter = "FW_WORKBENCH_FLEET_SUSPEND_AFTER"
 )
 
 // Config configures the fleet. An empty Subject turns the fleet off.
@@ -58,6 +61,10 @@ const (
 // names the subject prefix of the intake queues of the workers: a worker
 // that runs the profile <agent> sets bus.intake to "<intake>.<agent>", and
 // the front puts the run requests of a job there (enqueue.go).
+//
+// SuspendAfter is how long a Task of those atespaces stays idle before the
+// front suspends it (suspend.go). Nil means the default of ten minutes when
+// Atespaces is set, and zero turns the controller off.
 type Config struct {
 	Subject   string        `yaml:"subject"`
 	Name      string        `yaml:"name"`
@@ -68,6 +75,17 @@ type Config struct {
 	Atespaces []string      `yaml:"atespaces"`
 	Egress    string        `yaml:"egress"`
 	Intake    string        `yaml:"intake"`
+
+	SuspendAfter *time.Duration `yaml:"suspendAfter"`
+}
+
+// suspendAfter returns the grace period of the suspend controller, or zero
+// when it is off.
+func (c Config) suspendAfter() time.Duration {
+	if c.SuspendAfter == nil {
+		return 0
+	}
+	return *c.SuspendAfter
 }
 
 // block is the part of the workbench block that this package reads.
@@ -109,6 +127,16 @@ func Load(cfg *fw.Config) (Config, error) {
 	if v, ok := lookup(EnvIntake); ok {
 		c.Intake = v
 	}
+	if v, ok := lookup(EnvSuspendAfter); ok {
+		if strings.EqualFold(v, "off") {
+			v = "0s"
+		}
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("fleet: %s=%q is not a duration such as 10m, or off", EnvSuspendAfter, v)
+		}
+		c.SuspendAfter = &d
+	}
 	if v, ok := lookup(EnvForward); ok {
 		c.Forward = nil
 		for _, g := range strings.Split(v, ",") {
@@ -135,6 +163,10 @@ func Load(cfg *fw.Config) (Config, error) {
 	}
 	if c.Expire <= 0 {
 		c.Expire = DefaultExpire
+	}
+	if c.SuspendAfter == nil && len(c.Atespaces) > 0 {
+		d := DefaultSuspendAfter
+		c.SuspendAfter = &d
 	}
 	if c.Subject != "" {
 		c.Name, c.URL = defaults(c.Name, c.URL, cfg)
@@ -241,6 +273,11 @@ func check(c Config) []string {
 	}
 	if c.Expire < 0 {
 		p = append(p, fmt.Sprintf("workbench.fleet.expire %s is negative", c.Expire))
+	}
+	if d := c.suspendAfter(); d < 0 {
+		p = append(p, fmt.Sprintf("workbench.fleet.suspendAfter %s is negative", d))
+	} else if d > 0 && len(c.Atespaces) == 0 {
+		p = append(p, "workbench.fleet.suspendAfter needs workbench.fleet.atespaces, the Tasks that the front can suspend")
 	}
 	return p
 }
