@@ -4,7 +4,7 @@ package dashboard
 // the approval labels, the agent builder, and the capability catalog. The
 // page, the native API, and the MCP tools build their answers from these
 // functions, so a browser, an MCP App, and a host that shows only text say
-// the same thing (PRODUCT_DIRECTION.md, "UI direction" and "MCP parity").
+// the same thing (docs/ARCHITECTURE.md section 6.3 and docs/PRODUCT_DIRECTION.md).
 //
 // CONTRACT: the signatures and the JSON shapes in this file are fixed for
 // the surfaces. The helpers of these functions are in result.go.

@@ -1,7 +1,7 @@
 package fleet
 
 // This file puts the run requests of a job on the intake queues of the
-// workers (the kernel repository, KERNEL_SPLIT.md section 7). A worker that
+// workers (docs/ARCHITECTURE.md section 4.9). A worker that
 // runs the profile <agent> consumes bus.intake "<intake>.<agent>", and the
 // front publishes one request per piece of work there. The kernel of the
 // worker starts each request as the person that it names and gives the run

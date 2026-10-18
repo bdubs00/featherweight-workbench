@@ -1,7 +1,7 @@
 package fleet
 
-// This file reads a fleet from the platforms instead of from records (the
-// kernel repository, KERNEL_SPLIT.md section 7). The Task list of the ax
+// This file reads a fleet from the platforms instead of from records
+// (docs/ARCHITECTURE.md section 4.8). The Task list of the ax
 // API gives the members, their addresses, and their phases, and the egress
 // stream of the workers gives the state of every run. A member that
 // publishes no record, a bare kernel in a Task, is visible this way. The

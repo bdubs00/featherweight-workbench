@@ -1,362 +1,75 @@
-> Moved on 2026-10-17 from the root of featherweight-agent. The text below is unchanged. Its file paths name that repository at the time of writing. The code it describes now lives in featherweight-workbench and, for the kernel, in featherweight-kernel.
+# Product direction
 
-# Product direction: a bicycle for the mind
+## 1. The thesis
 
-Status: brainstorming. These are hypotheses to validate, not committed scope.
+Featherweight turns sandboxed containers on Google AX and Agent Substrate into durable, capability-bounded actors that work for a person and cost nothing while they wait.
 
-## The central idea
+Featherweight is not a chatbot and not a general workflow engine. It is an operating layer between an agent loop and a snapshotting container substrate. It splits the system into two binaries with a strict trust boundary:
 
-The strongest direction is **more agency for the person, not more autonomous agents**.
+1. **The worker (`fw`, in `featherweight-kernel`)** runs as PID 1 inside one AX Task. It runs the turn loop, enforces the budget and the policy, and writes every event to an append-only CloudEvents ledger on `/workspace`. It holds no OAuth refresh token, no team rule, and no view of other Tasks.
+2. **The front (`fw-workbench`, in `featherweight-workbench`)** runs outside the sandboxes as a standard Deployment. It authenticates people, keeps their OAuth grants in an encrypted store, serves the MCP server (`/mcp`) and the web page (`/ui`), puts work on the bus intake queues, projects fleet state from the AX API and the bus egress stream, and routes interactive requests to Tasks through the `atenet-router`.
 
-Many agent products invite the user to become a manager: assign work, monitor progress, answer questions, and inspect results. That can be useful, but it can also feel like hiring an unpredictable employee.
+The platforms hold the state. AX holds the Tasks. Substrate snapshots and restores `/workspace`. NATS carries work in and lifecycle events out. The ledger inside each Task holds the run. Prometheus, an OpenTelemetry collector, and Grafana hold the metrics, logs, and traces. The front holds the OAuth grants of people and nothing else of its own.
 
-The bicycle metaphor suggests something different:
+## 2. Why this layer exists
 
-> A tool that makes your intentions easier to express, your ideas cheaper to test, and your abilities grow with use.
+Google AX and Agent Substrate give an agent a gVisor sandbox, a persistent `/workspace` volume across snapshots, wake-on-request routing through `atenet-router`, and network egress policies. AX treats the container inside a Task as a black box. It does not know what a model turn is, whether a process is burning tokens or waiting on a person, how to resume an interrupted model stream without breaking the prompt cache, or how to limit a tree of delegated child Tasks.
 
-That is a richer ambition than an assistant that does tasks.
+Most agent frameworks sit at the other extreme. They hold conversation state in memory or in an external database, run subagents in one shared process with one service credential, and treat sandboxes as stateless command runners. When a run needs a human decision, it either blocks a running container and burns compute or drops the container and loses the filesystem state.
 
-## What users want
+Featherweight bridges the two. Because the kernel owns both PID 1 in the sandbox and the append-only ledger of the run, it maps every turn, tool call, approval, and budget onto Substrate's snapshot, suspend, and wake lifecycle.
 
-These are hypotheses to validate with a specific audience, not universal truths.
+## 3. Three core capabilities
 
-| What users ask for | The underlying desire |
-|---|---|
-| “Automate this.” | Stop making me carry this obligation in my head. |
-| “Remember my preferences.” | Stop making me explain myself repeatedly. |
-| “Help me decide.” | Make the situation understandable, not just summarize documents. |
-| “Do it for me.” | Produce a result I can trust without supervising every step. |
-| “Let me control it.” | Let me intervene without having to operate the machinery. |
-| “Keep my data private.” | Do not make me surrender ownership to gain capability. |
+### 3.1 Zero-cost waiting (stateful suspend on block)
 
-The combination is **leverage without loss of agency**.
+A long task often blocks on a person or an external system: a policy approval before `git push`, a clarifying question through `ask_user`, an OAuth sign-in for an MCP server, or a slow child Task.
 
-Three product ideas could express that.
+In Featherweight, a blocked run costs neither compute nor deadline time:
 
-## 1. Try it before you do it
+1. When a run enters `input-required`, the kernel records `fw.approval.requested` in `ledger.jsonl`, syncs the file to `/workspace`, and parks the run driver.
+2. When no run in the Task works, the worker reports `idle` on `/v1/status` and on the egress stream.
+3. The front suspends the AX Task. Substrate snapshots `/workspace` and frees the compute.
+4. Hours or days later, the person approves the action, answers the question, or finishes the OAuth connection through an MCP host or `/ui`.
+5. The front forwards the decision through `atenet-router` (or publishes the connection notice on the bus). The router wakes the Task, Substrate restores `/workspace`, `fw` rebuilds the run from `ledger.jsonl`, and the run continues from the exact point where it stopped.
 
-### Make experimentation almost frictionless
+Because the system prompt, the `Briefer` sections (`fw.run.started`), and the raw provider `thinking` blocks live in the ledger unchanged, the woken container keeps its provider prompt cache prefix. Because `fw.WorkingTime` counts only intervals when the run works, time spent waiting or suspended never consumes the run deadline.
 
-Most assistants move from conversation to execution. A distinctive intermediate step is **rehearsal**:
+### 3.2 Bounded fleet delegation under a person's identity
 
-> Let me see what would happen.
+A person in Claude Code, an IDE, or the browser can split a large job across many sandboxes without surrendering control or sharing a broad service account.
 
-For example:
+Two paths fan work out across the fleet:
 
-- “Try these two approaches to fixing the build. Compare the results.”
-- “Reorganize this project, but show me the proposed structure before changing my working copy.”
-- “Run the analysis with these three assumptions. Tell me which conclusion changes.”
-- “Prepare the customer update using the new numbers. Show me what changed from last week.”
+- **Batch jobs (`enqueue` and `batch`):** An MCP client sends a list of items to the front for a named profile. The front places one run request per item on `fw.jobs.<agent>` with a shared `fw.batch` id and the caller as the principal. Workers pull items from the queue as capacity allows.
+- **Hierarchical delegation (`spawn_task` with `spawn.driver: ax`):** A running agent spawns child runs. The AX spawner creates a separate AX Task for each child, passes the parent's principal and batch id, and drives the child through `atenet-router`.
 
-The experience is:
+Every delegated run obeys four invariants:
 
-**Ask → try in a bounded environment → inspect evidence and differences → apply selected changes.**
+1. **Monotonic attenuation:** A child run can never gain authority. It receives a subset of the parent's tools, the stricter of the parent's and its own policy rules, a budget capped by the parent's budget, and a deadline capped by the parent's remaining working time.
+2. **Acting as the person without exposing grants:** When an MCP server sets `auth.oauth.grant: user`, it acts with the permissions of the person who started the run. The worker requests short-lived access tokens from the front's token broker (`POST /v1/tokens`). The refresh token stays in the front's encrypted store and never enters a sandbox or a `/workspace` snapshot.
+3. **Single point of supervision:** When a child Task needs an approval or asks a question, `spawn_task` relays the request to the parent run. The person watches one run (or one `Needs you` list on the front) for the whole tree.
+4. **Hard guardrails at the token boundary:** Every worker enforces seven budget limits (`maxTurns`, `maxTokens`, `maxCostUSD`, `deadline`, `maxToolCalls`, `maxCallsPerTurn`, `maxRepeats`), per-tool byte and time bounds, cycle detection in the loop guard, and automatic secret redaction before any event reaches the ledger or the bus.
 
-This is not a model merely describing a hypothetical outcome. Where possible, it performs the work against a copy and runs checks.
+### 3.3 Ledger replay and speculative branching (`fw replay` and `fw fork`)
 
-### Why this captures the bicycle idea
+Because a run is completely defined by its append-only ledger and its `/workspace` directory, execution history is an object that the kernel can replay and branch.
 
-It makes a person more willing and able to explore.
+- **Regression testing (`fw replay`):** `fw replay <ledger> --model <selector>` re-runs a recorded ledger against a new model or prompt while serving the recorded `fw.tool.responded` outputs. A diff of the two ledgers tests a model upgrade without touching external services.
+- **Speculative execution (`fw fork`):** A person or an orchestrator can fork a run at sequence `N` into parallel child Tasks, try two different approaches or models against copies of the workspace, compare the resulting `fw.file.changed` diffs and test results, and apply the winner. Because the forked ledgers share the event prefix up to `N`, they share the provider prompt cache up to the branch point.
 
-The benefit is not just saving thirty minutes. It is making an experiment cheap enough that the user tries something they otherwise would not attempt.
+## 4. Surfaces and boundaries
 
-> “What if?” becomes a button that does useful work.
+### 4.1 MCP first, calm web workbench second
 
-This gives AX and gVisor a user-facing purpose without making users understand either technology. They enable safe working environments behind an ordinary “Try it” interaction.
+The primary interface for power users and developers is **MCP** (`/mcp` over Streamable HTTP and `fw-workbench mcp` over stdio). A person in Claude Code or an IDE uses Featherweight as a remote execution fleet: `enqueue`, `batch`, `run`, `run_status`, `run_result`, `run_file`, `approve`, and `connections`.
 
-A sandbox does not make external actions reversible. Sending an email, spending money, and changing a production service stay behind explicit action gates. Call it a rehearsal, not a universal undo system.
+The browser page at `/ui` and the MCP App (`dashboard`) provide the human control plane for reviewing results, answering schema-driven questions, approving destructive actions, and completing OAuth connections. Both `/mcp` and `/ui` read the same server-side projections in `dashboard/`:
 
-**Potential positioning:** A place to try your ideas before committing to them.
+- **Home (`GET /v1/home`):** Leads with a composer and three lists across the fleet: `Needs you`, `In progress`, and `Recent results`.
+- **Result (`GET /v1/runs/{id}/result`):** Shows the deliverable first: the pending decision, the summary, the files changed in `/workspace`, the recorded steps, and the budget limits. It never claims that a task passed verification merely because the model ended its turn.
+- **Builder (`POST /v1/builder`):** Proposes a least-privilege agent profile (`propose_agent`) from a description or from a completed run (`fromRun`). The model never saves a profile; the person reviews the plain-English abilities card (`On its own`, `Asks you first`, `Cannot`) and saves it under their own identity.
 
-## 2. Every correction makes you more capable
+### 4.2 Export operational data, do not rebuild Grafana
 
-### Turn successful work into reusable abilities, not just chat history
-
-A common assistant experience is:
-
-1. Explain the task.
-2. Correct the answer.
-3. Explain your conventions.
-4. Get a useful result.
-5. Repeat much of that next week.
-
-The product opportunity is to make that effort accumulate.
-
-Suppose the user says:
-
-> This is good, but exclude internal transfers, use our fiscal weeks, and flag missing data rather than estimating it.
-
-After completing the task, the system asks:
-
-> Use these rules for future cash-flow reports?
-
-Acceptance creates something concrete and inspectable:
-
-- The intended outcome.
-- The inputs and connected resources.
-- The rules of the user.
-- The expected output.
-- The checks that establish success.
-- The actions that still require permission.
-
-The next request becomes:
-
-> Run my cash-flow report.
-
-### The important part is the learning loop
-
-Not “the agent remembers everything.” Instead:
-
-> A correction becomes an explicit rule. A failure becomes a check. A successful task becomes a reusable ability.
-
-For engineering work, a correction can become a regression test. For documents, it can become a checklist or example. For judgment-heavy tasks, it can become a stated preference, not an invented objective truth.
-
-Changes are proposed, versioned, and reversible. They never silently expand permissions.
-
-This is closer to a personal power tool than a generic assistant. The user gradually builds a repertoire of things they can accomplish easily.
-
-Featherweight already has many ingredients: skills, profiles, recorded runs, artifacts, and a conversational builder. The differentiator is the quality of this refinement cycle, not another configuration format.
-
-**Potential positioning:** Do it once. Make it yours. Get better every time.
-
-## 3. Give it an obligation, not a prompt
-
-### Own the follow-through
-
-Users often do not want another answer. They want a nagging obligation removed.
-
-Compare:
-
-> Summarize these open issues.
-
-With:
-
-> Help me keep this release ready. Tell me when something changes that threatens Friday.
-
-The second requires continuity:
-
-- Remember the desired state.
-- Watch relevant signals.
-- Notice meaningful changes.
-- Prepare useful next actions.
-- Interrupt only when the person needs to decide.
-- Explain why an interruption matters.
-
-This is not merely scheduled prompting. It is **attention management**.
-
-A useful notification says:
-
-> The release is blocked by a new dependency failure. I reproduced it and prepared a patch. Here are the test results. Do you want to open the PR?
-
-An unhelpful notification says:
-
-> Here is your daily summary of 38 issues.
-
-### Why people would care
-
-It removes the burden of remembering to check.
-
-This is also the hardest concept to get right. Bad monitoring creates noise. Vague responsibilities create unbounded work. Start with one narrow obligation and explicit limits.
-
-**Potential positioning:** Keep the outcome in sight without keeping the task in your head.
-
-## Recommended direction: combine the first two
-
-Build around:
-
-> A personal workbench where you can try things safely and turn what works into lasting capabilities.
-
-That produces a simple loop:
-
-```text
-Express an intention
-        ↓
-Try it with me
-        ↓
-Inspect the result
-        ↓
-Correct what matters
-        ↓
-Save the useful capability
-        ↓
-Delegate it next time
-```
-
-The user can move between three natural modes:
-
-- **With me:** help me explore and understand.
-- **For me:** execute this understood task.
-- **Keep doing:** repeat a proven responsibility within agreed limits.
-
-Those are not three different products. They are stages of trust.
-
-They avoid forcing users to choose between a passive chatbot and an unsupervised agent.
-
-## The interface matters as much as the runtime
-
-The primary object is not an agent personality or a scrolling transcript. It is **the work itself**:
-
-- A document being improved.
-- A patch being tested.
-- A decision with alternatives and evidence.
-- An analysis with assumptions the user can change.
-- A recurring responsibility with a clear current state.
-
-Conversation helps manipulate that work. It is not the only way to see it.
-
-Useful controls include:
-
-- **Try another approach**
-- **Change this assumption**
-- **Show the evidence**
-- **Compare versions**
-- **Apply these changes**
-- **Use this rule next time**
-
-Those controls give people direct leverage. “Create agent,” “configure tool,” and “view execution graph” mostly expose implementation.
-
-## Product decision: remove the Usage destination
-
-Remove the Usage page from the browser and MCP App navigation. Remove the aggregate usage section from agent cards too. The product is a workbench, not a monitoring console.
-
-Operational reporting belongs in Prometheus/Grafana or an equivalent observability stack:
-
-- Model tokens and cost, with cost available only when prices are configured.
-- Model and tool latency, errors, throughput, and availability.
-- Run outcomes, pending approvals, and budget or loop failures.
-- Infrastructure and fleet health.
-
-Keep task-specific limits, budget warnings, and relevant cost information beside the work that they affect. Do not remove budget enforcement or durable usage records from the kernel. Unknown cost is not zero cost.
-
-The `/metrics` surface and telemetry observer already exist. Ship a supported scrape configuration, a small Grafana dashboard, and useful alerts rather than rebuilding them in fw. Keep the metrics endpoint inside the monitoring perimeter. Avoid user identities, run IDs, prompts, and other sensitive or unbounded values as metric labels.
-
-Prometheus is not the authoritative billing or audit record. Scrapes can miss short-lived processes, and counters reset on restart. Preserve durable records for exact accounting. Under AX, avoid scraping sleeping actors through the wake-on-request router. Use an always-on collector or control-plane path where needed.
-
-Removing a UI destination does not require immediately deleting the native usage API or the MCP `usage` tool. Preserve compatibility or deprecate those contracts explicitly. Remove Usage from the advertised dashboard views and handle old links deliberately.
-
-This section records the removal decision. It does not implement the UI change.
-
-## UI direction: a calm workbench
-
-The existing UI has useful foundations: system typography, light and dark themes, a responsive split layout, collapsed tool steps, file previews, schema-driven questions, and a conversational agent builder. Preserve those strengths. Improve hierarchy and interaction before adding decoration.
-
-### Start with the intention
-
-Put a composer on home: “What would you like to move forward?” Include attachments from the first message. Keep agent selection available as a compact choice, with the selected agent visible, rather than requiring a visit to an agent card before starting work.
-
-On wide screens, use the main pane for this composer or the selected work. Do not open to a large empty pane that only asks the person to select a conversation.
-
-Keep primary navigation small: work, reusable agents, and an account/settings menu. Put fleet topology and infrastructure details in the operator view. Reveal a member or connection when it changes what the person can do, not on every row.
-
-### Name the work, not just the worker
-
-Title a work item “Fix checkout retries” rather than “default” or “reviewer.” Put the agent name, owner, and time beneath the title. Keep avatars small and secondary.
-
-Prioritize Needs you, In progress, and Recent results. Use “Ready to review” only when a reviewable result exists. A model ending a run does not prove that the work passed its checks.
-
-Replace the large status distribution bar with a restrained summary when it helps. The most important visual element is the next useful action, not the ratio of completed to failed runs.
-
-### Give the result a place to live
-
-On desktop, give the selected work a stable result area. Show the current artifact or change, a short summary, evidence, and the next action. Keep the conversation and detailed activity available without making the person scroll through them to find the deliverable.
-
-On mobile and in narrow MCP hosts, use the same hierarchy in one column: result or pending decision first, supporting details next, conversation within reach.
-
-Add result manifests and immutable deliverables before presenting proposed comparison, rehearsal, or verification controls as implemented features. A new layout cannot manufacture evidence that the runtime does not record.
-
-### Make decisions legible
-
-An approval card names the action, target, consequences, and scope of consent. Show the exact change or payload before the decision. Use a specific action label such as “Open pull request” when the tool provides trustworthy structured data. Keep a neutral generic label when the action cannot be described reliably.
-
-Distinguish an answer to a question from permission to act. Keep raw JSON and tool names behind Details. Never hide material consequences merely to make the card shorter.
-
-### Remove friction rather than add spectacle
-
-- Remove the blocking feather opening animation. Keep the feather as a quiet brand mark or a small loading indicator. Render usable content as soon as it arrives.
-- Preserve message drafts, attachments, scroll position, keyboard focus, and in-progress approval answers across navigation and refreshes.
-- Update changed rows instead of replacing a whole form-bearing view during polling.
-- Open long conversations at their recent end and load older history on demand instead of fetching every page before rendering.
-- Keep the neutral palette and one primary accent. Use status colors with words or icons, not as the only signal.
-- Use larger, comfortable action targets, clear focus indicators, restrained motion, and accessible contrast. Keep monospace for code and paths.
-- Put model selectors, globs, identity patterns, and JSON behind an Advanced section. Lead the agent editor with responsibility, boundaries, and examples.
-- Offer ordinary sign-in for browser users. Token pasting remains a developer escape hatch.
-- In an MCP App, respect the host theme and available display modes. Keep useful text fallbacks when the host cannot render the page.
-
-Elegance means less explanation, fewer interruptions, and a clear next action. It does not require another frontend framework.
-
-## MCP parity: current code review
-
-The browser dashboard and MCP App serve the same `surface/dashboard/index.html`. Its native and MCP adapters expose matching operations for the current shared page. Most improvements to that page therefore benefit both environments.
-
-This is strong workflow parity, not complete API or host-experience parity.
-
-| Area | Current status |
-|---|---|
-| Start, inspect, follow up, approve, and cancel runs | Present through both native API and MCP tools. |
-| Profile discovery, creation, editing, deletion, and dry-run validation | Present through both. |
-| Conversation, questions, child runs, file previews, and agent-builder cards | Shared UI and shared server-side view models. |
-| Attachments | Native and MCP run/send APIs support them. The shared initial-run form has no attachment picker; the follow-up composer does. Host payload limits still need testing. |
-| Fleet run actions | Native routes and MCP management tools forward supported actions. Cross-member operations require a forwardable caller credential. |
-| Live updates | The shared page polls on both transports. Native API also has an SSE event stream. MCP offers progress on waiting calls and paged reads, but no Tasks extension in this implementation. |
-| Raw file access | Native API offers file listings and raw downloads. MCP `run_file` offers bounded text/image previews, not an equivalent general binary download. The shared page also lacks a download action. |
-| Runtime tool discovery | Native `/v1/tools` lists runtime tool specifications. MCP `tools/list` lists the management and explicitly exposed tools, not the same capability catalog. |
-| Fleet resources | MCP management tools can reach remote runs. `fw://runs/{id}` and its ledger resource read local runs only. |
-| Text-only home | The MCP `dashboard` response summarizes all visible runs. The shared page defaults to the person and their teams. Access checks still apply, but the home experiences differ. |
-| Builder without the page | Typed profile operations exist, but the guided builder prompt and “Save as agent” assembly live in JavaScript. A text-only host has to reconstruct the workflow. |
-| Approval retry after restart | Signed MCP `requestState` needs a stable `FW_MCP_STATE_KEY`, shared across replicas. Without it, the approval stays in the ledger but the old signed retry cannot be verified. The explicit `approve` tool remains the fallback. |
-
-Close the practical gaps before adding more protocol surface:
-
-1. Share the home scope, builder flow, and result semantics between visual and text-only experiences.
-2. Add a discoverable capability catalog and an authorized artifact retrieval path that suit both transports.
-3. Document remote resource limitations and configure durable approval signing in the supported deployment.
-4. Exercise the same workflows through native HTTP, the MCP App bridge, and text-only MCP: create, preview, start, attach, approve, resume, inspect a result, and reuse the setup.
-5. Test real hosts for frame sizing, theme, keyboard use, attachment limits, errors, and disconnect recovery. Shared HTML alone does not establish host compatibility.
-
-Rehearsal, version comparison, accepted-result evidence, and correction-to-rule learning remain proposed product capabilities on both surfaces.
-
-Review basis: source inspection and passing short tests for `surface/dashboard`, `surface/native`, `surface/mcp`, `surface/metrics`, and `telemetry`. This pass did not include a rendered-browser or live MCP-host usability test.
-
-## Where the differentiation becomes defensible
-
-None of these ideas is individually unique. The differentiation comes from delivering them together exceptionally well.
-
-The advantage could become:
-
-1. **Reliable rehearsal:** real execution and checks, not persuasive previews.
-2. **User-owned accumulated knowledge:** explicit, portable rules and capabilities.
-3. **Low supervision cost:** the system presents evidence and decisions, not a stream of activity.
-4. **Continuity across tools:** the same capabilities work from the browser, an IDE, or an MCP host.
-5. **Trust earned through repeated results:** the user knows what a capability does because they helped refine it.
-
-Open source and self-hosting reinforce the story:
-
-> The abilities you build belong to you.
-
-They are supporting evidence, not the headline.
-
-## Validate before building much more
-
-Find five people with the same recurring, messy task. Choose a task involving judgment and several tools, not a simple automation that already has an obvious script.
-
-Help each person complete it three times.
-
-Watch for:
-
-- What they explain repeatedly.
-- Which mistakes they consistently correct.
-- What evidence they need before accepting the result.
-- Where they want exploration versus delegation.
-- Whether the third attempt requires substantially less supervision.
-
-The key experiment:
-
-> Does the product become more useful after correction, or does each interaction feel like starting over?
-
-If users begin saying “this is how I do that now,” the product is something stronger than a chatbot they occasionally consult.
-
-## North star
-
-> Every successful interaction leaves the user with more capability, not merely another answer.
-
-That is a bicycle for the mind.
+Featherweight does not ship an operational monitoring console or a billing dashboard. Workers push Prometheus metrics, CloudEvents ledger logs, and OpenTelemetry spans over OTLP (`telemetry/otlp.go`) to an external collector. Sleeping Tasks stop pushing, and nothing scrapes a sleeping Task through the wake-on-request router. The ledger remains the exact record of token usage and tool execution for audit and budget enforcement.

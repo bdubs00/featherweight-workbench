@@ -206,7 +206,7 @@ The `server/discover` and `tools/list` results carry `ttlMs` and `cacheScope`, s
 
 ## 4. Fleet
 
-The fleet is changing shape (the kernel repository, KERNEL_SPLIT.md section 7). A worker becomes a bare kernel that publishes no record, and the front reads the Task list from the ax API and the state of the runs from the egress stream of the workers. The record and the heartbeat below stay until every worker runs the bare binary. The view, the forwarding, and the authorization by the rules of the owner stay as they are.
+The fleet splits into workers and a front (`docs/PRODUCT_DIRECTION.md` and the kernel repository, `docs/ROADMAP.md` section 2). A worker becomes a bare kernel that publishes no record, and the front reads the Task list from the ax API and the state of the runs from the egress stream of the workers. The record and the heartbeat below stay until every worker runs the bare binary. The view, the forwarding, and the authorization by the rules of the owner stay as they are.
 
 A fleet is a set of `fw` processes that share one bus and one fleet subject. Each process in the fleet is a member. A member publishes a record of itself and of its runs on the bus. Every member reads the records of the others. Any member therefore serves one view of the whole fleet through its native API, its MCP server, and its dashboard. No member leads the others, and no election takes place.
 
@@ -296,17 +296,9 @@ The directory `examples/agentgateway` puts a fleet behind agentgateway on one pu
 
 The A2A server and the MCP resources `fw://runs/{id}`, `fw://runs/{id}/ledger`, and `fw://runs/{id}/files/{+path}` serve the runs of their own process only.
 
-### 4.8 Security
-
-A record carries the inputs, the outputs, and the tool inputs of runs, cut to size. The `Redact` middleware removes secrets before an event enters the ledger, so no secret reaches a record. Limit publish and subscribe on the fleet subject to `fw` workloads, for example with NATS accounts or Redis ACLs. A process that can publish on the fleet subject can show false runs in a view. It cannot send a credential to an address outside `fleet.forward`, and it cannot act on a real run, because the owner decides.
-
-### 4.9 What the fleet does not do
-
-The fleet shares no ledger, elects no leader, and schedules no work. Bus intake (the kernel architecture, section 9.3) spreads work across the processes that consume one queue. A2A peers (the kernel architecture, section 7.4) let one agent ask another.
-
 ### 4.8 The platforms as sources
 
-The kernel repository, KERNEL_SPLIT.md section 7, defines a worker as a bare kernel that publishes no record. The front sees such a worker through two sources that the configuration names. `workbench.fleet.atespaces` names the atespaces whose Tasks are members: at every interval the front lists them on the ax API at `ax.server`, and each Task is a member named `<atespace>/<task>` with the address `ax:<atespace>/<task>` and the state of its phase, live when it runs, quiet when it is suspended or pending, stopped otherwise. A Task that leaves the list leaves the view. `workbench.fleet.egress` names the subject prefix of the egress stream of the workers, `bus.egress` on each of them. The front subscribes to that stream and projects every run from its events with the projection of the kernel, so the state, the title, the pending approval, and the turns of a run are those of the ledger of the worker. Every event names its process in `node`, which the kernel sets from `node` of its configuration and the package `ax` sets to `ax:<atespace>/<task>`, so the front knows which member holds the run. A worker sets `bus.egressTypes` to the list `fleet.EgressTypes`, which carries the state of a run and nothing of its content.
+A worker in the target fleet is a bare kernel that publishes no record (`docs/PRODUCT_DIRECTION.md`). The front sees such a worker through two sources that the configuration names. `workbench.fleet.atespaces` names the atespaces whose Tasks are members: at every interval the front lists them on the ax API at `ax.server`, and each Task is a member named `<atespace>/<task>` with the address `ax:<atespace>/<task>` and the state of its phase, live when it runs, quiet when it is suspended or pending, stopped otherwise. A Task that leaves the list leaves the view. `workbench.fleet.egress` names the subject prefix of the egress stream of the workers, `bus.egress` on each of them. The front subscribes to that stream and projects every run from its events with the projection of the kernel, so the state, the title, the pending approval, and the turns of a run are those of the ledger of the worker. Every event names its process in `node`, which the kernel sets from `node` of its configuration and the package `ax` sets to `ax:<atespace>/<task>`, so the front knows which member holds the run. A worker sets `bus.egressTypes` to the list `fleet.EgressTypes`, which carries the state of a run and nothing of its content.
 
 When a Task starts to run, the front reads its runs once through the router, with the static token of the fleet, so the runs that started before the front listened are in the view. A running Task is awake, so the read wakes nobody, and a suspended Task holds no active run. After that read the front lives on the stream. A worker outside ax that publishes events is visible too, under its node name, without an address.
 
@@ -319,6 +311,14 @@ A job is many pieces of the same work, one run each, spread over the workers tha
 Every request names the person who sent the job, so the run on the worker acts as that person, and it carries the batch name in the metadata key `fw.batch`, which a child run inherits in this process or in a child Task. The idempotency key of each request is the batch name and the position of the item, so a job that is sent twice starts each run once. The tool `batch` tells how a job goes: the runs of the batch by state, the members that hold them, the runs that wait for the person, and the runs that failed with their errors. `runs_list` and `GET /v1/fleet/runs` take `batch` as a filter, and `GET /v1/runs` of a worker takes it too. The view of the front sees the runs of a job through the egress stream or the records, as section 4.8 describes, so a run appears when a worker takes it.
 
 A batch name is at most 128 characters without spaces. Without one, `enqueue` makes an id. One call takes at most 500 items; a larger job goes in several calls under one batch name.
+
+### 4.10 Security
+
+A record carries the inputs, the outputs, and the tool inputs of runs, cut to size. The `Redact` middleware removes secrets before an event enters the ledger, so no secret reaches a record. Limit publish and subscribe on the fleet subject to `fw` workloads, for example with NATS accounts or Redis ACLs. A process that can publish on the fleet subject can show false runs in a view. It cannot send a credential to an address outside `fleet.forward`, and it cannot act on a real run, because the owner decides.
+
+### 4.11 What the fleet does not do
+
+The fleet shares no ledger, elects no leader, and schedules no work. Bus intake (the kernel architecture, section 9.3) spreads work across the processes that consume one queue. A2A peers (the kernel architecture, section 7.4) let one agent ask another.
 
 ## 5. Browser sign-in
 

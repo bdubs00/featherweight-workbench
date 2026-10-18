@@ -5,11 +5,11 @@ This repository holds the workbench for people on top of the kernel, featherweig
 - the page at `/ui`, with the home, the result of a run, the conversation, and the agent builder
 - browser sign-in with OpenID Connect, the `oidc` authentication mode
 - the MCP server at `/mcp` and over standard input and output, for desktop clients and MCP App hosts
-- the fleet, one view of many `fw` processes over retained bus records
+- the fleet, one view of many `fw` workers from the ax API, the bus egress stream, and retained bus records
 - connections, with which an MCP server of the kernel acts for the person who started a run
 - the `propose_agent` tool and the titles that a model writes for runs
 
-`fw-workbench` takes every verb of `fw`, with the same flags and the same configuration. The design is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The kernel design is in the architecture of the kernel.
+`fw-workbench` takes every verb of `fw`, with the same flags and the same configuration. The product thesis is in [docs/PRODUCT_DIRECTION.md](docs/PRODUCT_DIRECTION.md), and the design is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The kernel design is in the architecture of the kernel.
 
 ## Build
 
