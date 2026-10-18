@@ -32,6 +32,7 @@ func (s *branchSpawner) Cancel(ctx context.Context, _, id string) error {
 	return s.child.Cancel(ctx, id)
 }
 func (s *branchSpawner) Place(context.Context, *fw.Run) (string, error) { return s.member, nil }
+func (s *branchSpawner) Abandon(context.Context, string) error          { return nil }
 func (s *branchSpawner) Branch(ctx context.Context, _ string, events []fw.Event, req fw.ForkRequest) (*fw.Run, error) {
 	select {
 	case <-s.release:
