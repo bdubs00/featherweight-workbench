@@ -51,8 +51,11 @@ func (s *server) mount() error {
 		{"GET /v1/home", s.home},
 		{"GET /v1/home/others", s.others},
 		{"POST /v1/builder", s.builder},
-		{"GET /v1/runs/{id}/result", s.k.Remote(s.result)},
-		{"GET /v1/runs/{id}/transcript", s.k.Remote(s.transcript)},
+		// A worker serves the native API of the kernel alone, so these two
+		// views of a run of another member are built here from its run and
+		// its events, not forwarded.
+		{"GET /v1/runs/{id}/result", s.result},
+		{"GET /v1/runs/{id}/transcript", s.transcript},
 		{"GET /v1/fleet", s.fleet},
 		{"GET /v1/fleet/runs", s.fleetRuns},
 		{"GET /v1/usage", s.usage},

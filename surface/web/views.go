@@ -5,6 +5,8 @@ package web
 // page, and the OAuth protected-resource document.
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/teams"
 )
 
@@ -106,12 +109,49 @@ func (s *server) others(w http.ResponseWriter, r *http.Request) {
 // what it needs next (dashboard.Result). The read authorizes the caller as
 // GET /v1/runs/{id} does.
 func (s *server) result(w http.ResponseWriter, r *http.Request) {
-	res, err := dashboard.ResultOf(r.Context(), s.a, r.PathValue("id"))
+	id := r.PathValue("id")
+	res, err := dashboard.ResultOf(r.Context(), s.a, id)
+	if errors.Is(err, fw.ErrRunNotFound) {
+		// A run of another member: its owner serves the native API of the
+		// kernel alone, so the result is built here from its ledger.
+		if member, oerr := s.ownerOf(r.Context(), id); oerr != nil {
+			err = oerr
+		} else if member != "" {
+			res, err = s.remoteResult(r.Context(), member, id)
+		}
+	}
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// ownerOf returns the member of the view that holds a run that this process
+// does not have, or "" when the view knows none.
+func (s *server) ownerOf(ctx context.Context, id string) (string, error) {
+	f := fleet.Of(s.a)
+	if f == nil {
+		return "", nil
+	}
+	run, err := f.Run(ctx, id)
+	switch {
+	case errors.Is(err, fw.ErrRunNotFound):
+		return "", nil
+	case err != nil:
+		return "", err
+	}
+	return run.Member, nil
+}
+
+// remoteResult builds the result of a run of another member from its
+// ledger, read through the fleet with the credential of the caller.
+func (s *server) remoteResult(ctx context.Context, member, id string) (dashboard.Result, error) {
+	run, events, err := fleet.MemberLedger(ctx, fleet.Of(s.a), member, id)
+	if err != nil {
+		return dashboard.Result{}, err
+	}
+	return dashboard.ResultFrom(ctx, s.a, run, events)
 }
 
 // transcript answers GET /v1/runs/{id}/transcript: the run object and its
@@ -129,6 +169,17 @@ func (s *server) result(w http.ResponseWriter, r *http.Request) {
 func (s *server) transcript(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	run, err := s.a.Get(r.Context(), id)
+	if errors.Is(err, fw.ErrRunNotFound) {
+		member, oerr := s.ownerOf(r.Context(), id)
+		if oerr != nil {
+			s.fail(w, r, oerr)
+			return
+		}
+		if member != "" {
+			s.remoteTranscript(w, r, member, id)
+			return
+		}
+	}
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -180,6 +231,91 @@ func (s *server) transcript(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.fail(w, r, err)
 		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"run": run, "items": dashboard.Transcript(events), "next": next, "prev": prev})
+}
+
+// transcriptPage reads the paging parameters of the transcript route. It
+// writes the problem and returns false when they do not fit.
+func transcriptPage(w http.ResponseWriter, r *http.Request) (from, before uint64, limit int, ok bool) {
+	q := r.URL.Query()
+	if q.Get("from") != "" && q.Get("before") != "" {
+		problem(w, r, http.StatusBadRequest, "the query parameters from and before do not go together; from reads forward and before reads back")
+		return 0, 0, 0, false
+	}
+	for _, p := range []struct {
+		name string
+		v    *uint64
+	}{{"from", &from}, {"before", &before}} {
+		if v := q.Get(p.name); v != "" {
+			n, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				problem(w, r, http.StatusBadRequest, "the query parameter "+p.name+" must be a sequence number")
+				return 0, 0, 0, false
+			}
+			*p.v = n
+		}
+	}
+	limit = defaultEventsLimit
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			problem(w, r, http.StatusBadRequest, "the query parameter limit must be a positive number")
+			return 0, 0, 0, false
+		}
+		limit = min(n, maxEventsLimit)
+	}
+	return from, before, limit, true
+}
+
+// remoteTranscript answers the transcript route for a run of another
+// member from the events of its owner, with the same pages as for a run of
+// this process. The owner authorizes the read with the credential of the
+// caller.
+func (s *server) remoteTranscript(w http.ResponseWriter, r *http.Request, member, id string) {
+	from, before, limit, ok := transcriptPage(w, r)
+	if !ok {
+		return
+	}
+	f := fleet.Of(s.a)
+	var (
+		run        *fw.Run
+		events     []fw.Event
+		next, prev uint64
+		err        error
+	)
+	switch {
+	case from > 0:
+		run, events, next, err = fleet.MemberEvents(r.Context(), f, member, id, from, limit)
+		if from > 1 {
+			prev = from
+		}
+	case before > 1:
+		// The last limit events before the sequence number: read forward
+		// from the start of that page.
+		start := uint64(1)
+		if before > uint64(limit) {
+			start = before - uint64(limit)
+		}
+		run, events, _, err = fleet.MemberEvents(r.Context(), f, member, id, start, int(before-start))
+		if start > 1 {
+			prev = start
+		}
+	case before == 1:
+		run, err = fleet.MemberRun(r.Context(), f, member, id)
+		events = []fw.Event{}
+	default:
+		run, events, _, err = fleet.MemberEvents(r.Context(), f, member, id, 0, limit)
+		if len(events) > 0 && events[0].Seq > 1 {
+			prev = events[0].Seq
+		}
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if before > 0 && before <= run.Seq {
+		next = before
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"run": run, "items": dashboard.Transcript(events), "next": next, "prev": prev})
 }

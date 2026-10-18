@@ -313,6 +313,25 @@ func ResultOf(ctx context.Context, a *fw.Agent, id string) (Result, error) {
 	return res, nil
 }
 
+// ResultFrom builds the result of a run of another member from its run
+// object and every event of its ledger, which the surface read through the
+// fleet (fleet.MemberLedger). The tools are those of this process. The
+// limits that the run nears are left out, because its budget lives with
+// its owner, and no action saves an agent from it.
+func ResultFrom(ctx context.Context, a *fw.Agent, run *fw.Run, events []fw.Event) (Result, error) {
+	specs, err := a.ToolSpecs(ctx)
+	if err != nil {
+		return Result{}, fmt.Errorf("dashboard: list the tools: %w", err)
+	}
+	fold := newResultFold(specsByName(specs))
+	for _, e := range events {
+		fold.add(e)
+	}
+	res := fold.result(run)
+	res.Next = nextActions(run, res, false)
+	return res, nil
+}
+
 // String is the result as text for a host that shows only text.
 func (r Result) String() string {
 	return resultText(r)
