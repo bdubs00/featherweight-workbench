@@ -115,6 +115,10 @@ func (f *Fleet) Forward(ctx context.Context, member string, req *http.Request) (
 		}
 		return nil, fmt.Errorf("fleet: %w: %s did not answer: %v", ErrNoRoute, member, err)
 	}
+	if actor != "" && f.platform != nil {
+		// The Task answered, so it is awake; its phase follows (suspend.go).
+		f.platform.resumed(member)
+	}
 	return resp, nil
 }
 

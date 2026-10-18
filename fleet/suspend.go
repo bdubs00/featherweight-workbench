@@ -120,19 +120,57 @@ func (f *Fleet) WakeFor(agent string) {
 }
 
 // wake reads the status of a sleeping Task through the router, which
-// resumes it, and marks the member live when the read succeeds.
+// resumes it, and makes the phase of the Task follow (resumed).
 func (p *platform) wake(ctx context.Context, m *platformMember, agent string) {
 	var st view.Status
 	if err := p.read(ctx, m, "/v1/status", &st); err != nil {
 		p.f.log.Warn("fleet: wake a Task for a job", "member", m.name, "agent", agent, "error", err)
 		return
 	}
-	now := time.Now()
+	p.f.log.Info("fleet: woke a Task for a job", "member", m.name, "agent", agent)
+	p.resumed(m.name)
+}
+
+// resumed makes the phase of a Task follow a request that reached it
+// through the router. The router wakes a sleeping actor on a request, and
+// the ax API does not learn of it: the phase stays Suspended, so the
+// controller would never suspend the Task again, and the actor would run
+// on. The front marks the member live and calls ResumeTask, which changes
+// nothing for a Task that runs, once per wake. Forward calls it after every
+// answer of an ax member, so an approval or a run that wakes a Task counts.
+func (p *platform) resumed(member string) {
 	p.mu.Lock()
+	m := p.members[member]
+	client := p.client
+	if m == nil || m.atespace == "" || client == nil {
+		p.mu.Unlock()
+		return
+	}
+	now := time.Now()
 	if m.state != MemberLive {
 		m.state, m.liveSince = MemberLive, now
 	}
 	m.seen = now
+	if m.phase == phaseRunning || m.resuming {
+		p.mu.Unlock()
+		return
+	}
+	m.resuming = true
 	p.mu.Unlock()
-	p.f.log.Info("fleet: woke a Task for a job", "member", m.name, "agent", agent)
+	go func() {
+		ctx, cancel := context.WithTimeout(p.f.ctx, suspendTimeout)
+		defer cancel()
+		_, err := client.ResumeTask(ctx, &v1alpha1.ResumeTaskRequest{Atespace: m.atespace, Name: taskOf(m)})
+		p.mu.Lock()
+		m.resuming = false
+		if err == nil {
+			m.phase = phaseRunning
+		}
+		p.mu.Unlock()
+		if err != nil {
+			p.f.log.Warn("fleet: the phase of a woken Task does not follow", "member", m.name, "error", err)
+			return
+		}
+		p.f.log.Info("fleet: the phase of a woken Task follows", "member", m.name)
+	}()
 }

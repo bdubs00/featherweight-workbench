@@ -27,6 +27,18 @@ func (f *fakeAX) SuspendTask(_ context.Context, req *v1alpha1.SuspendTaskRequest
 	return &v1alpha1.Task{}, nil
 }
 
+// ResumeTask records the call and moves the Task to the phase Running.
+func (f *fakeAX) ResumeTask(_ context.Context, req *v1alpha1.ResumeTaskRequest) (*v1alpha1.Task, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.tasks[req.GetAtespace()][req.GetName()]; !ok {
+		return nil, context.Canceled
+	}
+	f.tasks[req.GetAtespace()][req.GetName()] = "Running"
+	f.resumed = append(f.resumed, req.GetAtespace()+"/"+req.GetName())
+	return &v1alpha1.Task{}, nil
+}
+
 func (f *fakeAX) phase(atespace, name string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -126,6 +138,18 @@ func TestSuspendIdleTasksAndWakeForJobs(t *testing.T) {
 		t.Fatalf("Enqueue = %d, %v", sent, err)
 	}
 	eventually(t, "the sleeping Task is woken for the job", func() bool { return tasks.count("team/alpha") > before })
+	// The ax API learns of the wake, so the phase follows, and the Task is
+	// suspended again once it idles: the cycle closes.
+	eventually(t, "the phase of the woken Task follows", func() bool {
+		ax.mu.Lock()
+		defer ax.mu.Unlock()
+		return len(ax.resumed) == 1 && ax.resumed[0] == "team/alpha"
+	})
+	eventually(t, "the woken Task is suspended again when it idles", func() bool {
+		ax.mu.Lock()
+		defer ax.mu.Unlock()
+		return len(ax.suspended) == 2
+	})
 	woken := tasks.count("team/alpha")
 	if _, _, err := Enqueue(ctx, front.a, "nobody", []fw.RunRequest{{Input: "x"}}); err != nil {
 		t.Fatal(err)
@@ -135,10 +159,10 @@ func TestSuspendIdleTasksAndWakeForJobs(t *testing.T) {
 		t.Fatalf("a job for a profile that the Task does not serve woke it: %d reads, want %d", tasks.count("team/alpha"), woken)
 	}
 	ax.mu.Lock()
-	n := len(ax.suspended)
+	n, r := len(ax.suspended), len(ax.resumed)
 	ax.mu.Unlock()
-	if n != 1 {
-		t.Fatalf("SuspendTask calls = %d, want 1", n)
+	if n != 2 || r != 1 {
+		t.Fatalf("SuspendTask calls = %d, ResumeTask calls = %d; want 2 and 1", n, r)
 	}
 }
 

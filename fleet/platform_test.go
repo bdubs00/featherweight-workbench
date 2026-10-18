@@ -24,6 +24,7 @@ type fakeAX struct {
 	mu        sync.Mutex
 	tasks     map[string]map[string]string // atespace to task name to phase
 	suspended []string                     // the Tasks that SuspendTask moved, in order
+	resumed   []string                     // the Tasks that ResumeTask moved, in order
 }
 
 func newFakeAX(t *testing.T, tasks map[string]map[string]string) *fakeAX {

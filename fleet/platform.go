@@ -70,8 +70,12 @@ type platformMember struct {
 	url      string
 	atespace string
 	state    string
+	phase    string // the phase of the Task as the ax API last gave it
 	seen     time.Time
 	filled   bool // the runs of the member were read once
+	// resuming is true while a ResumeTask call runs for the member
+	// (suspend.go), so a burst of requests makes one call.
+	resuming bool
 	// liveSince is when the phase of the Task last became Running; the
 	// suspend controller counts idle time from it when the member has
 	// no run (suspend.go).
@@ -202,7 +206,8 @@ func (p *platform) poll(ctx context.Context) {
 				p.members[name] = m
 			}
 			was := m.state
-			m.state, m.seen = stateOfPhase(t.GetStatus().GetPhase()), now
+			m.phase = t.GetStatus().GetPhase()
+			m.state, m.seen = stateOfPhase(m.phase), now
 			if m.state == MemberLive && was != MemberLive {
 				m.liveSince = now
 			}
