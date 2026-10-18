@@ -4,7 +4,10 @@
 #   fleet.example.com          the public host of the gateway
 #   https://idp.example.com    the OIDC issuer that signs the tokens of your people
 #   https://models.example.com/v1, MODEL   an OpenAI-compatible model server and model id
-#   ghcr.io/bdubs00/featherweight-workbench:static, :toolbox   the fw-workbench images
+#   ghcr.io/bdubs00/featherweight-workbench:static   the fw-workbench image of the front
+#   ghcr.io/bdubs00/featherweight-kernel:toolbox     the kernel image of a worker; a lean
+#                                                    build carries only the drivers it uses
+#                                                    (the kernel architecture, section 15)
 #
 # Install agentgateway v1.6.0 and its CRDs first (see README.md).
 apiVersion: v1
@@ -235,7 +238,7 @@ spec:
     spec:
       containers:
         - name: fw
-          image: ghcr.io/bdubs00/featherweight-workbench:toolbox
+          image: ghcr.io/bdubs00/featherweight-kernel:toolbox
           args: ["serve"]
           envFrom:
             - configMapRef: {name: fw-fleet}
