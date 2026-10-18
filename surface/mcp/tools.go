@@ -25,13 +25,14 @@ const (
 	toolRunStatus = "run_status"
 	toolApprove   = "approve"
 	toolCancel    = "cancel"
+	toolFork      = "fork"
 	toolSend      = "send"
 )
 
 // workTools are the names that an exposed tool never takes: the work tools
 // and the management tools.
 var workTools = map[string]bool{
-	toolRun: true, toolRunStatus: true, toolApprove: true, toolCancel: true, toolSend: true,
+	toolRun: true, toolRunStatus: true, toolApprove: true, toolCancel: true, toolSend: true, toolFork: true,
 	toolWhoami: true, toolAgentsList: true, toolAgentGet: true, toolAgentPut: true, toolAgentDelete: true,
 	toolRunsList: true, toolRunEvents: true, toolRunFile: true, toolUsage: true, toolDashboard: true,
 	toolRunResult: true, toolAgentBuilder: true, toolCapabilities: true,
@@ -280,6 +281,25 @@ type runIDArgs struct {
 	RunID string `json:"runId"`
 }
 
+type forkArgs struct {
+	RunID    string            `json:"runId"`
+	Seq      uint64            `json:"seq,omitempty"`
+	Input    string            `json:"input,omitempty"`
+	Model    string            `json:"model,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
+	Spawn    bool              `json:"spawn,omitempty"`
+}
+
+// forkSchema is the input of the tool fork.
+const forkSchema = `{"type":"object","properties":{
+	"runId":` + runIDSchema + `,
+	"seq":{"type":"integer","minimum":0,"description":"The sequence number of the last event of the run that the branch keeps. 0 or absent keeps every event."},
+	"input":{"type":"string","description":"A message that follows the kept events, so the branch goes on in another direction."},
+	"model":{"type":"string","description":"A model selector or a name from models for the branch."},
+	"metadata":{"type":"object","additionalProperties":{"type":"string"},"description":"Metadata of the branch."},
+	"spawn":{"type":"boolean","description":"Run the branch in a Task of its own, with a workspace of its own, when the member has a spawner."}
+},"required":["runId"],"additionalProperties":false}`
+
 type approveArgs struct {
 	RunID      string          `json:"runId"`
 	ApprovalID string          `json:"approvalId"`
@@ -326,6 +346,13 @@ func (s *server) addWorkTools() {
 		InputSchema: json.RawMessage(cancelSchema),
 		Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, s.cancel)
+	sdk.AddTool(s.srv, &sdk.Tool{
+		Name:        toolFork,
+		Title:       "Branch a run",
+		Description: "Branch a run: a new run that keeps the events of the run up to seq, with the conversation to that point, and goes on with the message input, with another model, or the same way again. With spawn, the branch runs in a Task of its own. The source does not change. Read the branch with run_status.",
+		InputSchema: json.RawMessage(forkSchema),
+		Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(false), OpenWorldHint: ptr(true)},
+	}, s.fork)
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolSend,
 		Title:       "Send a follow-up",
@@ -870,6 +897,25 @@ func (s *server) cancel(ctx context.Context, req *sdk.CallToolRequest, in runIDA
 	}
 	s.log.Info("mcp run canceled", "run", in.RunID, "principal", principalOf(ctx, req))
 	return s.status(ctx, req, in.RunID), nil, nil
+}
+
+// fork branches a run of this process or of another member.
+func (s *server) fork(ctx context.Context, req *sdk.CallToolRequest, in forkArgs) (*sdk.CallToolResult, any, error) {
+	if strings.TrimSpace(in.RunID) == "" {
+		return errorResult("Invalid request: the argument runId is required."), nil, nil
+	}
+	branch, err := s.a.Fork(ctx, in.RunID, fw.ForkRequest{Seq: in.Seq, Input: in.Input, Model: in.Model, Metadata: in.Metadata, Spawn: in.Spawn, Origin: fw.OriginMCP})
+	if err != nil {
+		if res := s.elsewhere(withCredential(ctx, req), in.RunID, err, func(ctx context.Context, member string) *sdk.CallToolResult {
+			body := map[string]any{"seq": in.Seq, "input": in.Input, "model": in.Model, "metadata": in.Metadata, "spawn": in.Spawn}
+			return remoteResult(s.memberRun(ctx, member, http.MethodPost, "/v1/runs/"+url.PathEscape(in.RunID)+"/fork", body, ""))
+		}); res != nil {
+			return res, nil, nil
+		}
+		return workError("", err), nil, nil
+	}
+	s.log.Info("mcp run branched", "run", in.RunID, "branch", branch.ID, "spawn", in.Spawn, "principal", principalOf(ctx, req))
+	return s.status(ctx, req, branch.ID), nil, nil
 }
 
 func (s *server) send(ctx context.Context, req *sdk.CallToolRequest, in sendArgs) (*sdk.CallToolResult, any, error) {
