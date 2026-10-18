@@ -19,7 +19,7 @@ The workbench changes no kernel code. It plugs in through the extension points o
 - `fw.RegisterService` runs work beside the agent for as long as it lives, `Kit.SetRelay` of the native surface answers a request about a run of another process, `metrics.RegisterCollector` adds series to the metrics surface, and `cli.RegisterDoctorCheck` adds a line to `fw doctor`. The package `fleet` uses the service, the relay, and the doctor check (section 4); the fleet gauges that it added once are gone, because a collector reads the fleet from the export of each worker (the kernel architecture, section 10.5).
 - `fw.Agent.SetPersonTokens` gives the tool sources of the kernel the access tokens of people, and `fw.Agent.Connected` resumes the calls that wait for a connection. The package `connections` uses both (section 11).
 
-Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `authn/oidc` registers the mode `oidc`, `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary.
+Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary, the `oidc` authentication mode of the kernel included, because the front verifies the tokens of people.
 
 ### 1.2 Build
 
@@ -52,7 +52,6 @@ dashboard/              the page index.html and the views for people: home, resu
 surface/web/            the routes for people on the native surface (section 2)
 surface/mcp/            the MCP server over HTTP and over stdio (section 3)
 fleet/                  the fleet: the member record, the view, and forwarding (section 4)
-authn/oidc/             the oidc authentication driver (the kernel architecture, section 13.1)
 tools/builder/          the tool propose_agent (section 6.4)
 examples/agentgateway/  a fleet behind agentgateway on one public URL
 docs/ARCHITECTURE.md    this document

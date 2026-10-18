@@ -100,7 +100,6 @@ The workbench changes no kernel code. It uses these hooks of the kernel:
 | `surface/web` | the routes for people on the native surface |
 | `surface/mcp` | the MCP server |
 | `fleet` | the fleet driver |
-| `authn/oidc` | the `oidc` authentication mode |
 | `tools/builder` | the `propose_agent` tool |
 | `examples/agentgateway` | a fleet behind agentgateway |
 

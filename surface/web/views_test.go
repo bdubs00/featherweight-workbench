@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
-	"github.com/bdubs00/featherweight-workbench/authn/oidc"
+	"github.com/bdubs00/featherweight-kernel/authn/oidc"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 )
 

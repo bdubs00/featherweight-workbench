@@ -31,7 +31,7 @@ import (
 	_ "github.com/bdubs00/featherweight-kernel/tools/builtin"
 	_ "github.com/bdubs00/featherweight-kernel/tools/mcp"
 
-	_ "github.com/bdubs00/featherweight-workbench/authn/oidc"
+	_ "github.com/bdubs00/featherweight-kernel/authn/oidc"
 	_ "github.com/bdubs00/featherweight-workbench/surface/web"
 	_ "github.com/bdubs00/featherweight-workbench/titles"
 	_ "github.com/bdubs00/featherweight-workbench/tools/builder"
