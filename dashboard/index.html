@@ -814,7 +814,7 @@ const S = {mode: '', me: null, stack: [{view: 'home'}], error: '', timers: [], w
 const PLACES = ['home', 'agents'];
 const fleetOn = () => !!(S.me && S.me.fleet);
 const top = () => S.stack[S.stack.length - 1];
-const TITLES = {home: 'Work', agents: 'Agents', operator: 'Operator view', signin: 'Sign in', start: 'New run', create: 'New agent', others: 'Runs by others',
+const TITLES = {home: 'Work', agents: 'Agents', signin: 'Sign in', start: 'New run', create: 'New agent', others: 'Runs by others',
   connections: 'Connections', connect: 'Connect', connected: 'Connected'};
 // person reports whether the caller is a signed-in person, the only kind
 // of caller that can connect a service.
@@ -860,7 +860,7 @@ function bar(s, end, large) {
   return `<header class="bar${large ? ' large-on' : ''}">${left}<div class="title">${esc(titleOf(s))}</div><div class="end">${end || ''}</div></header>`;
 }
 // header is the top of a place: the feather, Work and Agents, and the
-// account menu with who the person is, the operator view, and Sign out.
+// account menu with who the person is, the links of the deployment, and Sign out.
 function header(cur) {
   const p = (S.me && S.me.principal) || {};
   const name = p.name || who(p.subject) || 'You';
@@ -872,7 +872,7 @@ function header(cur) {
     <div class="pop"><button class="me" data-action="menu" aria-haspopup="true" aria-expanded="false" aria-label="Account of ${esc(name)}">${esc((name[0] || '?').toUpperCase())}</button>
       <div class="menu right" role="menu" hidden><div class="who"><b>${esc(name)}</b>${lines.map(l => `<small>${esc(l)}</small>`).join('')}</div>
         ${person() ? '<button role="menuitem" data-action="go" data-view="connections">Connections</button>' : ''}
-        <button role="menuitem" data-action="go" data-view="operator">Operator view</button>
+        ${S.me && S.me.links && S.me.links.metrics ? `<a role="menuitem" href="${esc(S.me.links.metrics)}" target="_blank" rel="noopener">Metrics</a>` : ''}
         ${S.mode === 'native' && native.token() ? '<button role="menuitem" class="danger" data-action="signout">Sign out</button>' : ''}</div></div></header>`;
 }
 const alert = () => S.error ? `<div class="alert" role="alert"><p>${esc(S.error)}</p><button class="btn small" data-action="dismiss">Dismiss</button></div>` : '';
@@ -2036,24 +2036,6 @@ screens.others = {
   },
 };
 
-// operator is the view of the processes that serve the page: the members
-// of the fleet, and where the metrics are.
-screens.operator = {
-  async open(s, el, dir) {
-    const all = fleetOn() ? (await api.fleet()).members || [] : [];
-    if (top() !== s) return;
-    const seen = m => m.self ? 'Serves this page' : cap(memberWord(m)) + (m.state === 'live' ? '' : ', last seen ' + ago(m.lastSeen));
-    const rows = all.length ? all.map(m => `<div class="row"><span class="main"><span class="t">${esc(m.name)}</span>
-      <span class="s">${esc(seen(m) + (m.self || m.canForward ? '' : '. Read-only from here'))}</span></span>
-      <span class="end">${m.inputRequired ? `${badge('needs-you')} ${num(m.inputRequired)}` : m.active ? num(m.active) + ' working' : ''}</span></div>`).join('')
-      : '<div class="row"><span class="main"><span class="t">This process</span><span class="s">Serves this page. The fleet is off.</span></span></div>';
-    mount(el, bar(s, '', true) + alert() + `<h1 class="large">Operator view</h1>
-      <p class="lede">${all.length > 1 ? num(all.length) + ' members share this fleet. Each one runs its own agents.' : 'The process that serves this page.'}</p>
-      <h2 class="sec">${all.length ? 'Fleet members' : 'Process'}</h2><div class="group">${rows}</div>
-      <h2 class="sec">Metrics</h2><p class="hint" style="margin-left:4px;font-size:15px;line-height:21px">fw exports tokens, cost, latency, errors, and run outcomes as Prometheus metrics at /metrics. Your monitoring stack reads them there.</p>`, dir);
-  },
-};
-
 // signin asks the person to sign in. With browser sign-in on, Sign in goes
 // to the issuer and comes back to the same screen. The token form stays as
 // a quiet way in for a developer, or the only way when sign-in is off.
@@ -2487,7 +2469,6 @@ function applyResult(res) {
   if (d.view === 'run' && d.run) return go('run', {id: d.run.id}, 'replace');
   if (d.view === 'agent' && d.agent) return go('agent', {name: d.agent.name}, 'replace');
   if (d.view === 'agents') return go('agents');
-  if (d.view === 'fleet') return go('operator', {}, 'replace');
   go('home');
 }
 bridge.on('ui/notifications/tool-input', () => {});
@@ -2515,7 +2496,7 @@ function watchSize() {
 // sets the address with replaceState, which fires no hashchange.
 function fromHash() {
   let [view, key, member] = location.hash.slice(1).split('/').map(decodeURIComponent);
-  if (view === 'fleet') view = 'operator';
+  if (view === 'fleet' || view === 'operator') view = 'home';
   if (PLACES.includes(view)) S.stack = [{view}];
   else if (view === 'agent' || view === 'edit') S.stack = [{view: 'agents'}, {view, name: key, member}];
   else if (!screens[view] || ['signin', 'file', 'compose'].includes(view)) S.stack = [{view: 'home'}];

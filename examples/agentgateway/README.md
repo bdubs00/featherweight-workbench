@@ -60,7 +60,7 @@ To turn on browser sign-in, do these steps:
 
 ## Metrics
 
-The pods of `fw-front` carry the label `fw.dev/scrape: "true"`, so the job `fw-pods` of [examples/observability](../observability/README.md) scrapes them. The front reports every member of the fleet in the `fw_fleet_*` gauges, from the records that the bus keeps. The gateway does not route `/metrics`, so the route stays inside the cluster.
+The pods of `fw-front` carry the label `fw.dev/scrape: "true"`, so the job `fw-pods` of [examples/observability](../observability/README.md) scrapes them. A member pushes its own metrics, its ledger, and its traces to the collector of `examples/observability` when `OTEL_EXPORTER_OTLP_ENDPOINT` names one, so Prometheus never scrapes a Task. The gateway does not route `/metrics`, so the route stays inside the cluster.
 
 A member that runs as a plain Deployment, such as `reviewer`, is always on too. To collect its model and tool metrics, add the same label to its pod template. Never add the label to an ax Task, because a scrape wakes a Task that sleeps.
 

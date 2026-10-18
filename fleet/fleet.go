@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
-	"github.com/bdubs00/featherweight-kernel/surface/metrics"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 )
 
@@ -39,7 +38,6 @@ func init() {
 		k.SetRelay(NewRelay(k.Agent()))
 		return nil
 	})
-	metrics.RegisterCollector(NewCollector)
 }
 
 // Start is the service of the fleet (fw.Service). When the configuration

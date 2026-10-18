@@ -18,6 +18,27 @@ type Whoami struct {
 	Teams []string `json:"teams,omitempty"`
 	// Fleet is the member name of this process when the fleet is on.
 	Fleet string `json:"fleet,omitempty"`
+	// Links are the addresses that the deployment names in the block
+	// workbench.links of fw.yaml, such as metrics, the Grafana dashboard of
+	// the fleet. The page offers them in the account menu.
+	Links map[string]string `json:"links,omitempty"`
+}
+
+// links is the part of the workbench block that names the addresses.
+type links struct {
+	Links map[string]string `yaml:"links"`
+}
+
+// Links returns the addresses of workbench.links, or nil.
+func Links(cfg *fw.Config) map[string]string {
+	var b links
+	if cfg == nil {
+		return nil
+	}
+	if _, err := cfg.Extension("workbench", &b); err != nil || len(b.Links) == 0 {
+		return nil
+	}
+	return b.Links
 }
 
 // WhoamiOf describes the caller in ctx.
@@ -30,5 +51,6 @@ func WhoamiOf(ctx context.Context, a *fw.Agent) (Whoami, error) {
 	if f := fleet.Of(a); f != nil {
 		out.Fleet = f.Name()
 	}
+	out.Links = Links(a.Config())
 	return out, nil
 }

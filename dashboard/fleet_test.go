@@ -68,7 +68,7 @@ func TestMembersText(t *testing.T) {
 }
 
 func TestPageHasTheFleet(t *testing.T) {
-	for _, want := range []string{"/v1/fleet", `call('fleet')`, `data-view="operator"`, `'/v1/home'`, `data-view="others"`, "Runs by others", "?member="} {
+	for _, want := range []string{"/v1/fleet", `call('fleet')`, `S.me.links.metrics`, `'/v1/home'`, `data-view="others"`, "Runs by others", "?member="} {
 		if !bytes.Contains(Page(), []byte(want)) {
 			t.Errorf("page lacks %q", want)
 		}
