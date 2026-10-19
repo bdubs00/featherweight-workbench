@@ -149,3 +149,41 @@ func TestBatchForgottenPerPerson(t *testing.T) {
 		}
 	}
 }
+
+// TestPlatformLateEnd delivers the end of a run after a later event. After
+// a title annotation, which changes no state, the end still applies, and
+// the usage of the annotation stays on top of the totals. After a
+// follow-up, the run works again, so the late end changes nothing.
+func TestPlatformLateEnd(t *testing.T) {
+	ctx := context.Background()
+	front := newMember(t, fw.NewMemBus(), "front", nil)
+	f := front.f
+	totals := fw.RunUsage{Usage: fw.Usage{InputTokens: 100}, Turns: 1}
+	evs := finishedRun("late", "item", totals)
+	title := fw.Usage{InputTokens: 60, OutputTokens: 6}
+	annotated := fw.MustEvent("", fw.EvRunAnnotated, fw.RunAnnotatedData{Metadata: map[string]string{fw.MetaTitle: "T"}, Usage: &title, Provider: "fake", Model: "titles"})
+	suspended := fw.MustEvent("", fw.EvRunSuspended, fw.RunSuspendedData{Reason: "shutdown", Totals: &totals})
+	again := fw.MustEvent("", fw.EvMessageReceived, fw.MessageReceivedData{Role: fw.RoleUser, Content: []fw.Block{fw.Text("more")}})
+
+	finished, paused, reopened := fw.NewID(), fw.NewID(), fw.NewID()
+	stream(t, f, finished, []uint64{1, 2, 3, 5, 4}, evs[0], evs[1], evs[2], annotated, evs[3])
+	stream(t, f, paused, []uint64{1, 2, 3, 5, 4}, evs[0], evs[1], evs[2], annotated, suspended)
+	stream(t, f, reopened, []uint64{1, 2, 3, 5, 6, 4}, evs[0], evs[1], evs[2], again, evs[2], evs[3])
+
+	want := fw.RunUsage{Usage: totals.Usage.Add(title), Turns: 1, UnpricedTokens: 66}
+	for _, tc := range []struct {
+		id    string
+		state fw.RunState
+		usage fw.RunUsage
+		seq   uint64
+	}{
+		{finished, fw.StateCompleted, want, 4},
+		{paused, fw.StateSuspended, want, 4},
+		{reopened, fw.StateRunning, fw.RunUsage{Turns: 2}, 0},
+	} {
+		r, err := f.Run(ctx, tc.id)
+		if err != nil || r.State != tc.state || r.Usage != tc.usage || r.UsageSeq != tc.seq || r.Title != "T" && tc.id != reopened {
+			t.Errorf("run %s = state %s, usage %+v at %d, %v; want %s, %+v at %d", tc.id, r.State, r.Usage, r.UsageSeq, err, tc.state, tc.usage, tc.seq)
+		}
+	}
+}
