@@ -426,6 +426,7 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 			continue
 		}
 		m.serves(r.Agent)
+		delete(p.gone, r.ID) // the run is in view again, not forgotten
 		cur, ok := p.runs[r.ID]
 		switch {
 		case !ok || cur.run.Seq < r.Seq || (!cur.queued && cur.run.Seq == r.Seq):

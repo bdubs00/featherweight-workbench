@@ -379,3 +379,39 @@ func TestPlatformTwoPublishersOfABranch(t *testing.T) {
 		t.Fatalf("the branch = state %s, usage %+v at %d", r.State, r.Usage, r.UsageSeq)
 	}
 }
+
+// TestPlatformBackfillClearsTheDroppedCopy reads a Task, drops its run as
+// when the Task leaves the list, and reads the Task again when it comes
+// back. The run is in view once, not also among the forgotten runs.
+func TestPlatformBackfillClearsTheDroppedCopy(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "team")
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
+	ctx := context.Background()
+	ax := newFakeAX(t, map[string]map[string]string{"team": {"gamma": "Suspended"}})
+	run := &fw.Run{ID: "01GAMMA", Agent: "default", State: fw.StateCompleted, Principal: "bob", Seq: 4, UsageSeq: 4,
+		Usage: fw.RunUsage{Usage: fw.Usage{InputTokens: 7}}, Metadata: map[string]string{fw.MetaBatch: "job"},
+		CreatedAt: time.Now().Add(-time.Minute), UpdatedAt: time.Now()}
+	router := fakeRouter(t, "team/gamma", []*fw.Run{run})
+	front := newMember(t, fw.NewMemBus(), "front", func(cfg *fw.Config, fc *Config) {
+		fc.Atespaces = []string{"team"}
+		cfg.AX.Server = ax.addr
+		cfg.AX.Router = strings.TrimPrefix(router.URL, "http://")
+	})
+	p := front.f.platform
+	eventually(t, "the front lists gamma", func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.members["team/gamma"] != nil
+	})
+	p.mu.Lock()
+	m := p.members["team/gamma"]
+	p.mu.Unlock()
+	p.backfill(ctx, m)
+	p.mu.Lock()
+	p.drop("01GAMMA", p.runs["01GAMMA"], time.Now())
+	p.mu.Unlock()
+	p.backfill(ctx, m)
+	if b, err := front.f.Batch(as("bob"), "job"); err != nil || len(b.Runs) != 1 || b.Forgotten != 0 {
+		t.Fatalf("bob's job: %d runs, %d forgotten, %v", len(b.Runs), b.Forgotten, err)
+	}
+}
