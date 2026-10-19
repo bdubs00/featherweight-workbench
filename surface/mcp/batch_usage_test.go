@@ -76,22 +76,12 @@ func TestBatchUsage(t *testing.T) {
 	}
 	// A third run of the job, as a worker on an older kernel sends it: its
 	// fw.run.finished carries no totals.
-	old := fw.NewID()
-	for i, ev := range []struct {
-		typ  string
-		data any
-	}{
+	publishInOrder(t, ctx, bus, f, "job-1", fw.NewID(), []egressEvent{
 		{fw.EvRunQueued, fw.RunQueuedData{Agent: "default", Input: "three", Origin: fw.OriginBus, Principal: "alice", Metadata: map[string]string{fw.MetaBatch: "job-1"}}},
 		{fw.EvRunStarted, fw.RunStartedData{Model: "fake/m"}},
 		{fw.EvTurnStarted, fw.TurnData{Turn: 1}},
 		{fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "three"}},
-	} {
-		e := fw.MustEvent(old, ev.typ, ev.data)
-		e.Seq, e.Node, e.Source = uint64(i+1), "box:8080", "fw://local/default/"+old
-		if err := bus.Publish(ctx, "fw.events.local.default."+ev.typ, e); err != nil {
-			t.Fatal(err)
-		}
-	}
+	})
 
 	var b batchResult
 	var text string
