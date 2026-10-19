@@ -337,6 +337,11 @@ func TestLimitText(t *testing.T) {
 			t.Errorf("limitText(%s, %g) = %q, want %q", tc.limit, tc.value, got, tc.want)
 		}
 	}
+	// A limit that a run shares with its child runs names the run and says so.
+	tree := fw.BudgetExceededData{Limit: "maxTokens", Value: 1012, Max: 1000, Scope: fw.ScopeTree, Run: "01ROOT"}
+	if got, want := limitText(tree), "Stopped at the token limit of run 01ROOT, which it shares with its child runs, after 1012 tokens in all."; got != want {
+		t.Errorf("limitText(tree) = %q, want %q", got, want)
+	}
 }
 
 func TestStepTextAndEffect(t *testing.T) {
@@ -529,12 +534,22 @@ func TestResultSaveAgentForTheStarter(t *testing.T) {
 
 func TestNearLimits(t *testing.T) {
 	u := fw.RunUsage{Usage: fw.Usage{InputTokens: 700, OutputTokens: 100}, Turns: 18, ToolCalls: 2, CostUSD: 0.5}
-	got := nearLimits(u, fw.Budget{MaxTurns: 20, MaxTokens: 1000, MaxToolCalls: 40, MaxCostUSD: 4})
+	run := &fw.Run{Usage: u}
+	got := nearLimits(run, fw.Budget{MaxTurns: 20, MaxTokens: 1000, MaxToolCalls: 40, MaxCostUSD: 4})
 	want := []string{"Used 18 of 20 turns.", "Used 800 of 1000 tokens."}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("near limits = %q, want %q", got, want)
 	}
-	if got := nearLimits(u, fw.Budget{}); len(got) != 0 {
+	if got := nearLimits(run, fw.Budget{}); len(got) != 0 {
 		t.Fatalf("no budget: %q", got)
+	}
+	// The child runs share the tokens, the cost, and the tool calls of the
+	// run, and not its turns.
+	run.TreeUsage = &fw.RunUsage{Usage: fw.Usage{InputTokens: 700, OutputTokens: 100}, Turns: 40, ToolCalls: 35, CostUSD: 0.5}
+	run.Usage = fw.RunUsage{Usage: fw.Usage{InputTokens: 10}, Turns: 2}
+	got = nearLimits(run, fw.Budget{MaxTurns: 20, MaxTokens: 1000, MaxToolCalls: 40, MaxCostUSD: 4})
+	want = []string{"Used 800 of 1000 tokens with the child runs.", "Used 35 of 40 tool calls with the child runs."}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("near limits of a tree = %q, want %q", got, want)
 	}
 }

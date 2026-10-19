@@ -517,29 +517,38 @@ func cutRunes(s string, n int) string {
 // nearShare is the share of a limit from which nearLimits words it.
 const nearShare = 0.75
 
-// nearLimits words each limit of the budget that the usage of a run has
-// used for nearShare or more, such as "Used 18 of 20 turns.". A limit of
-// zero has no bound and makes no line.
-func nearLimits(u fw.RunUsage, b fw.Budget) []string {
+// nearLimits words each limit of the budget that a run has used for
+// nearShare or more, such as "Used 18 of 20 turns.". A limit of zero has
+// no bound and makes no line. The turns are those of the run. The tokens,
+// the cost, and the tool calls are those of the run and of its child runs
+// (Run.TreeUsage), because the run shares those limits with them.
+func nearLimits(r *fw.Run, b fw.Budget) []string {
 	var out []string
+	u, tree, with := r.Usage, r.Usage, ""
+	if r.TreeUsage != nil {
+		tree, with = *r.TreeUsage, " with the child runs"
+	}
 	near := func(used, limit float64) bool { return limit > 0 && used >= nearShare*limit }
 	if near(float64(u.Turns), float64(b.MaxTurns)) {
 		out = append(out, fmt.Sprintf("Used %d of %s.", u.Turns, count(b.MaxTurns, "turn", "turns")))
 	}
-	if tokens := u.InputTokens + u.OutputTokens; near(float64(tokens), float64(b.MaxTokens)) {
-		out = append(out, fmt.Sprintf("Used %d of %s.", tokens, count(b.MaxTokens, "token", "tokens")))
+	if tokens := tree.InputTokens + tree.OutputTokens; near(float64(tokens), float64(b.MaxTokens)) {
+		out = append(out, fmt.Sprintf("Used %d of %s%s.", tokens, count(b.MaxTokens, "token", "tokens"), with))
 	}
-	if near(u.CostUSD, b.MaxCostUSD) {
-		out = append(out, fmt.Sprintf("Used $%.2f of the $%.2f cost limit.", u.CostUSD, b.MaxCostUSD))
+	if near(tree.CostUSD, b.MaxCostUSD) {
+		out = append(out, fmt.Sprintf("Used $%.2f of the $%.2f cost limit%s.", tree.CostUSD, b.MaxCostUSD, with))
 	}
-	if near(float64(u.ToolCalls), float64(b.MaxToolCalls)) {
-		out = append(out, fmt.Sprintf("Used %d of %s.", u.ToolCalls, count(b.MaxToolCalls, "tool call", "tool calls")))
+	if near(float64(tree.ToolCalls), float64(b.MaxToolCalls)) {
+		out = append(out, fmt.Sprintf("Used %d of %s%s.", tree.ToolCalls, count(b.MaxToolCalls, "tool call", "tool calls"), with))
 	}
 	return out
 }
 
 // limitText words a budget stop.
 func limitText(d fw.BudgetExceededData) string {
+	if d.Scope == fw.ScopeTree {
+		return treeLimitText(d)
+	}
 	n := int(d.Value)
 	switch d.Limit {
 	case "maxTurns":
@@ -556,6 +565,25 @@ func limitText(d fw.BudgetExceededData) string {
 		return fmt.Sprintf("Stopped, because the agent made the same call %d times in a row.", n)
 	}
 	return fmt.Sprintf("Stopped at the limit %s, at %g.", d.Limit, d.Value)
+}
+
+// treeLimitText words a stop at a limit that a run shares with the runs
+// under it, such as its child runs.
+func treeLimitText(d fw.BudgetExceededData) string {
+	who := "run " + d.Run
+	if d.Run == "" {
+		who = "a run above this one"
+	}
+	n := int(d.Value)
+	switch d.Limit {
+	case "maxTokens":
+		return fmt.Sprintf("Stopped at the token limit of %s, which it shares with its child runs, after %s in all.", who, count(n, "token", "tokens"))
+	case "maxCostUSD":
+		return fmt.Sprintf("Stopped at the cost limit of %s, which it shares with its child runs, after $%.2f in all.", who, d.Value)
+	case "maxToolCalls":
+		return fmt.Sprintf("Stopped at the tool call limit of %s, which it shares with its child runs, after %s in all.", who, count(n, "tool call", "tool calls"))
+	}
+	return fmt.Sprintf("Stopped at the limit %s of %s, which it shares with its child runs, at %g.", d.Limit, who, d.Value)
 }
 
 // loopText words a repeat that the loop guard found.

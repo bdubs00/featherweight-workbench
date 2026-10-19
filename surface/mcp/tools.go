@@ -808,6 +808,9 @@ func describe(e fw.Event) string {
 	case fw.EvBudgetExceeded:
 		var d fw.BudgetExceededData
 		if e.Decode(&d) == nil {
+			if d.Scope == fw.ScopeTree {
+				return "budget exceeded: " + d.Limit + " of the run tree of " + d.Run
+			}
 			return "budget exceeded: " + d.Limit
 		}
 	case fw.EvError:

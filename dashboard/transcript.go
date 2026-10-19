@@ -193,7 +193,11 @@ func Transcript(events []fw.Event) []Item {
 			if e.Decode(&d) == nil {
 				it := at(ItemNote)
 				it.IsError = true
-				it.setText("The run reached its limit of " + d.Limit + ".")
+				if d.Scope == fw.ScopeTree {
+					it.setText("The run tree of run " + d.Run + " reached its limit of " + d.Limit + ", which the run shares with its child runs.")
+				} else {
+					it.setText("The run reached its limit of " + d.Limit + ".")
+				}
 				out = append(out, it)
 			}
 		case fw.EvLoopDetected:

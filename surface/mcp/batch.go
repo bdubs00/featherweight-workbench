@@ -102,7 +102,9 @@ type batchResult struct {
 // batchUsage is the usage of a job: the sum of the usage of its runs that
 // report one, field by field. The sum counts each run once. A child run
 // carries the batch of its parent, so it is a run of the job of its own,
-// and its usage is not also in the usage of its parent. Reported counts
+// and its usage is not also in the usage of its parent. The sum adds
+// Run.Usage and never Run.TreeUsage, which holds the child runs too.
+// Reported counts
 // the runs in the sum, and Missing the runs that report no usage yet; a
 // sum with Missing above zero is partial. CostUSD is the cost at the
 // prices of the workers, and it leaves out UnpricedTokens, whose cost is

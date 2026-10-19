@@ -306,7 +306,7 @@ func ResultOf(ctx context.Context, a *fw.Agent, id string) (Result, error) {
 	if len(res.Limits) == 0 {
 		// A run that no limit stopped shows the limits that it nears.
 		if budget, err := a.RunBudget(ctx, id); err == nil {
-			res.Limits = nearLimits(run.Usage, budget)
+			res.Limits = nearLimits(run, budget)
 		}
 	}
 	res.Next = nextActions(run, res, canSave(ctx, a, run))
