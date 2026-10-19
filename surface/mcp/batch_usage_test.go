@@ -370,24 +370,27 @@ func TestBatchBranchWithoutWork(t *testing.T) {
 	}
 }
 
-// TestBatchRunOfNoKnownJob follows a finished job while the view holds a
-// run that works and whose fw.run.queued it missed, so its job is unknown.
-// That run can belong to the job, so the job is not finished, and the sum
-// reads as partial.
+// TestBatchRunOfNoKnownJob holds a run that works on a worker and whose
+// fw.run.queued the view missed, so its job is unknown. A job with a run
+// that works on that worker reads as partial, because the run can belong
+// to it. A finished job on the worker stays finished and complete, and the
+// text names no such run.
 func TestBatchRunOfNoKnownJob(t *testing.T) {
 	ctx, bus, f, call := lifecycleFront(t)
 	done := fw.RunUsage{Usage: fw.Usage{InputTokens: 100, OutputTokens: 10}, Turns: 1}
-	publishInOrder(t, ctx, bus, f, "j", fw.NewID(), finishedEvents("j", "done", done))
+	publishInOrder(t, ctx, bus, f, "k", fw.NewID(), finishedEvents("k", "done", done))
+	publishInOrder(t, ctx, bus, f, "j", fw.NewID(), finishedEvents("j", "works", done)[:3])
 	e := fw.MustEvent(fw.NewID(), fw.EvTurnStarted, fw.TurnData{Turn: 4})
 	e.Seq, e.Node, e.Source = 12, "box:8080", "fw://local/default/"+e.Subject
 	if err := bus.Publish(ctx, "fw.events.local.default."+e.Type, e); err != nil {
 		t.Fatal(err)
 	}
 	b, text := call("j")
-	if b.Total != 1 || b.Finished || b.Unknown != 1 || !b.Usage.Partial || b.Usage.Final != 1 {
-		t.Fatalf("batch = %+v; text %q", b, text)
+	if b.Total != 1 || b.Finished || b.Unknown != 1 || !b.Usage.Partial || !strings.Contains(text, "The view holds 1 run whose job it does not know yet") {
+		t.Fatalf("the job that works = %+v; text %q", b, text)
 	}
-	if !strings.Contains(text, "The view holds 1 run whose job it does not know yet") || strings.Contains(text, "The job is finished") {
-		t.Fatalf("batch text = %q", text)
+	b, text = call("k")
+	if b.Total != 1 || !b.Finished || b.Unknown != 0 || b.Usage.Partial || strings.Contains(text, "does not know") {
+		t.Fatalf("the finished job = %+v; text %q", b, text)
 	}
 }

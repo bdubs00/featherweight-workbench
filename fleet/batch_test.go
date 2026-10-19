@@ -286,8 +286,9 @@ func TestPlatformEventAfterDrop(t *testing.T) {
 // TestPlatformBackfillGivesIdentity starts a front while two runs of a job
 // work on a sleeping Task. The stream reaches each run before the one read
 // of the Task lands: one at the sequence number of the read, one at a newer
-// one. The read gives both their identity, the newer state of the stream
-// stays, and until the read the job counts both as runs of no known job.
+// one. The read gives both their identity, and the newer state of the
+// stream stays. Until the read, the job holds no run that a caller can
+// see, so it tells no caller of the runs without identity either.
 func TestPlatformBackfillGivesIdentity(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "team")
 	t.Setenv("FW_API_TOKEN", "fleet-secret")
@@ -322,7 +323,7 @@ func TestPlatformBackfillGivesIdentity(t *testing.T) {
 	at("01GAMMA", 9, fw.EvTurnStarted, fw.TurnData{Turn: 2})
 	at("01DELTA", 10, fw.EvApprovalDecided, fw.ApprovalDecidedData{ApprovalID: "ap1", Decision: "allow"})
 	at("01DELTA", 11, fw.EvTurnStarted, fw.TurnData{Turn: 3})
-	if b, _ := front.f.Batch(ctx, "job"); len(b.Runs) != 0 || b.Unknown != 2 || b.UnknownActive != 2 {
+	if b, _ := front.f.Batch(ctx, "job"); len(b.Runs) != 0 || b.Unknown != 0 || b.UnknownActive != 0 {
 		t.Fatalf("before the read: %d runs, %d unknown, %d unknown active", len(b.Runs), b.Unknown, b.UnknownActive)
 	}
 	p.mu.Lock()
@@ -381,6 +382,46 @@ func TestPlatformTwoPublishersOfABranch(t *testing.T) {
 	}
 	if r := b.Runs[0]; r.Usage != (fw.RunUsage{}) || r.UsageSeq == 0 || r.State != fw.StateCompleted {
 		t.Fatalf("the branch = state %s, usage %+v at %d", r.State, r.Usage, r.UsageSeq)
+	}
+}
+
+// TestBatchUnknownScope holds a run without identity that works on the
+// member of a job of ada, and another on a member where ada has no run of
+// the job. While the job works, its sum counts only the run on its own
+// member as of no known job. Once the job is finished, no such run makes it
+// partial or keeps it from being finished. A caller who sees no run of the
+// job learns of no such run at all.
+func TestBatchUnknownScope(t *testing.T) {
+	front := newMember(t, fw.NewMemBus(), "front", func(c *fw.Config, _ *Config) { c.Access.Default = "closed" })
+	f := front.f
+	totals := fw.RunUsage{Usage: fw.Usage{InputTokens: 10}, Turns: 1}
+	unknown := func(member, id string) {
+		e := fw.MustEvent(id, fw.EvTurnStarted, fw.TurnData{Turn: 9})
+		e.Seq, e.Node, e.Source = 40, member, "fw://local/default/"+id
+		if err := f.platform.onEvent(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unknown("box:8080", fw.NewID())
+	unknown("box:9090", fw.NewID())
+	working := fw.NewID()
+	evs := finishedRun("job", "item", totals)
+	stream(t, f, working, []uint64{1, 2, 3}, evs[:3]...)
+	for _, tc := range []struct {
+		who            string
+		unknown, alive int
+	}{
+		{"ada", 1, 1},
+		{"eve", 0, 0},
+	} {
+		b, err := f.Batch(as(tc.who), "job")
+		if err != nil || b.Unknown != tc.unknown || b.UnknownActive != tc.alive {
+			t.Errorf("%s while the job works: unknown %d, active %d, %v; want %d, %d", tc.who, b.Unknown, b.UnknownActive, err, tc.unknown, tc.alive)
+		}
+	}
+	stream(t, f, working, []uint64{4}, evs[3])
+	if b, err := f.Batch(as("ada"), "job"); err != nil || len(b.Runs) != 1 || b.Unknown != 0 || b.UnknownActive != 0 {
+		t.Errorf("ada once the job is finished: %d runs, unknown %d, active %d, %v", len(b.Runs), b.Unknown, b.UnknownActive, err)
 	}
 }
 

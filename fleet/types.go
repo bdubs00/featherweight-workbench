@@ -154,9 +154,13 @@ type BatchView interface {
 // Unknown counts the runs of the view that have no identity yet, because
 // the view missed their fw.run.queued and no read of their member gave it,
 // such as a run of a Task that the stream reached before the one read of
-// the Task after a restart of the front. Any batch can hold them, so a sum
-// over the runs is partial when Unknown is above zero, and UnknownActive
-// counts those that are not finished.
+// the Task after a restart of the front. Such a run can be a run of the
+// batch, so a sum over the runs is partial when Unknown is above zero, and
+// UnknownActive counts those that are not finished. Batch counts them only
+// on the members that hold a run of the batch that the caller can view,
+// and only while such a run works: a caller learns nothing of the members
+// where the caller has no run of the batch, and a run of someone else
+// keeps no finished batch from being finished.
 type BatchRuns struct {
 	Runs          []*fw.Run
 	Forgotten     int

@@ -685,11 +685,11 @@ func fillPause(interval time.Duration, fails int) time.Duration {
 	return min(d, fillPauseMax)
 }
 
-// unknown counts the runs that have no identity yet, and those of them
-// that are not finished. The caller holds p.mu.
-func (p *platform) unknown() (n, active int) {
+// unknown counts the runs on the members that have no identity yet, and
+// those of them that are not finished. The caller holds p.mu.
+func (p *platform) unknown(members map[string]bool) (n, active int) {
 	for _, r := range p.runs {
-		if r.queued || r.run.ID == "" {
+		if r.queued || r.run.ID == "" || !members[r.member] {
 			continue
 		}
 		n++

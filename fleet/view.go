@@ -208,9 +208,22 @@ func (f *Fleet) Batch(ctx context.Context, batch string) (BatchRuns, error) {
 		}
 		return out.Runs[i].ID > out.Runs[j].ID
 	})
-	f.platform.mu.Lock()
-	out.Unknown, out.UnknownActive = f.platform.unknown()
-	f.platform.mu.Unlock()
+	// A run without identity can be a run of this job only on a member
+	// that holds a run of the job, and it matters only while the job works:
+	// once every run of the job that the caller sees is finished, the work
+	// of the job is done. So a caller learns nothing of the runs of members
+	// where the caller has no run of the job, and a run of someone else
+	// keeps no finished job from being finished.
+	members, working := map[string]bool{}, false
+	for _, r := range out.Runs {
+		members[r.Member] = true
+		working = working || !r.State.Terminal()
+	}
+	if working {
+		f.platform.mu.Lock()
+		out.Unknown, out.UnknownActive = f.platform.unknown(members)
+		f.platform.mu.Unlock()
+	}
 	for member, runs := range f.platform.forgotten(batch) {
 		ok, _, err := f.allow(ctx, f.forgotRecord(member, runs), runs, false)
 		if err != nil {
