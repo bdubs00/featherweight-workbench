@@ -202,3 +202,27 @@ func TestPlatformLateQueuedState(t *testing.T) {
 		t.Fatalf("Batch = %+v, %v", b.Runs, err)
 	}
 }
+
+// TestForgottenCopyKeepsNoText drops a finished run with a title and other
+// metadata. The copy that the view keeps of it holds what the
+// authorization and the batch read, and no text: no title, no input, no
+// output, and no metadata beyond fw.batch.
+func TestForgottenCopyKeepsNoText(t *testing.T) {
+	front := newMember(t, fw.NewMemBus(), "front", nil)
+	f := front.f
+	totals := fw.RunUsage{Usage: fw.Usage{InputTokens: 100}, Turns: 1}
+	evs := finishedRun("job", "the input of the run", totals)
+	title := fw.MustEvent("", fw.EvRunAnnotated, fw.RunAnnotatedData{Metadata: map[string]string{fw.MetaTitle: "A title from a model", "note": "private"}})
+	id := fw.NewID()
+	stream(t, f, id, []uint64{1, 2, 3, 4, 5}, append(evs, title)...)
+	f.platform.records(time.Now().Add(f.expire+time.Minute), false)
+	runs := f.platform.forgotten("job")["box:8080"]
+	if len(runs) != 1 {
+		t.Fatalf("forgotten = %+v", runs)
+	}
+	c := runs[0]
+	if c.ID != id || c.Principal != "ada" || c.Agent != "default" || c.State != fw.StateCompleted ||
+		c.Title != "" || c.Input != "" || c.Output != "" || len(c.Metadata) != 1 || c.Metadata[fw.MetaBatch] != "job" {
+		t.Fatalf("the forgotten copy = %+v", c)
+	}
+}

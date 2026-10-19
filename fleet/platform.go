@@ -129,10 +129,11 @@ type addedUsage struct {
 }
 
 // forgotRun is a run of a batch that the view dropped (drop), so the tool
-// batch can tell that its counts leave it out. run is a copy without its
-// texts, which the view authorizes as it authorizes the runs, so a caller
-// learns only of the runs that the caller could see. at is the time of the
-// drop; the view forgets the run for good after the expire time since then.
+// batch can tell that its counts leave it out. run is a copy without texts
+// (forgetful), which the view authorizes as it authorizes the runs, so a
+// caller learns only of the runs that the caller could see. at is the time
+// of the drop; the view forgets the run for good after the expire time
+// since then.
 type forgotRun struct {
 	run    *fw.Run
 	member string
@@ -547,10 +548,22 @@ func (p *platform) onEvent(e fw.Event) error {
 func (p *platform) drop(id string, r *platformRun, now time.Time) {
 	delete(p.runs, id)
 	if batch := r.run.Metadata[fw.MetaBatch]; batch != "" {
-		c := *r.run
-		c.Input, c.Output, c.Error, c.Pending = "", "", "", nil
-		p.forgot[batch] = append(p.forgot[batch], forgotRun{run: &c, member: r.member, at: now})
+		p.forgot[batch] = append(p.forgot[batch], forgotRun{run: forgetful(r.run), member: r.member, at: now})
 	}
+}
+
+// forgetful returns a copy of a run with what the authorization and the
+// batch read, and no text: the id, the agent, the person, the parent and
+// the depth for the lineage, the state, the origin, the usage, and the
+// metadata fw.batch. A check of the control plane receives the facts of a
+// run (fw.RunFacts) and no metadata, and the rules read the person, the
+// agent, and the parent, so the title, the input, the output, the error,
+// the pending call, and the rest of the metadata go.
+func forgetful(r *fw.Run) *fw.Run {
+	c := *r
+	c.Title, c.Input, c.Output, c.Error, c.Pending, c.ExtraTools = "", "", "", "", nil, nil
+	c.Metadata = map[string]string{fw.MetaBatch: r.Metadata[fw.MetaBatch]}
+	return &c
 }
 
 // forgotten returns the runs of a batch that the view dropped, by member.
