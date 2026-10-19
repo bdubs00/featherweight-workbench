@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -118,5 +119,112 @@ func TestBatchUsage(t *testing.T) {
 		if !strings.Contains(text, s) {
 			t.Fatalf("batch text lacks %q: %q", s, text)
 		}
+	}
+}
+
+// egressEvent is one event of a run on the egress stream of a worker.
+type egressEvent struct {
+	typ  string
+	data any
+}
+
+// publishInOrder sends the events of one run of a batch on the egress
+// stream, as the worker box:8080 does, with the sequence numbers from 1.
+// The mem bus hands each event to a goroutine of its own, so it does not
+// keep their order, as a stream of NATS does; the helper waits after each
+// event until the view of the front applied it.
+func publishInOrder(t *testing.T, ctx context.Context, bus fw.Bus, f *fleet.Fleet, batch, id string, evs []egressEvent) {
+	t.Helper()
+	for i, ev := range evs {
+		e := fw.MustEvent(id, ev.typ, ev.data)
+		e.Seq, e.Node, e.Source = uint64(i+1), "box:8080", "fw://local/default/"+id
+		if err := bus.Publish(ctx, "fw.events.local.default."+ev.typ, e); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for !applied(f, batch, id, e.Seq) {
+			if time.Now().After(deadline) {
+				t.Fatalf("the front did not apply event %d of %s", e.Seq, id)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+// applied reports whether the view of the front holds the run of a batch
+// up to seq.
+func applied(f *fleet.Fleet, batch, id string, seq uint64) bool {
+	b, err := f.Batch(context.Background(), batch)
+	if err != nil {
+		return false
+	}
+	for _, r := range b.Runs {
+		if r.ID == id {
+			return r.Seq >= seq
+		}
+	}
+	return false
+}
+
+// lifecycleFront is a front with the batch tools whose fleet reads the
+// egress stream fw.events of the bus. call runs the tool batch as alice.
+func lifecycleFront(t *testing.T) (context.Context, fw.Bus, *fleet.Fleet, func(string) (batchResult, string)) {
+	t.Helper()
+	ctx := testCtx(t)
+	t.Setenv(fleet.EnvIntake, "fw.jobs")
+	t.Setenv(fleet.EnvEgress, "")
+	t.Setenv(fleet.EnvAtespaces, "")
+	bus := fw.NewMemBus()
+	front := newAgent(t, newScript().model(), fw.WithBus(bus), fw.WithAuthn(people))
+	f, err := fleet.Open(ctx, front, fleet.Config{Name: "front", Egress: "fw.events", Interval: 40 * time.Millisecond, Expire: fleet.DefaultExpire})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	attach(front, f)
+	cs := as(t, ctx, serveAgent(t, front, nil).URL, "alice-token")
+	return ctx, bus, f, func(batch string) (batchResult, string) {
+		res := callTool(t, ctx, cs, toolBatch, map[string]any{"batch": batch})
+		var b batchResult
+		structured(t, res, &b)
+		return b, textOf(res)
+	}
+}
+
+// finishedEvents is the lifecycle of one finished run of a batch, as alice,
+// with totals.
+func finishedEvents(batch, input string, totals fw.RunUsage) []egressEvent {
+	return []egressEvent{
+		{fw.EvRunQueued, fw.RunQueuedData{Agent: "default", Input: input, Origin: fw.OriginBus, Principal: "alice", Metadata: map[string]string{fw.MetaBatch: batch}}},
+		{fw.EvRunStarted, fw.RunStartedData{Model: "fake/m"}},
+		{fw.EvTurnStarted, fw.TurnData{Turn: 1}},
+		{fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "ok", Totals: &totals}},
+	}
+}
+
+// TestBatchCountsEveryRun follows a job of 60 runs on one worker. A record
+// of the view holds the newest 50 finished runs of a member, and the tool
+// batch counts every run of the job all the same: the total, the states,
+// and the usage.
+func TestBatchCountsEveryRun(t *testing.T) {
+	ctx, bus, f, call := lifecycleFront(t)
+	per := fw.RunUsage{Usage: fw.Usage{InputTokens: 100, OutputTokens: 10}, Turns: 1, CostUSD: 0.01}
+	var want fw.RunUsage
+	for i := 0; i < 60; i++ {
+		publishInOrder(t, ctx, bus, f, "big", fw.NewID(), finishedEvents("big", fmt.Sprint("item ", i), per))
+		want.Usage = want.Usage.Add(per.Usage)
+		want.Turns += per.Turns
+		want.CostUSD += per.CostUSD
+	}
+	publishInOrder(t, ctx, bus, f, "other", fw.NewID(), finishedEvents("other", "else", per))
+	b, text := call("big")
+	if b.Total != 60 || b.States["completed"] != 60 || !b.Finished || b.Forgotten != 0 {
+		t.Fatalf("batch = %+v; text %q", b, text)
+	}
+	if b.Usage.RunUsage != want || b.Usage.Reported != 60 || b.Usage.Missing != 0 {
+		t.Fatalf("usage = %+v, want %+v of 60 runs", b.Usage, want)
+	}
+	if !strings.Contains(text, "Batch big: 60 runs on 1 members.") || !strings.Contains(text, "Usage of 60 runs: 60 turns, 6600 tokens, $0.6000.") || strings.Contains(text, "partial") {
+		t.Fatalf("batch text = %q", text)
 	}
 }

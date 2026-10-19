@@ -17,7 +17,6 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
-	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -97,6 +96,9 @@ type batchResult struct {
 	Failed   []batchRun     `json:"failed,omitempty"`
 	Finished bool           `json:"finished"`
 	Usage    batchUsage     `json:"usage"`
+	// Forgotten counts the runs of the job that the view of the fleet
+	// dropped (fleet.BatchView). Total, States, and Usage leave them out.
+	Forgotten int `json:"forgotten,omitempty"`
 }
 
 // batchUsage is the usage of a job: the sum of the usage of its runs that
@@ -168,6 +170,39 @@ func (u batchUsage) text() string {
 	}
 	b.WriteString(" The sum counts each run once: the usage of a child run is not also in its parent.")
 	return b.String()
+}
+
+// batchRuns lists every run of a batch that the caller can view: the runs
+// of this process and the runs of the batch that the view of the fleet
+// holds, whole and not cut to the newest finished runs of each member as
+// the records are. The second value counts the runs of the batch that the
+// view forgot.
+func (s *server) batchRuns(ctx context.Context, batch string) ([]*fw.Run, int, error) {
+	local, err := s.a.List(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	runs := view.FilterBatch(local, batch)
+	v := fleet.Of(s.a)
+	if v == nil {
+		return runs, 0, nil
+	}
+	forgotten := 0
+	if bv, ok := v.(fleet.BatchView); ok {
+		b, err := bv.Batch(ctx, batch)
+		if err != nil {
+			return nil, 0, err
+		}
+		runs, forgotten = append(runs, b.Runs...), b.Forgotten
+	} else {
+		remote, err := v.Runs(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		runs = append(runs, view.FilterBatch(remote, batch)...)
+	}
+	view.SortRuns(runs)
+	return runs, forgotten, nil
 }
 
 // plural writes a number with the singular or the plural noun.
@@ -292,12 +327,11 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 	if batch == "" {
 		return errorResult("Invalid request: the argument batch is required."), nil, nil
 	}
-	all, err := dashboard.Runs(ctx, s.a, dashboard.ScopeFleet, "")
+	runs, forgotten, err := s.batchRuns(ctx, batch)
 	if err != nil {
 		return failResult(err), nil, nil
 	}
-	runs := view.FilterBatch(all, batch)
-	out := batchResult{View: "batch", Batch: batch, Total: len(runs), States: map[string]int{}, Members: []string{}, Finished: len(runs) > 0}
+	out := batchResult{View: "batch", Batch: batch, Total: len(runs), States: map[string]int{}, Members: []string{}, Finished: len(runs) > 0, Forgotten: forgotten}
 	members := map[string]bool{}
 	for _, r := range runs {
 		out.States[string(r.State)]++
@@ -333,7 +367,11 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 	}
 	sort.Strings(out.Members)
 	if len(runs) == 0 {
-		return result(fmt.Sprintf("No run of batch %s is in view. A run appears when a worker takes it from the queue.", batch), out), nil, nil
+		text := fmt.Sprintf("No run of batch %s is in view. A run appears when a worker takes it from the queue, and a finished run leaves the view after workbench.fleet.expire.", batch)
+		if forgotten > 0 {
+			text += fmt.Sprintf(" The view forgot %s of it.", plural(forgotten, "run", "runs"))
+		}
+		return result(text, out), nil, nil
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Batch %s: %d runs", batch, len(runs))
@@ -351,6 +389,9 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 	}
 	if out.Finished {
 		b.WriteString(" The job is finished.")
+	}
+	if forgotten > 0 {
+		fmt.Fprintf(&b, " The view forgot %s of the job, because a finished run leaves the view after workbench.fleet.expire and a run leaves with its Task; the counts and the usage leave them out.", plural(forgotten, "run", "runs"))
 	}
 	b.WriteString("\n" + out.Usage.text())
 	for _, w := range out.Waiting {
