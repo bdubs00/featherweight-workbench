@@ -30,7 +30,7 @@ func (f *Fleet) remotes(now time.Time) []remote {
 		return nil
 	}
 	var out []remote
-	for _, r := range f.platform.records(now) {
+	for _, r := range f.platform.records(now, false) {
 		if r.rec.State != "" || now.Sub(r.seen) <= f.expire {
 			out = append(out, r)
 		}
@@ -169,6 +169,48 @@ func (f *Fleet) Runs(ctx context.Context) ([]*fw.Run, error) {
 		}
 		return out[i].ID > out[j].ID
 	})
+	return out, nil
+}
+
+// The fleet lists a batch whole, so the tool batch never reads the cut
+// records for it.
+var _ BatchView = (*Fleet)(nil)
+
+// Batch implements BatchView.
+func (f *Fleet) Batch(ctx context.Context, batch string) (BatchRuns, error) {
+	var out BatchRuns
+	if f.platform == nil {
+		return out, nil
+	}
+	for _, r := range f.platform.records(time.Now(), true) {
+		var runs []*fw.Run
+		for _, run := range r.rec.Runs {
+			if run.Metadata[fw.MetaBatch] == batch {
+				runs = append(runs, run)
+			}
+		}
+		if len(runs) == 0 {
+			continue
+		}
+		ok, _, err := f.allow(ctx, r.rec, runs, false)
+		if err != nil {
+			return BatchRuns{}, err
+		}
+		for i, run := range runs {
+			if ok[i] {
+				out.Runs = append(out.Runs, withMember(run, r.rec.Name))
+			}
+		}
+	}
+	sort.Slice(out.Runs, func(i, j int) bool {
+		if !out.Runs[i].CreatedAt.Equal(out.Runs[j].CreatedAt) {
+			return out.Runs[i].CreatedAt.After(out.Runs[j].CreatedAt)
+		}
+		return out.Runs[i].ID > out.Runs[j].ID
+	})
+	if len(out.Runs) > 0 || fw.PrincipalFrom(ctx) == nil {
+		out.Forgotten = f.platform.forgotten(batch)
+	}
 	return out, nil
 }
 
