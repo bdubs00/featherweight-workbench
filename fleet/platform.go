@@ -63,7 +63,7 @@ type platform struct {
 	members  map[string]*platformMember // by member name
 	runs     map[string]*platformRun    // by run id
 	children map[string]childLink       // by the id of the child
-	forgot   map[string]forgotBatch     // by batch: the runs of a job that the view dropped
+	forgot   map[string][]forgotRun     // by batch: the runs of a job that the view dropped
 	conn     *grpc.ClientConn
 	client   v1alpha1.AXClient
 }
@@ -114,14 +114,29 @@ type platformRun struct {
 	// queued is true once the view applied the fw.run.queued of the run,
 	// or read the run whole from its member (backfill).
 	queued bool
+	// stateSeq is the sequence number of the latest event that changed
+	// the state of the run, and added holds the usage that each event
+	// after the latest totals added, so a late end of the run can apply
+	// (lateEnd).
+	stateSeq uint64
+	added    []addedUsage
 }
 
-// forgotBatch counts the runs of one batch that the view dropped (drop),
-// so the tool batch can tell that its counts leave them out. at is the
-// latest drop; the count goes after the expire time since then.
-type forgotBatch struct {
-	n  int
-	at time.Time
+// addedUsage is the usage that one event added to a run.
+type addedUsage struct {
+	seq uint64
+	u   fw.RunUsage
+}
+
+// forgotRun is a run of a batch that the view dropped (drop), so the tool
+// batch can tell that its counts leave it out. run is a copy without its
+// texts, which the view authorizes as it authorizes the runs, so a caller
+// learns only of the runs that the caller could see. at is the time of the
+// drop; the view forgets the run for good after the expire time since then.
+type forgotRun struct {
+	run    *fw.Run
+	member string
+	at     time.Time
 }
 
 // startPlatform starts the sources that the configuration names: the Task
@@ -137,7 +152,7 @@ func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv strin
 		members:   map[string]*platformMember{},
 		runs:      map[string]*platformRun{},
 		children:  map[string]childLink{},
-		forgot:    map[string]forgotBatch{},
+		forgot:    map[string][]forgotRun{},
 	}
 	if len(p.atespaces) > 0 {
 		if p.server == "" {
@@ -408,7 +423,7 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 		if cur, ok := p.runs[r.ID]; ok && cur.run.Seq >= r.Seq {
 			continue
 		}
-		p.runs[r.ID] = &platformRun{run: r, member: m.name, updated: now, queued: true}
+		p.runs[r.ID] = &platformRun{run: r, member: m.name, updated: now, queued: true, stateSeq: r.Seq}
 	}
 	for _, ag := range agents.Agents {
 		m.serves(ag.Name)
@@ -488,22 +503,33 @@ func (p *platform) onEvent(e fw.Event) error {
 		r = &platformRun{run: &fw.Run{}, member: name}
 		p.runs[e.Subject] = r
 	}
-	// An old or repeated event changes nothing. The one exception is the
-	// first fw.run.queued of a run that arrives after later events, which
-	// a bus can deliver out of order: only that event names the agent, the
-	// person, and the metadata of the run. The projection takes the
-	// identity from it and keeps the state of the later events.
-	if e.Seq != 0 && e.Seq <= r.run.Seq && (e.Type != fw.EvRunQueued || r.queued) {
+	// The totals of fw.run.finished and fw.run.suspended set the usage of
+	// the run, with the cost at the prices of the worker. The prices of
+	// this process price only the increments that the stream carries after
+	// them, such as fw.run.annotated.
+	//
+	// An old or repeated event changes nothing, with two exceptions for an
+	// event that arrives after later events, which a bus can deliver out of
+	// order. The first fw.run.queued of a run gives the run its identity,
+	// because only that event names the agent, the person, and the
+	// metadata; the projection keeps the state of the later events. An end
+	// of the run, fw.run.finished or fw.run.suspended, applies when no
+	// event that changes the state came after it (lateEnd).
+	switch late := e.Seq != 0 && e.Seq <= r.run.Seq; {
+	case !late:
+		before := r.run.Usage
+		r.run.Apply(e, p.prices)
+		r.track(e, before)
+	case e.Type == fw.EvRunQueued && !r.queued:
+		r.run.Apply(e, p.prices)
+	case (e.Type == fw.EvRunFinished || e.Type == fw.EvRunSuspended) && e.Seq > r.stateSeq:
+		r.lateEnd(e, p.prices)
+	default:
 		return nil
 	}
 	if e.Type == fw.EvRunQueued {
 		r.queued = true
 	}
-	// The totals of fw.run.finished and fw.run.suspended set the usage of
-	// the run, with the cost at the prices of the worker. The prices of
-	// this process price only the increments that the stream carries after
-	// them, such as fw.run.annotated.
-	r.run.Apply(e, p.prices)
 	r.member, r.updated = name, now
 	m.serves(r.run.Agent)
 	if e.Type == fw.EvRunChild {
@@ -521,18 +547,90 @@ func (p *platform) onEvent(e fw.Event) error {
 func (p *platform) drop(id string, r *platformRun, now time.Time) {
 	delete(p.runs, id)
 	if batch := r.run.Metadata[fw.MetaBatch]; batch != "" {
-		fb := p.forgot[batch]
-		fb.n++
-		fb.at = now
-		p.forgot[batch] = fb
+		c := *r.run
+		c.Input, c.Output, c.Error, c.Pending = "", "", "", nil
+		p.forgot[batch] = append(p.forgot[batch], forgotRun{run: &c, member: r.member, at: now})
 	}
 }
 
-// forgotten returns how many runs of a batch the view dropped.
-func (p *platform) forgotten(batch string) int {
+// forgotten returns the runs of a batch that the view dropped, by member.
+func (p *platform) forgotten(batch string) map[string][]*fw.Run {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.forgot[batch].n
+	out := map[string][]*fw.Run{}
+	for _, fr := range p.forgot[batch] {
+		out[fr.member] = append(out[fr.member], fr.run)
+	}
+	return out
+}
+
+// track records what an event in order did to the run: whether it changed
+// the state, and the usage that it added after the latest totals.
+func (r *platformRun) track(e fw.Event, before fw.RunUsage) {
+	if changesState(e.Type) {
+		r.stateSeq = e.Seq
+	}
+	if e.Seq != 0 && r.run.UsageSeq == e.Seq {
+		r.added = nil // the totals of e cover every event before it
+		return
+	}
+	if d := usageDiff(r.run.Usage, before); d != (fw.RunUsage{}) {
+		r.added = append(r.added, addedUsage{seq: e.Seq, u: d})
+	}
+}
+
+// lateEnd applies an end of the run that arrived after later events that
+// changed no state, such as a title annotation, so the end is still the
+// latest state of the run. Its totals cover the events before it, and the
+// usage that the later events added goes on top.
+func (r *platformRun) lateEnd(e fw.Event, prices fw.Prices) {
+	r.run.Apply(e, prices)
+	r.stateSeq = e.Seq
+	if r.run.UsageSeq != e.Seq {
+		return // an older kernel sends no totals
+	}
+	var after []addedUsage
+	for _, a := range r.added {
+		if a.seq > e.Seq {
+			r.run.Usage = usageSum(r.run.Usage, a.u)
+			after = append(after, a)
+		}
+	}
+	r.added = after
+}
+
+// changesState reports whether an event of the type can change the state
+// of a run in the projection.
+func changesState(typ string) bool {
+	switch typ {
+	case fw.EvRunQueued, fw.EvRunStarted, fw.EvRunResumed, fw.EvTurnStarted, fw.EvMessageReceived,
+		fw.EvApprovalRequested, fw.EvApprovalDecided, fw.EvRunSuspended, fw.EvRunFinished:
+		return true
+	}
+	return false
+}
+
+// usageSum adds two usages field by field.
+func usageSum(a, b fw.RunUsage) fw.RunUsage {
+	a.Usage = a.Usage.Add(b.Usage)
+	a.Turns += b.Turns
+	a.ToolCalls += b.ToolCalls
+	a.CostUSD += b.CostUSD
+	a.UnpricedTokens += b.UnpricedTokens
+	return a
+}
+
+// usageDiff is the usage a has beyond b, field by field.
+func usageDiff(a, b fw.RunUsage) fw.RunUsage {
+	a.InputTokens -= b.InputTokens
+	a.OutputTokens -= b.OutputTokens
+	a.CacheReadTokens -= b.CacheReadTokens
+	a.CacheWriteTokens -= b.CacheWriteTokens
+	a.Turns -= b.Turns
+	a.ToolCalls -= b.ToolCalls
+	a.CostUSD -= b.CostUSD
+	a.UnpricedTokens -= b.UnpricedTokens
+	return a
 }
 
 // MemberName turns the node of a kernel, "ax:<atespace>/<task>" for a Task,
@@ -570,9 +668,17 @@ func (p *platform) records(now time.Time, all bool) []remote {
 			p.drop(id, r, now)
 		}
 	}
-	for batch, fb := range p.forgot {
-		if now.Sub(fb.at) > p.f.expire {
+	for batch, frs := range p.forgot {
+		kept := frs[:0]
+		for _, fr := range frs {
+			if now.Sub(fr.at) <= p.f.expire {
+				kept = append(kept, fr)
+			}
+		}
+		if len(kept) == 0 {
 			delete(p.forgot, batch)
+		} else {
+			p.forgot[batch] = kept
 		}
 	}
 	for id, l := range p.children {

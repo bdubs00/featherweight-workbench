@@ -22,10 +22,16 @@ func stream(t *testing.T, f *Fleet, id string, seqs []uint64, evs ...fw.Event) {
 	}
 }
 
-// finishedRun is the lifecycle of one finished run of a batch with totals.
+// finishedRun is the lifecycle of one finished run of a batch with totals,
+// as ada.
 func finishedRun(batch, input string, totals fw.RunUsage) []fw.Event {
+	return finishedRunOf("ada", batch, input, totals)
+}
+
+// finishedRunOf is finishedRun as another person.
+func finishedRunOf(principal, batch, input string, totals fw.RunUsage) []fw.Event {
 	return []fw.Event{
-		fw.MustEvent("", fw.EvRunQueued, fw.RunQueuedData{Agent: "default", Input: input, Origin: fw.OriginBus, Principal: "ada", Metadata: map[string]string{fw.MetaBatch: batch}}),
+		fw.MustEvent("", fw.EvRunQueued, fw.RunQueuedData{Agent: "default", Input: input, Origin: fw.OriginBus, Principal: principal, Metadata: map[string]string{fw.MetaBatch: batch}}),
 		fw.MustEvent("", fw.EvRunStarted, fw.RunStartedData{Model: "fake/m"}),
 		fw.MustEvent("", fw.EvTurnStarted, fw.TurnData{Turn: 1}),
 		fw.MustEvent("", fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "ok", Totals: &totals}),
@@ -74,7 +80,7 @@ func TestBatchListsEveryRun(t *testing.T) {
 	if b, _ := f.Batch(as("bob"), "big"); b.Forgotten != 0 {
 		t.Fatalf("bob learns of %d forgotten runs", b.Forgotten)
 	}
-	// A run of the job that is still in view brings the count to its viewer.
+	// ada, who started the runs, learns of them.
 	stream(t, f, fw.NewID(), seqs, finishedRun("big", "late", totals)...)
 	if b, _ := f.Batch(as("ada"), "big"); len(b.Runs) != 1 || b.Forgotten != 60 {
 		t.Fatalf("ada: Batch = %d runs, %d forgotten", len(b.Runs), b.Forgotten)
@@ -108,5 +114,91 @@ func TestPlatformQueuedOnce(t *testing.T) {
 	}
 	if runs, _ := f.Runs(as("ada")); len(runs) != 2 {
 		t.Fatalf("ada sees %d runs", len(runs))
+	}
+}
+
+// TestBatchForgottenPerPerson drops the runs of one batch name that two
+// people use. Each person learns only of the dropped runs that the person
+// could see, and an admin learns of all of them.
+func TestBatchForgottenPerPerson(t *testing.T) {
+	front := newMember(t, fw.NewMemBus(), "front", func(c *fw.Config, _ *Config) {
+		c.Access.Default = "closed"
+		c.Access.Admins = []string{"root"}
+	})
+	f := front.f
+	totals := fw.RunUsage{Usage: fw.Usage{InputTokens: 100}, Turns: 1}
+	seqs := []uint64{1, 2, 3, 4}
+	for i := 0; i < 3; i++ {
+		stream(t, f, fw.NewID(), seqs, finishedRunOf("bob", "nightly", fmt.Sprint("bob ", i), totals)...)
+	}
+	stream(t, f, fw.NewID(), seqs, finishedRunOf("ada", "nightly", "ada 0", totals)...)
+	f.platform.records(time.Now().Add(f.expire+time.Minute), false)
+	stream(t, f, fw.NewID(), seqs, finishedRunOf("ada", "nightly", "ada 1", totals)...)
+	for _, tc := range []struct {
+		who             string
+		runs, forgotten int
+	}{
+		{"ada", 1, 1},
+		{"bob", 0, 3},
+		{"root", 1, 4},
+		{"eve", 0, 0},
+	} {
+		b, err := f.Batch(as(tc.who), "nightly")
+		if err != nil || len(b.Runs) != tc.runs || b.Forgotten != tc.forgotten {
+			t.Errorf("%s: %d runs, %d forgotten, %v; want %d, %d", tc.who, len(b.Runs), b.Forgotten, err, tc.runs, tc.forgotten)
+		}
+	}
+}
+
+// TestPlatformLateEnd delivers the end of a run after a later event. After
+// a title annotation, which changes no state, the end still applies, and
+// the usage of the annotation stays on top of the totals. After a
+// follow-up, the run works again, so the late end changes nothing.
+func TestPlatformLateEnd(t *testing.T) {
+	ctx := context.Background()
+	front := newMember(t, fw.NewMemBus(), "front", nil)
+	f := front.f
+	totals := fw.RunUsage{Usage: fw.Usage{InputTokens: 100}, Turns: 1}
+	evs := finishedRun("late", "item", totals)
+	title := fw.Usage{InputTokens: 60, OutputTokens: 6}
+	annotated := fw.MustEvent("", fw.EvRunAnnotated, fw.RunAnnotatedData{Metadata: map[string]string{fw.MetaTitle: "T"}, Usage: &title, Provider: "fake", Model: "titles"})
+	suspended := fw.MustEvent("", fw.EvRunSuspended, fw.RunSuspendedData{Reason: "shutdown", Totals: &totals})
+	again := fw.MustEvent("", fw.EvMessageReceived, fw.MessageReceivedData{Role: fw.RoleUser, Content: []fw.Block{fw.Text("more")}})
+
+	finished, paused, reopened := fw.NewID(), fw.NewID(), fw.NewID()
+	stream(t, f, finished, []uint64{1, 2, 3, 5, 4}, evs[0], evs[1], evs[2], annotated, evs[3])
+	stream(t, f, paused, []uint64{1, 2, 3, 5, 4}, evs[0], evs[1], evs[2], annotated, suspended)
+	stream(t, f, reopened, []uint64{1, 2, 3, 5, 6, 4}, evs[0], evs[1], evs[2], again, evs[2], evs[3])
+
+	want := fw.RunUsage{Usage: totals.Usage.Add(title), Turns: 1, UnpricedTokens: 66}
+	for _, tc := range []struct {
+		id    string
+		state fw.RunState
+		usage fw.RunUsage
+		seq   uint64
+	}{
+		{finished, fw.StateCompleted, want, 4},
+		{paused, fw.StateSuspended, want, 4},
+		{reopened, fw.StateRunning, fw.RunUsage{Turns: 2}, 0},
+	} {
+		r, err := f.Run(ctx, tc.id)
+		if err != nil || r.State != tc.state || r.Usage != tc.usage || r.UsageSeq != tc.seq || r.Title != "T" && tc.id != reopened {
+			t.Errorf("run %s = state %s, usage %+v at %d, %v; want %s, %+v at %d", tc.id, r.State, r.Usage, r.UsageSeq, err, tc.state, tc.usage, tc.seq)
+		}
+	}
+}
+
+// TestPlatformLateQueuedState delivers a title annotation of a queued run
+// before its fw.run.queued. No event set a state, so the run is queued.
+func TestPlatformLateQueuedState(t *testing.T) {
+	front := newMember(t, fw.NewMemBus(), "front", nil)
+	f := front.f
+	evs := finishedRun("noState", "item", fw.RunUsage{})
+	title := fw.MustEvent("", fw.EvRunAnnotated, fw.RunAnnotatedData{Metadata: map[string]string{fw.MetaTitle: "T"}})
+	id := fw.NewID()
+	stream(t, f, id, []uint64{2, 1}, title, evs[0])
+	b, err := f.Batch(as("ada"), "noState")
+	if err != nil || len(b.Runs) != 1 || b.Runs[0].State != fw.StateQueued || b.Runs[0].Title != "T" || b.Runs[0].Agent != "default" {
+		t.Fatalf("Batch = %+v, %v", b.Runs, err)
 	}
 }

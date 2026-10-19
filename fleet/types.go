@@ -142,8 +142,9 @@ type View interface {
 // dropped since it started: a finished run after the expire time, and
 // every run of a Task that left the Task list. A view knows only the runs
 // that it saw since it started, so a sum over the runs is partial when
-// Forgotten is above zero. Batch reports Forgotten only to a caller that
-// can view a run of the batch, or that names no principal.
+// Forgotten is above zero. Forgotten counts only the dropped runs that
+// the principal in ctx could view, decided as for the runs, so a batch
+// name that two people use tells neither of the runs of the other.
 type BatchView interface {
 	Batch(ctx context.Context, batch string) (BatchRuns, error)
 }
