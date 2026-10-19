@@ -96,6 +96,86 @@ type batchResult struct {
 	Waiting  []batchRun     `json:"waiting,omitempty"`
 	Failed   []batchRun     `json:"failed,omitempty"`
 	Finished bool           `json:"finished"`
+	Usage    batchUsage     `json:"usage"`
+}
+
+// batchUsage is the usage of a job: the sum of the usage of its runs that
+// report one, field by field. The sum counts each run once. A child run
+// carries the batch of its parent, so it is a run of the job of its own,
+// and its usage is not also in the usage of its parent. Reported counts
+// the runs in the sum, and Missing the runs that report no usage yet; a
+// sum with Missing above zero is partial. CostUSD is the cost at the
+// prices of the workers, and it leaves out UnpricedTokens, whose cost is
+// unknown.
+type batchUsage struct {
+	fw.RunUsage
+	Reported int `json:"reported"`
+	Missing  int `json:"missing"`
+}
+
+// add counts one run of the job: its usage, or one more missing run.
+func (u *batchUsage) add(r *fw.Run) {
+	if !usageReported(r) {
+		u.Missing++
+		return
+	}
+	u.Reported++
+	u.Usage = u.Usage.Add(r.Usage.Usage)
+	u.Turns += r.Usage.Turns
+	u.ToolCalls += r.Usage.ToolCalls
+	u.CostUSD += r.Usage.CostUSD
+	u.UnpricedTokens += r.Usage.UnpricedTokens
+}
+
+// usageReported reports whether the view knows the usage of a run: the
+// kernel recorded its totals on fw.run.finished or fw.run.suspended
+// (fw.Run.UsageSeq), or the view counted the tokens of its model calls. A
+// run of a worker whose egress sends only the lifecycle events reports its
+// usage when it finishes or is suspended, and a run of an older kernel on
+// such a worker reports none.
+func usageReported(r *fw.Run) bool {
+	u := r.Usage
+	return r.UsageSeq > 0 || u.InputTokens+u.OutputTokens+u.CacheReadTokens+u.CacheWriteTokens > 0
+}
+
+// text words the usage of a job on one line.
+func (u batchUsage) text() string {
+	if u.Reported == 0 {
+		return "No run reports usage yet."
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Usage of %s: %s, %s", plural(u.Reported, "run", "runs"), plural(u.Turns, "turn", "turns"), plural(u.InputTokens+u.OutputTokens, "token", "tokens"))
+	if c := u.CacheReadTokens + u.CacheWriteTokens; c > 0 {
+		fmt.Fprintf(&b, " and %s", plural(c, "cache token", "cache tokens"))
+	}
+	if u.ToolCalls > 0 {
+		b.WriteString(", " + plural(u.ToolCalls, "tool call", "tool calls"))
+	}
+	if u.CostUSD > 0 {
+		fmt.Fprintf(&b, ", $%.4f", u.CostUSD)
+	}
+	b.WriteString(".")
+	switch {
+	case u.UnpricedTokens > 0 && u.CostUSD > 0:
+		fmt.Fprintf(&b, " The cost leaves out %s without a price, so the whole cost is unknown.", plural(u.UnpricedTokens, "token", "tokens"))
+	case u.UnpricedTokens > 0:
+		fmt.Fprintf(&b, " The cost is unknown: no price covers %s.", plural(u.UnpricedTokens, "token", "tokens"))
+	}
+	if u.Missing == 1 {
+		b.WriteString(" 1 run reports no usage yet, so the sum is partial.")
+	} else if u.Missing > 1 {
+		fmt.Fprintf(&b, " %d runs report no usage yet, so the sum is partial.", u.Missing)
+	}
+	b.WriteString(" The sum counts each run once: the usage of a child run is not also in its parent.")
+	return b.String()
+}
+
+// plural writes a number with the singular or the plural noun.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // batchRun is one run of a job that a person must look at.
@@ -129,7 +209,7 @@ func (s *server) addBatchTools() {
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolBatch,
 		Title:       "Job status",
-		Description: "Tell how a job goes: how many runs it has in each state, which members hold them, which runs wait for you, and which failed, with their errors.",
+		Description: "Tell how a job goes: how many runs it has in each state, which members hold them, which runs wait for you, and which failed, with their errors. It also sums the tokens, turns, tool calls, and cost of the runs, counting each run once, and says how many runs report no usage yet.",
 		InputSchema: json.RawMessage(batchSchema),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, s.batch)
@@ -221,6 +301,7 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 	members := map[string]bool{}
 	for _, r := range runs {
 		out.States[string(r.State)]++
+		out.Usage.add(r)
 		if !r.State.Terminal() {
 			out.Finished = false
 		}
@@ -271,6 +352,7 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 	if out.Finished {
 		b.WriteString(" The job is finished.")
 	}
+	b.WriteString("\n" + out.Usage.text())
 	for _, w := range out.Waiting {
 		fmt.Fprintf(&b, "\n- %s waits for you", w.RunID)
 		if w.Member != "" {

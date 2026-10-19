@@ -94,8 +94,8 @@ func fakeRouter(t *testing.T, actor string, runs []*fw.Run) *httptest.Server {
 }
 
 // newWorker is a bare kernel on the bus: no fleet, an egress stream, and
-// a node name.
-func newWorker(t *testing.T, bus fw.Bus, node string) *fw.Agent {
+// a node name. opts come after the defaults, so they win.
+func newWorker(t *testing.T, bus fw.Bus, node string, opts ...fw.Option) *fw.Agent {
 	t.Helper()
 	cfg := fw.DefaultConfig()
 	cfg.Home = t.TempDir()
@@ -103,8 +103,9 @@ func newWorker(t *testing.T, bus fw.Bus, node string) *fw.Agent {
 	cfg.Bus.Egress = "fw.events"
 	cfg.Bus.EgressTypes = EgressTypes
 	cfg.Agents = map[string]fw.AgentProfile{"default": {}}
-	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(fw.NoAuthn{}), fw.WithModel(textModel("done")),
-		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(bus), fw.WithLogger(quietLogger()))
+	base := []fw.Option{fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(fw.NoAuthn{}), fw.WithModel(textModel("done")),
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(bus), fw.WithLogger(quietLogger())}
+	a, err := fw.New(append(base, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
