@@ -187,3 +187,18 @@ func TestPlatformLateEnd(t *testing.T) {
 		}
 	}
 }
+
+// TestPlatformLateQueuedState delivers a title annotation of a queued run
+// before its fw.run.queued. No event set a state, so the run is queued.
+func TestPlatformLateQueuedState(t *testing.T) {
+	front := newMember(t, fw.NewMemBus(), "front", nil)
+	f := front.f
+	evs := finishedRun("noState", "item", fw.RunUsage{})
+	title := fw.MustEvent("", fw.EvRunAnnotated, fw.RunAnnotatedData{Metadata: map[string]string{fw.MetaTitle: "T"}})
+	id := fw.NewID()
+	stream(t, f, id, []uint64{2, 1}, title, evs[0])
+	b, err := f.Batch(as("ada"), "noState")
+	if err != nil || len(b.Runs) != 1 || b.Runs[0].State != fw.StateQueued || b.Runs[0].Title != "T" || b.Runs[0].Agent != "default" {
+		t.Fatalf("Batch = %+v, %v", b.Runs, err)
+	}
+}
