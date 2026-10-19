@@ -325,3 +325,47 @@ func TestUsageOf(t *testing.T) {
 		}
 	}
 }
+
+// TestBatchBranchWithoutWork forks a finished run of a job on a worker of
+// the lifecycle stream without a message. The branch stays finished and
+// does no work, so the job reads as final, with the usage of the source
+// alone, and not as partial for good.
+func TestBatchBranchWithoutWork(t *testing.T) {
+	ctx := testCtx(t)
+	t.Setenv(fleet.EnvIntake, "fw.jobs")
+	t.Setenv(fleet.EnvEgress, "")
+	t.Setenv(fleet.EnvAtespaces, "")
+	bus := newOrderedBus()
+	wcfg := testConfig(t)
+	wcfg.Node = "box:8080"
+	wcfg.Bus.Egress = "fw.events"
+	wcfg.Bus.EgressTypes = fleet.EgressTypes
+	worker := newAgent(t, newScript(endTurn("one")).model(), fw.WithConfig(wcfg), fw.WithBus(bus))
+	front := newAgent(t, newScript().model(), fw.WithBus(bus), fw.WithAuthn(people))
+	f, err := fleet.Open(ctx, front, fleet.Config{Name: "front", Egress: "fw.events", Interval: 40 * time.Millisecond, Expire: fleet.DefaultExpire})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	attach(front, f)
+	cs := as(t, ctx, serveAgent(t, front, nil).URL, "alice-token")
+
+	alice := fw.WithPrincipal(ctx, &fw.Principal{Subject: "alice", Kind: fw.KindUser})
+	src, err := worker.Run(alice, "one", fw.WithRequest(fw.RunRequest{Metadata: map[string]string{fw.MetaBatch: "fork-job"}}))
+	if err != nil || src.State != fw.StateCompleted {
+		t.Fatalf("src = %+v, %v", src, err)
+	}
+	br, err := worker.Fork(alice, src.ID, fw.ForkRequest{})
+	if err != nil || br.State != fw.StateCompleted {
+		t.Fatalf("branch = %+v, %v", br, err)
+	}
+	waitApplied(t, f, "fork-job", src.ID, src.Seq)
+	waitApplied(t, f, "fork-job", br.ID, br.Seq)
+
+	res := callTool(t, ctx, cs, toolBatch, map[string]any{"batch": "fork-job"})
+	var b batchResult
+	structured(t, res, &b)
+	if b.Total != 2 || !b.Finished || b.Usage.Reported != 2 || b.Usage.Final != 2 || b.Usage.Missing != 0 || b.Usage.Partial || b.Usage.RunUsage != src.Usage {
+		t.Fatalf("batch = %+v, want the usage %+v of the source, final; text %q", b, src.Usage, textOf(res))
+	}
+}
