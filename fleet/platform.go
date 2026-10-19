@@ -113,8 +113,10 @@ type platformRun struct {
 	member  string
 	updated time.Time
 	// queued is true once the view applied the fw.run.queued of the run,
-	// or read the run whole from its member (backfill).
+	// or read the run whole from its member (backfill). kept is the largest
+	// RunQueuedData.Kept that the view applied (onEvent).
 	queued bool
+	kept   uint64
 	// stateSeq is the sequence number of the latest event that changed
 	// the state of the run, and added holds the usage that each event
 	// after the latest totals added, so a late end of the run can apply
@@ -530,12 +532,20 @@ func (p *platform) onEvent(e fw.Event) error {
 	// metadata; the projection keeps the state of the later events. An end
 	// of the run, fw.run.finished or fw.run.suspended, applies when no
 	// event that changes the state came after it (lateEnd).
+	//
+	// Two processes can publish for one branch: its source records it as
+	// failed under its id when the start failed, with Kept zero and no
+	// copy, while the process of the branch took it after all, with Kept
+	// the number of its copies. A later fw.run.queued with a larger Kept
+	// applies too, so the copies of the source never count as the work of
+	// the branch; the record of the source holds no work to lose.
+	kept := queuedKept(e)
 	switch late := e.Seq != 0 && e.Seq <= r.run.Seq; {
 	case !late:
 		before := r.run.Usage
 		r.run.Apply(e, p.prices)
 		r.track(e, before)
-	case e.Type == fw.EvRunQueued && !r.queued:
+	case e.Type == fw.EvRunQueued && (!r.queued || kept > r.kept):
 		r.run.Apply(e, p.prices)
 	case (e.Type == fw.EvRunFinished || e.Type == fw.EvRunSuspended) && e.Seq > r.stateSeq:
 		r.lateEnd(e, p.prices)
@@ -544,6 +554,7 @@ func (p *platform) onEvent(e fw.Event) error {
 	}
 	if e.Type == fw.EvRunQueued {
 		r.queued = true
+		r.kept = max(r.kept, kept)
 	}
 	r.member, r.updated = name, now
 	m.serves(r.run.Agent)
@@ -593,6 +604,19 @@ func (p *platform) forgotten(batch string) map[string][]*fw.Run {
 		}
 	}
 	return out
+}
+
+// queuedKept returns RunQueuedData.Kept of a fw.run.queued, or zero for
+// another event.
+func queuedKept(e fw.Event) uint64 {
+	if e.Type != fw.EvRunQueued {
+		return 0
+	}
+	var d struct {
+		Kept uint64 `json:"kept"`
+	}
+	_ = e.Decode(&d)
+	return d.Kept
 }
 
 // identify gives a run that the stream reached before its fw.run.queued,

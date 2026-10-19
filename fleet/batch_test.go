@@ -342,3 +342,40 @@ func TestPlatformBackfillGivesIdentity(t *testing.T) {
 		t.Fatalf("the run that the stream reached after the read = %+v", r)
 	}
 }
+
+// TestPlatformTwoPublishersOfABranch delivers the events of one branch
+// from two processes: the record of its source, which took the start of
+// the branch for failed, with Kept zero, and then the copies that the
+// process of the branch took after all, with a finished source. The larger
+// Kept wins, so the copies do not count as the work of the branch.
+func TestPlatformTwoPublishersOfABranch(t *testing.T) {
+	ctx := context.Background()
+	front := newMember(t, fw.NewMemBus(), "front", nil)
+	f := front.f
+	srcTotals := fw.RunUsage{Usage: fw.Usage{InputTokens: 1000, OutputTokens: 100}, Turns: 3}
+	id := fw.NewID()
+	q := fw.RunQueuedData{Agent: "default", Input: "item", Principal: "ada", Metadata: map[string]string{fw.MetaBatch: "two"}}
+	stream(t, f, id, []uint64{1, 2},
+		fw.MustEvent("", fw.EvRunQueued, q),
+		fw.MustEvent("", fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeFailed, Error: "did not start", Totals: &fw.RunUsage{}}))
+	kq := q
+	kq.Kept = 4
+	for i, e := range []fw.Event{
+		fw.MustEvent("", fw.EvRunQueued, kq),
+		fw.MustEvent("", fw.EvRunStarted, fw.RunStartedData{Model: "fake/m"}),
+		fw.MustEvent("", fw.EvTurnStarted, fw.TurnData{Turn: 1}),
+		fw.MustEvent("", fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "ok", Totals: &srcTotals}),
+	} {
+		e.Subject, e.Seq, e.Node, e.Source = id, uint64(i+1), "ax:space/child", "fw://local/default/"+id
+		if err := f.platform.onEvent(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := f.Batch(ctx, "two")
+	if err != nil || len(b.Runs) != 1 {
+		t.Fatalf("Batch = %+v, %v", b, err)
+	}
+	if r := b.Runs[0]; r.Usage != (fw.RunUsage{}) || r.UsageSeq == 0 || r.State != fw.StateCompleted {
+		t.Fatalf("the branch = state %s, usage %+v at %d", r.State, r.Usage, r.UsageSeq)
+	}
+}
