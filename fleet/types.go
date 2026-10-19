@@ -131,6 +131,29 @@ type View interface {
 	Forward(ctx context.Context, member string, req *http.Request) (*http.Response, error)
 }
 
+// BatchView is a View that lists the runs of one batch whole. A record
+// holds the runs that are not finished and the newest FinishedRuns
+// finished runs of a member, so Runs cuts a large job; Batch does not.
+//
+// Batch returns every run of the batch that the view holds and that the
+// principal in ctx can view, each with Member set, newest first. That
+// includes the runs of a worker that the view no longer lists, because a
+// job counts them. Forgotten counts the runs of the batch that the view
+// dropped since it started: a finished run after the expire time, and
+// every run of a Task that left the Task list. A view knows only the runs
+// that it saw since it started, so a sum over the runs is partial when
+// Forgotten is above zero. Batch reports Forgotten only to a caller that
+// can view a run of the batch, or that names no principal.
+type BatchView interface {
+	Batch(ctx context.Context, batch string) (BatchRuns, error)
+}
+
+// BatchRuns is the answer of BatchView.Batch.
+type BatchRuns struct {
+	Runs      []*fw.Run
+	Forgotten int
+}
+
 // Errors of the fleet. A surface answers ErrNoRoute with 502 and
 // ErrNoCredential with 403: the caller is authenticated here, but it
 // carries no credential that the owner can check.

@@ -42,10 +42,10 @@ func TestPlatformUsageFromLifecycleEvents(t *testing.T) {
 	ctx := context.Background()
 	bus := fw.NewMemBus()
 	var mu sync.Mutex
-	sent := map[string]bool{}
+	sent := map[string]int{}
 	stop, err := bus.Subscribe(ctx, "fw.events.>", func(e fw.Event) error {
 		mu.Lock()
-		sent[e.Type] = true
+		sent[e.Type]++
 		mu.Unlock()
 		return nil
 	})
@@ -68,8 +68,34 @@ func TestPlatformUsageFromLifecycleEvents(t *testing.T) {
 		got, err := front.f.Run(ctx, r.ID)
 		return err == nil && got.State == fw.StateCompleted && got.Usage == r.Usage
 	})
+	// The mem bus hands each event to a goroutine of its own, so the spy
+	// can lag behind the front. It waits for every event of the run that
+	// the egress of the worker publishes, and then tells what they were.
+	egress := map[string]bool{}
+	for _, typ := range EgressTypes {
+		egress[typ] = true
+	}
+	ledger, err := worker.Events(ctx, r.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 0
+	for e := range ledger {
+		if egress[e.Type] {
+			want++
+		}
+	}
+	eventually(t, "the spy receives every published event", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, c := range sent {
+			n += c
+		}
+		return n == want
+	})
 	mu.Lock()
-	if sent[fw.EvModelResponded] || sent[fw.EvToolRequested] || !sent[fw.EvRunFinished] {
+	if sent[fw.EvModelResponded] != 0 || sent[fw.EvToolRequested] != 0 || sent[fw.EvRunFinished] != 1 {
 		t.Fatalf("the stream carried %v", sent)
 	}
 	mu.Unlock()

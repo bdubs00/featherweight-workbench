@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -75,22 +76,12 @@ func TestBatchUsage(t *testing.T) {
 	}
 	// A third run of the job, as a worker on an older kernel sends it: its
 	// fw.run.finished carries no totals.
-	old := fw.NewID()
-	for i, ev := range []struct {
-		typ  string
-		data any
-	}{
+	publishInOrder(t, ctx, bus, f, "job-1", fw.NewID(), []egressEvent{
 		{fw.EvRunQueued, fw.RunQueuedData{Agent: "default", Input: "three", Origin: fw.OriginBus, Principal: "alice", Metadata: map[string]string{fw.MetaBatch: "job-1"}}},
 		{fw.EvRunStarted, fw.RunStartedData{Model: "fake/m"}},
 		{fw.EvTurnStarted, fw.TurnData{Turn: 1}},
 		{fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "three"}},
-	} {
-		e := fw.MustEvent(old, ev.typ, ev.data)
-		e.Seq, e.Node, e.Source = uint64(i+1), "box:8080", "fw://local/default/"+old
-		if err := bus.Publish(ctx, "fw.events.local.default."+ev.typ, e); err != nil {
-			t.Fatal(err)
-		}
-	}
+	})
 
 	var b batchResult
 	var text string
@@ -105,18 +96,190 @@ func TestBatchUsage(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if b.Total != 3 || !b.Finished || b.Usage.RunUsage != want || b.Usage.Reported != 2 || b.Usage.Missing != 1 {
+	if b.Total != 3 || !b.Finished || b.Usage.RunUsage != want || b.Usage.Reported != 2 || b.Usage.Final != 2 || b.Usage.Missing != 1 || !b.Usage.Partial {
 		t.Fatalf("batch = %+v, want usage %+v of 2 runs and 1 missing; text %q", b, want, text)
 	}
 	for _, s := range []string{
 		"Usage of 2 runs: 3 turns, ",
 		"1 tool call, $",
 		"The cost leaves out 22 tokens without a price",
-		"1 run reports no usage yet, so the sum is partial.",
+		"1 run reports no usage yet. The sum is partial.",
 		"The sum counts each run once",
 	} {
 		if !strings.Contains(text, s) {
 			t.Fatalf("batch text lacks %q: %q", s, text)
+		}
+	}
+}
+
+// egressEvent is one event of a run on the egress stream of a worker.
+type egressEvent struct {
+	typ  string
+	data any
+}
+
+// publishInOrder sends the events of one run of a batch on the egress
+// stream, as the worker box:8080 does, with the sequence numbers from 1.
+// The mem bus hands each event to a goroutine of its own, so it does not
+// keep their order, as a stream of NATS does; the helper waits after each
+// event until the view of the front applied it.
+func publishInOrder(t *testing.T, ctx context.Context, bus fw.Bus, f *fleet.Fleet, batch, id string, evs []egressEvent) {
+	t.Helper()
+	for i, ev := range evs {
+		e := fw.MustEvent(id, ev.typ, ev.data)
+		e.Seq, e.Node, e.Source = uint64(i+1), "box:8080", "fw://local/default/"+id
+		if err := bus.Publish(ctx, "fw.events.local.default."+ev.typ, e); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for !applied(f, batch, id, e.Seq) {
+			if time.Now().After(deadline) {
+				t.Fatalf("the front did not apply event %d of %s", e.Seq, id)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+// applied reports whether the view of the front holds the run of a batch
+// up to seq.
+func applied(f *fleet.Fleet, batch, id string, seq uint64) bool {
+	b, err := f.Batch(context.Background(), batch)
+	if err != nil {
+		return false
+	}
+	for _, r := range b.Runs {
+		if r.ID == id {
+			return r.Seq >= seq
+		}
+	}
+	return false
+}
+
+// lifecycleFront is a front with the batch tools whose fleet reads the
+// egress stream fw.events of the bus. call runs the tool batch as alice.
+func lifecycleFront(t *testing.T) (context.Context, fw.Bus, *fleet.Fleet, func(string) (batchResult, string)) {
+	t.Helper()
+	ctx := testCtx(t)
+	t.Setenv(fleet.EnvIntake, "fw.jobs")
+	t.Setenv(fleet.EnvEgress, "")
+	t.Setenv(fleet.EnvAtespaces, "")
+	bus := fw.NewMemBus()
+	front := newAgent(t, newScript().model(), fw.WithBus(bus), fw.WithAuthn(people))
+	f, err := fleet.Open(ctx, front, fleet.Config{Name: "front", Egress: "fw.events", Interval: 40 * time.Millisecond, Expire: fleet.DefaultExpire})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	attach(front, f)
+	cs := as(t, ctx, serveAgent(t, front, nil).URL, "alice-token")
+	return ctx, bus, f, func(batch string) (batchResult, string) {
+		res := callTool(t, ctx, cs, toolBatch, map[string]any{"batch": batch})
+		var b batchResult
+		structured(t, res, &b)
+		return b, textOf(res)
+	}
+}
+
+// finishedEvents is the lifecycle of one finished run of a batch, as alice,
+// with totals.
+func finishedEvents(batch, input string, totals fw.RunUsage) []egressEvent {
+	return []egressEvent{
+		{fw.EvRunQueued, fw.RunQueuedData{Agent: "default", Input: input, Origin: fw.OriginBus, Principal: "alice", Metadata: map[string]string{fw.MetaBatch: batch}}},
+		{fw.EvRunStarted, fw.RunStartedData{Model: "fake/m"}},
+		{fw.EvTurnStarted, fw.TurnData{Turn: 1}},
+		{fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "ok", Totals: &totals}},
+	}
+}
+
+// TestBatchCountsEveryRun follows a job of 60 runs on one worker. A record
+// of the view holds the newest 50 finished runs of a member, and the tool
+// batch counts every run of the job all the same: the total, the states,
+// and the usage.
+func TestBatchCountsEveryRun(t *testing.T) {
+	ctx, bus, f, call := lifecycleFront(t)
+	per := fw.RunUsage{Usage: fw.Usage{InputTokens: 100, OutputTokens: 10}, Turns: 1, CostUSD: 0.01}
+	var want fw.RunUsage
+	for i := 0; i < 60; i++ {
+		publishInOrder(t, ctx, bus, f, "big", fw.NewID(), finishedEvents("big", fmt.Sprint("item ", i), per))
+		want.Usage = want.Usage.Add(per.Usage)
+		want.Turns += per.Turns
+		want.CostUSD += per.CostUSD
+	}
+	publishInOrder(t, ctx, bus, f, "other", fw.NewID(), finishedEvents("other", "else", per))
+	b, text := call("big")
+	if b.Total != 60 || b.States["completed"] != 60 || !b.Finished || b.Forgotten != 0 {
+		t.Fatalf("batch = %+v; text %q", b, text)
+	}
+	if b.Usage.RunUsage != want || b.Usage.Reported != 60 || b.Usage.Final != 60 || b.Usage.Missing != 0 || b.Usage.Partial {
+		t.Fatalf("usage = %+v, want %+v of 60 final runs", b.Usage, want)
+	}
+	if !strings.Contains(text, "Batch big: 60 runs on 1 members.") || !strings.Contains(text, "Usage of 60 runs: 60 turns, 6600 tokens, $0.6000.") || strings.Contains(text, "partial") {
+		t.Fatalf("batch text = %q", text)
+	}
+}
+
+// TestBatchUsageIsPartial follows a job of three runs on a worker that
+// sends only the lifecycle events. One run waits for an approval, and the
+// stream carried only the tokens of its title call: the view does not know
+// its usage. One run finished, took a follow-up, and works again: its
+// totals date from its first end, so its usage is not final. One run
+// finished. The sum holds the two runs with totals and reads as partial.
+func TestBatchUsageIsPartial(t *testing.T) {
+	ctx, bus, f, call := lifecycleFront(t)
+	title := fw.Usage{InputTokens: 60, OutputTokens: 6}
+	publishInOrder(t, ctx, bus, f, "j", fw.NewID(), []egressEvent{
+		{fw.EvRunQueued, fw.RunQueuedData{Agent: "default", Input: "waits", Origin: fw.OriginBus, Principal: "alice", Metadata: map[string]string{fw.MetaBatch: "j"}}},
+		{fw.EvRunStarted, fw.RunStartedData{Model: "fake/m"}},
+		{fw.EvRunAnnotated, fw.RunAnnotatedData{Metadata: map[string]string{fw.MetaTitle: "T"}, Usage: &title, Provider: "fake", Model: "titles"}},
+		{fw.EvTurnStarted, fw.TurnData{Turn: 1}},
+		{fw.EvApprovalRequested, fw.ApprovalRequestedData{ApprovalID: "ap1", Tool: "shell", CallID: "c1", Reason: "needs ok"}},
+	})
+	first := fw.RunUsage{Usage: fw.Usage{InputTokens: 100, OutputTokens: 10}, Turns: 1}
+	again := append(finishedEvents("j", "again", first),
+		egressEvent{fw.EvMessageReceived, fw.MessageReceivedData{Role: fw.RoleUser, Content: []fw.Block{fw.Text("more")}, Origin: fw.OriginHTTP}},
+		egressEvent{fw.EvTurnStarted, fw.TurnData{Turn: 2}},
+	)
+	publishInOrder(t, ctx, bus, f, "j", fw.NewID(), again)
+	done := fw.RunUsage{Usage: fw.Usage{InputTokens: 300, OutputTokens: 30}, Turns: 2}
+	publishInOrder(t, ctx, bus, f, "j", fw.NewID(), finishedEvents("j", "done", done))
+
+	b, text := call("j")
+	want := fw.RunUsage{Usage: first.Usage.Add(done.Usage), Turns: first.Turns + 1 + done.Turns}
+	if b.Total != 3 || b.Usage.RunUsage != want || b.Usage.Reported != 2 || b.Usage.Final != 1 || b.Usage.Missing != 1 || !b.Usage.Partial {
+		t.Fatalf("usage = %+v, want %+v of 2 runs, 1 final, 1 missing; text %q", b.Usage, want, text)
+	}
+	for _, s := range []string{
+		"Usage of 2 runs: 4 turns, 440 tokens.",
+		"The usage of 1 run is not final yet, because the run is not finished.",
+		"1 run reports no usage yet.",
+		"The sum is partial.",
+	} {
+		if !strings.Contains(text, s) {
+			t.Fatalf("batch text lacks %q: %q", s, text)
+		}
+	}
+}
+
+// TestUsageOf tells for each kind of run whether the view knows its usage
+// and whether that usage is final.
+func TestUsageOf(t *testing.T) {
+	tokens := fw.RunUsage{Usage: fw.Usage{InputTokens: 60, OutputTokens: 6}}
+	for _, tc := range []struct {
+		name         string
+		run          fw.Run
+		known, final bool
+	}{
+		{"a run of this process that works", fw.Run{State: fw.StateRunning, Usage: tokens}, true, false},
+		{"a finished run of this process from an older ledger", fw.Run{State: fw.StateCompleted, Usage: tokens}, true, true},
+		{"a run of a worker with the tokens of a title call", fw.Run{Member: "w", State: fw.StateInputRequired, Usage: tokens}, false, false},
+		{"a run of a worker that works after its totals", fw.Run{Member: "w", State: fw.StateRunning, Usage: tokens, UsageSeq: 9}, true, false},
+		{"a suspended run of a worker", fw.Run{Member: "w", State: fw.StateSuspended, Usage: tokens, UsageSeq: 9}, true, false},
+		{"a finished run of a worker with totals", fw.Run{Member: "w", State: fw.StateFailed, UsageSeq: 9}, true, true},
+		{"a finished run of an older kernel on a worker", fw.Run{Member: "w", State: fw.StateCompleted, Usage: tokens}, false, false},
+	} {
+		if known, final := usageOf(&tc.run); known != tc.known || final != tc.final {
+			t.Errorf("%s: known %v, final %v; want %v, %v", tc.name, known, final, tc.known, tc.final)
 		}
 	}
 }

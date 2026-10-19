@@ -63,6 +63,7 @@ type platform struct {
 	members  map[string]*platformMember // by member name
 	runs     map[string]*platformRun    // by run id
 	children map[string]childLink       // by the id of the child
+	forgot   map[string]forgotBatch     // by batch: the runs of a job that the view dropped
 	conn     *grpc.ClientConn
 	client   v1alpha1.AXClient
 }
@@ -110,6 +111,17 @@ type platformRun struct {
 	run     *fw.Run
 	member  string
 	updated time.Time
+	// queued is true once the view applied the fw.run.queued of the run,
+	// or read the run whole from its member (backfill).
+	queued bool
+}
+
+// forgotBatch counts the runs of one batch that the view dropped (drop),
+// so the tool batch can tell that its counts leave them out. at is the
+// latest drop; the count goes after the expire time since then.
+type forgotBatch struct {
+	n  int
+	at time.Time
 }
 
 // startPlatform starts the sources that the configuration names: the Task
@@ -125,6 +137,7 @@ func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv strin
 		members:   map[string]*platformMember{},
 		runs:      map[string]*platformRun{},
 		children:  map[string]childLink{},
+		forgot:    map[string]forgotBatch{},
 	}
 	if len(p.atespaces) > 0 {
 		if p.server == "" {
@@ -249,7 +262,7 @@ func (p *platform) poll(ctx context.Context) {
 			delete(p.members, name)
 			for id, r := range p.runs {
 				if r.member == name {
-					delete(p.runs, id)
+					p.drop(id, r, now)
 				}
 			}
 		}
@@ -395,7 +408,7 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 		if cur, ok := p.runs[r.ID]; ok && cur.run.Seq >= r.Seq {
 			continue
 		}
-		p.runs[r.ID] = &platformRun{run: r, member: m.name, updated: now}
+		p.runs[r.ID] = &platformRun{run: r, member: m.name, updated: now, queued: true}
 	}
 	for _, ag := range agents.Agents {
 		m.serves(ag.Name)
@@ -475,8 +488,16 @@ func (p *platform) onEvent(e fw.Event) error {
 		r = &platformRun{run: &fw.Run{}, member: name}
 		p.runs[e.Subject] = r
 	}
-	if e.Seq != 0 && e.Seq <= r.run.Seq && e.Type != fw.EvRunQueued {
-		return nil // an old or repeated event
+	// An old or repeated event changes nothing. The one exception is the
+	// first fw.run.queued of a run that arrives after later events, which
+	// a bus can deliver out of order: only that event names the agent, the
+	// person, and the metadata of the run. The projection takes the
+	// identity from it and keeps the state of the later events.
+	if e.Seq != 0 && e.Seq <= r.run.Seq && (e.Type != fw.EvRunQueued || r.queued) {
+		return nil
+	}
+	if e.Type == fw.EvRunQueued {
+		r.queued = true
 	}
 	// The totals of fw.run.finished and fw.run.suspended set the usage of
 	// the run, with the cost at the prices of the worker. The prices of
@@ -493,6 +514,25 @@ func (p *platform) onEvent(e fw.Event) error {
 		}
 	}
 	return nil
+}
+
+// drop removes a run from the view and counts it for its batch. The caller
+// holds p.mu.
+func (p *platform) drop(id string, r *platformRun, now time.Time) {
+	delete(p.runs, id)
+	if batch := r.run.Metadata[fw.MetaBatch]; batch != "" {
+		fb := p.forgot[batch]
+		fb.n++
+		fb.at = now
+		p.forgot[batch] = fb
+	}
+}
+
+// forgotten returns how many runs of a batch the view dropped.
+func (p *platform) forgotten(batch string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.forgot[batch].n
 }
 
 // MemberName turns the node of a kernel, "ax:<atespace>/<task>" for a Task,
@@ -520,13 +560,19 @@ func memberOf(node string) (name, u, atespace string) {
 // first cut to FinishedRuns, and the agents that the member serves and
 // that its runs name, with the access block that this process has for
 // each agent, because the front decides for a worker with its own
-// configuration.
-func (p *platform) records(now time.Time) []remote {
+// configuration. With all, a record holds every run of the member, as the
+// tool batch needs it, and no finished run is left out.
+func (p *platform) records(now time.Time, all bool) []remote {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for id, r := range p.runs {
 		if r.run.State.Terminal() && now.Sub(r.updated) > p.f.expire {
-			delete(p.runs, id)
+			p.drop(id, r, now)
+		}
+	}
+	for batch, fb := range p.forgot {
+		if now.Sub(fb.at) > p.f.expire {
+			delete(p.forgot, batch)
 		}
 	}
 	for id, l := range p.children {
@@ -580,6 +626,12 @@ func (p *platform) records(now time.Time) []remote {
 			return runs[i].ID > runs[j].ID
 		})
 		kept, omitted := pickRuns(runs)
+		if all {
+			kept, omitted = make([]*fw.Run, 0, len(runs)), 0
+			for _, r := range runs {
+				kept = append(kept, shorten(r))
+			}
+		}
 		rec := &Record{
 			Name:      m.name,
 			URL:       m.url,
