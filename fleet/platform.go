@@ -111,6 +111,9 @@ type platformRun struct {
 	run     *fw.Run
 	member  string
 	updated time.Time
+	// queued is true once the view applied the fw.run.queued of the run,
+	// or read the run whole from its member (backfill).
+	queued bool
 }
 
 // forgotBatch counts the runs of one batch that the view dropped (drop),
@@ -405,7 +408,7 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 		if cur, ok := p.runs[r.ID]; ok && cur.run.Seq >= r.Seq {
 			continue
 		}
-		p.runs[r.ID] = &platformRun{run: r, member: m.name, updated: now}
+		p.runs[r.ID] = &platformRun{run: r, member: m.name, updated: now, queued: true}
 	}
 	for _, ag := range agents.Agents {
 		m.serves(ag.Name)
@@ -485,8 +488,16 @@ func (p *platform) onEvent(e fw.Event) error {
 		r = &platformRun{run: &fw.Run{}, member: name}
 		p.runs[e.Subject] = r
 	}
-	if e.Seq != 0 && e.Seq <= r.run.Seq && e.Type != fw.EvRunQueued {
-		return nil // an old or repeated event
+	// An old or repeated event changes nothing. The one exception is the
+	// first fw.run.queued of a run that arrives after later events, which
+	// a bus can deliver out of order: only that event names the agent, the
+	// person, and the metadata of the run. The projection takes the
+	// identity from it and keeps the state of the later events.
+	if e.Seq != 0 && e.Seq <= r.run.Seq && (e.Type != fw.EvRunQueued || r.queued) {
+		return nil
+	}
+	if e.Type == fw.EvRunQueued {
+		r.queued = true
 	}
 	// The totals of fw.run.finished and fw.run.suspended set the usage of
 	// the run, with the cost at the prices of the worker. The prices of

@@ -80,3 +80,33 @@ func TestBatchListsEveryRun(t *testing.T) {
 		t.Fatalf("ada: Batch = %d runs, %d forgotten", len(b.Runs), b.Forgotten)
 	}
 }
+
+// TestPlatformQueuedOnce sends the same fw.run.queued again after a run
+// finished, as a retry of the egress does, and delivers the events of
+// another run out of order. A repeated fw.run.queued changes nothing, and
+// a late one gives the run its identity and keeps the state of the later
+// events.
+func TestPlatformQueuedOnce(t *testing.T) {
+	ctx := context.Background()
+	front := newMember(t, fw.NewMemBus(), "front", nil)
+	f := front.f
+	totals := fw.RunUsage{Usage: fw.Usage{InputTokens: 5}, Turns: 1}
+	evs := finishedRun("r", "item", totals)
+
+	id := fw.NewID()
+	stream(t, f, id, []uint64{1, 2, 3, 4, 1}, append(evs, evs[0])...)
+	b, err := f.Batch(ctx, "r")
+	if err != nil || len(b.Runs) != 1 || b.Runs[0].State != fw.StateCompleted || b.Runs[0].Usage != totals || b.Runs[0].Seq != 4 {
+		t.Fatalf("after a repeated fw.run.queued: %+v, %v", b.Runs, err)
+	}
+
+	late := fw.NewID()
+	stream(t, f, late, []uint64{4, 2, 1, 3, 1}, evs[3], evs[1], evs[0], evs[2], evs[0])
+	r, err := f.Run(ctx, late)
+	if err != nil || r.State != fw.StateCompleted || r.Usage != totals || r.Principal != "ada" || r.Agent != "default" || r.Metadata[fw.MetaBatch] != "r" {
+		t.Fatalf("out of order: %+v, %v", r, err)
+	}
+	if runs, _ := f.Runs(as("ada")); len(runs) != 2 {
+		t.Fatalf("ada sees %d runs", len(runs))
+	}
+}
