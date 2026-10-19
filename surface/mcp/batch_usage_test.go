@@ -96,14 +96,14 @@ func TestBatchUsage(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if b.Total != 3 || !b.Finished || b.Usage.RunUsage != want || b.Usage.Reported != 2 || b.Usage.Missing != 1 {
+	if b.Total != 3 || !b.Finished || b.Usage.RunUsage != want || b.Usage.Reported != 2 || b.Usage.Final != 2 || b.Usage.Missing != 1 || !b.Usage.Partial {
 		t.Fatalf("batch = %+v, want usage %+v of 2 runs and 1 missing; text %q", b, want, text)
 	}
 	for _, s := range []string{
 		"Usage of 2 runs: 3 turns, ",
 		"1 tool call, $",
 		"The cost leaves out 22 tokens without a price",
-		"1 run reports no usage yet, so the sum is partial.",
+		"1 run reports no usage yet. The sum is partial.",
 		"The sum counts each run once",
 	} {
 		if !strings.Contains(text, s) {
@@ -211,10 +211,75 @@ func TestBatchCountsEveryRun(t *testing.T) {
 	if b.Total != 60 || b.States["completed"] != 60 || !b.Finished || b.Forgotten != 0 {
 		t.Fatalf("batch = %+v; text %q", b, text)
 	}
-	if b.Usage.RunUsage != want || b.Usage.Reported != 60 || b.Usage.Missing != 0 {
-		t.Fatalf("usage = %+v, want %+v of 60 runs", b.Usage, want)
+	if b.Usage.RunUsage != want || b.Usage.Reported != 60 || b.Usage.Final != 60 || b.Usage.Missing != 0 || b.Usage.Partial {
+		t.Fatalf("usage = %+v, want %+v of 60 final runs", b.Usage, want)
 	}
 	if !strings.Contains(text, "Batch big: 60 runs on 1 members.") || !strings.Contains(text, "Usage of 60 runs: 60 turns, 6600 tokens, $0.6000.") || strings.Contains(text, "partial") {
 		t.Fatalf("batch text = %q", text)
+	}
+}
+
+// TestBatchUsageIsPartial follows a job of three runs on a worker that
+// sends only the lifecycle events. One run waits for an approval, and the
+// stream carried only the tokens of its title call: the view does not know
+// its usage. One run finished, took a follow-up, and works again: its
+// totals date from its first end, so its usage is not final. One run
+// finished. The sum holds the two runs with totals and reads as partial.
+func TestBatchUsageIsPartial(t *testing.T) {
+	ctx, bus, f, call := lifecycleFront(t)
+	title := fw.Usage{InputTokens: 60, OutputTokens: 6}
+	publishInOrder(t, ctx, bus, f, "j", fw.NewID(), []egressEvent{
+		{fw.EvRunQueued, fw.RunQueuedData{Agent: "default", Input: "waits", Origin: fw.OriginBus, Principal: "alice", Metadata: map[string]string{fw.MetaBatch: "j"}}},
+		{fw.EvRunStarted, fw.RunStartedData{Model: "fake/m"}},
+		{fw.EvRunAnnotated, fw.RunAnnotatedData{Metadata: map[string]string{fw.MetaTitle: "T"}, Usage: &title, Provider: "fake", Model: "titles"}},
+		{fw.EvTurnStarted, fw.TurnData{Turn: 1}},
+		{fw.EvApprovalRequested, fw.ApprovalRequestedData{ApprovalID: "ap1", Tool: "shell", CallID: "c1", Reason: "needs ok"}},
+	})
+	first := fw.RunUsage{Usage: fw.Usage{InputTokens: 100, OutputTokens: 10}, Turns: 1}
+	again := append(finishedEvents("j", "again", first),
+		egressEvent{fw.EvMessageReceived, fw.MessageReceivedData{Role: fw.RoleUser, Content: []fw.Block{fw.Text("more")}, Origin: fw.OriginHTTP}},
+		egressEvent{fw.EvTurnStarted, fw.TurnData{Turn: 2}},
+	)
+	publishInOrder(t, ctx, bus, f, "j", fw.NewID(), again)
+	done := fw.RunUsage{Usage: fw.Usage{InputTokens: 300, OutputTokens: 30}, Turns: 2}
+	publishInOrder(t, ctx, bus, f, "j", fw.NewID(), finishedEvents("j", "done", done))
+
+	b, text := call("j")
+	want := fw.RunUsage{Usage: first.Usage.Add(done.Usage), Turns: first.Turns + 1 + done.Turns}
+	if b.Total != 3 || b.Usage.RunUsage != want || b.Usage.Reported != 2 || b.Usage.Final != 1 || b.Usage.Missing != 1 || !b.Usage.Partial {
+		t.Fatalf("usage = %+v, want %+v of 2 runs, 1 final, 1 missing; text %q", b.Usage, want, text)
+	}
+	for _, s := range []string{
+		"Usage of 2 runs: 4 turns, 440 tokens.",
+		"The usage of 1 run is not final yet, because the run is not finished.",
+		"1 run reports no usage yet.",
+		"The sum is partial.",
+	} {
+		if !strings.Contains(text, s) {
+			t.Fatalf("batch text lacks %q: %q", s, text)
+		}
+	}
+}
+
+// TestUsageOf tells for each kind of run whether the view knows its usage
+// and whether that usage is final.
+func TestUsageOf(t *testing.T) {
+	tokens := fw.RunUsage{Usage: fw.Usage{InputTokens: 60, OutputTokens: 6}}
+	for _, tc := range []struct {
+		name         string
+		run          fw.Run
+		known, final bool
+	}{
+		{"a run of this process that works", fw.Run{State: fw.StateRunning, Usage: tokens}, true, false},
+		{"a finished run of this process from an older ledger", fw.Run{State: fw.StateCompleted, Usage: tokens}, true, true},
+		{"a run of a worker with the tokens of a title call", fw.Run{Member: "w", State: fw.StateInputRequired, Usage: tokens}, false, false},
+		{"a run of a worker that works after its totals", fw.Run{Member: "w", State: fw.StateRunning, Usage: tokens, UsageSeq: 9}, true, false},
+		{"a suspended run of a worker", fw.Run{Member: "w", State: fw.StateSuspended, Usage: tokens, UsageSeq: 9}, true, false},
+		{"a finished run of a worker with totals", fw.Run{Member: "w", State: fw.StateFailed, UsageSeq: 9}, true, true},
+		{"a finished run of an older kernel on a worker", fw.Run{Member: "w", State: fw.StateCompleted, Usage: tokens}, false, false},
+	} {
+		if known, final := usageOf(&tc.run); known != tc.known || final != tc.final {
+			t.Errorf("%s: known %v, final %v; want %v, %v", tc.name, known, final, tc.known, tc.final)
+		}
 	}
 }

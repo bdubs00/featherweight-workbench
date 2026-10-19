@@ -104,24 +104,34 @@ type batchResult struct {
 // batchUsage is the usage of a job: the sum of the usage of its runs that
 // report one, field by field. The sum counts each run once. A child run
 // carries the batch of its parent, so it is a run of the job of its own,
-// and its usage is not also in the usage of its parent. Reported counts
-// the runs in the sum, and Missing the runs that report no usage yet; a
-// sum with Missing above zero is partial. CostUSD is the cost at the
-// prices of the workers, and it leaves out UnpricedTokens, whose cost is
-// unknown.
+// and its usage is not also in the usage of its parent; a branch counts
+// only its own work, not the events that it kept from its source.
+//
+// Reported counts the runs in the sum, and Missing the runs whose usage
+// the view does not know (usageOf). Final counts the reported runs whose
+// usage is final. Partial is true when Missing is above zero, when a
+// reported run is not final, or when the view forgot runs of the job.
+// CostUSD is the cost at the prices of the workers, and it leaves out
+// UnpricedTokens, whose cost is unknown.
 type batchUsage struct {
 	fw.RunUsage
-	Reported int `json:"reported"`
-	Missing  int `json:"missing"`
+	Reported int  `json:"reported"`
+	Final    int  `json:"final"`
+	Missing  int  `json:"missing"`
+	Partial  bool `json:"partial"`
 }
 
 // add counts one run of the job: its usage, or one more missing run.
 func (u *batchUsage) add(r *fw.Run) {
-	if !usageReported(r) {
+	known, final := usageOf(r)
+	if !known {
 		u.Missing++
 		return
 	}
 	u.Reported++
+	if final {
+		u.Final++
+	}
 	u.Usage = u.Usage.Add(r.Usage.Usage)
 	u.Turns += r.Usage.Turns
 	u.ToolCalls += r.Usage.ToolCalls
@@ -129,15 +139,26 @@ func (u *batchUsage) add(r *fw.Run) {
 	u.UnpricedTokens += r.Usage.UnpricedTokens
 }
 
-// usageReported reports whether the view knows the usage of a run: the
-// kernel recorded its totals on fw.run.finished or fw.run.suspended
-// (fw.Run.UsageSeq), or the view counted the tokens of its model calls. A
-// run of a worker whose egress sends only the lifecycle events reports its
-// usage when it finishes or is suspended, and a run of an older kernel on
-// such a worker reports none.
-func usageReported(r *fw.Run) bool {
-	u := r.Usage
-	return r.UsageSeq > 0 || u.InputTokens+u.OutputTokens+u.CacheReadTokens+u.CacheWriteTokens > 0
+// usageOf reports whether the view knows the usage of a run, and whether
+// that usage is final.
+//
+// A run of this process, without Member, has the usage of its whole
+// ledger, so the view knows it, and it is final once the run is finished.
+// A run of another member has a known usage when its kernel recorded the
+// totals of the run on fw.run.finished or fw.run.suspended
+// (fw.Run.UsageSeq), and the usage is final when the run is finished: the
+// totals of its end and the annotations that the stream carried after
+// them. Tokens without totals do not count, because on a stream of
+// lifecycle events they come from fw.run.annotated alone, such as a title
+// call, and not from the model calls of the run. A run that works or waits
+// again after its totals, after a follow-up, a resume, or a decision, is
+// known up to its totals, so its usage is not final.
+func usageOf(r *fw.Run) (known, final bool) {
+	if r.Member == "" {
+		return true, r.State.Terminal()
+	}
+	known = r.UsageSeq > 0
+	return known, known && r.State.Terminal()
 }
 
 // text words the usage of a job on one line.
@@ -163,12 +184,22 @@ func (u batchUsage) text() string {
 	case u.UnpricedTokens > 0:
 		fmt.Fprintf(&b, " The cost is unknown: no price covers %s.", plural(u.UnpricedTokens, "token", "tokens"))
 	}
-	if u.Missing == 1 {
-		b.WriteString(" 1 run reports no usage yet, so the sum is partial.")
-	} else if u.Missing > 1 {
-		fmt.Fprintf(&b, " %d runs report no usage yet, so the sum is partial.", u.Missing)
+	switch n := u.Reported - u.Final; {
+	case n == 1:
+		b.WriteString(" The usage of 1 run is not final yet, because the run is not finished.")
+	case n > 1:
+		fmt.Fprintf(&b, " The usage of %d runs is not final yet, because they are not finished.", n)
 	}
-	b.WriteString(" The sum counts each run once: the usage of a child run is not also in its parent.")
+	switch {
+	case u.Missing == 1:
+		b.WriteString(" 1 run reports no usage yet.")
+	case u.Missing > 1:
+		fmt.Fprintf(&b, " %d runs report no usage yet.", u.Missing)
+	}
+	if u.Partial {
+		b.WriteString(" The sum is partial.")
+	}
+	b.WriteString(" The sum counts each run once: the usage of a child run is not also in its parent, and a branch counts only its own work.")
 	return b.String()
 }
 
@@ -244,7 +275,7 @@ func (s *server) addBatchTools() {
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolBatch,
 		Title:       "Job status",
-		Description: "Tell how a job goes: how many runs it has in each state, which members hold them, which runs wait for you, and which failed, with their errors. It also sums the tokens, turns, tool calls, and cost of the runs, counting each run once, and says how many runs report no usage yet.",
+		Description: "Tell how a job goes: how many runs it has in each state, which members hold them, which runs wait for you, and which failed, with their errors. It also sums the tokens, turns, tool calls, and cost of the runs, counting each run once and a branch for its own work, and says when the sum is partial: a run reports no usage yet, a run is not finished, or the view forgot runs of the job.",
 		InputSchema: json.RawMessage(batchSchema),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, s.batch)
@@ -362,6 +393,7 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 			out.Failed = append(out.Failed, batchRun{RunID: r.ID, Member: r.Member, State: string(r.State), Title: r.Title, Detail: r.Error})
 		}
 	}
+	out.Usage.Partial = out.Usage.Missing > 0 || out.Usage.Final < out.Usage.Reported || forgotten > 0
 	for m := range members {
 		out.Members = append(out.Members, m)
 	}
