@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"sort"
 	"strings"
@@ -423,10 +424,15 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 			continue
 		}
 		m.serves(r.Agent)
-		if cur, ok := p.runs[r.ID]; ok && cur.run.Seq >= r.Seq {
-			continue
+		cur, ok := p.runs[r.ID]
+		switch {
+		case !ok || cur.run.Seq < r.Seq || (!cur.queued && cur.run.Seq == r.Seq):
+			// The read is newer than the view, or as new and the view has
+			// no identity for the run: the read is the whole run.
+			p.runs[r.ID] = &platformRun{run: r, member: m.name, updated: now, queued: true, stateSeq: r.Seq}
+		case !cur.queued:
+			cur.identify(r)
 		}
-		p.runs[r.ID] = &platformRun{run: r, member: m.name, updated: now, queued: true, stateSeq: r.Seq}
 	}
 	for _, ag := range agents.Agents {
 		m.serves(ag.Name)
@@ -587,6 +593,60 @@ func (p *platform) forgotten(batch string) map[string][]*fw.Run {
 		}
 	}
 	return out
+}
+
+// identify gives a run that the stream reached before its fw.run.queued,
+// and that is newer than the read of its member, the identity from the
+// read: the agent, the person, the input, the parent, the batch, and the
+// start. The state that the stream changed after the read stays, and the
+// usage takes the read and the usage that the stream added after it,
+// unless the stream brought newer totals.
+func (r *platformRun) identify(read *fw.Run) {
+	c := r.run
+	c.Agent, c.Input, c.Origin, c.Principal = read.Agent, read.Input, read.Origin, read.Principal
+	c.Parent, c.Depth, c.ExtraTools, c.CreatedAt = read.Parent, read.Depth, read.ExtraTools, read.CreatedAt
+	md := maps.Clone(read.Metadata)
+	if md == nil {
+		md = map[string]string{}
+	}
+	maps.Copy(md, c.Metadata)
+	c.Metadata = md
+	if c.Title == "" {
+		c.Title = read.Title
+	}
+	if r.stateSeq <= read.Seq {
+		c.State, c.Pending, c.Output, c.Error = read.State, read.Pending, read.Output, read.Error
+	}
+	if c.UsageSeq <= read.Seq {
+		u := read.Usage
+		var after []addedUsage
+		for _, a := range r.added {
+			if a.seq > read.Seq {
+				u = usageSum(u, a.u)
+				after = append(after, a)
+			}
+		}
+		c.Usage, c.UsageSeq, r.added = u, read.UsageSeq, after
+	}
+	if c.TreeUsage == nil {
+		c.TreeUsage, c.TreeOpen, c.TreeWorking = read.TreeUsage, read.TreeOpen, read.TreeWorking
+	}
+	r.queued = true
+}
+
+// unknown counts the runs that have no identity yet, and those of them
+// that are not finished. The caller holds p.mu.
+func (p *platform) unknown() (n, active int) {
+	for _, r := range p.runs {
+		if r.queued || r.run.ID == "" {
+			continue
+		}
+		n++
+		if !r.run.State.Terminal() {
+			active++
+		}
+	}
+	return n, active
 }
 
 // track records what an event in order did to the run: whether it changed

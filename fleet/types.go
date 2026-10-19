@@ -150,9 +150,18 @@ type BatchView interface {
 }
 
 // BatchRuns is the answer of BatchView.Batch.
+//
+// Unknown counts the runs of the view that have no identity yet, because
+// the view missed their fw.run.queued and no read of their member gave it,
+// such as a run of a Task that the stream reached before the one read of
+// the Task after a restart of the front. Any batch can hold them, so a sum
+// over the runs is partial when Unknown is above zero, and UnknownActive
+// counts those that are not finished.
 type BatchRuns struct {
-	Runs      []*fw.Run
-	Forgotten int
+	Runs          []*fw.Run
+	Forgotten     int
+	Unknown       int
+	UnknownActive int
 }
 
 // Errors of the fleet. A surface answers ErrNoRoute with 502 and

@@ -208,6 +208,9 @@ func (f *Fleet) Batch(ctx context.Context, batch string) (BatchRuns, error) {
 		}
 		return out.Runs[i].ID > out.Runs[j].ID
 	})
+	f.platform.mu.Lock()
+	out.Unknown, out.UnknownActive = f.platform.unknown()
+	f.platform.mu.Unlock()
 	for member, runs := range f.platform.forgotten(batch) {
 		ok, _, err := f.allow(ctx, f.forgotRecord(member, runs), runs, false)
 		if err != nil {

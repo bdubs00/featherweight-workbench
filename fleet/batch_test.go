@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -275,5 +276,69 @@ func TestPlatformEventAfterDrop(t *testing.T) {
 	f.platform.mu.Unlock()
 	if srcLeft || strangerLeft {
 		t.Fatalf("after the expire time: the source is in view %v, the run with no identity %v", srcLeft, strangerLeft)
+	}
+}
+
+// TestPlatformBackfillGivesIdentity starts a front while two runs of a job
+// work on a sleeping Task. The stream reaches each run before the one read
+// of the Task lands: one at the sequence number of the read, one at a newer
+// one. The read gives both their identity, the newer state of the stream
+// stays, and until the read the job counts both as runs of no known job.
+func TestPlatformBackfillGivesIdentity(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "team")
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
+	ctx := context.Background()
+	ax := newFakeAX(t, map[string]map[string]string{"team": {"gamma": "Suspended"}})
+	read := fw.RunUsage{Usage: fw.Usage{InputTokens: 300}, Turns: 2}
+	same := &fw.Run{ID: "01GAMMA", Agent: "default", State: fw.StateRunning, Principal: "bob", Seq: 9, Usage: read,
+		Metadata: map[string]string{fw.MetaBatch: "job"}, CreatedAt: time.Now().Add(-time.Minute), UpdatedAt: time.Now()}
+	newer := &fw.Run{ID: "01DELTA", Agent: "default", State: fw.StateInputRequired, Principal: "bob", Seq: 9, Usage: read,
+		Pending:  &fw.Approval{ID: "ap1", Tool: "shell"},
+		Metadata: map[string]string{fw.MetaBatch: "job"}, CreatedAt: time.Now().Add(-time.Minute), UpdatedAt: time.Now()}
+	router := fakeRouter(t, "team/gamma", []*fw.Run{same, newer})
+	front := newMember(t, fw.NewMemBus(), "front", func(cfg *fw.Config, fc *Config) {
+		fc.Atespaces = []string{"team"}
+		cfg.AX.Server = ax.addr
+		cfg.AX.Router = strings.TrimPrefix(router.URL, "http://")
+		cfg.Access.Default = "closed"
+	})
+	p := front.f.platform
+	eventually(t, "the front lists gamma", func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.members["team/gamma"] != nil
+	})
+	at := func(id string, seq uint64, typ string, data any) {
+		e := fw.MustEvent(id, typ, data)
+		e.Seq, e.Node, e.Source = seq, "ax:team/gamma", "fw://local/default/"+id
+		if err := p.onEvent(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at("01GAMMA", 9, fw.EvTurnStarted, fw.TurnData{Turn: 2})
+	at("01DELTA", 10, fw.EvApprovalDecided, fw.ApprovalDecidedData{ApprovalID: "ap1", Decision: "allow"})
+	at("01DELTA", 11, fw.EvTurnStarted, fw.TurnData{Turn: 3})
+	if b, _ := front.f.Batch(ctx, "job"); len(b.Runs) != 0 || b.Unknown != 2 || b.UnknownActive != 2 {
+		t.Fatalf("before the read: %d runs, %d unknown, %d unknown active", len(b.Runs), b.Unknown, b.UnknownActive)
+	}
+	p.mu.Lock()
+	m := p.members["team/gamma"]
+	p.mu.Unlock()
+	p.backfill(ctx, m)
+
+	b, err := front.f.Batch(as("bob"), "job")
+	if err != nil || len(b.Runs) != 2 || b.Unknown != 0 {
+		t.Fatalf("bob's job: %d runs, %d unknown, %v", len(b.Runs), b.Unknown, err)
+	}
+	got := map[string]*fw.Run{}
+	for _, r := range b.Runs {
+		got[r.ID] = r
+	}
+	if r := got["01GAMMA"]; r == nil || r.Principal != "bob" || r.State != fw.StateRunning || r.Usage != read || r.Seq != 9 {
+		t.Fatalf("the run at the sequence number of the read = %+v", r)
+	}
+	if r := got["01DELTA"]; r == nil || r.Principal != "bob" || r.Agent != "default" || r.State != fw.StateRunning || r.Pending != nil ||
+		r.Usage.Turns != 3 || r.Usage.InputTokens != 300 || r.Seq != 11 {
+		t.Fatalf("the run that the stream reached after the read = %+v", r)
 	}
 }

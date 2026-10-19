@@ -369,3 +369,25 @@ func TestBatchBranchWithoutWork(t *testing.T) {
 		t.Fatalf("batch = %+v, want the usage %+v of the source, final; text %q", b, src.Usage, textOf(res))
 	}
 }
+
+// TestBatchRunOfNoKnownJob follows a finished job while the view holds a
+// run that works and whose fw.run.queued it missed, so its job is unknown.
+// That run can belong to the job, so the job is not finished, and the sum
+// reads as partial.
+func TestBatchRunOfNoKnownJob(t *testing.T) {
+	ctx, bus, f, call := lifecycleFront(t)
+	done := fw.RunUsage{Usage: fw.Usage{InputTokens: 100, OutputTokens: 10}, Turns: 1}
+	publishInOrder(t, ctx, bus, f, "j", fw.NewID(), finishedEvents("j", "done", done))
+	e := fw.MustEvent(fw.NewID(), fw.EvTurnStarted, fw.TurnData{Turn: 4})
+	e.Seq, e.Node, e.Source = 12, "box:8080", "fw://local/default/"+e.Subject
+	if err := bus.Publish(ctx, "fw.events.local.default."+e.Type, e); err != nil {
+		t.Fatal(err)
+	}
+	b, text := call("j")
+	if b.Total != 1 || b.Finished || b.Unknown != 1 || !b.Usage.Partial || b.Usage.Final != 1 {
+		t.Fatalf("batch = %+v; text %q", b, text)
+	}
+	if !strings.Contains(text, "The view holds 1 run whose job it does not know yet") || strings.Contains(text, "The job is finished") {
+		t.Fatalf("batch text = %q", text)
+	}
+}

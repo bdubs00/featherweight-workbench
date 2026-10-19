@@ -99,6 +99,9 @@ type batchResult struct {
 	// Forgotten counts the runs of the job that the view of the fleet
 	// dropped (fleet.BatchView). Total, States, and Usage leave them out.
 	Forgotten int `json:"forgotten,omitempty"`
+	// Unknown counts the runs of the view that have no identity yet, so
+	// that their job is unknown (fleet.BatchRuns). Any job can hold them.
+	Unknown int `json:"unknown,omitempty"`
 }
 
 // batchUsage is the usage of a job: the sum of the usage of its runs that
@@ -207,34 +210,43 @@ func (u batchUsage) text() string {
 // batchRuns lists every run of a batch that the caller can view: the runs
 // of this process and the runs of the batch that the view of the fleet
 // holds, whole and not cut to the newest finished runs of each member as
-// the records are. The second value counts the runs of the batch that the
-// view forgot.
-func (s *server) batchRuns(ctx context.Context, batch string) ([]*fw.Run, int, error) {
+// the records are, with the counts of the view of the runs that it forgot
+// and of the runs that it knows no identity of (fleet.BatchRuns).
+func (s *server) batchRuns(ctx context.Context, batch string) (fleet.BatchRuns, error) {
 	local, err := s.a.List(ctx)
 	if err != nil {
-		return nil, 0, err
+		return fleet.BatchRuns{}, err
 	}
-	runs := view.FilterBatch(local, batch)
+	out := fleet.BatchRuns{Runs: view.FilterBatch(local, batch)}
 	v := fleet.Of(s.a)
 	if v == nil {
-		return runs, 0, nil
+		return out, nil
 	}
-	forgotten := 0
 	if bv, ok := v.(fleet.BatchView); ok {
 		b, err := bv.Batch(ctx, batch)
 		if err != nil {
-			return nil, 0, err
+			return fleet.BatchRuns{}, err
 		}
-		runs, forgotten = append(runs, b.Runs...), b.Forgotten
+		b.Runs = append(out.Runs, b.Runs...)
+		out = b
 	} else {
 		remote, err := v.Runs(ctx)
 		if err != nil {
-			return nil, 0, err
+			return fleet.BatchRuns{}, err
 		}
-		runs = append(runs, view.FilterBatch(remote, batch)...)
+		out.Runs = append(out.Runs, view.FilterBatch(remote, batch)...)
 	}
-	view.SortRuns(runs)
-	return runs, forgotten, nil
+	view.SortRuns(out.Runs)
+	return out, nil
+}
+
+// unknownText tells of the runs of the view that have no identity yet, or
+// says nothing when there are none.
+func unknownText(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" The view holds %s whose job it does not know yet, because it missed their start, so the counts and the usage can leave out runs of this job.", plural(n, "run", "runs"))
 }
 
 // plural writes a number with the singular or the plural noun.
@@ -359,11 +371,15 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 	if batch == "" {
 		return errorResult("Invalid request: the argument batch is required."), nil, nil
 	}
-	runs, forgotten, err := s.batchRuns(ctx, batch)
+	found, err := s.batchRuns(ctx, batch)
 	if err != nil {
 		return failResult(err), nil, nil
 	}
-	out := batchResult{View: "batch", Batch: batch, Total: len(runs), States: map[string]int{}, Members: []string{}, Finished: len(runs) > 0, Forgotten: forgotten}
+	runs, forgotten := found.Runs, found.Forgotten
+	// A run whose job the view does not know can be a run of this job that
+	// still works.
+	out := batchResult{View: "batch", Batch: batch, Total: len(runs), States: map[string]int{}, Members: []string{},
+		Finished: len(runs) > 0 && found.UnknownActive == 0, Forgotten: forgotten, Unknown: found.Unknown}
 	members := map[string]bool{}
 	for _, r := range runs {
 		out.States[string(r.State)]++
@@ -394,7 +410,7 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 			out.Failed = append(out.Failed, batchRun{RunID: r.ID, Member: r.Member, State: string(r.State), Title: r.Title, Detail: r.Error})
 		}
 	}
-	out.Usage.Partial = out.Usage.Missing > 0 || out.Usage.Final < out.Usage.Reported || forgotten > 0
+	out.Usage.Partial = out.Usage.Missing > 0 || out.Usage.Final < out.Usage.Reported || forgotten > 0 || found.Unknown > 0
 	for m := range members {
 		out.Members = append(out.Members, m)
 	}
@@ -404,6 +420,7 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 		if forgotten > 0 {
 			text += fmt.Sprintf(" The view forgot %s of it.", plural(forgotten, "run", "runs"))
 		}
+		text += unknownText(found.Unknown)
 		return result(text, out), nil, nil
 	}
 	var b strings.Builder
@@ -426,6 +443,7 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 	if forgotten > 0 {
 		fmt.Fprintf(&b, " The view forgot %s of the job, because a finished run leaves the view after workbench.fleet.expire and a run leaves with its Task; the counts and the usage leave them out.", plural(forgotten, "run", "runs"))
 	}
+	b.WriteString(unknownText(found.Unknown))
 	b.WriteString("\n" + out.Usage.text())
 	for _, w := range out.Waiting {
 		fmt.Fprintf(&b, "\n- %s waits for you", w.RunID)
