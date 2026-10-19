@@ -40,8 +40,10 @@ const listPage = 500
 
 // EgressTypes are the ledger event types that a worker publishes for the
 // view of the front: enough for the state, the title, the pending
-// approval, and the turns of a run, and nothing of its content. A worker
-// sets bus.egressTypes to this list.
+// approval, and the turns of a run, and nothing of its content. The usage
+// of a run comes from the totals that fw.run.finished and fw.run.suspended
+// carry, so fw.model.responded, which holds the content, stays out. A
+// worker sets bus.egressTypes to this list.
 var EgressTypes = []string{
 	fw.EvRunQueued, fw.EvRunStarted, fw.EvRunResumed, fw.EvRunSuspended, fw.EvRunFinished,
 	fw.EvApprovalRequested, fw.EvApprovalDecided, fw.EvRunAnnotated, fw.EvTurnStarted, fw.EvMessageReceived,
@@ -476,6 +478,10 @@ func (p *platform) onEvent(e fw.Event) error {
 	if e.Seq != 0 && e.Seq <= r.run.Seq && e.Type != fw.EvRunQueued {
 		return nil // an old or repeated event
 	}
+	// The totals of fw.run.finished and fw.run.suspended set the usage of
+	// the run, with the cost at the prices of the worker. The prices of
+	// this process price only the increments that the stream carries after
+	// them, such as fw.run.annotated.
 	r.run.Apply(e, p.prices)
 	r.member, r.updated = name, now
 	m.serves(r.run.Agent)
