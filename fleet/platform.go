@@ -39,6 +39,10 @@ const (
 // listPage is how many Tasks one ListTasks call asks for.
 const listPage = 500
 
+// fillPauseMax bounds the pause before the front reads the runs of a Task
+// again after a read failed (fillPause).
+const fillPauseMax = 5 * time.Minute
+
 // EgressTypes are the ledger event types that a worker publishes for the
 // view of the front: enough for the state, the title, the pending
 // approval, and the turns of a run, and nothing of its content. The usage
@@ -91,6 +95,10 @@ type platformMember struct {
 	phase    string // the phase of the Task as the ax API last gave it
 	seen     time.Time
 	filled   bool // the runs of the member were read once
+	// fillFails counts the reads of the runs of the member that failed in a
+	// row, and fillAt is the time of the next read after a failure (fillPause).
+	fillFails int
+	fillAt    time.Time
 	// resuming is true while a ResumeTask call runs for the member
 	// (suspend.go), so a burst of requests makes one call.
 	resuming bool
@@ -266,7 +274,7 @@ func (p *platform) poll(ctx context.Context) {
 			if m.state == MemberLive && was != MemberLive {
 				m.liveSince = now
 			}
-			if m.state == MemberLive && !m.filled {
+			if m.state == MemberLive && !m.filled && !now.Before(m.fillAt) {
 				m.filled = true
 				fill = append(fill, m)
 			}
@@ -407,9 +415,7 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 	var runs struct {
 		Runs []*fw.Run `json:"runs"`
 	}
-	if err := p.read(ctx, m, "/v1/runs", &runs); err != nil {
-		p.f.log.Warn("fleet: read the runs of a Task; the view starts from the stream", "member", m.name, "error", err)
-	}
+	runsErr := p.read(ctx, m, "/v1/runs", &runs)
 	var agents struct {
 		Agents []struct {
 			Name string `json:"name"`
@@ -421,6 +427,16 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 	now := time.Now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if runsErr != nil {
+		// The runs that the stream reaches until then have no identity, so
+		// the front reads the Task again after a pause.
+		m.filled = false
+		m.fillFails++
+		m.fillAt = now.Add(fillPause(p.f.interval, m.fillFails))
+		p.f.log.Warn("fleet: read the runs of a Task; the view reads it again later", "member", m.name, "retryAt", m.fillAt, "error", runsErr)
+	} else {
+		m.fillFails, m.fillAt = 0, time.Time{}
+	}
 	for _, r := range runs.Runs {
 		if r == nil || r.ID == "" {
 			continue
@@ -657,6 +673,16 @@ func (r *platformRun) identify(read *fw.Run) {
 		c.TreeUsage, c.TreeOpen, c.TreeWorking = read.TreeUsage, read.TreeOpen, read.TreeWorking
 	}
 	r.queued = true
+}
+
+// fillPause is the pause before a read of the runs of a Task after fails
+// reads in a row failed: one interval, doubling up to fillPauseMax.
+func fillPause(interval time.Duration, fails int) time.Duration {
+	d := interval
+	for i := 1; i < fails && d < fillPauseMax; i++ {
+		d *= 2
+	}
+	return min(d, fillPauseMax)
 }
 
 // unknown counts the runs that have no identity yet, and those of them

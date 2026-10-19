@@ -2,8 +2,12 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -377,6 +381,50 @@ func TestPlatformTwoPublishersOfABranch(t *testing.T) {
 	}
 	if r := b.Runs[0]; r.Usage != (fw.RunUsage{}) || r.UsageSeq == 0 || r.State != fw.StateCompleted {
 		t.Fatalf("the branch = state %s, usage %+v at %d", r.State, r.Usage, r.UsageSeq)
+	}
+}
+
+// TestPlatformBackfillRetries starts a front while a run works on a Task
+// whose first read through the router fails. The front reads the Task again
+// after a pause, so the run gets its identity from the read.
+func TestPlatformBackfillRetries(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "team")
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
+	ctx := context.Background()
+	ax := newFakeAX(t, map[string]map[string]string{"team": {"gamma": "Running"}})
+	run := &fw.Run{ID: "01GAMMA", Agent: "default", State: fw.StateRunning, Principal: "bob", Seq: 9,
+		Metadata: map[string]string{fw.MetaBatch: "job"}, CreatedAt: time.Now().Add(-time.Minute), UpdatedAt: time.Now()}
+	var mu sync.Mutex
+	reads := 0
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/runs" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"agents": []any{}})
+			return
+		}
+		mu.Lock()
+		reads++
+		n := reads
+		mu.Unlock()
+		if n == 1 {
+			http.Error(w, "the router is not ready", http.StatusBadGateway)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"runs": []*fw.Run{run}})
+	}))
+	t.Cleanup(router.Close)
+	front := newMember(t, fw.NewMemBus(), "front", func(cfg *fw.Config, fc *Config) {
+		fc.Atespaces = []string{"team"}
+		cfg.AX.Server = ax.addr
+		cfg.AX.Router = strings.TrimPrefix(router.URL, "http://")
+	})
+	eventually(t, "a later read gives the run its identity", func() bool {
+		r, err := front.f.Run(ctx, "01GAMMA")
+		return err == nil && r.Principal == "bob" && r.Metadata[fw.MetaBatch] == "job"
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	if reads < 2 {
+		t.Fatalf("reads of the runs = %d", reads)
 	}
 }
 
