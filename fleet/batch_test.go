@@ -226,3 +226,54 @@ func TestForgottenCopyKeepsNoText(t *testing.T) {
 		t.Fatalf("the forgotten copy = %+v", c)
 	}
 }
+
+// TestPlatformEventAfterDrop drops a finished run, and then the source of a
+// branch appends fw.run.child to it. The run comes back with its identity,
+// not as a run with no agent and no person, and it leaves the view again
+// after the expire time. A run that the view knows from an event alone, with
+// no identity, is not listed, and it leaves after the expire time too.
+func TestPlatformEventAfterDrop(t *testing.T) {
+	ctx := context.Background()
+	front := newMember(t, fw.NewMemBus(), "front", nil)
+	f := front.f
+	totals := fw.RunUsage{Usage: fw.Usage{InputTokens: 100}, Turns: 1}
+	src := fw.NewID()
+	stream(t, f, src, []uint64{1, 2, 3, 4}, finishedRun("job", "item", totals)...)
+	f.platform.records(time.Now().Add(f.expire+time.Minute), false)
+	f.platform.mu.Lock()
+	_, held := f.platform.runs[src]
+	f.platform.mu.Unlock()
+	if held {
+		t.Fatal("the view still has the source")
+	}
+	if b, _ := f.Batch(ctx, "job"); b.Forgotten != 1 {
+		t.Fatalf("forgotten = %d", b.Forgotten)
+	}
+	branch := fw.NewID()
+	stream(t, f, src, []uint64{5}, fw.MustEvent("", fw.EvRunChild, fw.RunChildData{Child: branch, Member: "ax:space/child", Principal: "ada", Kind: "branch"}))
+	r, err := f.Run(as("ada"), src)
+	if err != nil || r.State != fw.StateCompleted || r.Agent != "default" || r.Principal != "ada" || r.Usage != totals || r.Seq != 5 {
+		t.Fatalf("the run after its fw.run.child = %+v, %v", r, err)
+	}
+	// The job holds the source again and the stand-in of its branch.
+	if b, _ := f.Batch(ctx, "job"); len(b.Runs) != 2 || b.Forgotten != 0 {
+		t.Fatalf("Batch = %d runs, %d forgotten", len(b.Runs), b.Forgotten)
+	}
+
+	stranger := fw.NewID()
+	stream(t, f, stranger, []uint64{3}, fw.MustEvent("", fw.EvTurnStarted, fw.TurnData{Turn: 1}))
+	runs, _ := f.Runs(ctx)
+	for _, x := range runs {
+		if x.ID == stranger {
+			t.Fatalf("a run with no identity is listed: %+v", x)
+		}
+	}
+	f.platform.records(time.Now().Add(3*f.expire), false)
+	f.platform.mu.Lock()
+	_, srcLeft := f.platform.runs[src]
+	_, strangerLeft := f.platform.runs[stranger]
+	f.platform.mu.Unlock()
+	if srcLeft || strangerLeft {
+		t.Fatalf("after the expire time: the source is in view %v, the run with no identity %v", srcLeft, strangerLeft)
+	}
+}

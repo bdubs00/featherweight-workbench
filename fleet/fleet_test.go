@@ -138,7 +138,7 @@ func inject(f *Fleet, name, url, atespace, state string, seen time.Time, runs ..
 	m.state, m.seen = state, seen
 	for _, r := range runs {
 		c := *r
-		p.runs[r.ID] = &platformRun{run: &c, member: name, updated: seen}
+		p.runs[r.ID] = &platformRun{run: &c, member: name, updated: seen, queued: true}
 		m.serves(r.Agent)
 	}
 }

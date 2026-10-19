@@ -63,7 +63,7 @@ type platform struct {
 	members  map[string]*platformMember // by member name
 	runs     map[string]*platformRun    // by run id
 	children map[string]childLink       // by the id of the child
-	forgot   map[string][]forgotRun     // by batch: the runs of a job that the view dropped
+	gone     map[string]forgotRun       // by run id: the runs that the view dropped
 	conn     *grpc.ClientConn
 	client   v1alpha1.AXClient
 }
@@ -128,8 +128,10 @@ type addedUsage struct {
 	u   fw.RunUsage
 }
 
-// forgotRun is a run of a batch that the view dropped (drop), so the tool
-// batch can tell that its counts leave it out. run is a copy without texts
+// forgotRun is a run that the view dropped (drop). The tool batch tells
+// that its counts leave out such a run of the job, and an event of the run
+// that arrives later brings it back with its identity, such as the
+// fw.run.child of a branch of a finished run. run is a copy without texts
 // (forgetful), which the view authorizes as it authorizes the runs, so a
 // caller learns only of the runs that the caller could see. at is the time
 // of the drop; the view forgets the run for good after the expire time
@@ -153,7 +155,7 @@ func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv strin
 		members:   map[string]*platformMember{},
 		runs:      map[string]*platformRun{},
 		children:  map[string]childLink{},
-		forgot:    map[string][]forgotRun{},
+		gone:      map[string]forgotRun{},
 	}
 	if len(p.atespaces) > 0 {
 		if p.server == "" {
@@ -502,6 +504,12 @@ func (p *platform) onEvent(e fw.Event) error {
 	r := p.runs[e.Subject]
 	if r == nil {
 		r = &platformRun{run: &fw.Run{}, member: name}
+		if fr, ok := p.gone[e.Subject]; ok {
+			// A run that the view dropped comes back with its identity.
+			delete(p.gone, e.Subject)
+			c := *fr.run
+			r = &platformRun{run: &c, member: fr.member, queued: true, stateSeq: c.Seq}
+		}
 		p.runs[e.Subject] = r
 	}
 	// The totals of fw.run.finished and fw.run.suspended set the usage of
@@ -547,8 +555,8 @@ func (p *platform) onEvent(e fw.Event) error {
 // holds p.mu.
 func (p *platform) drop(id string, r *platformRun, now time.Time) {
 	delete(p.runs, id)
-	if batch := r.run.Metadata[fw.MetaBatch]; batch != "" {
-		p.forgot[batch] = append(p.forgot[batch], forgotRun{run: forgetful(r.run), member: r.member, at: now})
+	if r.queued {
+		p.gone[id] = forgotRun{run: forgetful(r.run), member: r.member, at: now}
 	}
 }
 
@@ -561,8 +569,10 @@ func (p *platform) drop(id string, r *platformRun, now time.Time) {
 // the pending call, and the rest of the metadata go.
 func forgetful(r *fw.Run) *fw.Run {
 	c := *r
-	c.Title, c.Input, c.Output, c.Error, c.Pending, c.ExtraTools = "", "", "", "", nil, nil
-	c.Metadata = map[string]string{fw.MetaBatch: r.Metadata[fw.MetaBatch]}
+	c.Title, c.Input, c.Output, c.Error, c.Pending, c.ExtraTools, c.Metadata = "", "", "", "", nil, nil, nil
+	if batch := r.Metadata[fw.MetaBatch]; batch != "" {
+		c.Metadata = map[string]string{fw.MetaBatch: batch}
+	}
 	return &c
 }
 
@@ -571,8 +581,10 @@ func (p *platform) forgotten(batch string) map[string][]*fw.Run {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := map[string][]*fw.Run{}
-	for _, fr := range p.forgot[batch] {
-		out[fr.member] = append(out[fr.member], fr.run)
+	for _, fr := range p.gone {
+		if fr.run.Metadata[fw.MetaBatch] == batch {
+			out[fr.member] = append(out[fr.member], fr.run)
+		}
 	}
 	return out
 }
@@ -677,21 +689,16 @@ func (p *platform) records(now time.Time, all bool) []remote {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for id, r := range p.runs {
-		if r.run.State.Terminal() && now.Sub(r.updated) > p.f.expire {
+		// A run without an identity, which no fw.run.queued, no read of its
+		// member, and no copy of a dropped run gave one, expires after the
+		// expire time without an event, whatever its state.
+		if (r.run.State.Terminal() || !r.queued) && now.Sub(r.updated) > p.f.expire {
 			p.drop(id, r, now)
 		}
 	}
-	for batch, frs := range p.forgot {
-		kept := frs[:0]
-		for _, fr := range frs {
-			if now.Sub(fr.at) <= p.f.expire {
-				kept = append(kept, fr)
-			}
-		}
-		if len(kept) == 0 {
-			delete(p.forgot, batch)
-		} else {
-			p.forgot[batch] = kept
+	for id, fr := range p.gone {
+		if now.Sub(fr.at) > p.f.expire {
+			delete(p.gone, id)
 		}
 	}
 	for id, l := range p.children {
@@ -701,8 +708,8 @@ func (p *platform) records(now time.Time, all bool) []remote {
 	}
 	byMember := map[string][]*fw.Run{}
 	for id, r := range p.runs {
-		if r.run.ID == "" {
-			continue
+		if r.run.ID == "" || !r.queued {
+			continue // a run that has no identity yet is not listed
 		}
 		run := r.run
 		if l, ok := p.children[id]; ok && run.Parent == "" {
