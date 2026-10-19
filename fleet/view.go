@@ -208,10 +208,40 @@ func (f *Fleet) Batch(ctx context.Context, batch string) (BatchRuns, error) {
 		}
 		return out.Runs[i].ID > out.Runs[j].ID
 	})
-	if len(out.Runs) > 0 || fw.PrincipalFrom(ctx) == nil {
-		out.Forgotten = f.platform.forgotten(batch)
+	for member, runs := range f.platform.forgotten(batch) {
+		ok, _, err := f.allow(ctx, f.forgotRecord(member, runs), runs, false)
+		if err != nil {
+			return BatchRuns{}, err
+		}
+		for _, yes := range ok {
+			if yes {
+				out.Forgotten++
+			}
+		}
 	}
 	return out, nil
+}
+
+// forgotRecord is a record for the runs that the view dropped from a
+// member, so the view authorizes them as it authorizes the runs of a
+// record (allow): with the access of this process and its profiles of the
+// agents of the runs. The member itself can be gone.
+func (f *Fleet) forgotRecord(member string, runs []*fw.Run) *Record {
+	cfg := f.a.Config()
+	rec := &Record{Name: member, Access: Access{Mode: f.a.AccessMode(), Default: cfg.Access.Default, Admins: cfg.Access.Admins}, Runs: runs}
+	seen := map[string]bool{}
+	for _, r := range runs {
+		if r.Agent == "" || seen[r.Agent] {
+			continue
+		}
+		seen[r.Agent] = true
+		ag := RecordAgent{Name: r.Agent}
+		if prof, ok := f.a.ProfileNamed(r.Agent); ok {
+			ag.Description, ag.Access = prof.Description, prof.Access
+		}
+		rec.Agents = append(rec.Agents, ag)
+	}
+	return rec
 }
 
 // Run implements View.

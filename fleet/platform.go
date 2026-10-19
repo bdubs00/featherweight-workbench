@@ -63,7 +63,7 @@ type platform struct {
 	members  map[string]*platformMember // by member name
 	runs     map[string]*platformRun    // by run id
 	children map[string]childLink       // by the id of the child
-	forgot   map[string]forgotBatch     // by batch: the runs of a job that the view dropped
+	forgot   map[string][]forgotRun     // by batch: the runs of a job that the view dropped
 	conn     *grpc.ClientConn
 	client   v1alpha1.AXClient
 }
@@ -116,12 +116,15 @@ type platformRun struct {
 	queued bool
 }
 
-// forgotBatch counts the runs of one batch that the view dropped (drop),
-// so the tool batch can tell that its counts leave them out. at is the
-// latest drop; the count goes after the expire time since then.
-type forgotBatch struct {
-	n  int
-	at time.Time
+// forgotRun is a run of a batch that the view dropped (drop), so the tool
+// batch can tell that its counts leave it out. run is a copy without its
+// texts, which the view authorizes as it authorizes the runs, so a caller
+// learns only of the runs that the caller could see. at is the time of the
+// drop; the view forgets the run for good after the expire time since then.
+type forgotRun struct {
+	run    *fw.Run
+	member string
+	at     time.Time
 }
 
 // startPlatform starts the sources that the configuration names: the Task
@@ -137,7 +140,7 @@ func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv strin
 		members:   map[string]*platformMember{},
 		runs:      map[string]*platformRun{},
 		children:  map[string]childLink{},
-		forgot:    map[string]forgotBatch{},
+		forgot:    map[string][]forgotRun{},
 	}
 	if len(p.atespaces) > 0 {
 		if p.server == "" {
@@ -521,18 +524,21 @@ func (p *platform) onEvent(e fw.Event) error {
 func (p *platform) drop(id string, r *platformRun, now time.Time) {
 	delete(p.runs, id)
 	if batch := r.run.Metadata[fw.MetaBatch]; batch != "" {
-		fb := p.forgot[batch]
-		fb.n++
-		fb.at = now
-		p.forgot[batch] = fb
+		c := *r.run
+		c.Input, c.Output, c.Error, c.Pending = "", "", "", nil
+		p.forgot[batch] = append(p.forgot[batch], forgotRun{run: &c, member: r.member, at: now})
 	}
 }
 
-// forgotten returns how many runs of a batch the view dropped.
-func (p *platform) forgotten(batch string) int {
+// forgotten returns the runs of a batch that the view dropped, by member.
+func (p *platform) forgotten(batch string) map[string][]*fw.Run {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.forgot[batch].n
+	out := map[string][]*fw.Run{}
+	for _, fr := range p.forgot[batch] {
+		out[fr.member] = append(out[fr.member], fr.run)
+	}
+	return out
 }
 
 // MemberName turns the node of a kernel, "ax:<atespace>/<task>" for a Task,
@@ -570,9 +576,17 @@ func (p *platform) records(now time.Time, all bool) []remote {
 			p.drop(id, r, now)
 		}
 	}
-	for batch, fb := range p.forgot {
-		if now.Sub(fb.at) > p.f.expire {
+	for batch, frs := range p.forgot {
+		kept := frs[:0]
+		for _, fr := range frs {
+			if now.Sub(fr.at) <= p.f.expire {
+				kept = append(kept, fr)
+			}
+		}
+		if len(kept) == 0 {
 			delete(p.forgot, batch)
+		} else {
+			p.forgot[batch] = kept
 		}
 	}
 	for id, l := range p.children {
