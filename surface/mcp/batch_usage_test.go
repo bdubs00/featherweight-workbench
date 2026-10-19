@@ -5,12 +5,55 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 )
+
+// orderedBus delivers each event to the subscribers of its subject before
+// Publish returns, in the order of the calls, as NATS keeps the order of
+// one publisher. The mem bus hands each event to a goroutine of its own,
+// so the order in which a front sees the events of a run is up to the
+// scheduler. Consume goes to the mem bus.
+type orderedBus struct {
+	*fw.MemBus
+	mu   sync.Mutex
+	subs []*orderedSub
+}
+
+type orderedSub struct {
+	subject string
+	h       func(fw.Event) error
+	stopped atomic.Bool
+}
+
+func newOrderedBus() *orderedBus { return &orderedBus{MemBus: fw.NewMemBus()} }
+
+// Subscribe implements fw.Bus.
+func (b *orderedBus) Subscribe(_ context.Context, subject string, h func(fw.Event) error) (func(), error) {
+	s := &orderedSub{subject: subject, h: h}
+	b.mu.Lock()
+	b.subs = append(b.subs, s)
+	b.mu.Unlock()
+	return func() { s.stopped.Store(true) }, nil
+}
+
+// Publish implements fw.Bus.
+func (b *orderedBus) Publish(ctx context.Context, subject string, e fw.Event) error {
+	b.mu.Lock()
+	subs := append([]*orderedSub(nil), b.subs...)
+	b.mu.Unlock()
+	for _, s := range subs {
+		if !s.stopped.Load() && fw.SubjectMatch(s.subject, subject) {
+			_ = s.h(e)
+		}
+	}
+	return b.MemBus.Publish(ctx, subject, e)
+}
 
 // TestBatchUsage follows a job on a front whose fleet reads the egress of a
 // worker that sends only the lifecycle events (fleet.EgressTypes), with no
@@ -24,7 +67,7 @@ func TestBatchUsage(t *testing.T) {
 	t.Setenv(fleet.EnvIntake, "fw.jobs")
 	t.Setenv(fleet.EnvEgress, "")
 	t.Setenv(fleet.EnvAtespaces, "")
-	bus := fw.NewMemBus()
+	bus := newOrderedBus()
 
 	model := func(r *fw.Response, name string) *fw.Response {
 		r.Provider, r.Model = "fake", name
@@ -64,6 +107,8 @@ func TestBatchUsage(t *testing.T) {
 		if err != nil || r.State != fw.StateCompleted {
 			t.Fatalf("worker run = %+v, %v", r, err)
 		}
+		// The egress of the worker publishes in the background.
+		waitApplied(t, f, "job-1", r.ID, r.Seq)
 		u := r.Usage
 		want.Usage = want.Usage.Add(u.Usage)
 		want.Turns += u.Turns
@@ -83,19 +128,10 @@ func TestBatchUsage(t *testing.T) {
 		{fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "three"}},
 	})
 
+	res := callTool(t, ctx, cs, toolBatch, map[string]any{"batch": "job-1"})
 	var b batchResult
-	var text string
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		res := callTool(t, ctx, cs, toolBatch, map[string]any{"batch": "job-1"})
-		b = batchResult{}
-		structured(t, res, &b)
-		text = textOf(res)
-		if (b.Total == 3 && b.Finished && b.Usage.Reported == 2) || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	structured(t, res, &b)
+	text := textOf(res)
 	if b.Total != 3 || !b.Finished || b.Usage.RunUsage != want || b.Usage.Reported != 2 || b.Usage.Final != 2 || b.Usage.Missing != 1 || !b.Usage.Partial {
 		t.Fatalf("batch = %+v, want usage %+v of 2 runs and 1 missing; text %q", b, want, text)
 	}
@@ -119,10 +155,9 @@ type egressEvent struct {
 }
 
 // publishInOrder sends the events of one run of a batch on the egress
-// stream, as the worker box:8080 does, with the sequence numbers from 1.
-// The mem bus hands each event to a goroutine of its own, so it does not
-// keep their order, as a stream of NATS does; the helper waits after each
-// event until the view of the front applied it.
+// stream, as the worker box:8080 does, with the sequence numbers from 1,
+// and waits after each event until the view of the front applied it, so
+// the events arrive in order on any bus.
 func publishInOrder(t *testing.T, ctx context.Context, bus fw.Bus, f *fleet.Fleet, batch, id string, evs []egressEvent) {
 	t.Helper()
 	for i, ev := range evs {
@@ -131,13 +166,20 @@ func publishInOrder(t *testing.T, ctx context.Context, bus fw.Bus, f *fleet.Flee
 		if err := bus.Publish(ctx, "fw.events.local.default."+ev.typ, e); err != nil {
 			t.Fatal(err)
 		}
-		deadline := time.Now().Add(5 * time.Second)
-		for !applied(f, batch, id, e.Seq) {
-			if time.Now().After(deadline) {
-				t.Fatalf("the front did not apply event %d of %s", e.Seq, id)
-			}
-			time.Sleep(time.Millisecond)
+		waitApplied(t, f, batch, id, e.Seq)
+	}
+}
+
+// waitApplied waits until the view of the front holds the run of a batch
+// up to seq, for as long as the test may run.
+func waitApplied(t *testing.T, f *fleet.Fleet, batch, id string, seq uint64) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for !applied(f, batch, id, seq) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the front did not apply event %d of %s", seq, id)
 		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -164,7 +206,7 @@ func lifecycleFront(t *testing.T) (context.Context, fw.Bus, *fleet.Fleet, func(s
 	t.Setenv(fleet.EnvIntake, "fw.jobs")
 	t.Setenv(fleet.EnvEgress, "")
 	t.Setenv(fleet.EnvAtespaces, "")
-	bus := fw.NewMemBus()
+	bus := newOrderedBus()
 	front := newAgent(t, newScript().model(), fw.WithBus(bus), fw.WithAuthn(people))
 	f, err := fleet.Open(ctx, front, fleet.Config{Name: "front", Egress: "fw.events", Interval: 40 * time.Millisecond, Expire: fleet.DefaultExpire})
 	if err != nil {
