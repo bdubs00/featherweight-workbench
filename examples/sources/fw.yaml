@@ -1,0 +1,56 @@
+# Event sources of a front: outside systems that start runs by themselves
+# (docs/ARCHITECTURE.md section 13).
+#
+# The front puts the run of each new event on the intake queue of a profile,
+# fw.jobs.<agent>, and the workers that run that profile take it. The same
+# event never starts a second run within dedupFor, also with two replicas of
+# the front, because the front claims the key of each event in a JetStream
+# key-value bucket before it publishes.
+#
+# Set these variables before the start. The front refuses to start without
+# them, and it never writes their values to a log:
+#   TICKETS_WEBHOOK_KEY   the key that the ticket system signs its webhooks with
+#   ALERTS_API_TOKEN      a token that reads the alerts of the alert system
+
+bus: { driver: nats, url: "nats://nats.agents.svc:4222" }
+workbench:
+  fleet:
+    egress: fw.events
+    intake: fw.jobs
+  sources:
+    # A ticket system posts a JSON body to /v1/sources/tickets for each new
+    # or changed ticket, such as:
+    #   {"id": "T-1042", "updated": "2026-10-19T10:05:00Z",
+    #    "summary": "The printer is on fire", "requester": {"name": "Ada"}}
+    # It signs the body with HMAC-SHA256 in the header X-Signature-256.
+    - name: tickets
+      agent: triage
+      auth: { mode: hmac, secret: TICKETS_WEBHOOK_KEY, header: X-Signature-256 }
+      input: |
+        A ticket changed in the ticket system. Triage it.
+        Ticket: {{.id}}
+        Summary: {{.summary}}
+        Requester: {{.requester.name}}
+        Assignee: {{index . "assignee" | default "nobody"}}
+      title: "Triage {{.id}}"
+      metadata: { ticket: "{{.id}}" }
+      # The id and the time of the change: each change starts one run, and a
+      # change that arrives twice starts one run.
+      key: "{{.id}}/{{.updated}}"
+
+    # An alert system without webhooks. Every replica of the front reads the
+    # firing alerts every two minutes, and the claims keep the runs single.
+    # The answer lists the alerts under data.alerts.
+    - name: alerts
+      agent: oncall
+      poll:
+        url: https://alerts.example.com/api/v1/alerts?state=firing
+        every: 2m
+        secret: ALERTS_API_TOKEN
+      items: data.alerts
+      input: "Look into the alert {{.name}} on {{.target}}. It fires since {{.startsAt}}."
+      title: "Alert {{.name}} on {{.target}}"
+      # An alert that fires again later has a new start time, so it starts a
+      # new run.
+      key: "{{.fingerprint}}/{{.startsAt}}"
+      dedupFor: 24h

@@ -18,6 +18,7 @@ The workbench changes no kernel code. It plugs in through the extension points o
 - `fw.Agent.SetProfiles` replaces the profiles of the kernel at runtime, and `cli.AgentsPut` and `cli.AgentsDelete` give the verb `agents` its writes. The package `agents` uses them (section 10).
 - `fw.RegisterService` runs work beside the agent for as long as it lives, `Kit.SetRelay` of the native surface answers a request about a run of another process, `metrics.RegisterCollector` adds series to the metrics surface, and `cli.RegisterDoctorCheck` adds a line to `fw doctor`. The package `fleet` uses the service, the relay, and the doctor check (section 4); the fleet gauges that it added once are gone, because a collector reads the fleet from the export of each worker (the kernel architecture, section 10.5).
 - `fw.Agent.SetPersonTokens` gives the tool sources of the kernel the access tokens of people, and `fw.Agent.Connected` resumes the calls that wait for a connection. The package `connections` uses both (section 11).
+- The package `sources` uses `fw.RegisterService`, `native.Extend`, and `cli.RegisterDoctorCheck` too: its service runs the sources, its route takes the events of webhooks, and its doctor line names the sources (section 13).
 
 Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary, the `oidc` authentication mode of the kernel included, because the front verifies the tokens of people.
 
@@ -52,8 +53,11 @@ dashboard/              the page index.html and the views for people: home, resu
 surface/web/            the routes for people on the native surface (section 2)
 surface/mcp/            the MCP server over HTTP and over stdio (section 3)
 fleet/                  the fleet: the member record, the view, and forwarding (section 4)
+sources/                the event sources: webhooks and polls that turn the events of
+                        outside systems into runs (section 13)
 tools/builder/          the tool propose_agent (section 6.4)
 examples/agentgateway/  a fleet behind agentgateway on one public URL
+examples/sources/       a configuration with a webhook source and a poll source
 docs/ARCHITECTURE.md    this document
 Dockerfile              fw-workbench:static on distroless
 Dockerfile.toolbox      fw-workbench:toolbox on Debian with git
@@ -70,6 +74,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `/ui/signin`, `/ui/callback` | Browser sign-in (section 5) | with `auth.oidc.clientId` |
 | `/ui/connect/callback` | The end of a connection (section 2.1) | always |
 | `/.well-known/oauth-protected-resource` | Protected resource metadata (RFC 9728) | when `auth.mode` includes `oidc` |
+| `/v1/sources/{name}` | Webhook sources, POST only, with the credential of each source (section 13) | with a webhook source in `workbench.sources` |
 
 | Method and path | Purpose |
 |---|---|
@@ -291,6 +296,8 @@ Every request names the person who sent the job, so the run on the worker acts a
 
 A batch name is at most 128 characters without spaces. Without one, `enqueue` makes an id. One call takes at most 500 items; a larger job goes in several calls under one batch name. A worker that sleeps reads no queue, so after the publish the front wakes every suspended Task that serves the profile, with one read of its status through the router (section 4.12).
 
+An event source (section 13) puts its runs on the same queues through the same publish, so its runs wake the sleeping Tasks in the same way. The batch of each run of a source is the name of the source.
+
 ### 4.10 Security
 
 The events of the stream carry the inputs, the outputs, and the tool inputs of runs, cut to size. The `Redact` middleware removes secrets before an event enters the ledger, so no secret reaches the stream. Limit publish and subscribe on the egress and the intake subjects to `fw` workloads, for example with NATS accounts. A process that can publish on the egress subject can show false runs in a view, and a process that can publish on an intake queue can give a worker work; it cannot act on a real run, because the owner decides, and a credential goes to the router only.
@@ -511,7 +518,7 @@ To follow a run to its result:
 
 The split did not change the contract of the package `fw`. The kernel keeps the primitive of a connection: `fw.ConnectRequest`, `fw.RequestConnect`, `fw.PersonTokens`, and `Agent.Connected` (the kernel architecture, section 7.11). The MCP client of the kernel, `tools/mcp`, still acts for a person with the tokens that the package `connections` gives it (section 11).
 
-The workbench still reads three parts of the kernel configuration: the block `mcp` of its server surface, the OAuth setup of each `tools.mcp` entry with `auth.oauth.grant: user`, and `auth.oidc`. Everything else of the workbench lives in the block `workbench` of `fw.yaml`: `teams`, `titles`, `fleet`, `grants`, and `access`.
+The workbench still reads three parts of the kernel configuration: the block `mcp` of its server surface, the OAuth setup of each `tools.mcp` entry with `auth.oauth.grant: user`, and `auth.oidc`. Everything else of the workbench lives in the block `workbench` of `fw.yaml`: `teams`, `titles`, `fleet`, `grants`, `access`, and `sources`.
 
 ## 8. Teams
 
@@ -732,3 +739,202 @@ The answer holds one decision per check, in order, with `allow`, an optional `re
 ### 12.3 When the control plane does not answer
 
 If the control plane does not answer in time, the front refuses the request with `fw.ErrAuthzUnavailable`. An answer that it cannot read, or that holds the wrong number of decisions, counts as no answer. The native API answers 503 with `Retry-After: 5`, the MCP server returns an error result that says that the service did not answer, and a listing reports the outage instead of an empty list. A caller therefore tells a refusal, a 403, from a control plane that is down. A call from the process itself carries no principal and never asks, so the front keeps reading its sources during an outage. `fw-workbench doctor` prints one line for the control plane, `workbench.access.external`, and asks an MCP decision point whether it lists the tool.
+
+## 13. Event sources
+
+An event source turns the events of an outside system into runs, with no person in between. Examples of such a system are a ticket system, an alert manager, and a repository host. Without a source, a person or an agent calls `enqueue` for each piece of work. With a source, the front reacts to the events by itself, starts one run for each new event, and starts no second run for the same event, also with two replicas of the front. The package `sources` holds the sources. It is a service of the kernel (`fw.RegisterService`), so a process that serves has it, and a verb that runs one piece of work, such as `fw-workbench run`, does not.
+
+### 13.1 How a source works
+
+A source is an entry of the list `workbench.sources` in `fw.yaml`. There are two kinds:
+
+- A webhook source takes events on `POST /v1/sources/<name>`. The outside system sends one event, a JSON object, or an array of events.
+- A poll source reads an HTTP endpoint at an interval, for a system that sends no webhooks. The endpoint answers JSON to a GET, and a dotted path names the array of items in the answer.
+
+For each event, the source renders its templates into a run request of its agent profile: the input, the title, the metadata, and the de-duplication key. The source claims the key (section 13.3). Then it puts the request on the intake queue of the profile, `<workbench.fleet.intake>.<agent>`, through `fleet.Enqueue`, the publish of the tool `enqueue` (section 4.9). After the publish, the front wakes the sleeping Tasks that serve the profile (section 4.12).
+
+Each run request carries this metadata:
+
+| Key | Value |
+|---|---|
+| `fw.batch` | The name of the source. The tool `batch`, and `runs_list` with `batch`, follow the runs of a source as one job. |
+| `fw.title` | The title from the template `title`, when the source sets one |
+| `workbench.source` | The name of the source |
+| `workbench.sourceKey` | The de-duplication key of the event |
+
+The metadata of the configuration comes on top. The idempotency key of the request is `<source>/<key>`, so a worker that gets the same request twice returns the first run.
+
+A run of a source acts as `runAs`, which is `source:<name>` of the kind `workload` by default. In the rules mode, the admins and the owners, operators, and viewers of the profile see these runs (the kernel architecture, section 13.2). To let the runs act for a person at a service (section 11), set `runAs` to the subject of that person and `runAsKind` to `user`. That person must have connected the service.
+
+### 13.2 Configuration
+
+Each entry of `workbench.sources` takes these keys. No variable sets the list.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `name` | The name of the source: 1 to 63 lower-case letters, digits, `-`, or `_`. It names the route, the batch, and the bucket of the keys. | required |
+| `agent` | The agent profile, and so the queue `<workbench.fleet.intake>.<agent>` | required |
+| `auth.mode` | For a webhook: `bearer`, `hmac`, or `none` (section 13.4) | required for a webhook |
+| `auth.secret` | The variable that holds the bearer token or the HMAC key | required for `bearer` and `hmac` |
+| `auth.header` | The header that carries the HMAC signature | `X-Signature-256` |
+| `poll.url` | The endpoint of a poll source, an absolute http or https URL without a user or a password. This key makes the entry a poll source. | none |
+| `poll.every` | The time between two polls, 5 seconds or more | `1m` |
+| `poll.timeout` | The limit of one poll | `30s` |
+| `poll.secret` | The variable that holds the credential of the poll | none |
+| `poll.header` | The header that carries the credential as it is. Without it, the credential goes as `Authorization: Bearer <credential>`. | none |
+| `items` | A dotted path to the array of events in the body or in the answer, such as `result.tickets` | the body itself |
+| `input` | The template of the input of the run | the event as indented JSON |
+| `title` | The template of the title of the run, cut to 200 characters | no title |
+| `metadata` | Templates of metadata, by key | none |
+| `key` | The template of the de-duplication key, at most 512 bytes | required |
+| `dedupFor` | How long a key blocks a second run, one minute or more | `168h` (7 days) |
+| `runAs` | The principal of the runs | `source:<name>` |
+| `runAsKind` | The kind of that principal, `workload` or `user` | `workload` |
+
+The sources need `workbench.fleet.intake` (section 4.6), and the bus `nats` for the keys (section 13.3). A configuration that cannot work stops the start. These are the cases:
+
+- A webhook source has no `auth.mode`. A webhook without a credential must say `none`.
+- The variable of `auth.secret` or `poll.secret` holds no secret.
+- A template does not parse, or `key` is empty.
+- A metadata key is one that the source sets, or one that the kernel reserves.
+- `workbench.fleet.intake` is empty.
+- The bus is neither `nats` nor `mem`.
+
+A template is a Go `text/template` over one event. A field that the event does not have is an error, so `{{.id}}` refuses an event without `id`, and a key never comes out empty by accident. A template reads an optional field with `index`, such as `{{index . "assignee"}}`. Besides the built-in functions, a template can call `json` (a value as compact JSON, such as `{{json .}}` for the whole event), `lower`, `upper`, `trim`, and `default` (such as `{{index . "priority" | default "normal"}}`). A number keeps every digit of the body. A key must not be empty, and it must not hold a field whose value is null. The loader of `fw.yaml` expands `${NAME}` in every value first (the kernel architecture, section 12.1), so a template that needs the text `${` writes `$${`. A variable of a template, such as `$i`, needs no escape.
+
+Choose a key that changes when the work changes. For a ticket, the id and the time of the last change, such as `{{.id}}/{{.updated}}`, make a new run for each change and one run for each change that arrives twice.
+
+### 13.3 De-duplication
+
+The keys live in NATS JetStream, so every replica of the front shares them, and a restart keeps them. Each source has one key-value bucket, `<stream>_SOURCE_<name>`, where `<stream>` is `bus.options.stream`, `FW` by default. The TTL of the bucket is `dedupFor`, so the server forgets a key when its window ends. At the first claim of a source after a start, the front makes the bucket when it is missing, and it sets the TTL of a bucket that exists to the value of the configuration. The front opens its own connection for the keys, with `bus.url` and the options `credentials` and `token` of the bus. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_SOURCE_*.>`.
+
+The name of a key in the bucket is the SHA-256 of the de-duplication key, because a key can hold any character. The value holds the state of the claim, the key, the name of the replica, and the time.
+
+A source handles each event in four steps:
+
+1. It claims the key. A claim is a create-if-absent of the key with the state `pending`. The server decides, so of two replicas that claim one key at the same time, exactly one gets the claim.
+2. It publishes the run request.
+3. It marks the claim `done`. The key then blocks a second run for `dedupFor`.
+4. If the publish fails, it releases the claim instead, so the next delivery of the event makes the run.
+
+When a claim exists, the source does this:
+
+- A `done` claim makes the event a duplicate. The event makes no run.
+- A `pending` claim younger than two minutes means that another replica handles the event now. The event is busy: a webhook answers 503, and a poll meets the item again at its next poll.
+- A `pending` claim older than two minutes means that its replica stopped in the middle. The next delivery takes the claim over, with a compare of the revision, so only one replica takes it.
+
+When NATS does not answer, every claim fails at once. The source publishes nothing without a claim. A webhook answers 503 with `Retry-After: 5`, and a poll counts a failed poll and waits longer before the next one (section 13.5).
+
+So the same key starts at most one run in its window, with one exception. A replica can publish and then lose NATS before it marks the claim done. The claim then stays pending, and after two minutes a later delivery publishes the request again, with the same idempotency key. A worker that holds the first run returns it, and another worker starts a second run. A second run therefore needs a failure of NATS in the short time between a publish and the end of its claim. The opposite failure loses no event: when a publish fails and the release fails too, the pending claim goes to the next delivery after two minutes.
+
+With the bus `mem`, the process has no replica, because that bus reaches no other process. The keys then live in the memory of the process, a restart forgets them, and the log says so at start.
+
+### 13.4 The webhook route
+
+`POST /v1/sources/{name}` sits outside the authentication of the native API, because an outside system holds no token of a person. Each source checks its own credential:
+
+- `bearer`: the request carries `Authorization: Bearer <token>`, and the token equals the secret of `auth.secret`. The source checks it before it reads the body.
+- `hmac`: the header of `auth.header` holds the HMAC-SHA256 of the raw body, keyed with the secret of `auth.secret`, in hex or in base64, with an optional `sha256=` in front.
+- `none`: the source takes every request. The log warns about such a source at start.
+
+Every compare takes constant time. The body holds one event, an array of events, or, with `items`, a document that holds the array. One request takes at most 500 events and 1 MB. The source renders every event first. If one event does not fit the templates, no event of the request makes a run, and the detail of the 422 names that event.
+
+| Status | When |
+|---|---|
+| 202 | At least one event made a run request. The body lists the requests. |
+| 200 | Every event was a duplicate, or the body holds no event. The body has a `note`. |
+| 400 | The body is not JSON, an event is not an object, the path of `items` finds nothing, or the body holds more than 500 events. |
+| 401 | The credential is missing or wrong. A bearer source adds `WWW-Authenticate`. |
+| 404 | No webhook source has that name. |
+| 413 | The body is larger than 1 MB. |
+| 422 | An event does not fit the templates. The detail names the event. |
+| 503 | The store of the keys or the queue did not answer, or another replica handles an event now. The answer has `Retry-After: 5`. |
+
+After a 503, the sender sends the same request again. Every event of it that already made a run counts as a duplicate then, so a retry is always safe. The errors are problem documents, as on the run routes. A 202 or a 200 has this body:
+
+```json
+{
+  "source": "tickets",
+  "agent": "triage",
+  "queue": "fw.jobs.triage",
+  "batch": "tickets",
+  "accepted": 1,
+  "duplicate": 1,
+  "runs": [
+    {"event": 2, "key": "T-1042/2026-10-19T10:05:00Z",
+     "idempotencyKey": "tickets/T-1042/2026-10-19T10:05:00Z", "title": "Triage T-1042"}
+  ],
+  "duplicates": [{"event": 1, "key": "T-1042/2026-10-19T10:00:00Z"}]
+}
+```
+
+`event` is the position of the event in the body, from 1. The worker names the run when it takes the request, so the answer holds no run id. To find the run of an event, list the runs of the batch with `runs_list` and read `workbench.sourceKey`.
+
+### 13.5 Poll sources
+
+Every replica of the front polls each poll source, and the claims keep the runs single. The first poll comes after a random pause of up to 5 seconds, and each pause gets a random tenth on top, so the replicas do not poll at the same moment.
+
+A poll is a GET with `Accept: application/json` and the credential of `poll.secret`. An answer that is not 2xx, that is larger than 8 MB, or that is not JSON is a failed poll. After a failed poll, the source waits twice as long as before, up to 30 minutes, or up to `poll.every` when that is longer. A poll that works resets the pause. A poll follows a redirect only to the same scheme and host, so the credential never reaches another host. An item that does not fit the templates counts as refused, and the other items of the answer go on.
+
+The endpoint must list the same item with the same key while the work is the same. An item that leaves the list and comes back after `dedupFor` makes a new run.
+
+### 13.6 Counters
+
+Each source counts what it did since the process started. `sources.Stats(a)` returns one `sources.Stat` per source, in the order of the configuration, or nil when the agent runs no source:
+
+| Field | Meaning |
+|---|---|
+| `Source`, `Kind`, `Agent` | The name, `webhook` or `poll`, and the profile |
+| `Accepted` | The events that made a run request |
+| `Duplicate` | The events whose key made a run within the window |
+| `Busy` | The events that another replica handled at that moment |
+| `Refused` | The events that made no run for any other reason: a wrong credential, a body or a template that failed, a store or a queue that did not answer. A request that the source refuses before it reads its events counts as one event. |
+| `LastError`, `LastErrorAt` | The last reason of a refusal or of a failed poll, in words that hold no secret, and its time |
+| `LastAcceptedAt` | The time of the last run request |
+| `LastPollAt` | The time of the last poll that read the endpoint |
+
+Each replica counts its own events, so a sum over the replicas gives the counts of the fleet. A collector of metrics reads `Stats` to export them. `fw-workbench doctor` has a line that names each source, its kind, its agent, and the store of the keys. It fails when a variable of a secret is empty or when the bus keeps no keys.
+
+### 13.7 Security
+
+- The route takes no credential of the native API, so the credential of the source is the only check. Prefer `hmac`, which also proves that nobody changed the body. Limit who reaches `/v1/sources/` with the gateway, above all for a source with `auth.mode: none`, which starts runs for anyone who reaches it.
+- A signature holds no time. A replayed request within the window is a duplicate, and after the window it makes a run again. A key with the time of the change keeps such a replay a duplicate.
+- The content of an event becomes the input of a run, so an outside system can write instructions to the agent. Give the profile of a source only the tools that its work needs, and make the tools that change things ask first (the kernel architecture, section 7.5).
+- No token, no HMAC key, and no credential of a poll enters a log line, an answer, or a counter. An error of a poll names the host of the endpoint and never its whole address, because a query can hold a key.
+- The runs act as `runAs`. A source with `runAsKind: user` acts for that person at the services of section 11. Only an operator who can change `fw.yaml` sets it.
+
+### 13.8 Example
+
+This configuration has a webhook source for a ticket system and a poll source for an alert system without webhooks. The ticket system posts a body such as `{"id": "T-1042", "updated": "2026-10-19T10:05:00Z", "summary": "The printer is on fire", "requester": {"name": "Ada"}}` for each new or changed ticket, signed with a shared key. The directory `examples/sources` holds the same file.
+
+```yaml
+bus: { driver: nats, url: "nats://nats.agents.svc:4222" }
+workbench:
+  fleet:
+    egress: fw.events
+    intake: fw.jobs
+  sources:
+    - name: tickets
+      agent: triage
+      auth: { mode: hmac, secret: TICKETS_WEBHOOK_KEY, header: X-Signature-256 }
+      input: |
+        A ticket changed in the ticket system. Triage it.
+        Ticket: {{.id}}
+        Summary: {{.summary}}
+        Requester: {{.requester.name}}
+        Assignee: {{index . "assignee" | default "nobody"}}
+      title: "Triage {{.id}}"
+      metadata: { ticket: "{{.id}}" }
+      key: "{{.id}}/{{.updated}}"
+    - name: alerts
+      agent: oncall
+      poll:
+        url: https://alerts.example.com/api/v1/alerts?state=firing
+        every: 2m
+        secret: ALERTS_API_TOKEN
+      items: data.alerts
+      input: "Look into the alert {{.name}} on {{.target}}. It fires since {{.startsAt}}."
+      title: "Alert {{.name}} on {{.target}}"
+      key: "{{.fingerprint}}/{{.startsAt}}"
+      dedupFor: 24h
+```
