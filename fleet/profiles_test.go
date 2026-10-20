@@ -211,12 +211,38 @@ func TestPoolProfilesWithoutPools(t *testing.T) {
 // owner of the profile writes it, with the subject, the time, and the run,
 // and the merged policy allows the tool. A rule that cannot loosen the ask
 // is refused before anything is written.
-func TestAllowRuleFromAnApproval(t *testing.T) {
+// A rule goes into the policy of every worker of the pool, so the caller
+// must own every profile of the pool. ownedBlock gives alice the profile
+// triage only, so her rule is refused and names writer.
+func TestAllowRuleNeedsEveryProfile(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "team")
 	t.Setenv("FW_API_TOKEN", "fleet-secret")
 	ax := newPoolAX(t)
 	tasks := newFakeTasks(t)
 	front := newMember(t, fw.NewMemBus(), "front", poolFront(t, ax, strings.TrimPrefix(tasks.srv.URL, "http://"), ownedBlock))
+	store := overlaysOf(t, front.f)
+	eventually(t, "the pool made its Task", func() bool { return ax.get("team", "triage-0") != nil })
+	now := time.Now()
+	inject(front.f, "team/triage-0", "ax:team/triage-0", "team", MemberLive, now,
+		&fw.Run{ID: "01TRIAGE", Agent: "triage", State: fw.StateInputRequired, Principal: "carol", CreatedAt: now,
+			Pending: &fw.Approval{ID: "01TRIAGE-ask", Tool: "tickets.create_ticket", Reason: "rule: ask tickets.create_ticket", Input: []byte(`{"title":"x"}`)}})
+	_, _, err := AllowRule(as("alice"), front.a, "01TRIAGE", "01TRIAGE-ask", "")
+	if !errors.Is(err, fw.ErrForbidden) || !strings.Contains(err.Error(), "writer") {
+		t.Fatalf("a rule of the owner of one profile = %v", err)
+	}
+	if o, _ := store.Read(context.Background(), "triage"); !o.Empty() {
+		t.Fatalf("a refused rule wrote the overlay: %+v", o)
+	}
+}
+
+func TestAllowRuleFromAnApproval(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "team")
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
+	ax := newPoolAX(t)
+	tasks := newFakeTasks(t)
+	// alice owns every profile of the pool here, which a rule needs.
+	block := strings.Replace(ownedBlock, "          policy: {ask: [\"tickets.*\"]}\n", "          policy: {ask: [\"tickets.*\"]}\n          access: {owners: [alice]}\n", 1)
+	front := newMember(t, fw.NewMemBus(), "front", poolFront(t, ax, strings.TrimPrefix(tasks.srv.URL, "http://"), block))
 	store := overlaysOf(t, front.f)
 	eventually(t, "the pool made its Task", func() bool { return ax.get("team", "triage-0") != nil })
 	now := time.Now()
@@ -239,9 +265,9 @@ func TestAllowRuleFromAnApproval(t *testing.T) {
 	if _, _, err := AllowRule(alice, front.a, "01FLAG", "01FLAG-ask", ""); !errors.Is(err, fw.ErrInvalidRequest) || !strings.Contains(err.Error(), "flag destructive") {
 		t.Fatalf("a rule against a flag = %v", err)
 	}
-	// The process itself owns writer; its own policy asks before every
-	// ticket tool, so a rule of the pool changes nothing.
-	if _, _, err := AllowRule(context.Background(), front.a, "01WRITER", "01WRITER-ask", ""); !errors.Is(err, fw.ErrInvalidRequest) || !strings.Contains(err.Error(), "tickets.*") {
+	// The policy of writer asks before every ticket tool by a pattern, so
+	// a rule of the pool changes nothing, and the front says so.
+	if _, _, err := AllowRule(alice, front.a, "01WRITER", "01WRITER-ask", ""); !errors.Is(err, fw.ErrInvalidRequest) || !strings.Contains(err.Error(), "tickets.*") {
 		t.Fatalf("a rule under an ask of the profile = %v", err)
 	}
 	if o, _ := store.Read(context.Background(), "triage"); !o.Empty() {

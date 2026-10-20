@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -100,7 +101,11 @@ func (f *Fleet) mergedPool(ctx context.Context, base *pools.Pool) (*pools.Pool, 
 	if err != nil {
 		return nil, fmt.Errorf("fleet: read the overlay of the pool %s %s: %w", base.Name, f.overlays.Describe(), err)
 	}
-	return base.WithOverlay(o)
+	merged, err := base.WithOverlay(o)
+	if err != nil {
+		return nil, &overlayFitError{overlay: o, err: err}
+	}
+	return merged, nil
 }
 
 // current returns the pool that the last pass merged, else the pool of the
@@ -156,10 +161,28 @@ func PlaceOf(ctx context.Context, a *fw.Agent, name, pool string) (agents.Place,
 	}
 	merged, err := f.mergedPool(ctx, base)
 	if err != nil {
-		return nil, err
+		var fit *overlayFitError
+		if !errors.As(err, &fit) {
+			return nil, err
+		}
+		// The overlay does not fit the pool any more, for example a
+		// profile names a model that left fw.models. The place keeps
+		// the raw overlay, so a person can remove the entry; the pool
+		// itself waits (section 14.4).
+		f.log.Warn("fleet: the overlay of a pool does not fit; its place keeps the raw overlay so an entry can be removed", "pool", base.Name, "error", fit.Error())
+		merged = base.WithRawOverlay(fit.overlay)
 	}
 	return &poolPlace{f: f, base: base, pool: merged}, nil
 }
+
+// overlayFitError says that an overlay was read but does not fit its pool.
+type overlayFitError struct {
+	overlay pools.Overlay
+	err     error
+}
+
+func (e *overlayFitError) Error() string { return e.err.Error() }
+func (e *overlayFitError) Unwrap() error { return e.err }
 
 // PoolOf returns the name of the pool of a place from PlaceOf, or "" for
 // this process.
@@ -292,6 +315,13 @@ func (pl *poolPlace) Profile(name string) (fw.AgentProfile, bool) {
 func (pl *poolPlace) Check(p fw.AgentProfile) error {
 	c := p
 	c.Model = ""
+	if c.Outcome != nil {
+		// The grader resolves through the models of the workers, in the
+		// merged check below, not through the models of the front.
+		o := *c.Outcome
+		o.Grader = ""
+		c.Outcome = &o
+	}
 	if err := pl.f.a.CheckProfile(c); err != nil {
 		return err
 	}
@@ -529,12 +559,24 @@ func AllowRule(ctx context.Context, a *fw.Agent, runID, approvalID, note string)
 	if err != nil {
 		return "", "", err
 	}
-	if err := f.authorizePool(ctx, merged, fw.ActionAgentEdit, r.Agent); err != nil {
-		return "", "", err
-	}
 	rule := strings.TrimSpace(p.Tool)
+	if rule != "" && (strings.ContainsAny(rule, "*?[]\\: \t\r\n") || flagWord(rule)) {
+		return "", "", fmt.Errorf("%w: the tool name %q cannot become a rule, because the policy reads it as a pattern or a flag; allow once", fw.ErrInvalidRequest, rule)
+	}
 	if why := ruleRefusal(p.Reason, rule); why != "" {
 		return "", "", fmt.Errorf("%w: %s", fw.ErrInvalidRequest, why)
+	}
+	// A rule goes into fw.policy of the pool, the policy of every worker,
+	// so the caller must own every profile of the pool, not only the one
+	// of the run.
+	names := slices.Sorted(maps.Keys(merged.Profiles()))
+	if !slices.Contains(names, r.Agent) {
+		names = append(names, r.Agent)
+	}
+	for i, err := range f.authorizePoolAll(ctx, merged, fw.ActionAgentEdit, names) {
+		if err != nil {
+			return "", "", fmt.Errorf("a rule changes the policy of every profile of the pool %s, and the profile %s refuses: %w", base.Name, names[i], err)
+		}
 	}
 	if merged.Policy().External != nil {
 		return "", "", fmt.Errorf("%w: the workers of the pool %s ask a control plane about each call (fw.policy.external), so add the rule there", fw.ErrInvalidRequest, base.Name)
@@ -593,13 +635,25 @@ func ruleRefusal(reason, tool string) string {
 		return ""
 	case strings.HasPrefix(reason, "rule: ask "):
 		entry := strings.TrimSpace(strings.TrimPrefix(reason, "rule: ask "))
-		switch strings.ToLower(entry) {
-		case "readonly", "read-only", "idempotent", "destructive", "parallel", "parallelsafe":
+		if flagWord(entry) {
 			return fmt.Sprintf("the policy asks before every tool with the flag %s, and an allow rule for %s does not loosen that ask; change the policy of the pool in fw.yaml, or allow once", entry, tool)
+		}
+		if strings.ContainsAny(entry, ":*?[") {
+			return fmt.Sprintf("the policy asks by the pattern %q, which an allow rule for %s does not take away, because an ask wins over an allow; change the policy of the pool in fw.yaml, or allow once", entry, tool)
 		}
 		return ""
 	}
 	return fmt.Sprintf("the call waits for %q, which no policy rule answers; allow once", reason)
+}
+
+// flagWord reports whether s is a flag of the policy, such as destructive,
+// which names every tool with the flag and never one tool.
+func flagWord(s string) bool {
+	switch strings.ToLower(s) {
+	case "readonly", "read-only", "idempotent", "destructive", "parallel", "parallelsafe":
+		return true
+	}
+	return false
 }
 
 // subjectOf is the subject of the principal in ctx, or "".

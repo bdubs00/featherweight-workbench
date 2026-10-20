@@ -189,7 +189,7 @@ func (p *Pool) WithOverlay(o Overlay) (*Pool, error) {
 	}
 	c := *p
 	c.overlay = o
-	merged, err := overlayFW(p.FW, o)
+	merged, err := overlayFW(p.FW, o, p.worker.Agents)
 	if err != nil {
 		return nil, fmt.Errorf("pools: the overlay of the pool %s: %w", p.Name, err)
 	}
@@ -200,9 +200,20 @@ func (p *Pool) WithOverlay(o Overlay) (*Pool, error) {
 	return &c, nil
 }
 
+// WithRawOverlay returns the pool with the overlay attached and nothing
+// merged. A place of the front uses it when the overlay does not fit the
+// pool any more, so that a person can still remove the entry that does
+// not fit; the pool itself keeps its configuration alone.
+func (p *Pool) WithRawOverlay(o Overlay) *Pool {
+	c := *p
+	c.overlay = o
+	return &c
+}
+
 // overlayFW returns the block fw of a pool with the overlay on top. Neither
-// argument changes.
-func overlayFW(base map[string]any, o Overlay) (map[string]any, error) {
+// argument changes. configured holds the profiles of the configuration of
+// the pool, whose prompt files stay paths.
+func overlayFW(base map[string]any, o Overlay, configured map[string]fw.AgentProfile) (map[string]any, error) {
 	out := make(map[string]any, len(base))
 	for k, v := range base {
 		out[k] = v
@@ -215,7 +226,11 @@ func overlayFW(base map[string]any, o Overlay) (map[string]any, error) {
 			}
 		}
 		for _, e := range o.Profiles {
-			m, err := profileMap(e.Profile)
+			var same *fw.AgentProfile
+			if c, ok := configured[e.Profile.Name]; ok {
+				same = &c
+			}
+			m, err := profileMap(e.Profile, same)
 			if err != nil {
 				return nil, err
 			}
@@ -239,11 +254,13 @@ func overlayFW(base map[string]any, o Overlay) (map[string]any, error) {
 			ask = slices.DeleteFunc(ask, func(s string) bool { return strings.TrimSpace(s) == rule })
 		}
 		policy["allow"] = allow
-		if len(ask) > 0 {
-			policy["ask"] = ask
-		} else {
-			delete(policy, "ask")
+		// An absent ask list falls back to the default of the kernel,
+		// ask: [destructive], so the list is always written, as [] when
+		// the rules took the last entry away.
+		if ask == nil {
+			ask = []string{}
 		}
+		policy["ask"] = ask
 		out["policy"] = policy
 	}
 	return out, nil
@@ -271,12 +288,27 @@ func stringList(v any) []string {
 // such a file exists, so such a text gets a line break at its end: a
 // profile never reads a file of the worker, such as /proc/self/environ.
 // An empty skills list means no skill, while an absent one means every
-// skill, so the empty list stays.
-func profileMap(p fw.AgentProfile) (map[string]any, error) {
-	p.System = noPath(p.System)
+// skill, so the empty list stays. A text that equals the same field of
+// the profile of the configuration (same) stays as it is: it is a prompt
+// file of the pool that the worker must still read.
+func profileMap(p fw.AgentProfile, same *fw.AgentProfile) (map[string]any, error) {
+	keep := func(s string, i int) bool {
+		if same == nil {
+			return false
+		}
+		if i < 0 {
+			return s == same.System
+		}
+		return i < len(same.Instructions) && s == same.Instructions[i]
+	}
+	if !keep(p.System, -1) {
+		p.System = noPath(p.System)
+	}
 	p.Instructions = slices.Clone(p.Instructions)
 	for i, s := range p.Instructions {
-		p.Instructions[i] = noPath(s)
+		if !keep(s, i) {
+			p.Instructions[i] = noPath(s)
+		}
 	}
 	var n yaml.Node
 	if err := n.Encode(p); err != nil {
