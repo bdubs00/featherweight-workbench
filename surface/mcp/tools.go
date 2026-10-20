@@ -27,12 +27,13 @@ const (
 	toolCancel    = "cancel"
 	toolFork      = "fork"
 	toolSend      = "send"
+	toolRunBudget = "run_budget"
 )
 
 // workTools are the names that an exposed tool never takes: the work tools
 // and the management tools.
 var workTools = map[string]bool{
-	toolRun: true, toolRunStatus: true, toolApprove: true, toolCancel: true, toolSend: true, toolFork: true,
+	toolRun: true, toolRunStatus: true, toolApprove: true, toolCancel: true, toolSend: true, toolFork: true, toolRunBudget: true,
 	toolWhoami: true, toolAgentsList: true, toolAgentGet: true, toolAgentPut: true, toolAgentDelete: true,
 	toolRunsList: true, toolRunEvents: true, toolRunFile: true, toolUsage: true, toolDashboard: true,
 	toolRunResult: true, toolAgentBuilder: true, toolCapabilities: true,
@@ -62,12 +63,6 @@ const (
 	},"required":["runId","approvalId","decision"]}`
 
 	cancelSchema = `{"type":"object","properties":{"runId":` + runIDSchema + `},"required":["runId"]}`
-
-	sendSchema = `{"type":"object","properties":{
-		"runId":` + runIDSchema + `,
-		"content":{"type":"string","description":"The text of the follow-up message. It can be empty when the message has files."},
-		"files":` + filesSchema + `
-	},"required":["runId"]}`
 
 	// filesSchema is the schema of the attachments of a message.
 	filesSchema = `{"type":"array","maxItems":20,"description":"Files that a person attaches, each with a name and its bytes in base64. The model gets an image or a PDF when it reads the type, the text of a small text file, and otherwise a note with the path of the file in the workspace.","items":{"type":"object","properties":{
@@ -139,6 +134,37 @@ func runSchema(a *fw.Agent) json.RawMessage {
 			"description": "The fleet member that runs the agent; the fleet tool lists the members and their agents. Empty, or " + f.Name() + ", runs it here. A run on another member never waits: the call returns the run object at once."}
 	}
 	b, _ := json.Marshal(schema)
+	return b
+}
+
+// budgetChangeDesc describes a change of the budget of a run.
+const budgetChangeDesc = "A change of the budget of the run: each limit that is set replaces the same limit for the work that follows, so a run that failed at a limit goes on with more room. Every limit counts the whole run, also the turns, the tool calls, the tokens, the cost, and the working time before the change."
+
+// sendSchema builds the input schema of send.
+func sendSchema() json.RawMessage {
+	b, _ := json.Marshal(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"runId":   json.RawMessage(runIDSchema),
+			"content": map[string]any{"type": "string", "description": "The text of the follow-up message. It can be empty when the message has files."},
+			"files":   json.RawMessage(filesSchema),
+			"budget":  budgetSchema(budgetChangeDesc + " The change comes before the message, so the turn that the message starts has the new limits."),
+		},
+		"required": []string{"runId"},
+	})
+	return b
+}
+
+// runBudgetSchema builds the input schema of run_budget.
+func runBudgetSchema() json.RawMessage {
+	b, _ := json.Marshal(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"runId":  json.RawMessage(runIDSchema),
+			"budget": budgetSchema(budgetChangeDesc + " A running run reads the new budget at its next step."),
+		},
+		"required": []string{"runId", "budget"},
+	})
 	return b
 }
 
@@ -309,9 +335,15 @@ type approveArgs struct {
 }
 
 type sendArgs struct {
-	RunID   string    `json:"runId"`
-	Content string    `json:"content"`
-	Files   []fileArg `json:"files,omitempty"`
+	RunID   string      `json:"runId"`
+	Content string      `json:"content"`
+	Files   []fileArg   `json:"files,omitempty"`
+	Budget  *budgetArgs `json:"budget,omitempty"`
+}
+
+type runBudgetArgs struct {
+	RunID  string      `json:"runId"`
+	Budget *budgetArgs `json:"budget"`
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -356,10 +388,17 @@ func (s *server) addWorkTools() {
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolSend,
 		Title:       "Send a follow-up",
-		Description: "Add a follow-up user message to a run. A finished run starts a new turn. Read the result with run_status.",
-		InputSchema: json.RawMessage(sendSchema),
+		Description: "Add a follow-up user message to a run. A finished run starts a new turn. With budget, the run gets new limits first, so a run that failed at a limit goes on with more room. Read the result with run_status.",
+		InputSchema: sendSchema(),
 		Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), OpenWorldHint: ptr(true)},
 	}, s.send)
+	sdk.AddTool(s.srv, &sdk.Tool{
+		Name:        toolRunBudget,
+		Title:       "Change the budget of a run",
+		Description: "Change the limits of a run, for example to give a running run more turns or more working time. Each limit that is set replaces the same limit for the work that follows, and every limit counts the whole run. A finished run stays finished; send a follow-up to go on. The result is the budget of the run after the change.",
+		InputSchema: runBudgetSchema(),
+		Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
+	}, s.runBudget)
 }
 
 // principalOf returns the subject of the caller: the per-request token info
@@ -949,11 +988,22 @@ func (s *server) send(ctx context.Context, req *sdk.CallToolRequest, in sendArgs
 	if len(content) == 0 {
 		return errorResult("Invalid request: a message needs content or files."), nil, nil
 	}
-	if err := s.a.Send(ctx, in.RunID, fw.Message{Role: fw.RoleUser, Content: content}, fw.OriginMCP); err != nil {
+	var opts []fw.SendOption
+	if in.Budget != nil {
+		b, err := in.Budget.budget("budget")
+		if err != nil {
+			return errorResult("Invalid request: " + err.Error()), nil, nil
+		}
+		opts = append(opts, fw.WithSendBudget(b))
+	}
+	if err := s.a.Send(ctx, in.RunID, fw.Message{Role: fw.RoleUser, Content: content}, fw.OriginMCP, opts...); err != nil {
 		if res := s.elsewhere(withCredential(ctx, req), in.RunID, err, func(ctx context.Context, member string) *sdk.CallToolResult {
 			body := map[string]any{"content": in.Content}
 			if len(in.Files) > 0 {
 				body["files"] = in.Files
+			}
+			if in.Budget != nil {
+				body["budget"] = in.Budget
 			}
 			return remoteResult(s.memberRun(ctx, member, http.MethodPost, "/v1/runs/"+url.PathEscape(in.RunID)+"/messages", body, ""))
 		}); res != nil {
@@ -962,6 +1012,62 @@ func (s *server) send(ctx context.Context, req *sdk.CallToolRequest, in sendArgs
 		return workError("", err), nil, nil
 	}
 	return s.status(ctx, req, in.RunID), nil, nil
+}
+
+// budgetAnswer is the result of run_budget: the effective budget of the
+// run after the change and the run object, as PATCH /v1/runs/{id}/budget
+// answers.
+type budgetAnswer struct {
+	Budget fw.Budget `json:"budget"`
+	Run    *fw.Run   `json:"run"`
+}
+
+// runBudget changes the budget of a run of this process or of another
+// member (fw.Agent.ChangeBudget).
+func (s *server) runBudget(ctx context.Context, req *sdk.CallToolRequest, in runBudgetArgs) (*sdk.CallToolResult, any, error) {
+	if strings.TrimSpace(in.RunID) == "" || in.Budget == nil {
+		return errorResult("Invalid request: the arguments runId and budget are required."), nil, nil
+	}
+	change, err := in.Budget.budget("budget")
+	if err != nil {
+		return errorResult("Invalid request: " + err.Error()), nil, nil
+	}
+	b, err := s.a.ChangeBudget(ctx, in.RunID, change, fw.OriginMCP)
+	if err != nil {
+		if res := s.elsewhere(withCredential(ctx, req), in.RunID, err, func(ctx context.Context, member string) *sdk.CallToolResult {
+			var out budgetAnswer
+			if err := s.callMember(ctx, member, http.MethodPatch, "/v1/runs/"+url.PathEscape(in.RunID)+"/budget", in.Budget, "", &out); err != nil {
+				return failResult(err)
+			}
+			if out.Run != nil && out.Run.Member == "" {
+				out.Run.Member = member
+			}
+			s.log.Info("mcp run budget changed on a fleet member", "run", in.RunID, "member", member, "principal", principalOf(ctx, req))
+			return budgetResult(in.RunID, out)
+		}); res != nil {
+			return res, nil, nil
+		}
+		return workError("", err), nil, nil
+	}
+	s.log.Info("mcp run budget changed", "run", in.RunID, "change", fw.BudgetText(change), "principal", principalOf(ctx, req))
+	r, err := s.a.Get(ctx, in.RunID)
+	if err != nil {
+		return workError("", err), nil, nil
+	}
+	return budgetResult(in.RunID, budgetAnswer{Budget: b, Run: r}), nil, nil
+}
+
+// budgetResult is the result of run_budget: a text with the limits now
+// and the answer as structured content.
+func budgetResult(id string, out budgetAnswer) *sdk.CallToolResult {
+	text := fmt.Sprintf("The budget of run %s now is: %s.", id, fw.BudgetText(out.Budget))
+	if out.Run != nil && out.Run.State.Terminal() {
+		text += " The run is " + string(out.Run.State) + "; send a follow-up to go on with the new budget."
+	}
+	return &sdk.CallToolResult{
+		Content:           []sdk.Content{&sdk.TextContent{Text: text}},
+		StructuredContent: out,
+	}
 }
 
 // status returns the run object as a tool result.
