@@ -56,6 +56,9 @@ func (s *server) mount() error {
 		// its events, not forwarded.
 		{"GET /v1/runs/{id}/result", s.result},
 		{"GET /v1/runs/{id}/transcript", s.transcript},
+		// The front keeps the rules of its pools, so this route is not
+		// forwarded either (section 14.9).
+		{"POST /v1/runs/{id}/approvals/{approval}/rule", s.allowRule},
 		{"GET /v1/fleet", s.fleet},
 		{"GET /v1/fleet/runs", s.fleetRuns},
 		{"GET /v1/usage", s.usage},
