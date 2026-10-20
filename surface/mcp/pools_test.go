@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/pools"
 	"gopkg.in/yaml.v3"
@@ -261,5 +262,36 @@ func TestApproveRuleNeedsAPool(t *testing.T) {
 	}
 	if res := callTool(t, ctx, cs, toolApprove, map[string]any{"runId": r.ID, "approvalId": r.Pending.ID, "decision": "allow"}); res.IsError {
 		t.Fatalf("approve = %q", textOf(res))
+	}
+}
+
+// run_events with compact keeps the first 200 characters of each tool
+// output and its size, and without compact the whole output.
+func TestRunEventsCompact(t *testing.T) {
+	ctx := testCtx(t)
+	long := strings.Repeat("0123456789", 100)
+	echo := fw.NewTool(fw.ToolSpec{Name: "echo", ReadOnly: true}, func(context.Context, json.RawMessage) (fw.ToolResult, error) {
+		return fw.TextResult(long), nil
+	})
+	a := newAgent(t, newScript(toolUse("c1", "echo", `{}`), endTurn("done")).model(), fw.WithTools(echo))
+	cs := mustConnect(t, ctx, serveAgent(t, a, nil).URL, clientSetup{})
+	r := runOf(t, callTool(t, ctx, cs, "run", map[string]any{"input": "go"}))
+	output := func(args map[string]any) dashboard.Item {
+		t.Helper()
+		var res eventsResult
+		structured(t, callTool(t, ctx, cs, toolRunEvents, args), &res)
+		for _, it := range res.Items {
+			if it.Kind == dashboard.ItemResult {
+				return it
+			}
+		}
+		t.Fatalf("no tool output in %+v", res.Items)
+		return dashboard.Item{}
+	}
+	if it := output(map[string]any{"runId": r.ID, "compact": true}); len(it.Text) != 200 || it.Size != 1000 || !it.Cut {
+		t.Fatalf("a compact output = %d characters, size %d, cut %v", len(it.Text), it.Size, it.Cut)
+	}
+	if it := output(map[string]any{"runId": r.ID}); it.Text != long {
+		t.Fatalf("a full output = %d characters", len(it.Text))
 	}
 }

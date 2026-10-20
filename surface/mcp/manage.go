@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
@@ -95,7 +96,8 @@ const (
 		"runId":` + runIDSchema + `,
 		"limit":{"type":"integer","minimum":1,"maximum":500,"description":"The most events to return; the default is 50."},
 		"from":{"type":"integer","minimum":1,"description":"The sequence number to start from, to read forward. Without from and before the result is the last events of the run. The result names the next sequence number when more follow."},
-		"before":{"type":"integer","minimum":1,"description":"Read the page of events that ends before this sequence number, to read back. The result names prev, the value of before for the page in front of it, until the page starts at the first event. Do not pass it with from."}
+		"before":{"type":"integer","minimum":1,"description":"Read the page of events that ends before this sequence number, to read back. The result names prev, the value of before for the page in front of it, until the page starts at the first event. Do not pass it with from."},
+		"compact":{"type":"boolean","description":"true keeps the first 200 characters of each tool output and its size in bytes, so a poll of a busy run costs little. Read the page again without compact for the full outputs."}
 	},"required":["runId"]}`
 
 	dashboardViews = `"view":{"type":"string","enum":["home","run","agent","usage","agents","runs","approvals","fleet"],"description":"The view to open. home, the default, shows the work that needs you, the work in progress, the recent results, and your agents. run shows one run as a chat, and agent one agent profile. agents, runs, approvals, and fleet are older names of home. usage is deprecated: operators read the Prometheus metrics."},
@@ -203,10 +205,11 @@ type (
 		Batch     string `json:"batch,omitempty"`
 	}
 	runEventsArgs struct {
-		RunID  string `json:"runId"`
-		Limit  int    `json:"limit,omitempty"`
-		From   uint64 `json:"from,omitempty"`
-		Before uint64 `json:"before,omitempty"`
+		RunID   string `json:"runId"`
+		Limit   int    `json:"limit,omitempty"`
+		From    uint64 `json:"from,omitempty"`
+		Before  uint64 `json:"before,omitempty"`
+		Compact bool   `json:"compact,omitempty"`
 	}
 	dashboardArgs struct {
 		View  string `json:"view,omitempty"`
@@ -326,7 +329,7 @@ func (s *server) addManageTools() {
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolRunEvents,
 		Title:       "Run events",
-		Description: "Return the last events of a run as short lines, newest last, with the run object. Pass from to page through the ledger from a sequence number.",
+		Description: "Return the last events of a run as short lines, newest last, with the run object. Pass from to page through the ledger from a sequence number, and compact to cut each tool output to its first 200 characters.",
 		InputSchema: json.RawMessage(runEventsSchema),
 		Annotations: readOnly(),
 	}, s.runEvents)
@@ -765,7 +768,28 @@ func (s *server) runEvents(ctx context.Context, req *sdk.CallToolRequest, in run
 	if err != nil {
 		return failResult(err), nil, nil
 	}
+	if in.Compact {
+		compact(res.Items)
+	}
 	return result(eventsText(res), res), nil, nil
+}
+
+// compactOutput is how many characters of each tool output a compact page
+// of events keeps.
+const compactOutput = 200
+
+// compact cuts each tool output of a page to its first compactOutput
+// characters and sets Size to the bytes of the output that the page held,
+// so a poll of a busy run costs little.
+func compact(items []dashboard.Item) {
+	for i := range items {
+		it := &items[i]
+		if it.Kind != dashboard.ItemResult || utf8.RuneCountInString(it.Text) <= compactOutput {
+			continue
+		}
+		it.Size = int64(len(it.Text))
+		it.Text, it.Cut = string([]rune(it.Text)[:compactOutput]), true
+	}
 }
 
 // page names a page of the events of a run: from reads forward from a
