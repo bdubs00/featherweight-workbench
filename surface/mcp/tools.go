@@ -902,7 +902,10 @@ func (s *server) approve(ctx context.Context, req *sdk.CallToolRequest, in appro
 		}
 	}
 	res := s.approveNow(ctx, req, in)
-	if lead != "" && !res.IsError && len(res.Content) > 0 {
+	if lead != "" && len(res.Content) > 0 {
+		if res.IsError {
+			lead += "The decision did not go through, so the call still waits; allow it again. "
+		}
 		if t, ok := res.Content[0].(*sdk.TextContent); ok {
 			res.Content[0] = &sdk.TextContent{Text: lead + t.Text}
 		}
