@@ -10,7 +10,8 @@ package fleet
 // sends to "<queue>.dead" for a job that cannot start or that failed on its
 // last attempt. When jobs wait and no awake Task that serves the profile
 // has room, the front wakes the sleeping Tasks that serve it, as it does
-// after its own enqueue (suspend.go).
+// after its own enqueue (suspend.go). The metrics of the front show the
+// same numbers (metrics.go).
 
 import (
 	"context"
@@ -184,8 +185,8 @@ func (f *Fleet) queueAgents() []string {
 	return out
 }
 
-// readQueues reads the queues once, keeps their state, and wakes the Tasks
-// for the jobs that wait.
+// readQueues reads the queues once, keeps their state for the metrics and
+// the tool batch, and wakes the Tasks for the jobs that wait.
 func (f *Fleet) readQueues(ctx context.Context, now time.Time) {
 	q := f.queues
 	agents := f.queueAgents()

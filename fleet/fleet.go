@@ -8,8 +8,8 @@
 // action to the Task that owns the run through the atenet router
 // (forward.go), puts the pieces of a job on the intake queues of the
 // workers (enqueue.go), reads the depth of those queues and wakes the Tasks
-// for the jobs that wait (queues.go), and suspends the Tasks that idle
-// (suspend.go). The
+// for the jobs that wait (queues.go), suspends the Tasks that idle
+// (suspend.go), and adds its series to the metrics (metrics.go). The
 // kernel knows no fleet, and a worker publishes nothing about itself: it
 // is a bare kernel, and the platforms keep the state.
 package fleet
