@@ -115,9 +115,11 @@ func runSchema(a *fw.Agent) json.RawMessage {
 							"deny":    ruleList("Rules that refuse a call, such as bash: rm -rf*."),
 						},
 					},
-					"budget": budgetSchema("Limits of this run from the profile side; the request budget wins over them."),
+					"budget":  budgetSchema("Limits of this run from the profile side; the request budget wins over them."),
+					"outcome": outcomeSchema("A grade of the answer from the profile side; the outcome of the request wins over it."),
 				},
 			},
+			"outcome": outcomeSchema("A grade of the answer: a rubric, an optional grader model, and the number of passes. It replaces the outcome of the profile as a whole."),
 			"wait": map[string]any{"type": "boolean", "default": true,
 				"description": "true waits until the run finishes or needs input. false returns the run object at once."},
 			"budget": budgetSchema("Limits of this run. A field that is set replaces the same limit of the profile."),
@@ -169,6 +171,21 @@ func runBudgetSchema() json.RawMessage {
 }
 
 // budgetSchema is the schema of a budget object.
+// outcomeSchema is the schema of an outcome block: the kernel grades the
+// answer of the run against the rubric in a grader run (the kernel
+// architecture, section 20).
+func outcomeSchema(desc string) map[string]any {
+	return map[string]any{
+		"type":        "object",
+		"description": desc,
+		"properties": map[string]any{
+			"rubric":     map[string]any{"type": "string", "description": "What a satisfactory answer must do, in plain words. Empty turns the grade off."},
+			"grader":     map[string]any{"type": "string", "description": "A provider/model selector of the grader, or a name from the models map. Empty uses the model of the run."},
+			"iterations": map[string]any{"type": "integer", "minimum": 0, "maximum": 10, "description": "The number of grader passes. 1 grades once; 2 or more give the run another turn with the notes of the grader after needs_revision."},
+		},
+	}
+}
+
 func budgetSchema(desc string) map[string]any {
 	return map[string]any{
 		"type":        "object",
@@ -194,6 +211,7 @@ type runArgs struct {
 	Agent        string            `json:"agent,omitempty"`
 	Instructions string            `json:"instructions,omitempty"`
 	Profile      *profileArgs      `json:"profile,omitempty"`
+	Outcome      *fw.Outcome       `json:"outcome,omitempty"`
 	Wait         *bool             `json:"wait,omitempty"`
 	Budget       *budgetArgs       `json:"budget,omitempty"`
 	RequestID    string            `json:"requestId,omitempty"`
@@ -229,6 +247,7 @@ type profileArgs struct {
 	TimeZone     string      `json:"timeZone,omitempty"`
 	Policy       *fw.Rules   `json:"policy,omitempty"`
 	Budget       *budgetArgs `json:"budget,omitempty"`
+	Outcome      *fw.Outcome `json:"outcome,omitempty"`
 }
 
 // profile converts the arguments. The prefix names the fields in an
@@ -243,6 +262,7 @@ func (p *profileArgs) profile(prefix string) (fw.AgentProfile, error) {
 		Model:        p.Model,
 		Effort:       strings.ToLower(p.Effort),
 		TimeZone:     strings.TrimSpace(p.TimeZone),
+		Outcome:      p.Outcome,
 	}
 	if out.TimeZone != "" {
 		if _, _, err := fw.LoadZone(out.TimeZone); err != nil {
@@ -466,6 +486,9 @@ func (s *server) run(ctx context.Context, req *sdk.CallToolRequest, in runArgs) 
 	}
 	if in.Instructions != "" {
 		opts = append(opts, fw.WithInstructions(in.Instructions))
+	}
+	if in.Outcome != nil {
+		opts = append(opts, fw.WithOutcome(*in.Outcome))
 	}
 	if in.Profile != nil {
 		p, err := in.Profile.profile("profile.")

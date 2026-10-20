@@ -53,7 +53,7 @@ const fillPauseMax = 5 * time.Minute
 var EgressTypes = []string{
 	fw.EvRunQueued, fw.EvRunStarted, fw.EvRunResumed, fw.EvRunSuspended, fw.EvRunFinished,
 	fw.EvApprovalRequested, fw.EvApprovalDecided, fw.EvRunAnnotated, fw.EvTurnStarted, fw.EvMessageReceived,
-	fw.EvRunChild,
+	fw.EvRunChild, fw.EvOutcomeEvaluated,
 }
 
 // platform is the view of the members that the platforms know.
