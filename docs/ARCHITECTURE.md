@@ -12,7 +12,7 @@ The workbench changes no kernel code. It plugs in through the extension points o
 
 - `native.Extend` adds routes to the native surface of the kernel, on the same listener and behind the same authentication. The package `surface/web` registers one extension in `init`. Its routes get a `*native.Kit`, so they answer errors and forward the runs of other fleet members as the run routes do.
 - `fw.RegisterDefaults` changes the default configuration in `init`. The package `surface/mcp` adds `mcp` to `surfaces`, and the package `tools/builder` adds `propose_agent` to the built-in tools. A file or a variable still overrides each default.
-- The package `cli` of the kernel holds the command line. `cmd/fw-workbench` calls `cli.Run`, so `fw-workbench` takes every verb of `fw`. It sets `cli.ServeMCPStdio`, so the verb `mcp` serves the MCP server over stdio.
+- The package `cli` of the kernel holds the command line. `cmd/fw-workbench` calls `cli.Run`, so `fw-workbench` takes every verb of `fw`. It sets `cli.ServeMCPStdio`, so the verb `mcp` serves the MCP server over stdio. The verb `pools` belongs to the workbench, so `cmd/fw-workbench` runs it before `cli.Run` (section 13.2).
 - `fw.RegisterExtension` claims a top-level block of `fw.yaml` for the workbench. The package `teams` claims the block `workbench`, and `fw.Config.Extension` decodes it (section 8).
 - `fw.RegisterRunAnnotator` adds metadata to every run that the kernel queues. The package `teams` records the teams of the person who starts a run this way (section 8).
 - `fw.Agent.SetProfiles` replaces the profiles of the kernel at runtime, and `cli.AgentsPut` and `cli.AgentsDelete` give the verb `agents` its writes. The package `agents` uses them (section 10).
@@ -52,8 +52,10 @@ dashboard/              the page index.html and the views for people: home, resu
 surface/web/            the routes for people on the native surface (section 2)
 surface/mcp/            the MCP server over HTTP and over stdio (section 3)
 fleet/                  the fleet: the member record, the view, and forwarding (section 4)
+pools/                  the pools: the configuration, the rendered Tasks, and the reconciler (section 13)
 tools/builder/          the tool propose_agent (section 6.4)
 examples/agentgateway/  a fleet behind agentgateway on one public URL
+examples/pools/         a front that keeps a pool of three workers (section 13)
 docs/ARCHITECTURE.md    this document
 Dockerfile              fw-workbench:static on distroless
 Dockerfile.toolbox      fw-workbench:toolbox on Debian with git
@@ -253,6 +255,7 @@ The fleet reads the block `fleet` under the key `workbench` of `fw.yaml`, which 
 | `workbench.fleet.egress` | `FW_WORKBENCH_FLEET_EGRESS` | The subject prefix of the egress stream of the workers, `bus.egress` on each of them (section 4.1) | none |
 | `workbench.fleet.intake` | `FW_WORKBENCH_FLEET_INTAKE` | The subject prefix of the intake queues of the workers: a worker that runs the profile `<agent>` sets `bus.intake` to `<intake>.<agent>` (section 4.9) | none |
 | `workbench.fleet.suspendAfter` | `FW_WORKBENCH_FLEET_SUSPEND_AFTER` | How long a Task stays idle before the front suspends it, a duration such as `10m`, or `off` (section 4.12) | `10m` with atespaces, else off |
+| `workbench.pools` | none | The pools of Tasks that the front keeps, each with its image, the configuration of its workers, and its replica count (section 13) | none |
 
 A worker needs no key of this block: it sets `bus.driver`, `bus.url`, `bus.egress`, `bus.intake`, and `tokens.url` of the kernel. The front names its sources:
 
@@ -275,13 +278,14 @@ The directory `examples/agentgateway` puts a fleet behind agentgateway on one pu
 
 - The native API serves `GET /v1/fleet`. It lists the members that the caller can see. Each member has its state, the agents that the caller can see, and its counts of active runs and of runs that wait for input. `GET /v1/fleet/runs` lists the runs of the whole fleet in the shape of `GET /v1/runs` of the kernel, which covers this process only. Its parameter `scope` is `fleet`, the default, or `local`, `member` narrows the list to one member, and `parent` lists the children of a run of any member. `agent`, `state`, `principal`, and `limit` narrow it as on `GET /v1/runs`. Each run of another member carries the field `member`. `POST /v1/runs?member=<name>` starts a run on that member.
 - The MCP server adds the tool `fleet`, and `runs_list` takes the arguments `scope` and `member`: the scope `fleet`, the default, covers every member, and `local` covers this process only.
+- With pools, `GET /v1/fleet` carries `pools`, the MCP tool `fleet` lists them after the members, and the Agents place of the page shows one line for each pool (section 13.7).
 - The home of the dashboard lists the work of the whole fleet that the caller can see. The Agents place groups the agents by member (section 6.2). Approve, deny, cancel, and a follow-up work in the same way on every run.
 
 The A2A server and the MCP resources `fw://runs/{id}`, `fw://runs/{id}/ledger`, and `fw://runs/{id}/files/{+path}` serve the runs of their own process only.
 
 ### 4.8 The platforms as sources
 
-Section 4.1 describes the two sources. The front reads the Task list from the ax API and the runs from the egress stream, reads a running Task once when it appears, and lives on the stream after that; it never polls a Task, because a request wakes a Task that sleeps. The gauges that the collector carries, the forwarding, the token broker, and the suspend controller read the same view.
+Section 4.1 describes the two sources. The front reads the Task list from the ax API and the runs from the egress stream, reads a running Task once when it appears, and lives on the stream after that; it never polls a Task, because a request wakes a Task that sleeps. The gauges that the collector carries, the forwarding, the token broker, the suspend controller, and the pools read the same view. The suspend controller and the pools read a Task through the router only right before they act on it (sections 4.12 and 13.4).
 
 ### 4.9 Jobs
 
@@ -732,3 +736,192 @@ The answer holds one decision per check, in order, with `allow`, an optional `re
 ### 12.3 When the control plane does not answer
 
 If the control plane does not answer in time, the front refuses the request with `fw.ErrAuthzUnavailable`. An answer that it cannot read, or that holds the wrong number of decisions, counts as no answer. The native API answers 503 with `Retry-After: 5`, the MCP server returns an error result that says that the service did not answer, and a listing reports the outage instead of an empty list. A caller therefore tells a refusal, a 403, from a control plane that is down. A call from the process itself carries no principal and never asks, so the front keeps reading its sources during an outage. `fw-workbench doctor` prints one line for the control plane, `workbench.access.external`, and asks an MCP decision point whether it lists the tool.
+
+## 13. Pools
+
+A pool keeps a set of ax Tasks that run one agent profile. The block `workbench.pools` of `fw.yaml` lists the pools. Each pool names the image, the fw configuration of the workers, their variables, their egress, and the number of Tasks. At every interval, the front makes the Tasks of each pool match the configuration. A person no longer renders and applies the manifests of the workers by hand. The package `pools` reads the configuration, renders the Workspace and the Task of each worker, and runs the reconciler. The fleet runs it after each read of the Task list (section 4.1).
+
+### 13.1 Configuration
+
+Each entry of `workbench.pools` has these keys. A key that a pool does not know is an error.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `name` | The name of the pool. Its Tasks are `<name>-<index>`, and their Workspaces are `<name>-<index>-ws`. | required |
+| `atespace` | The atespace of the Tasks. It must be one of `workbench.fleet.atespaces`. | the only atespace of the fleet |
+| `replicas` | The number of Tasks. With `0`, the front deletes every Task of the pool once the Task is idle. A Task that failed after it ran waits for a person (section 13.4). | required |
+| `image` | The worker image by digest, `<image>@sha256:<64 hex digits>`. Substrate pulls an actor image only by digest. | required |
+| `agent` | The profile of `fw.agents` whose queue the workers take. | the only profile of `fw.agents` |
+| `intake` | The intake queue of the workers. | `<workbench.fleet.intake>.<agent>`, else `fw.jobs.<agent>` |
+| `revision` | Free text. A new value replaces every Task, for example to start every worker again with a new Workspace. | none |
+| `env` | The variables of the workers. Each entry has `name` and `value`, or `name` and `fromEnv`, the name of a variable of the front. | none |
+| `egress` | `spec.egress` of each Task: `rules`, each with one of `http`, `https`, and `tls`, which hold `hostnames` and `ports`. ax creates the egress policy of the actor from it before the Task first runs. | required |
+| `resources` | `requests` and `limits` of each Task, each with `cpu` and `memory`. | none |
+| `files` | Extra files of the Workspace, each with a `path` relative to `/workspace` and its `content`. | none |
+| `fw` | The `fw.yaml` of each worker: the agents and their profiles, the policy, the model, the providers, and the tools. | required |
+
+The front writes `fw` to `.fw/fw.yaml` in the Workspace of each Task. The Workspace is bound at `/workspace`, where the kernel reads its configuration under ax. The front adds these keys:
+
+- `bus.intake` from `intake`, `bus.egress` from `workbench.fleet.egress`, and `bus.egressTypes` with the event types that the view reads (section 4.1). A pool cannot set them in `fw`.
+- The defaults that `fw` can change: `bus.driver` and `bus.url` of the front, `auth.mode: token`, and `ax.server` and `ax.router` of the front. A worker in a Substrate sandbox reaches NATS over WebSocket, so a pool usually sets its own `bus.url`. The front never copies a bus URL that holds a credential.
+- On NATS, the default `bus.options.concurrency: 1`. A Task runs one run at a time. The NATS intake takes four messages at a time by default, so one worker can hold four jobs while the other workers idle.
+
+The front adds four variables to each Task:
+
+- `FW_POOL`, the name of the pool.
+- `FW_POOL_SPEC`, the hash of the configuration of the pool.
+- `FW_BASH_HIDE`, which keeps `AX_TASK_YAML`, the token variable, and each variable with `fromEnv` out of the bash tool of the worker. `AX_TASK_YAML` holds every variable of the Task.
+- The static token of the front, under `auth.tokenEnv` of the worker, which is `FW_API_TOKEN` by default (section 13.6).
+
+The policy of the workers is `fw.policy`, the policy of the Task, in the open. A profile can only tighten it.
+
+The front expands `${NAME}` in its own `fw.yaml` before it reads the pools, in `workbench.pools` too. The worker expands its own file again. For a variable that the worker expands, write `$${NAME}`. Never write a secret as `${NAME}`. The front then puts the value into the configuration, and the dry run prints it. Use `fromEnv` for a secret.
+
+The front checks every pool at its start, and a problem stops the start. The error names each key and what to set, for example:
+
+- `workbench.pools[0] (triage): image "ghcr.io/example/fw:latest" has no digest: Substrate pulls an actor image only by digest, so write it as <image>@sha256:<64 hex digits>`
+- `workbench.pools[0] (triage): set fw.model, the provider/model selector of the workers, such as openai/<model>: a pool has no default model`
+- `workbench.pools[0] (triage): replicas -1 is below 0; set 0 or more`
+
+The checks also cover these points:
+
+- `fw` decodes as a configuration of the kernel, and the checks of the kernel pass on it.
+- The Task and the Workspace pass the checks of the ax API, such as the names and the egress hostnames.
+- `env` sets no variable `FW_*` and no variable `AX_*`, and not the token variable of the worker. A variable `FW_*` changes the configuration of the worker after these checks, so a key of `fw` takes its place.
+- Each egress rule sets exactly one of `http`, `https`, and `tls`.
+- `fw.auth.mode` includes `token`, and `fw.bus.driver` is the bus of the front.
+- `fw.bus.url` holds no credential as text. Write `$${NAME}` for it, and set `NAME` in `env` with `fromEnv`.
+- The static token sees every run of a worker under the access rules of `fw` (section 13.4). Else the error says to add `kind:token` to `fw.access.admins`.
+- The front has `workbench.fleet.atespaces`, `workbench.fleet.egress`, a bus other than `mem`, `ax.server`, and `ax.router`.
+- The front has every variable that a `fromEnv` names.
+
+`fw-workbench doctor` reports these problems on its fleet line. The front also logs a warning for each address of a worker that no egress rule allows. It looks at the bus, the providers, the MCP servers, and the token broker.
+
+The directory `examples/pools` holds a front with one pool. The pool has three workers of the profile `triage` on the queue `fw.jobs.triage`. They use a model behind a proxy and reach the bus, the model proxy, and an MCP server. One tool writes to the ticket system, and it asks a person first. The pool, in short:
+
+```yaml
+workbench:
+  fleet: {atespaces: [default], egress: fw.events, intake: fw.jobs}
+  pools:
+    - name: triage
+      replicas: 3
+      image: ghcr.io/bdubs00/featherweight-kernel@sha256:<64 hex digits>
+      env:
+        - {name: OPENAI_API_KEY, value: the-proxy-holds-the-key}
+        - {name: TICKETS_TOKEN, fromEnv: TICKETS_TOKEN}
+      egress:
+        rules:
+          - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
+          - http: {hostnames: [model-proxy.models.svc.cluster.local], ports: [8080]}
+          - https: {hostnames: [tickets-mcp.example.com]}
+      fw:
+        model: openai/example-model
+        bus: {url: "ws://nats.agents.svc.cluster.local:8080"}
+        providers:
+          openai: {baseUrl: "http://model-proxy.models.svc.cluster.local:8080/v1", apiKeyEnv: OPENAI_API_KEY}
+        tools:
+          builtin: [files, clock]
+          mcp:
+            - {name: tickets, endpoint: "https://tickets-mcp.example.com/mcp", auth: {bearer: TICKETS_TOKEN}}
+        policy: {default: allow, ask: [tickets.update_ticket]}
+        agents:
+          triage:
+            description: Reads new tickets and sorts each one into a queue.
+            tools: [files, tickets.search_tickets, tickets.get_ticket, tickets.update_ticket]
+```
+
+### 13.2 The dry run
+
+`fw-workbench pools render [-config file] [file]` prints the Workspaces and the Tasks that the front applies. The output is a stream of YAML documents in the order of the apply. A comment before each pool names its queue, its hash, the variables that the front copies, and its warnings. Each value that the front copies from its environment is a placeholder, such as `<secret: FW_API_TOKEN of the front>`. So the output holds no secret, and the command needs none of the variables. The hash covers the name of each variable of the front and never its value. When the command reads the configuration with the variables of the front, the hash in the output is the hash that the front writes. A person reviews a change with the output before the front acts.
+
+The output is for review only. Do not apply it: a placeholder is not a value. A Task that holds a placeholder runs an older value of a variable of the front (section 13.4), so the front replaces it.
+
+### 13.3 Ownership
+
+The ax API keeps no labels and no annotations on a Task. It keeps the name and the specification. So the front marks a Task of a pool with its name and its specification. A Task belongs to the pool `P` on two conditions:
+
+- Its name is `P-<index>`, with a decimal index without a leading zero.
+- Its variable `FW_POOL` is `P`.
+
+The front never touches another Task. It needs both marks:
+
+- A Task named `triage-1` without `FW_POOL=triage` belongs to no pool, such as a Task that a person made. The pool leaves it alone, says so in its state, and takes the next free name.
+- A child Task of a worker comes from `spawn_task` with the ax driver. It inherits `FW_POOL` from its parent, but its name is `<parent>-<run id>`. So it belongs to no pool either.
+
+A Workspace has no variables, so the front marks it in its file: the first line of the rendered `fw.yaml` names the pool. The front writes and deletes only a Workspace with that line, or a Workspace that does not exist. A Workspace of that name without the line keeps its content, and the pool takes the next free name.
+
+A pool that leaves the configuration, or that moves to another atespace, leaves its Tasks as they are. The front cannot tell a removed pool from a pool of another front. To remove a pool, set `replicas: 0`, wait until its Tasks are gone, and then remove the entry. Delete a Task that failed after it ran by hand.
+
+### 13.4 A pass
+
+At every `workbench.fleet.interval`, the front reads the Task list and runs the suspend controller. Then it runs one pass for each pool over the Tasks of its atespace. A current Task of the pool carries the hash of the pool in `FW_POOL_SPEC`. It also holds the values that the front holds now for its variables. So a new value of a variable of the front, such as a new static token, makes every Task older too. The front compares the values in constant time and never logs them. A pass has these steps:
+
+1. It sends the delete again for a Task of the pool in the phase `Terminating`. Substrate can refuse a delete while an actor resumes, and nothing else tries again. When the view holds a run of such a Task, the front asks the Task, and a Task that holds the run waits.
+2. It puts aside a Task that failed after it ran. Such a Task can hold runs that nobody can read, so the pool never deletes it, and the Task does not count toward `replicas`. The state of the pool asks a person to delete it. It also names a run of the Task that the view still holds, because the actor can still work.
+3. It deletes the Tasks above `replicas`, the idle ones first, and the Workspace of each such Task. The order is in the list after these steps.
+4. It resumes a current Task that never ran, and a Task that is `Pending`. ax creates every Task suspended, and a resume can fail for a moment. ax sets the condition `WorkspaceReady` at the first resume of a Task, so a Task without it never ran through ax.
+5. It creates the missing Tasks at the lowest free names. For each Task, it writes the Workspace, creates the Task, and resumes it.
+6. It replaces the Tasks that are not current. It deletes such a Task, and the next pass creates it again with the current configuration. A Task that is not up serves nobody, so the pool replaces it at once. Up means running, or asleep after a first run. Of the Tasks that are up, the pool replaces one in each pass. It waits until every Task of the pool is up. So the pool keeps its workers while it rolls.
+
+A failed Task of the current configuration that never ran holds no run. The pool deletes it `FailedRetry`, five minutes, after the failure, and the next pass creates it again. ax sets the phase `Failed` only for an error that does not go away by itself, so the pool tries again seldom. In between, the state of the pool gives the reason that ax gives.
+
+For a delete above the replica count, the front prefers these Tasks, in this order:
+
+- A Task that never ran.
+- A Task of which the view knows no active run.
+- A Task of an older configuration.
+- A running Task, because its status read wakes nobody.
+- The Task with the highest index.
+
+An active run is a run that is not finished, a run that waits for input included. The front deletes a Task only without an active run:
+
+- A Task that never ran, and of which the view knows no active run, holds none.
+- Any other Task must answer that it holds none, in `runs.active` of `GET /v1/status` through the router. The front sends the static token that the Task holds, so a Task that holds an older token answers too.
+- The Task also answers for each run that the view holds, with `GET /v1/runs/{id}`. A run that the Task does not have, or that ended, is a run that the view holds after a lost event. A run that the Task hides from the token keeps the Task.
+- After these answers, the front asks the view once more before the delete. A run that the view learned in between keeps the Task.
+- A running Task can have the condition `WorkspaceReady` at `False`, because its kernel never answered at a resume. When it does not answer now either, and the view knows no run of it, it counts as a Task that never ran. So a pool replaces the Tasks of a broken image after a fix.
+
+The ledger of the Task decides. Its status counts a run that the view missed. An example is a run that waits for an approval in a Task that slept since before the front started. When the view still holds a run after a lost event, the Task shows that the run ended, and the front logs the difference. A read of a sleeping Task wakes it, and the front logs that too. The front never deletes a Task that does not answer, or that neither runs nor sleeps. The state of the pool says why, and a person decides. The status counts only the runs that the caller can view. So the static token must see every run of a worker (section 13.1).
+
+The state of the pool says why a Task waits, for example `triage-1 runs an older configuration and holds the active run 01K..., so the pool replaces it once it is idle`. The log of the front has a line for each new reason, and a line for each Task that the front creates, resumes, or deletes.
+
+### 13.5 No leader
+
+No replica of the front leads. Every replica runs every pass, and every action is safe to repeat. So two replicas give the result of one:
+
+- A name comes from the pool and the index, so two creates of one Task make one Task. Before a create, the front reads the Task, and it writes no Workspace for a Task that exists. ax refuses a second create, and the front takes the refusal as the work of the other replica.
+- A resume, a write of a Workspace with the same content, and a delete of a Task that is gone change nothing.
+- Before a delete, the front reads the Task again. It deletes only the Task that the pass judged: the same `FW_POOL`, the same `FW_POOL_SPEC`, the same create time, and for a delete that it sends again, still the phase `Terminating`. So a replica with an older list never deletes a Task that the other replica made since. The front deletes a Workspace only while no Task of its name exists.
+- Two replicas can choose different idle Tasks above the replica count. Then the pool has one Task too few for one interval, and the next pass creates it.
+
+A leader needs a lease, and the front has none: the ax API offers no lock, and the bus of the fleet can be NATS or Redis. A rolling update of the front can run two configurations at once. Then the replicas disagree about the hash, and each replica can replace an idle Task of the other. A replacement waits for an idle Task, and the disagreement ends with the old replica.
+
+### 13.6 The token
+
+The workers need the static token of the fleet. The front reads a worker with it, and a worker accepts it. The front copies the token from its own environment into each Task. It reads the token under `auth.tokenEnv` of the front and writes it under `auth.tokenEnv` of the worker. Both are `FW_API_TOKEN` by default. The configuration file never holds the token, and the front refuses a pool that sets it in `env`. A variable with `fromEnv` takes the same path.
+
+The front reads these variables once at its start and keeps them in memory. It writes them into the Tasks through the ax API and nowhere else. No log line, no file, no state of a pool, and no output of the dry run holds one. An error of the ax API can echo such a value. Then the front replaces the value before it logs or shows the error. It replaces each value of eight characters or more, also in the quoted forms of Go and JSON. So the static token must have eight characters or more, or the front does not start.
+
+To rotate the token, change the Secret of the front and restart the front. Every Task then holds an older value, and the pool replaces the Tasks one at a time, each once it is idle. The front reads each old Task with the token that the Task holds.
+
+### 13.7 Visibility
+
+`GET /v1/fleet` carries `pools`, and the MCP tool `fleet` lists them after the members. Each pool has these fields:
+
+- `name`, `atespace`, `agent`, `intake`, and `hash`.
+- `wanted`, the replica count.
+- `actual`, the Tasks of the pool that exist, are not being deleted, and did not fail after a run.
+- `ready`, the Tasks of those that run the current configuration and are up.
+- `tasks`, each Task with its phase and a note.
+- `gaps`, one reason for each difference.
+
+The Agents place of the page shows one line for each pool. A caller who can view the agent of a pool sees the pool. The front decides as for the agent of a member (section 4.4). It uses the access block of its own profile of that name, else the access block in `fw`.
+
+### 13.8 Known limits
+
+- At this version, ax keeps the variables of a Task as plain text in its store, because it has no references to Secrets. Whoever can read the Tasks on the ax API reads the static token and every value of `fromEnv`. Limit who can read the ax API.
+- Every worker shares the token of the front until each member has a token of its own. A worker can reach the front and every other worker with it.
+- A worker can take a job from the queue in the moment between the last question to the view and the delete. It then loses that run. The intake acknowledges a job only at the end of its run. So the bus delivers the job again after its ack wait, five minutes on NATS.
+- The bash tool of a worker gets each variable of `env` with a `value`. A variable with `fromEnv` stays out of it. To give a command in bash such a secret, name it in `fw.tools.bash.env` under another name, as `$${NAME}`.
+- A Workspace of a Task that the pool deleted to replace it stays until the pool creates the Task again. When the delete of a Workspace above the replica count fails, the Workspace stays. Such a Workspace is small and holds no secret.
+- A pass runs in the loop of the Task list, one call after another. A slow delete waits for Substrate, and it can hold the next read of the Task list back for up to two minutes.

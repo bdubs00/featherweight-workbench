@@ -5,7 +5,7 @@ This repository holds the workbench for people on top of the kernel, featherweig
 - the page at `/ui`, with the home, the result of a run, the conversation, and the agent builder
 - browser sign-in with OpenID Connect, the `oidc` authentication mode
 - the MCP server at `/mcp` and over standard input and output, for desktop clients and MCP App hosts
-- the fleet, one view of many `fw` workers from the ax API and the bus egress stream, with jobs, a token broker, and a suspend controller
+- the fleet, one view of many `fw` workers from the ax API and the bus egress stream, with jobs, a token broker, a suspend controller, and pools that keep a number of Tasks of one profile
 - connections, with which an MCP server of the kernel acts for the person who started a run
 - the `propose_agent` tool and the titles that a model writes for runs
 
@@ -51,7 +51,7 @@ Open `http://localhost:8080/ui` and paste the token. The listener serves the rou
 | `GET /v1/runs/{id}/result` | what a run produced and what it needs next |
 | `GET /v1/runs/{id}/transcript` | the conversation of a run as chat items |
 | `POST /v1/builder` | a run of the agent builder |
-| `GET /v1/fleet` | the members of the fleet |
+| `GET /v1/fleet` | the members and the pools of the fleet |
 | `/v1/connections` | the connections of the caller to services |
 | `GET /v1/usage` | the usage of the runs, deprecated |
 
@@ -81,13 +81,15 @@ Each run gets a title that a model writes, such as "Fix checkout retries", the f
 
 A worker is a bare `fw` in an ax Task, and the front is `fw-workbench` outside the sandboxes. The front reads the Tasks from the ax API (`workbench.fleet.atespaces`) and the runs from the egress stream of the workers (`workbench.fleet.egress`), and it serves one view of the whole fleet. A request about a run of a worker goes to its Task through the atenet router with the credential of the caller, a job goes to the intake queue of a profile with `enqueue`, and a Task that idles is suspended until the next request wakes it. [examples/agentgateway](examples/agentgateway/README.md) runs a fleet behind agentgateway on one public URL.
 
+A pool (`workbench.pools`) keeps a number of Tasks that run one profile. The front creates the Tasks with their Workspaces. It replaces a Task of an older configuration once the Task is idle. It deletes the Tasks above the count, but never a Task with an active run. `fw-workbench pools render` prints the Tasks that the front applies, with a placeholder for each secret. [examples/pools](examples/pools/fw.yaml) keeps three workers of one profile, and section 13 of the architecture has the rules.
+
 ## How the workbench builds on the kernel
 
 The workbench changes no kernel code. It uses these hooks of the kernel:
 
 1. `native.Extend` mounts the routes of `surface/web` on the native surface of the kernel, behind the same authentication.
 2. `fw.RegisterDefaults` turns on the `mcp` surface and adds the `propose_agent` tool.
-3. Package `cli` gives the verbs of `fw`, and `cmd/fw-workbench` adds the MCP server to the verb `mcp` and the writes to the verb `agents`.
+3. Package `cli` gives the verbs of `fw`, and `cmd/fw-workbench` adds the MCP server to the verb `mcp`, the writes to the verb `agents`, and the verb `pools`.
 4. `fw.RegisterExtension` claims the block `workbench` of `fw.yaml`, and `fw.RegisterRunAnnotator` records the teams of a run.
 5. `fw.Agent.Annotate` records a title that a model wrote, and `fw.Agent.SetProfiles` makes a saved agent profile live.
 
@@ -100,8 +102,10 @@ The workbench changes no kernel code. It uses these hooks of the kernel:
 | `surface/web` | the routes for people on the native surface |
 | `surface/mcp` | the MCP server |
 | `fleet` | the fleet driver |
+| `pools` | the pools of Tasks that the fleet keeps |
 | `tools/builder` | the `propose_agent` tool |
 | `examples/agentgateway` | a fleet behind agentgateway |
+| `examples/pools` | a front that keeps a pool of three workers |
 
 ## License
 
