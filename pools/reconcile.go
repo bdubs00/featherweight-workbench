@@ -541,7 +541,12 @@ func (r *Reconciler) order(ms []*member) []*member {
 func (r *Reconciler) idle(ctx context.Context, m *member) (bool, string) {
 	runs := r.Check.Active(m.id())
 	m.seen = runs
-	if !m.started && len(runs) == 0 {
+	// A Task that runs is always asked, even when this replica never saw
+	// it run and its view holds no run of it: another replica can have
+	// started a run on it seconds ago, and the status read wakes nobody.
+	// On 2026-10-20 a front deleted a fresh Task of a pool 1.6 s after a
+	// decision on a run that the other replica had started on it.
+	if !m.started && len(runs) == 0 && m.phase != phaseRunning {
 		return true, ""
 	}
 	switch m.phase {
