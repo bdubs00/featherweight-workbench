@@ -728,6 +728,9 @@ const mcp = (() => {
     previewAgent: p => call('agent_put', Object.assign({}, p, {dryRun: true})).then(r => r.draft),
     send: (id, content, files) => call('send', clean({runId: id, content, files: files && files.length ? files : undefined})),
     decide: (id, approvalId, decision, note, content) => call('approve', clean({runId: id, approvalId, decision, note, content})),
+    // allowRule allows the call and adds its tool to the policy of the pool
+    // of the agent, in one call.
+    allowRule: (id, approvalId, note) => call('approve', clean({runId: id, approvalId, decision: 'allow', rule: true, note})),
     cancel: id => call('cancel', {runId: id}),
     fleet: () => call('fleet'),
     connections: () => call('connections').then(r => r.connections || []),
@@ -797,6 +800,12 @@ const native = (() => {
     previewAgent: p => req('PUT', '/v1/agents/' + enc(p.name) + '?dryRun=true', p),
     send: (id, content, files) => req('POST', run(id) + '/messages', clean({content, files: files && files.length ? files : undefined})),
     decide: (id, approvalId, decision, note, content) => req('POST', run(id) + '/approvals/' + enc(approvalId), clean({decision, note, content})),
+    // allowRule adds the tool to the policy of the pool of the agent on the
+    // front, then allows the call on the member that owns the run.
+    allowRule: async (id, approvalId, note) => {
+      await req('POST', run(id) + '/approvals/' + enc(approvalId) + '/rule', clean({note}));
+      return req('POST', run(id) + '/approvals/' + enc(approvalId), clean({decision: 'allow', note}));
+    },
     cancel: id => req('POST', run(id) + '/cancel', {}),
     fleet: () => req('GET', '/v1/fleet'),
     connections: () => req('GET', '/v1/connections').then(r => (r && r.connections) || []),
@@ -1287,6 +1296,11 @@ function decisionCard(run, d) {
   const rule = /^rule: /.test(d.reason || '');
   const why = /^rule: ask destructive/.test(d.reason || '') ? 'This tool can change things, so it waits for you.'
     : rule ? 'A rule of this agent asks you first.' : d.reason ? cap(d.reason) : '';
+  // A worker of a pool takes its policy from the front, so the person can
+  // allow the tool for the agent from now on. A rule by a flag asks for
+  // every tool with the flag, and no allow rule answers it.
+  const always = !!(run.member && d.tool && (d.reason === 'default' || /^rule: ask /.test(d.reason || ''))
+    && !/^rule: ask (readonly|read-only|idempotent|destructive|parallel|parallelsafe)$/i.test(d.reason || ''));
   let raw = '';
   try { raw = d.input == null ? '' : JSON.stringify(typeof d.input === 'string' ? JSON.parse(d.input) : d.input, null, 2); } catch (e) { raw = String(d.input); }
   return `<div class="decide" data-ask="${esc(d.id)}" data-key="ask:${esc(d.id)}">
@@ -1296,7 +1310,7 @@ function decisionCard(run, d) {
     ${why ? `<p class="why">${esc(why)}</p>` : ''}
     <details class="more"><summary>Details</summary>${d.tool ? `<p>Tool: <code>${esc(d.tool)}</code></p>` : ''}${rule ? `<p>${esc(cap(d.reason))}</p>` : ''}${raw ? `<pre class="code">${esc(raw)}</pre>` : ''}</details>
     <form data-form="decide" data-id="${esc(run.id)}" data-approval="${esc(d.id)}">
-      <div class="do"><button class="btn" type="submit" value="deny" formnovalidate>Deny</button><button class="btn primary" type="submit" value="allow">${esc(d.label || 'Allow')}</button></div>
+      <div class="do"><button class="btn" type="submit" value="deny" formnovalidate>Deny</button>${always ? `<button class="btn" type="submit" value="rule" title="Allow this call, and let ${esc(agent)} use ${esc(d.tool)} from now on without asking">Always allow</button>` : ''}<button class="btn primary" type="submit" value="allow">${esc(d.label || 'Allow')}</button></div>
     </form></div>`;
 }
 // connectCard asks the person to connect the service that the run waits
@@ -2288,7 +2302,8 @@ const forms = {
         else content[k] = t === 'number' || t === 'integer' ? Number(el.value) : el.value;
       }
     }
-    await api.decide(f.dataset.id, f.dataset.approval, decision, note || undefined, content);
+    if (b && b.value === 'rule') await api.allowRule(f.dataset.id, f.dataset.approval, note || undefined);
+    else await api.decide(f.dataset.id, f.dataset.approval, decision, note || undefined, content);
     if (S.run) {
       S.run.decided = f.dataset.approval;
       screens.run.decision(S.run, null);
