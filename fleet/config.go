@@ -13,6 +13,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/ax"
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
 // Block is the top-level key of fw.yaml that the workbench claims.
@@ -72,6 +73,10 @@ type Config struct {
 
 	SuspendAfter *time.Duration `yaml:"suspendAfter"`
 	WakeOnQueue  *bool          `yaml:"wakeOnQueue"`
+
+	// Pools are the pools of workbench.pools, which LoadPools reads and
+	// Start fills (pools.go).
+	Pools []*pools.Pool `yaml:"-"`
 }
 
 // On reports whether the configuration names a source of members.

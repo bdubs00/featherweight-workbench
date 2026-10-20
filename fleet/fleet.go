@@ -9,7 +9,8 @@
 // (forward.go), puts the pieces of a job on the intake queues of the
 // workers (enqueue.go), reads the depth of those queues and wakes the Tasks
 // for the jobs that wait (queues.go), suspends the Tasks that idle
-// (suspend.go), and adds its series to the metrics (metrics.go). The
+// (suspend.go), keeps the Tasks of the pools of the configuration
+// (pools.go), and adds its series to the metrics (metrics.go). The
 // kernel knows no fleet, and a worker publishes nothing about itself: it
 // is a bare kernel, and the platforms keep the state.
 package fleet
@@ -17,6 +18,7 @@ package fleet
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -28,6 +30,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
 func init() {
@@ -47,6 +50,9 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	c, err := Load(a.Config())
 	if err != nil {
 		return nil, err
+	}
+	if c.Pools, err = LoadPools(a.Config(), c); err != nil {
+		return nil, fmt.Errorf("fleet: %w", err)
 	}
 	if !c.On() {
 		return nil, nil
@@ -148,7 +154,22 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 	if tokenEnv == "" {
 		tokenEnv = "FW_API_TOKEN"
 	}
-	if err := f.startPlatform(fc.Atespaces, egress, cfg.AX.Server, tokenEnv); err != nil {
+	var vals *pools.Values
+	if len(fc.Pools) > 0 {
+		if len(fc.Atespaces) == 0 {
+			f.cancel()
+			return nil, errors.New("fleet: the pools need workbench.fleet.atespaces, the atespaces whose Tasks the front lists")
+		}
+		// The front reads the variables that the Tasks of the pools copy
+		// once, and a missing one stops the start, not the first create.
+		v, err := pools.Resolve(fc.Pools, nil)
+		if err != nil {
+			f.cancel()
+			return nil, fmt.Errorf("fleet: %w", err)
+		}
+		vals = v
+	}
+	if err := f.startPlatform(fc.Atespaces, egress, cfg.AX.Server, tokenEnv, fc.Pools, vals); err != nil {
 		f.cancel()
 		return nil, err
 	}

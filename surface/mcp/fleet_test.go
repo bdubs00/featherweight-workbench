@@ -11,11 +11,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/pools"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -328,5 +330,38 @@ func TestWithCredential(t *testing.T) {
 	}
 	if got := fw.CredentialFrom(withCredential(context.Background(), &sdk.CallToolRequest{})); got != "" {
 		t.Errorf("no header = %q", got)
+	}
+}
+
+// poolFleet is a fake fleet that keeps pools.
+type poolFleet struct {
+	*fakeFleet
+	pools []pools.Status
+}
+
+func (f *poolFleet) Pools(context.Context) ([]pools.Status, error) { return f.pools, nil }
+
+// The fleet tool lists the pools after the members: the ready and the
+// wanted Tasks, and each reason for a gap.
+func TestFleetToolShowsPools(t *testing.T) {
+	ctx := testCtx(t)
+	fake := &poolFleet{
+		fakeFleet: &fakeFleet{name: "view", members: []fleet.Member{{Name: "view", Self: true, State: fleet.MemberLive, AccessMode: fw.AccessModeRules}}},
+		pools: []pools.Status{{Name: "triage", Atespace: "team", Agent: "triage", Intake: "fw.jobs.triage", Wanted: 3, Actual: 3, Ready: 2, CheckedAt: time.Now(),
+			Gaps: []string{"triage-1 runs an older configuration and holds the active run 01RUN, so the pool replaces it once it is idle"}}},
+	}
+	view := attach(manageAgent(t, newScript(endTurn("local")).model()), fake)
+	cs := as(t, ctx, serveAgent(t, view, nil).URL, "alice-token")
+	res := callTool(t, ctx, cs, toolFleet, map[string]any{})
+	var fl fleetResult
+	structured(t, res, &fl)
+	text := textOf(res)
+	for _, want := range []string{"1 pool of the front:", "- triage in team: 2 of 3 Tasks ready, 3 exist; agent triage on the queue fw.jobs.triage", "  - triage-1 runs an older configuration and holds the active run 01RUN"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the text has no %q: %s", want, text)
+		}
+	}
+	if res.IsError || len(fl.Pools) != 1 || fl.Pools[0].Ready != 2 {
+		t.Fatalf("fleet = %+v", fl)
 	}
 }
