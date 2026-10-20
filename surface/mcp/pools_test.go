@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -188,5 +189,77 @@ func TestAgentToolsWithPools(t *testing.T) {
 	}
 	if o, _ := pf.store.Read(ctx, "triage"); !o.Empty() {
 		t.Fatalf("the overlay after the delete = %+v", o)
+	}
+}
+
+// approve with rule writes the allow rule into the policy of the pool for
+// the owner of the profile, and then allows the call on the worker. Bob is
+// no owner, so for him nothing is written and nothing is decided.
+func TestApproveWithARule(t *testing.T) {
+	ctx := testCtx(t)
+	pf := newPooledFront(t)
+	pf.ask(t, "01RULERUN")
+	bob, alice := as(t, ctx, pf.url, "bob-token"), as(t, ctx, pf.url, "alice-token")
+	args := map[string]any{"runId": "01RULERUN", "approvalId": "01RULERUN-ask", "decision": "allow", "rule": true, "note": "every ticket is reviewed"}
+
+	if res := callTool(t, ctx, bob, toolApprove, args); !res.IsError || !strings.Contains(textOf(res), "Forbidden") || !strings.Contains(textOf(res), "Nothing is decided") {
+		t.Fatalf("approve of bob = %q", textOf(res))
+	}
+	deny := map[string]any{"runId": "01RULERUN", "approvalId": "01RULERUN-ask", "decision": "deny", "rule": true}
+	if res := callTool(t, ctx, alice, toolApprove, deny); !res.IsError {
+		t.Fatalf("a rule with deny = %q", textOf(res))
+	}
+	pf.mu.Lock()
+	n := len(pf.decided)
+	pf.mu.Unlock()
+	if o, _ := pf.store.Read(ctx, "triage"); n != 0 || !o.Empty() {
+		t.Fatalf("a refusal decided %d times or wrote %+v", n, o)
+	}
+
+	res := callTool(t, ctx, alice, toolApprove, args)
+	if res.IsError || !strings.Contains(textOf(res), "Added the rule allow tickets.create_ticket to the policy of the pool triage") {
+		t.Fatalf("approve with a rule = %q", textOf(res))
+	}
+	o, _ := pf.store.Read(ctx, "triage")
+	if len(o.Allow) != 1 || o.Allow[0].Rule != "tickets.create_ticket" || o.Allow[0].By != "alice" || o.Allow[0].Run != "01RULERUN" || o.Allow[0].Note != "every ticket is reviewed" {
+		t.Fatalf("the rule = %+v", o.Allow)
+	}
+	pf.mu.Lock()
+	defer pf.mu.Unlock()
+	if len(pf.decided) != 1 || pf.decided[0] != "team/triage-0 /v1/runs/01RULERUN/approvals/01RULERUN-ask allow" {
+		t.Fatalf("the decisions on the worker = %v", pf.decided)
+	}
+}
+
+// Without pools, approve with rule explains that a rule needs a pool and
+// decides nothing, agent_get refuses pool, and the tools work as before.
+func TestApproveRuleNeedsAPool(t *testing.T) {
+	ctx := testCtx(t)
+	var calls atomic.Int32
+	a := newAgent(t, newScript(toolUse("c1", "deploy", `{"target":"prod"}`), endTurn("done")).model(), fw.WithTools(deployTool(&calls)))
+	cs := mustConnect(t, ctx, serveAgent(t, a, nil).URL, clientSetup{})
+	r := runOf(t, callTool(t, ctx, cs, "run", map[string]any{"input": "ship it"}))
+	if r.Pending == nil {
+		t.Fatalf("run = %+v", r)
+	}
+	res := callTool(t, ctx, cs, toolApprove, map[string]any{"runId": r.ID, "approvalId": r.Pending.ID, "decision": "allow", "rule": true})
+	if !res.IsError || !strings.Contains(textOf(res), "Approval rules need a pool") {
+		t.Fatalf("approve with a rule = %q", textOf(res))
+	}
+	if now, _ := a.Get(ctx, r.ID); now.State != fw.StateInputRequired || calls.Load() != 0 {
+		t.Fatalf("the run went on: %+v", now)
+	}
+	if res := callTool(t, ctx, cs, toolAgentGet, map[string]any{"name": "default", "pool": "triage"}); !res.IsError {
+		t.Fatalf("agent_get with a pool = %q", textOf(res))
+	}
+	var list agentsResult
+	structured(t, callTool(t, ctx, cs, toolAgentsList, map[string]any{}), &list)
+	for _, ag := range list.Agents {
+		if ag.Front || ag.Pool != "" {
+			t.Fatalf("an agent without pools = %+v", ag)
+		}
+	}
+	if res := callTool(t, ctx, cs, toolApprove, map[string]any{"runId": r.ID, "approvalId": r.Pending.ID, "decision": "allow"}); res.IsError {
+		t.Fatalf("approve = %q", textOf(res))
 	}
 }

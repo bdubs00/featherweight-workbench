@@ -59,7 +59,8 @@ const (
 		"approvalId":{"type":"string","minLength":1,"description":"The id of the pending approval, from pending.id of the run object."},
 		"decision":{"type":"string","enum":["allow","deny"],"description":"allow lets the tool call run. deny refuses it."},
 		"note":{"type":"string","description":"A note for the record. The model reads it after a deny. For a free-text question, the note is the answer."},
-		"content":{"type":"object","description":"The form answers when the pending approval is a question with a schema."}
+		"content":{"type":"object","description":"The form answers when the pending approval is a question with a schema."},
+		"rule":{"type":"boolean","description":"With allow: also allow every later call of this tool for the agent, from now on. The front adds the tool to the policy of the pool whose workers run the agent, with your subject, the time, and the note. It needs the owner role on the agent and a pool."}
 	},"required":["runId","approvalId","decision"]}`
 
 	cancelSchema = `{"type":"object","properties":{"runId":` + runIDSchema + `},"required":["runId"]}`
@@ -332,6 +333,7 @@ type approveArgs struct {
 	Decision   string          `json:"decision"`
 	Note       string          `json:"note,omitempty"`
 	Content    json.RawMessage `json:"content,omitempty"`
+	Rule       bool            `json:"rule,omitempty"`
 }
 
 type sendArgs struct {
@@ -367,7 +369,7 @@ func (s *server) addWorkTools() {
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolApprove,
 		Title:       "Decide an approval",
-		Description: "Allow or deny the pending approval of a run. The run continues after the decision.",
+		Description: "Allow or deny the pending approval of a run. The run continues after the decision. With rule true, allow also adds the tool to the policy of the pool of the agent, so its workers stop asking for it.",
 		InputSchema: json.RawMessage(approveSchema),
 		Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), OpenWorldHint: ptr(true)},
 	}, s.approve)
@@ -892,6 +894,45 @@ func (s *server) elsewhere(ctx context.Context, id string, err error, call func(
 }
 
 func (s *server) approve(ctx context.Context, req *sdk.CallToolRequest, in approveArgs) (*sdk.CallToolResult, any, error) {
+	lead := ""
+	if in.Rule {
+		var res *sdk.CallToolResult
+		if lead, res = s.allowRule(withCredential(ctx, req), in); res != nil {
+			return res, nil, nil
+		}
+	}
+	res := s.approveNow(ctx, req, in)
+	if lead != "" && !res.IsError && len(res.Content) > 0 {
+		if t, ok := res.Content[0].(*sdk.TextContent); ok {
+			res.Content[0] = &sdk.TextContent{Text: lead + t.Text}
+		}
+	}
+	return res, nil, nil
+}
+
+// allowRule writes the allow rule of an approval into the policy of its
+// pool before the decision (section 14.9). It returns the first line of
+// the result, or the result of a refusal, in which case nothing is
+// decided.
+func (s *server) allowRule(ctx context.Context, in approveArgs) (string, *sdk.CallToolResult) {
+	if in.Decision != "allow" {
+		return "", errorResult("Invalid request: rule goes with the decision allow only.")
+	}
+	pool, rule, err := fleet.AllowRule(ctx, s.a, in.RunID, in.ApprovalID, in.Note)
+	switch {
+	case errors.Is(err, fleet.ErrNoPool):
+		cause := strings.TrimPrefix(err.Error(), fleet.ErrNoPool.Error()+": ")
+		return "", errorResult("Approval rules need a pool: the rule goes into the policy of the pool whose workers run the agent, and " + cause + ". Allow once instead, or add the rule to the policy in fw.yaml. Nothing is decided.")
+	case err != nil:
+		return "", errorResult(explain(err) + " Nothing is decided.")
+	}
+	s.log.Info("mcp approval rule added", "run", in.RunID, "approval", in.ApprovalID, "pool", pool, "rule", rule, "principal", subjectOf(ctx))
+	return fmt.Sprintf("Added the rule allow %s to the policy of the pool %s. The front replaces each Task of the pool once it is idle, and a worker asks again until then.\n", rule, pool), nil
+}
+
+// approveNow records the decision of an approval, on this process or on
+// the member that owns the run.
+func (s *server) approveNow(ctx context.Context, req *sdk.CallToolRequest, in approveArgs) *sdk.CallToolResult {
 	d := fw.ApprovalDecision{
 		ApprovalID: in.ApprovalID,
 		Decision:   in.Decision,
@@ -914,18 +955,18 @@ func (s *server) approve(ctx context.Context, req *sdk.CallToolRequest, in appro
 			}
 			return remoteResult(r, err)
 		}); res != nil {
-			return res, nil, nil
+			return res
 		}
 		if errors.Is(err, fw.ErrInvalidRequest) {
 			// Only the end of a connection allows a connect.
 			if r, gerr := s.a.Get(ctx, in.RunID); gerr == nil && r.Pending != nil && r.Pending.Connect != nil {
-				return errorResult(connectRefusal(r, s.base(req), err)), nil, nil
+				return errorResult(connectRefusal(r, s.base(req), err))
 			}
 		}
-		return workError("", err), nil, nil
+		return workError("", err)
 	}
 	s.log.Info("mcp approval decided", "run", in.RunID, "approval", in.ApprovalID, "decision", in.Decision, "decider", d.Decider)
-	return s.status(ctx, req, in.RunID), nil, nil
+	return s.status(ctx, req, in.RunID)
 }
 
 func (s *server) cancel(ctx context.Context, req *sdk.CallToolRequest, in runIDArgs) (*sdk.CallToolResult, any, error) {
