@@ -88,8 +88,9 @@ func TestWithOverlayMergesAndChangesTheHash(t *testing.T) {
 		t.Fatalf("the replaced profile = %+v", wc.Agents["triage"])
 	}
 	// The worker expands ${NAME} and reads $$ as one $, so the file holds
-	// the escaped text, and the skills list stays empty.
-	if h := wc.Agents["helper"]; h.System != "Use $${HOME} and $$$$5." || h.Skills == nil || len(h.Skills) != 0 {
+	// the escaped text, with a line break after a text of one line, and
+	// the skills list stays empty.
+	if h := wc.Agents["helper"]; h.System != "Use $${HOME} and $$$$5.\n" || h.Skills == nil || len(h.Skills) != 0 {
 		t.Fatalf("the added profile = %+v", h)
 	}
 	if got := merged.Profiles()["helper"].System; got != "Use ${HOME} and $$5." {
@@ -115,6 +116,25 @@ func TestWithOverlayMergesAndChangesTheHash(t *testing.T) {
 	}
 	if d := base.Decide("triage", "tickets.create_ticket", nil); d.Verdict != fw.VerdictAsk {
 		t.Fatalf("Decide before the rule = %+v", d)
+	}
+}
+
+// A prompt of one line reaches the worker with a line break at its end,
+// because the worker reads a prompt of one line as the path of a file when
+// such a file exists: an overlay never reads a file of the worker.
+func TestWithOverlayReadsNoFileOfTheWorker(t *testing.T) {
+	base := loadFixture(t, fixture)[0]
+	merged, err := base.WithOverlay(Overlay{}.WithProfile(OverlayProfile{Profile: fw.AgentProfile{
+		Name: "helper", System: "/proc/self/environ", Instructions: []string{"notes/triage.md", "Two\nlines"}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := workerOf(t, merged).Agents["helper"]
+	if h.System != "/proc/self/environ\n" || !slices.Equal(h.Instructions, []string{"notes/triage.md\n", "Two\nlines"}) {
+		t.Fatalf("the worker reads %q and %q", h.System, h.Instructions)
+	}
+	if p := merged.Profiles()["helper"]; p.System != "/proc/self/environ" || p.Instructions[0] != "notes/triage.md" {
+		t.Fatalf("Profiles = %+v", p)
 	}
 }
 

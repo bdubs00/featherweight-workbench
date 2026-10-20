@@ -266,10 +266,18 @@ func stringList(v any) []string {
 // profileMap turns a profile into the value of its key under fw.agents.
 // The worker expands ${NAME} in its fw.yaml and reads $$ as one $, so each
 // text is escaped and comes back to the worker as a person wrote it: a
-// profile never reads a variable of the worker. An empty skills list
-// means no skill, while an absent one means every skill, so the empty
-// list stays.
+// profile never reads a variable of the worker. The worker also reads a
+// system prompt or an instruction of one line as the path of a file when
+// such a file exists, so such a text gets a line break at its end: a
+// profile never reads a file of the worker, such as /proc/self/environ.
+// An empty skills list means no skill, while an absent one means every
+// skill, so the empty list stays.
 func profileMap(p fw.AgentProfile) (map[string]any, error) {
+	p.System = noPath(p.System)
+	p.Instructions = slices.Clone(p.Instructions)
+	for i, s := range p.Instructions {
+		p.Instructions[i] = noPath(s)
+	}
 	var n yaml.Node
 	if err := n.Encode(p); err != nil {
 		return nil, fmt.Errorf("encode the profile %s: %w", p.Name, err)
@@ -284,6 +292,15 @@ func profileMap(p fw.AgentProfile) (map[string]any, error) {
 		m["skills"] = []any{}
 	}
 	return m, nil
+}
+
+// noPath returns a text of one line with a line break at its end, so the
+// loader of the worker never takes it for a path.
+func noPath(s string) string {
+	if s == "" || strings.ContainsAny(s, "\n\r") {
+		return s
+	}
+	return s + "\n"
 }
 
 // escapeNode escapes the texts under n, as the profile store of the kernel
