@@ -332,7 +332,7 @@ A job waits in the intake queue of its profile until a worker takes it, and a wo
 
 The front reads the queue of every profile that it knows: the profiles of its own configuration, which is the configuration of the workers, and the profiles that the members of the view serve. The queue of the profile `<agent>` is `<workbench.fleet.intake>.<agent>`. On a NATS bus, the front opens one connection of its own to `bus.url`, with the keys `credentials` and `token` of `bus.options`, because the kernel driver does not share its connection. A server that is not reachable yet does not stop the start; the reads fail until the client connects, and the log names the first failure and the first read that works again. Each read asks the JetStream stream of `bus.options.stream`, `FW` by default, for three facts:
 
-- The durable consumers of the stream. The consumer of a queue is the consumer whose filter is the queue alone. The kernel makes one such consumer per queue, and every worker of the profile shares it. The front takes two numbers from it: pending, the jobs that no worker took yet, and ack-pending, the jobs that a worker took and did not acknowledge yet. A worker acknowledges a job when its run ends, so ack-pending counts the jobs whose runs work or wait.
+- The durable consumers of the stream. The consumer of a queue is the consumer whose filter is the queue alone. The kernel makes one such consumer per queue, and every worker of the profile shares it. The front takes two numbers from it: pending, the jobs that no worker took yet, and ack-pending, the jobs that a worker took and did not acknowledge yet. A worker acknowledges a job once the run of the job is queued in its ledger (the kernel architecture, section 9.3). So ack-pending counts only the jobs that a worker took and has not started yet, and a run that works or waits holds no job.
 - The messages that the stream stores for each subject under the intake prefix. A queue without a consumer never had a worker, so every message that the stream stores for it waits.
 - The time of the last dead letter of a queue, only when the number of dead letters changed (section 4.14).
 
@@ -353,7 +353,7 @@ The package `fleet` adds the series of the fleet to the registry of the front th
 | Metric | Type | Labels | What it counts |
 |---|---|---|---|
 | `fw_fleet_queue_pending` | gauge | `queue` | The jobs on the queue that no worker took yet |
-| `fw_fleet_queue_ack_pending` | gauge | `queue` | The jobs of the queue that a worker took and did not acknowledge yet: their runs work or wait |
+| `fw_fleet_queue_ack_pending` | gauge | `queue` | The jobs of the queue that a worker took and did not acknowledge yet: their runs are not queued yet |
 | `fw_fleet_dead_letters_total` | counter | `queue` | The dead-letter records of the queue on `<queue>.dead` |
 | `fw_fleet_dead_letter_last_timestamp_seconds` | gauge | `queue` | The Unix time of the last dead-letter record. A queue without one has no series. |
 | `fw_fleet_runs_finished_total` | counter | `agent`, `member`, `outcome` (`completed`, `failed`, `canceled`, `other`) | The runs of the workers that finished, from `fw.run.finished` on the egress stream |
@@ -1231,7 +1231,7 @@ The Agents place of the page shows one line for each pool. A caller who can view
 
 - At this version, ax keeps the variables of a Task as plain text in its store, because it has no references to Secrets. Whoever can read the Tasks on the ax API reads the static token and every value of `fromEnv`. Limit who can read the ax API.
 - Every worker shares the token of the front until each member has a token of its own. A worker can reach the front and every other worker with it.
-- A worker can take a job from the queue in the moment between the last question to the view and the delete. It then loses that run. The intake acknowledges a job only at the end of its run. So the bus delivers the job again after its ack wait, five minutes on NATS.
+- A worker can take a job from the queue in the moment between the last question to the view and the delete. The intake acknowledges a job once its run is queued in the ledger of the worker, so the bus does not deliver the job again, and the run goes with the Task. The window is the time between the last question and the delete. Until the kernel can stop the intake of a worker before a delete, scale a pool down when its queue is empty.
 - The bash tool of a worker gets each variable of `env` with a `value`. A variable with `fromEnv` stays out of it. To give a command in bash such a secret, name it in `fw.tools.bash.env` under another name, as `$${NAME}`.
 - A Workspace of a Task that the pool deleted to replace it stays until the pool creates the Task again. When the delete of a Workspace above the replica count fails, the Workspace stays. Such a Workspace is small and holds no secret.
 - A pass runs in the loop of the Task list, one call after another. A slow delete waits for Substrate, and it can hold the next read of the Task list back for up to two minutes.
