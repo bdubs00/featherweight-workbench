@@ -178,7 +178,7 @@ func (p *Pool) Overlay() Overlay { return p.overlay }
 // WithOverlay returns a copy of the pool with the overlay merged into fw:
 // each profile of the overlay is added to fw.agents or replaces the profile
 // of the same name, and each rule is added to fw.policy.allow. A policy
-// asks before it allows (the kernel architecture, section 7.2), so the
+// asks before it allows (the kernel architecture, section 7.5), so the
 // merge also removes from fw.policy.ask the entries that name the same
 // tool as a rule; an ask by a glob, a flag, or a pattern still holds. The
 // copy is rendered and checked as Load renders a pool, and its hash covers

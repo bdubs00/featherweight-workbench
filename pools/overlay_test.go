@@ -138,7 +138,7 @@ func TestWithOverlayReadsNoFileOfTheWorker(t *testing.T) {
 	}
 }
 
-// A profile that the workers could not load is an error of the merge, and
+// A profile that the workers cannot load is an error of the merge, and
 // the error names the key.
 func TestWithOverlayChecksTheMergedConfiguration(t *testing.T) {
 	base := loadFixture(t, fixture)[0]

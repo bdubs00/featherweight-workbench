@@ -91,7 +91,7 @@ func (p *platform) reconcilePools(ctx context.Context, listed map[string][]*v1al
 		if err := failed[pool.Atespace]; err != nil {
 			wait(fmt.Sprintf("the front could not list the Tasks of the atespace %s, so the pool waits: %v", pool.Atespace, err))
 		} else if merged, err := p.f.mergedPool(ctx, pool); err != nil {
-			// A pass without the overlay would take the profiles and the
+			// A pass without the overlay takes the profiles and the
 			// rules of the overlay away from every Task, so the pool waits.
 			wait(fmt.Sprintf("the pool waits: %v", err))
 		} else {

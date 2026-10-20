@@ -156,7 +156,7 @@ func PreviewIn(ctx context.Context, at Place, p fw.AgentProfile) (Draft, error) 
 }
 
 // check runs the checks of Put and Preview: the profile is normalized, the
-// place accepts it with the access block that Put saves, the caller may
+// place accepts it with the access block that Put saves, the caller can
 // create or edit it, and the configuration does not define it. It reports
 // whether the profile exists.
 func check(ctx context.Context, at Place, p *fw.AgentProfile) (bool, error) {
