@@ -87,6 +87,9 @@ func fleetOf(a *fw.Agent) *Fleet {
 	return f
 }
 
+// Pooled reports whether the fleet of a keeps pools.
+func Pooled(a *fw.Agent) bool { return fleetOf(a) != nil }
+
 // PlaceOf returns the place of the profile name for agent_put,
 // agent_delete, and the builder: the pool of the fleet of a that runs the
 // profile, else this process (agents.Local). pool names the pool, for a

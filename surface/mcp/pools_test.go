@@ -1,0 +1,192 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/pools"
+	"gopkg.in/yaml.v3"
+)
+
+// poolsBlock is a pool of one worker of the profile triage, which alice
+// owns. The policy of the workers asks before a ticket is created.
+const poolsBlock = `
+pools:
+  - name: triage
+    replicas: 1
+    image: ghcr.io/example/fw@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    egress:
+      rules:
+        - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
+    fw:
+      model: openai/some-model
+      bus: {url: "ws://nats.agents.svc.cluster.local:8080"}
+      access: {admins: ["kind:token"]}
+      policy: {default: allow, ask: [tickets.create_ticket]}
+      agents:
+        triage:
+          description: Sorts new tickets.
+          access: {owners: [alice]}
+`
+
+// pooledFront is a front with the pool of poolsBlock. The ax API does not
+// answer, so no pass runs, and the router is a test server that plays the
+// worker team/triage-0 for a decision and records it. The overlays live in
+// memory.
+type pooledFront struct {
+	url     string
+	bus     fw.Bus
+	fleet   *fleet.Fleet
+	store   *pools.MemOverlays
+	mu      sync.Mutex
+	decided []string // "<actor> <path> <decision>"
+}
+
+func newPooledFront(t *testing.T) *pooledFront {
+	t.Helper()
+	t.Setenv("FW_API_TOKEN", "fleet-secret-token")
+	ctx := testCtx(t)
+	pf := &pooledFront{bus: fw.NewMemBus(), store: pools.NewMemOverlays()}
+	old := fleet.OpenOverlays
+	fleet.OpenOverlays = func(context.Context, *fw.Config, *slog.Logger) (pools.OverlayStore, func(), error) {
+		return pf.store, nil, nil
+	}
+	t.Cleanup(func() { fleet.OpenOverlays = old })
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.Contains(r.URL.Path, "/approvals/") {
+			http.Error(w, "unexpected", http.StatusNotFound)
+			return
+		}
+		var body struct {
+			Decision string `json:"decision"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &body)
+		pf.mu.Lock()
+		pf.decided = append(pf.decided, r.Header.Get("ate-target-actor")+" "+r.URL.Path+" "+body.Decision)
+		pf.mu.Unlock()
+		id := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/runs/"), "/")[0]
+		_ = json.NewEncoder(w).Encode(fw.Run{ID: id, Agent: "triage", State: fw.StateRunning})
+	}))
+	t.Cleanup(router.Close)
+
+	cfg := testConfig(t)
+	cfg.Agents = map[string]fw.AgentProfile{"default": {}}
+	cfg.Bus.Driver, cfg.Bus.URL = "nats", "nats://nats.agents.svc.cluster.local:4222"
+	cfg.AX.Server, cfg.AX.Router = "127.0.0.1:1", strings.TrimPrefix(router.URL, "http://")
+	var n yaml.Node
+	if err := yaml.Unmarshal([]byte(poolsBlock), &n); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Extensions = map[string]yaml.Node{fleet.Block: *n.Content[0]}
+	front := newAgent(t, newScript().model(), fw.WithConfig(cfg), fw.WithBus(pf.bus), fw.WithAuthn(people))
+	off := time.Duration(0)
+	fc := fleet.Config{Name: "front", Egress: "fw.events", Atespaces: []string{"team"}, Interval: time.Hour, Expire: fleet.DefaultExpire, SuspendAfter: &off}
+	list, err := fleet.LoadPools(cfg, fc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc.Pools = list
+	f, err := fleet.Open(ctx, front, fc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	attach(front, f)
+	pf.fleet, pf.url = f, serveAgent(t, front, nil).URL
+	return pf
+}
+
+// ask puts a run of triage on the worker team/triage-0 that waits for an
+// approval of tickets.create_ticket, as the egress stream of the worker
+// tells it, and waits until the view holds it.
+func (pf *pooledFront) ask(t *testing.T, id string) {
+	t.Helper()
+	ctx := testCtx(t)
+	for i, ev := range []egressEvent{
+		{fw.EvRunQueued, fw.RunQueuedData{Agent: "triage", Input: "sort T-1", Origin: fw.OriginBus, Principal: "alice"}},
+		{fw.EvApprovalRequested, fw.ApprovalRequestedData{ApprovalID: id + "-ask", Tool: "tickets.create_ticket", CallID: "c1", Input: json.RawMessage(`{"title":"T-1"}`), Reason: "rule: ask tickets.create_ticket"}},
+	} {
+		e := fw.MustEvent(id, ev.typ, ev.data)
+		e.Seq, e.Node, e.Source = uint64(i+1), "ax:team/triage-0", "fw://team/triage-0/"+id
+		if err := pf.bus.Publish(ctx, "fw.events.team.triage-0."+ev.typ, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if r, err := pf.fleet.Run(context.Background(), id); err == nil && r.Pending != nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the view does not hold the run %s", id)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// With pools, the agent tools read and write the profiles that the workers
+// of a pool run: agents_list and agent_get name the pool and the policy of
+// the workers, agent_put and agent_delete change the overlay of the pool
+// for its owner only, and a profile of the front stays marked as such.
+func TestAgentToolsWithPools(t *testing.T) {
+	ctx := testCtx(t)
+	pf := newPooledFront(t)
+	alice, bob := as(t, ctx, pf.url, "alice-token"), as(t, ctx, pf.url, "bob-token")
+
+	var list agentsResult
+	structured(t, callTool(t, ctx, alice, toolAgentsList, map[string]any{}), &list)
+	if len(list.Agents) != 2 || list.Agents[0].Name != "triage" || list.Agents[0].Pool != "triage" || list.Agents[0].Role != "owner" ||
+		list.Agents[1].Name != "default" || !list.Agents[1].Front {
+		t.Fatalf("agents_list = %+v", list.Agents)
+	}
+	res := callTool(t, ctx, alice, toolAgentGet, map[string]any{"name": "triage"})
+	if text := textOf(res); res.IsError || !strings.Contains(text, "in the pool triage") || !strings.Contains(text, "asks first for tickets.create_ticket") {
+		t.Fatalf("agent_get = %q", text)
+	}
+	if res := callTool(t, ctx, bob, toolAgentGet, map[string]any{"name": "triage", "pool": "nope"}); !res.IsError {
+		t.Fatalf("agent_get in an unknown pool = %q", textOf(res))
+	}
+
+	if res := callTool(t, ctx, bob, toolAgentPut, map[string]any{"name": "triage", "system": "Take over."}); !res.IsError || !strings.Contains(textOf(res), "Forbidden") {
+		t.Fatalf("agent_put of bob = %q", textOf(res))
+	}
+	res = callTool(t, ctx, alice, toolAgentPut, map[string]any{"name": "triage", "description": "Sorts every ticket.", "dryRun": true})
+	if res.IsError || !strings.Contains(textOf(res), "Checked the agent profile triage in the pool triage") {
+		t.Fatalf("a dry run = %q", textOf(res))
+	}
+	if o, _ := pf.store.Read(ctx, "triage"); !o.Empty() {
+		t.Fatalf("a dry run wrote the overlay: %+v", o)
+	}
+	res = callTool(t, ctx, alice, toolAgentPut, map[string]any{"name": "triage", "description": "Sorts every ticket."})
+	if res.IsError || !strings.Contains(textOf(res), "Replaced the agent profile triage in the pool triage") {
+		t.Fatalf("agent_put = %q", textOf(res))
+	}
+	var got agentResult
+	structured(t, res, &got)
+	if got.Agent.Pool != "triage" || got.Agent.Overlay != fleet.OverlayReplaced || got.Agent.By != "alice" || got.Agent.Description != "Sorts every ticket." {
+		t.Fatalf("the saved agent = %+v", got.Agent)
+	}
+	if o, _ := pf.store.Read(ctx, "triage"); len(o.Profiles) != 1 || o.Profiles[0].By != "alice" {
+		t.Fatalf("the overlay = %+v", o)
+	}
+	if res := callTool(t, ctx, alice, toolAgentPut, map[string]any{"name": "newbie"}); !res.IsError || !strings.Contains(textOf(res), "triage (agent triage)") {
+		t.Fatalf("agent_put of a new name = %q", textOf(res))
+	}
+	if res := callTool(t, ctx, alice, toolAgentDelete, map[string]any{"name": "triage"}); res.IsError || !strings.Contains(textOf(res), "the pool triage") {
+		t.Fatalf("agent_delete = %q", textOf(res))
+	}
+	if o, _ := pf.store.Read(ctx, "triage"); !o.Empty() {
+		t.Fatalf("the overlay after the delete = %+v", o)
+	}
+}

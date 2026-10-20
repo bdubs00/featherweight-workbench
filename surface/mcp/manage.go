@@ -70,7 +70,9 @@ const (
 
 	agentNameSchema = `{"type":"string","minLength":1,"maxLength":64,"description":"The name of the agent profile."}`
 
-	agentGetSchema = `{"type":"object","properties":{"name":` + agentNameSchema + `},"required":["name"]}`
+	poolArgSchema = `{"type":"string","minLength":1,"description":"With pools only: the pool whose workers run the profile, when several pools run it, or the pool that gets a new profile. The fleet tool lists the pools."}`
+
+	agentGetSchema = `{"type":"object","properties":{"name":` + agentNameSchema + `,"pool":` + poolArgSchema + `},"required":["name"]}`
 
 	runsListProps = `
 		"agent":{"type":"string","description":"Only the runs of this agent profile."},
@@ -170,6 +172,7 @@ func agentPutSchema() json.RawMessage {
 	}
 	schema["properties"].(map[string]any)["dryRun"] = map[string]any{"type": "boolean",
 		"description": "true checks the profile and says in plain words what the agent can do, and saves nothing."}
+	schema["properties"].(map[string]any)["pool"] = json.RawMessage(poolArgSchema)
 	b, _ := json.Marshal(schema)
 	return b
 }
@@ -178,6 +181,7 @@ func agentPutSchema() json.RawMessage {
 type (
 	agentNameArgs struct {
 		Name string `json:"name"`
+		Pool string `json:"pool,omitempty"`
 	}
 	agentPutArgs struct {
 		profileArgs
@@ -185,6 +189,7 @@ type (
 		Description string     `json:"description,omitempty"`
 		Access      *fw.Access `json:"access,omitempty"`
 		DryRun      bool       `json:"dryRun,omitempty"`
+		Pool        string     `json:"pool,omitempty"`
 	}
 	runsListArgs struct {
 		Agent     string `json:"agent,omitempty"`
@@ -217,14 +222,16 @@ type (
 		View string `json:"view"`
 		dashboard.Whoami
 	}
+	// With pools, each agent of agentsResult and agentResult names its
+	// pool, or carries front for a profile of this process (section 14.9).
 	agentsResult struct {
-		View   string           `json:"view"`
-		Agents []view.AgentView `json:"agents"`
+		View   string            `json:"view"`
+		Agents []fleet.PoolAgent `json:"agents"`
 	}
 	agentResult struct {
-		View    string         `json:"view"`
-		Agent   view.AgentView `json:"agent"`
-		Created bool           `json:"created,omitempty"`
+		View    string          `json:"view"`
+		Agent   fleet.PoolAgent `json:"agent"`
+		Created bool            `json:"created,omitempty"`
 	}
 	draftResult struct {
 		View  string       `json:"view"`
@@ -284,28 +291,28 @@ func (s *server) addManageTools() {
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolAgentsList,
 		Title:       "List agents",
-		Description: "List the agent profiles that the caller can view, with the description, the model, the tools, the skills, the access lists, and the role of the caller.",
+		Description: "List the agent profiles that the caller can view, with the description, the model, the tools, the skills, the access lists, and the role of the caller. With pools, the list holds the profiles that the workers of each pool run, each with its pool, and the profiles of this process, marked front.",
 		InputSchema: json.RawMessage(emptySchema),
 		Annotations: readOnly(),
 	}, s.agentsList)
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolAgentGet,
 		Title:       "Get an agent",
-		Description: "Return one agent profile in full, with the role of the caller and what the agent can do in plain words.",
+		Description: "Return one agent profile in full, with the role of the caller and what the agent can do in plain words. With pools, it returns the profile that the workers of the pool run, with the policy of the workers; pass pool when several pools run it.",
 		InputSchema: json.RawMessage(agentGetSchema),
 		Annotations: readOnly(),
 	}, s.agentGet)
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolAgentPut,
 		Title:       "Create or replace an agent",
-		Description: "Create an agent profile, or replace the one with that name. The arguments mirror the profile: name, description, system, instructions, skills, tools, model, effort, timeZone, policy, budget, and access. Creating needs the creator role, and replacing needs the owner role on the agent. Without access, a new profile gets the caller as its owner, and a replaced profile keeps the access block it has.",
+		Description: "Create an agent profile, or replace the one with that name. The arguments mirror the profile: name, description, system, instructions, skills, tools, model, effort, timeZone, policy, budget, and access. Creating needs the creator role, and replacing needs the owner role on the agent. Without access, a new profile gets the caller as its owner, and a replaced profile keeps the access block it has. With pools, the profile goes to the pool whose workers run it, or to the pool that pool names, and every worker of the pool takes it.",
 		InputSchema: agentPutSchema(),
 		Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, s.agentPut)
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolAgentDelete,
 		Title:       "Delete an agent",
-		Description: "Remove an agent profile. It needs the owner role on the agent. The runs of the agent stay in the ledger.",
+		Description: "Remove an agent profile. It needs the owner role on the agent. The runs of the agent stay in the ledger. With pools, it removes what the front added to the pool; a profile of the configuration of the pool stays.",
 		InputSchema: json.RawMessage(agentGetSchema),
 		Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, s.agentDelete)
@@ -436,9 +443,20 @@ func (s *server) whoami(ctx context.Context, _ *sdk.CallToolRequest, _ struct{})
 }
 
 func (s *server) agentsList(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
-	agents, err := view.Agents(ctx, s.a)
+	own, err := view.Agents(ctx, s.a)
 	if err != nil {
 		return failResult(err), nil, nil
+	}
+	list, pooled, err := fleet.PoolAgents(ctx, s.a)
+	if err != nil {
+		return failResult(err), nil, nil
+	}
+	// With pools, the profiles of this process come after the profiles
+	// that the workers run, marked as the profiles of the front.
+	agents := make([]fleet.PoolAgent, 0, len(list)+len(own))
+	agents = append(agents, list...)
+	for _, v := range own {
+		agents = append(agents, fleet.PoolAgent{AgentView: v, Front: pooled})
 	}
 	var b strings.Builder
 	if len(agents) == 0 {
@@ -452,10 +470,19 @@ func (s *server) agentsList(ctx context.Context, _ *sdk.CallToolRequest, _ struc
 	return result(strings.TrimRight(b.String(), "\n"), agentsResult{View: viewAgents, Agents: agents}), nil, nil
 }
 
-// agentLine is one profile on one line, with the role and the usage.
-func agentLine(v view.AgentView) string {
+// agentLine is one profile on one line, with the role and the usage, and
+// with pools its place: the pool and the overlay state, or the front.
+func agentLine(v fleet.PoolAgent) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "- %s (you are %s)", v.Name, roleWord(v.Role))
+	switch {
+	case v.Pool != "" && v.Overlay != "":
+		fmt.Fprintf(&b, " in the pool %s, %s by the front%s", v.Pool, v.Overlay, byWhom(v))
+	case v.Pool != "":
+		fmt.Fprintf(&b, " in the pool %s", v.Pool)
+	case v.Front:
+		b.WriteString(" on the front only, which no worker of a pool runs")
+	}
 	if v.Description != "" {
 		b.WriteString(": " + v.Description)
 	}
@@ -481,19 +508,54 @@ func roleWord(role string) string {
 }
 
 func (s *server) agentGet(ctx context.Context, _ *sdk.CallToolRequest, in agentNameArgs) (*sdk.CallToolResult, any, error) {
-	v, err := view.Agent(ctx, s.a, in.Name)
+	v, err := s.agentNamed(ctx, in.Name, in.Pool)
 	if err != nil {
 		return failResult(err), nil, nil
 	}
 	return result(agentText(v), agentResult{View: viewAgent, Agent: v}), nil, nil
 }
 
+// agentNamed returns one profile as the caller sees it. With pools, it is
+// the profile that the workers of a pool run, else the profile of this
+// process, marked as the profile of the front.
+func (s *server) agentNamed(ctx context.Context, name, pool string) (fleet.PoolAgent, error) {
+	pa, found, err := fleet.PoolAgentNamed(ctx, s.a, name, strings.TrimSpace(pool))
+	if err != nil || found {
+		return pa, err
+	}
+	pooled := fleet.Pooled(s.a)
+	switch {
+	case pool != "" && pooled:
+		return fleet.PoolAgent{}, fmt.Errorf("%w: %s in the pool %s", fw.ErrProfileNotFound, name, pool)
+	case pool != "":
+		return fleet.PoolAgent{}, fmt.Errorf("%w: this process keeps no pool, so leave out pool", fw.ErrInvalidRequest)
+	}
+	v, err := view.Agent(ctx, s.a, name)
+	return fleet.PoolAgent{AgentView: v, Front: pooled}, err
+}
+
+// byWhom says who wrote the overlay entry of a profile, and when.
+func byWhom(v fleet.PoolAgent) string {
+	var out string
+	if v.By != "" {
+		out += " for " + v.By
+	}
+	if v.At != nil {
+		out += " on " + v.At.UTC().Format(time.RFC3339)
+	}
+	return out
+}
+
 // agentText is a profile as text: the summary line, what the agent can do
-// in plain words, then the profile as indented JSON.
-func agentText(v view.AgentView) string {
+// in plain words, the policy of the workers of its pool, then the profile
+// as indented JSON.
+func agentText(v fleet.PoolAgent) string {
 	head := agentLine(v)
 	if t := view.AbilityText(v.Abilities); t != "" {
 		head += t + "\n"
+	}
+	if v.WorkerPolicy != nil {
+		head += "The workers of the pool decide each call by fw.policy of the pool, which the policy of the profile can only tighten: " + rulesText(*v.WorkerPolicy) + "\n"
 	}
 	if v.Locked {
 		head += "The configuration defines this agent, so change it there.\n"
@@ -511,8 +573,13 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 		return errorResult("Invalid request: " + err.Error() + "."), nil, nil
 	}
 	p.Name, p.Description, p.Access = in.Name, in.Description, in.Access
+	at, err := fleet.PlaceOf(ctx, s.a, p.Name, in.Pool)
+	if err != nil {
+		return failResult(err), nil, nil
+	}
+	pool := fleet.PoolOf(at)
 	if in.DryRun {
-		d, err := agents.Preview(ctx, s.a, p)
+		d, err := agents.PreviewIn(ctx, at, p)
 		if err != nil {
 			return failResult(err), nil, nil
 		}
@@ -520,28 +587,71 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 		if d.Exists {
 			verb = "replace"
 		}
-		text := fmt.Sprintf("Checked the agent profile %s. Saving it would %s the agent. Nothing is saved.\n%s", d.Name, verb, agentText(d.AgentView))
+		where := ""
+		if pool != "" {
+			where = " in the pool " + pool
+		}
+		text := fmt.Sprintf("Checked the agent profile %s%s. Saving it would %s the agent. Nothing is saved.\n%s", d.Name, where, verb, agentText(fleet.PoolAgent{AgentView: d.AgentView, Pool: pool}))
 		return result(text, draftResult{View: viewDraft, Draft: d}), nil, nil
 	}
-	v, created, err := agents.Put(ctx, s.a, p)
+	saved, created, err := agents.PutIn(ctx, s.a, at, p)
 	if err != nil {
 		return failResult(err), nil, nil
+	}
+	v := fleet.PoolAgent{AgentView: saved, Pool: pool}
+	if pool != "" {
+		if pa, ok, err := fleet.PoolAgentNamed(ctx, s.a, saved.Name, pool); err == nil && ok {
+			v = pa
+		}
 	}
 	verb := "Replaced"
 	if created {
 		verb = "Created"
 	}
-	s.log.Info("mcp profile saved", "profile", v.Name, "created", created, "principal", subjectOf(ctx))
-	text := fmt.Sprintf("%s the agent profile %s.\n%s", verb, v.Name, agentText(v))
-	return result(text, agentResult{View: viewAgent, Agent: v, Created: created}), nil, nil
+	s.log.Info("mcp profile saved", "profile", v.Name, "created", created, "pool", pool, "principal", subjectOf(ctx))
+	text := fmt.Sprintf("%s the agent profile %s.\n", verb, v.Name)
+	if pool != "" {
+		text = fmt.Sprintf("%s the agent profile %s in the pool %s. The front replaces each Task of the pool once it is idle, so each worker takes the profile at its next start.\n", verb, v.Name, pool)
+	}
+	return result(text+agentText(v), agentResult{View: viewAgent, Agent: v, Created: created}), nil, nil
 }
 
 func (s *server) agentDelete(ctx context.Context, _ *sdk.CallToolRequest, in agentNameArgs) (*sdk.CallToolResult, any, error) {
-	if err := agents.Delete(ctx, s.a, in.Name); err != nil {
+	at, err := fleet.PlaceOf(ctx, s.a, in.Name, in.Pool)
+	if err != nil {
 		return failResult(err), nil, nil
 	}
-	s.log.Info("mcp profile deleted", "profile", in.Name, "principal", subjectOf(ctx))
-	return result(fmt.Sprintf("Deleted the agent profile %s. Its runs stay in the ledger.", in.Name), deletedResult{View: viewAgents, Deleted: in.Name}), nil, nil
+	if err := agents.DeleteIn(ctx, s.a, at, in.Name); err != nil {
+		return failResult(err), nil, nil
+	}
+	pool := fleet.PoolOf(at)
+	s.log.Info("mcp profile deleted", "profile", in.Name, "pool", pool, "principal", subjectOf(ctx))
+	text := fmt.Sprintf("Deleted the agent profile %s. Its runs stay in the ledger.", in.Name)
+	if pool != "" {
+		text = fmt.Sprintf("Removed the agent profile %s from what the front adds to the pool %s. Each worker of the pool runs the configuration of the pool again after the front replaces its Task. Its runs stay in the ledgers.", in.Name, pool)
+	}
+	return result(text, deletedResult{View: viewAgents, Deleted: in.Name}), nil, nil
+}
+
+// rulesText words a policy in one line: its default and its lists.
+func rulesText(r fw.Rules) string {
+	def := r.Default
+	if def == "" {
+		def = "allow"
+	}
+	parts := []string{"by default " + def}
+	for _, l := range []struct {
+		lead string
+		list []string
+	}{{"asks first for ", r.Ask}, {"never runs ", r.Deny}, {"allows ", r.Allow}} {
+		if len(l.list) > 0 {
+			parts = append(parts, l.lead+strings.Join(l.list, ", "))
+		}
+	}
+	if len(r.All) > 0 {
+		parts = append(parts, fmt.Sprintf("and %d more clauses, all of which must allow a call", len(r.All)))
+	}
+	return strings.Join(parts, "; ") + "."
 }
 
 func (s *server) runsList(ctx context.Context, req *sdk.CallToolRequest, in runsListArgs) (*sdk.CallToolResult, any, error) {
@@ -795,11 +905,11 @@ func (s *server) dashboard(ctx context.Context, req *sdk.CallToolRequest, in das
 	var b strings.Builder
 	switch which {
 	case viewAgent:
-		v, err := view.Agent(ctx, s.a, in.Agent)
+		v, err := s.agentNamed(ctx, in.Agent, "")
 		if err != nil {
 			return failResult(err), nil, nil
 		}
-		out.Agent = &v
+		out.Agent = &v.AgentView
 		b.WriteString("At a glance: " + out.Glance.Sentence + "\n\n")
 		b.WriteString(agentText(v))
 	case viewRun:
