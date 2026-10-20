@@ -7,7 +7,9 @@
 // through the relay of the native surface (native.Relay), forwards an
 // action to the Task that owns the run through the atenet router
 // (forward.go), puts the pieces of a job on the intake queues of the
-// workers (enqueue.go), and suspends the Tasks that idle (suspend.go). The
+// workers (enqueue.go), reads the depth of those queues and wakes the Tasks
+// for the jobs that wait (queues.go), and suspends the Tasks that idle
+// (suspend.go). The
 // kernel knows no fleet, and a worker publishes nothing about itself: it
 // is a bare kernel, and the platforms keep the state.
 package fleet
@@ -82,6 +84,10 @@ type Fleet struct {
 	suspendAfter time.Duration
 	router       string
 	client       *http.Client
+	// intake is the prefix of the intake queues, and wakeOnQueue turns
+	// the wake on queue depth on (queues.go).
+	intake      string
+	wakeOnQueue bool
 
 	ctx    context.Context // ends at Close; the sources live in it
 	cancel context.CancelFunc
@@ -93,6 +99,11 @@ type Fleet struct {
 
 	// The members that the platforms know (platform.go).
 	platform *platform
+
+	// The intake queues (queues.go), and the end of the connection to
+	// the server of the bus (nats.go).
+	queues      *queues
+	closeServer func()
 }
 
 // Open builds the fleet of an agent from a configuration that Load filled
@@ -126,6 +137,8 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 		f.expire = DefaultExpire
 	}
 	f.suspendAfter = fc.suspendAfter()
+	f.intake = strings.TrimSpace(fc.Intake)
+	f.wakeOnQueue = fc.wakeOnQueue() && f.intake != "" && len(fc.Atespaces) > 0
 	if _, ok := f.bus.(*fw.MemBus); ok && egress != "" {
 		f.log.Warn("the fleet reads the egress stream on the mem bus, which reaches this process only; set bus.driver to nats or redis", "egress", egress)
 	}
@@ -138,6 +151,17 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 		f.cancel()
 		return nil, err
 	}
+	var src queueSource
+	if f.intake != "" {
+		var err error
+		src, f.closeServer, err = openBusServer(ctx, cfg, f.log)
+		if err != nil {
+			// The front still sends jobs; it reads no queue.
+			f.log.Warn("fleet: open the server of the bus; the front reads no intake queue", "error", err)
+			src, f.closeServer = nil, nil
+		}
+	}
+	f.startQueues(src)
 	return f, nil
 }
 
@@ -164,6 +188,9 @@ func (f *Fleet) Close() error {
 		f.closePlatform()
 		f.viewMu.Unlock()
 		f.cancel()
+		if f.closeServer != nil {
+			f.closeServer()
+		}
 		f.client.CloseIdleConnections()
 	})
 	return nil

@@ -102,6 +102,11 @@ type platformMember struct {
 	// resuming is true while a ResumeTask call runs for the member
 	// (suspend.go), so a burst of requests makes one call.
 	resuming bool
+	// waking is true while a wake for a job runs for the member, and
+	// wokeAt is when the last one started (suspend.go), so the front
+	// sends one wake at a time and gives a woken Task time to take a job.
+	waking bool
+	wokeAt time.Time
 	// liveSince is when the phase of the Task last became Running; the
 	// suspend controller counts idle time from it when the member has
 	// no run (suspend.go).
