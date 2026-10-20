@@ -344,7 +344,7 @@ func TestListTools(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	slices.Sort(names)
-	if strings.Join(names, ",") != "agent_builder,agent_delete,agent_get,agent_put,agents_list,approve,cancel,capabilities,dashboard,fork,run,run_events,run_file,run_result,run_status,runs_list,send,usage,whoami" {
+	if strings.Join(names, ",") != "agent_builder,agent_delete,agent_get,agent_put,agents_list,approve,cancel,capabilities,dashboard,fork,run,run_budget,run_events,run_file,run_result,run_status,runs_list,send,usage,whoami" {
 		t.Fatalf("tools = %v", names)
 	}
 	destructive := func(name string) bool {
