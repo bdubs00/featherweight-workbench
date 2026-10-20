@@ -259,6 +259,16 @@ func problemOf(member string, status int, b []byte) *memberError {
 	return &memberError{member: member, status: status, detail: truncate(detail, 500)}
 }
 
+// memberErr gives an error answer of a read through fleet.ReadJSON the
+// text of the other requests to a member (memberError).
+func memberErr(err error) error {
+	var me *fleet.MemberError
+	if errors.As(err, &me) {
+		return &memberError{member: me.Member, status: me.Status, detail: me.Detail}
+	}
+	return err
+}
+
 // memberRun calls a run route of a member and returns the run object with
 // its member.
 func (s *server) memberRun(ctx context.Context, member, method, path string, body any, idemKey string) (*fw.Run, error) {
@@ -381,5 +391,5 @@ func fleetInstructions(a *fw.Agent) string {
 	if f == nil {
 		return ""
 	}
-	return fmt.Sprintf("\n\nFleet: this process is the member %s of a fleet of fw processes that share one bus. The fleet tool lists the members. runs_list lists the runs of every member; scope local keeps the runs of this process, and member keeps the runs of one member. run_status, run_events, run_result, run_file, approve, cancel, and send act on a run of any member by its id: the request goes to the member that owns the run with your credential, and that member decides. agent_builder with fromRun starts the builder on the member that owns the run. run with member starts a run on another member and returns at once. The resources fw://runs/{id} read the runs of this process only.", f.Name())
+	return fmt.Sprintf("\n\nFleet: this process is the member %s of a fleet of fw processes that share one bus. The fleet tool lists the members. runs_list lists the runs of every member; scope local keeps the runs of this process, and member keeps the runs of one member. run_status, run_events, run_result, run_file, approve, cancel, and send act on a run of any member by its id: the request goes to the member that owns the run with your credential, and that member decides. agent_builder with fromRun reads the run from the member that owns it and starts the builder in this process. run with member starts a run on another member and returns at once. The resources fw://runs/{id} read the runs of this process only.", f.Name())
 }

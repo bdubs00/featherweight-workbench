@@ -352,7 +352,10 @@ func TestBuilderAttachments(t *testing.T) {
 	}
 }
 
-func TestBuilderReachesTheOwner(t *testing.T) {
+// A worker serves the native API of the kernel alone, so a fromRun of
+// another member reads the run and its events from that member, with the
+// credential of the caller, and the builder runs in the view.
+func TestBuilderReadsTheOwner(t *testing.T) {
 	p := newFleetPair(t, builderAccess)
 	// Only a completed run becomes an agent, so alice allows the call that
 	// the remote run waits for first.
@@ -364,18 +367,32 @@ func TestBuilderReachesTheOwner(t *testing.T) {
 	before := len(p.fleet.forwarded())
 	resp, b = do(t, "POST", p.viewURL+"/v1/builder", `{"fromRun":"`+p.remote.ID+`"}`, "Authorization", asAlice)
 	r := decodeRun(t, resp, b, http.StatusCreated)
-	if r.Member != "owner" || r.Metadata[dashboard.ViewKey] != dashboard.ViewBuilder || !strings.Contains(r.Input, "clean up") {
-		t.Fatalf("remote builder run = %s", b)
+	if r.Member != "" || r.Metadata[dashboard.ViewKey] != dashboard.ViewBuilder || !strings.Contains(r.Input, "clean up") || !strings.Contains(r.Input, "rm") {
+		t.Fatalf("builder run from a remote run = %s", b)
 	}
-	if h := p.fleet.forwarded(); len(h) != before+1 || h[len(h)-1].Get("Authorization") != asAlice {
-		t.Fatalf("forwarded = %v", h)
+	h := p.fleet.forwarded()
+	if len(h) < before+2 {
+		t.Fatalf("forwarded %d requests, want the run and its events", len(h)-before)
 	}
-	if _, err := p.owner.Get(testCtx(t), r.ID); err != nil {
-		t.Fatalf("the owner has no builder run: %v", err)
+	for _, f := range h[before:] {
+		if f.Get("Authorization") != asAlice {
+			t.Fatalf("forwarded = %v", f)
+		}
+	}
+	if _, err := p.view.Get(testCtx(t), r.ID); err != nil {
+		t.Fatalf("the view has no builder run: %v", err)
+	}
+	if _, err := p.owner.Get(testCtx(t), r.ID); err == nil {
+		t.Fatal("the builder ran on the owner")
+	}
+	// Bob did not start the remote run, so he cannot turn it into an agent.
+	resp, b = do(t, "POST", p.viewURL+"/v1/builder", `{"fromRun":"`+p.remote.ID+`"}`, "Authorization", asBob)
+	if pr := decodeProblem(t, resp, b, http.StatusForbidden); !strings.Contains(pr.Detail, "only the person who started") {
+		t.Fatalf("bob turns the run of alice into an agent: %s", b)
 	}
 	// A run of this process stays here.
 	resp, b = do(t, "POST", p.viewURL+"/v1/builder", `{"fromRun":"`+p.local.ID+`"}`, "Authorization", asAlice)
-	if r := decodeRun(t, resp, b, http.StatusCreated); r.Member != "" || len(p.fleet.forwarded()) != before+1 {
+	if r := decodeRun(t, resp, b, http.StatusCreated); r.Member != "" {
 		t.Fatalf("local builder run = %s", b)
 	}
 }

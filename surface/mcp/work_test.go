@@ -250,55 +250,89 @@ func (o *fakeOwner) last() (path, body, auth string) {
 	return o.paths[n], o.bodies[n], o.auth[n]
 }
 
-func TestRunResultAndBuilderReachTheOwner(t *testing.T) {
+// remoteLedger is the ledger of a completed run of reviewer on a worker:
+// alice asked to clean up, the model removed a file with rm, and the run
+// answered done there.
+func remoteLedger(id, principal string) (*fw.Run, []fw.Event) {
+	run := &fw.Run{ID: id, Agent: "reviewer", State: fw.StateCompleted, Principal: principal, Input: "clean up", Output: "done there", Seq: 5, Origin: fw.OriginBus}
+	evs := []fw.Event{
+		fw.MustEvent("", fw.EvRunQueued, fw.RunQueuedData{Agent: "reviewer", Input: "clean up", Origin: fw.OriginBus, Principal: principal}),
+		fw.MustEvent("", fw.EvRunStarted, fw.RunStartedData{Model: "fake/m"}),
+		fw.MustEvent("", fw.EvTurnStarted, fw.TurnData{Turn: 1}),
+		fw.MustEvent("", fw.EvModelResponded, fw.ModelRespondedData{Content: []fw.Block{fw.Text("done there"), {Type: fw.BlockToolUse, ID: "c1", Name: "rm", Input: []byte(`{"path":"x"}`)}}}),
+		fw.MustEvent("", fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "done there"}),
+	}
+	for i := range evs {
+		evs[i].Subject, evs[i].Seq = id, uint64(i+1)
+	}
+	return run, evs
+}
+
+// A worker serves the native API of the kernel alone. run_result builds the
+// result of its run from the run and the events that the worker serves,
+// and agent_builder builds the first message of the builder the same way
+// and starts the builder here; neither asks the worker for a route that
+// only the workbench serves.
+func TestRunResultAndBuilderReadTheOwner(t *testing.T) {
 	ctx := testCtx(t)
-	remote := &fw.Run{ID: "01REMOTE", Agent: "reviewer", State: fw.StateCompleted, Principal: "alice"}
-	canned := dashboard.Result{RunID: remote.ID, Title: "Fix checkout retries", Agent: "reviewer", Status: dashboard.StatusReady, Summary: "done there"}
-	builder := fw.Run{ID: "01BUILDER", Agent: "default", State: fw.StateQueued, Metadata: map[string]string{dashboard.ViewKey: dashboard.ViewBuilder}}
+	remote, events := remoteLedger("01REMOTE", "alice")
+	other, otherEvents := remoteLedger("01OTHER", "bob")
 	owner := &fakeOwner{}
 	srv := owner.serve(t, map[string]any{
-		"GET /v1/runs/01REMOTE/result": canned,
-		"POST /v1/builder":             builder,
-		"GET /v1/runs/01GONE/result":   http.StatusNotFound,
+		"GET /v1/runs/01REMOTE/events": map[string]any{"run": remote, "events": events},
+		"GET /v1/runs/01REMOTE":        remote,
+		"GET /v1/runs/01OTHER":         other,
+		"GET /v1/runs/01OTHER/events":  map[string]any{"run": other, "events": otherEvents},
+		"GET /v1/runs/01GONE/events":   http.StatusNotFound,
 	})
 	fake := &fakeFleet{name: "view", owner: srv.URL, members: []fleet.Member{
 		{Name: "view", Self: true, State: fleet.MemberLive, AccessMode: fw.AccessModeRules},
 		{Name: "owner", State: fleet.MemberLive, CanForward: true, AccessMode: fw.AccessModeRules},
 	}}
-	fake.set(remote, &fw.Run{ID: "01GONE", Agent: "reviewer", State: fw.StateCompleted})
-	view := attach(manageAgent(t, newScript().model()), fake)
+	fake.set(remote, other, &fw.Run{ID: "01GONE", Agent: "reviewer", State: fw.StateCompleted})
+	builderAccess := fw.WithProfile(fw.AgentProfile{Name: "default", Access: &fw.Access{Operators: []string{"alice"}}})
+	view := attach(manageAgent(t, newScript().model(), builderAccess), fake)
 	cs := as(t, ctx, serveAgent(t, view, nil).URL, "alice-token")
 
 	res := callTool(t, ctx, cs, toolRunResult, map[string]any{"runId": remote.ID})
 	var got resultView
 	structured(t, res, &got)
-	if res.IsError || got.View != viewResult || got.Result.RunID != remote.ID || got.Result.Summary != "done there" || got.Result.Title != canned.Title {
+	if res.IsError || got.View != viewResult || got.Result.RunID != remote.ID || got.Result.Summary != "done there" || got.Result.Status != dashboard.StatusReady {
 		t.Fatalf("remote run_result = %+v: %s", got, textOf(res))
 	}
-	if textOf(res) != canned.String() {
-		t.Errorf("remote text = %q, want %q", textOf(res), canned.String())
-	}
-	if path, _, auth := owner.last(); path != "GET /v1/runs/01REMOTE/result" || auth != "Bearer alice-token" {
-		t.Errorf("forwarded %q with %q", path, auth)
+	if path, _, auth := owner.last(); path != "GET /v1/runs/01REMOTE/events" || auth != "Bearer alice-token" {
+		t.Errorf("read %q with %q", path, auth)
 	}
 	res = callTool(t, ctx, cs, toolRunResult, map[string]any{"runId": "01GONE"})
 	if !res.IsError || !strings.Contains(textOf(res), "the fleet member owner") || !strings.Contains(textOf(res), "the run is not here") {
 		t.Fatalf("a refused result = %s", textOf(res))
 	}
 
-	// agent_builder with a run of another member starts the builder there.
+	// agent_builder with a run of another member reads it there and starts
+	// the builder here.
 	res = callTool(t, ctx, cs, toolAgentBuilder, map[string]any{"fromRun": remote.ID})
 	if res.IsError {
 		t.Fatal(textOf(res))
 	}
 	started := runOf(t, res)
-	if started.ID != builder.ID || started.Member != "owner" || !strings.Contains(textOf(res), "on the fleet member owner") {
-		t.Fatalf("remote builder = %+v: %s", started, textOf(res))
+	if started.Member != "" || started.Metadata[dashboard.ViewKey] != dashboard.ViewBuilder || !strings.Contains(started.Input, "clean up") ||
+		!strings.Contains(started.Input, "done there") || !strings.Contains(started.Input, "rm") || strings.Contains(textOf(res), "on the fleet member") {
+		t.Fatalf("builder from a remote run = %+v: %s", started, textOf(res))
 	}
-	path, body, _ := owner.last()
-	var sent map[string]string
-	if err := json.Unmarshal([]byte(body), &sent); err != nil || path != "POST /v1/builder" || sent["fromRun"] != remote.ID || len(sent) != 1 {
-		t.Fatalf("forwarded %s %s: %v", path, body, err)
+	if _, err := view.Get(ctx, started.ID); err != nil {
+		t.Fatalf("the builder does not run here: %v", err)
+	}
+	// The terms of Save as agent hold for a remote run too.
+	res = callTool(t, ctx, cs, toolAgentBuilder, map[string]any{"fromRun": other.ID})
+	if !res.IsError || !strings.Contains(textOf(res), "only the person who started") {
+		t.Fatalf("builder from the run of bob = %s", textOf(res))
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	for _, p := range owner.paths {
+		if strings.HasSuffix(p, "/result") || strings.Contains(p, "/v1/builder") {
+			t.Fatalf("a worker got a route that only the workbench serves: %s", p)
+		}
 	}
 }
 

@@ -333,12 +333,19 @@ func refuse(format string, args ...any) error {
 }
 
 func saveCheck(ctx context.Context, a *fw.Agent, run *fw.Run) error {
+	return saveTerms(ctx, a, run, true)
+}
+
+// saveTerms applies the terms of saveCheck. With here, the run must be a
+// run of this process; without it, the run is a run of another member that
+// the caller read through the fleet (SaveAsAgentInputOn).
+func saveTerms(ctx context.Context, a *fw.Agent, run *fw.Run, here bool) error {
 	switch {
 	case run.State != fw.StateCompleted:
 		return refuse("only a completed run becomes an agent, and run %s is %s", run.ID, run.State)
 	case run.Parent != "":
 		return refuse("run %s is a child run, so only its top-level run becomes an agent", run.ID)
-	case run.Member != "":
+	case here && run.Member != "":
 		return refuse("run %s belongs to the fleet member %s, so only that member makes an agent from it", run.ID, run.Member)
 	case isBuilder(run):
 		return refuse("run %s is a conversation of the agent builder, not work to hand off", run.ID)

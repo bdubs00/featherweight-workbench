@@ -6,9 +6,7 @@ package web
 // the same conversation.
 
 import (
-	"bytes"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -36,13 +34,12 @@ type builderBody struct {
 // /v1/runs: the principal, the origin, and the header Idempotency-Key
 // apply. It answers 201 with the run object.
 //
-// A fromRun that another fleet member owns sends the whole request to that
-// member, as the run routes do, so the builder run starts where the run
-// lives.
+// A fromRun that another fleet member owns is read from that member with
+// the credential of the caller, because a worker serves the native API of
+// the kernel alone and no builder route: the first message comes from the
+// ledger of the owner (dashboard.SaveAsAgentInputOn), on the same terms,
+// and the builder runs in this process.
 func (s *server) builder(w http.ResponseWriter, r *http.Request) {
-	// The raw body stays at hand for a request that goes to another member.
-	var raw bytes.Buffer
-	r.Body = readCloser{io.TeeReader(r.Body, &raw), r.Body}
 	var body builderBody
 	if !s.decodeFiles(w, r, &body, func() int { return len(body.Files) }) {
 		return
@@ -53,15 +50,16 @@ func (s *server) builder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fromRun != "" {
-		if member, ok := fleet.Owner(s.a, w, r, fromRun); !ok {
-			return
-		} else if member != "" {
-			r.Body = io.NopCloser(bytes.NewReader(raw.Bytes()))
-			fleet.Forward(s.a, w, r, member)
+		member, ok := fleet.Owner(s.a, w, r, fromRun)
+		if !ok {
 			return
 		}
 		var err error
-		input, err = dashboard.SaveAsAgentInput(r.Context(), s.a, fromRun)
+		if member != "" {
+			input, err = dashboard.SaveAsAgentInputOn(r.Context(), s.a, fleet.Of(s.a), member, fromRun)
+		} else {
+			input, err = dashboard.SaveAsAgentInput(r.Context(), s.a, fromRun)
+		}
 		switch {
 		case errors.Is(err, fw.ErrRunNotFound):
 			problem(w, r, http.StatusNotFound, "no run has the id "+strconv.Quote(fromRun))
@@ -81,10 +79,4 @@ func (s *server) builder(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Location", "/v1/runs/"+run.ID)
 	writeJSON(w, http.StatusCreated, run)
-}
-
-// readCloser joins a reader with the closer of the original body.
-type readCloser struct {
-	io.Reader
-	io.Closer
 }
