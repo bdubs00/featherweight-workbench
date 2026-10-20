@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -285,15 +286,85 @@ func TestDeadLettersBySubscription(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		e := fw.MustEvent("01RUN", "fw.job.dead", map[string]string{"reason": "the run failed on its last attempt"})
 		e.Time = at.Add(time.Duration(i) * time.Second)
-		if err := bus.Publish(context.Background(), "fw.jobs.default.dead", e); err != nil {
-			t.Fatal(err)
+		for delivery := 0; delivery < 2; delivery++ {
+			if err := bus.Publish(context.Background(), "fw.jobs.default.dead", e); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	eventually(t, "the front counts both", func() bool {
+	eventually(t, "the front counts both distinct IDs, not all four deliveries", func() bool {
 		states, _ := front.f.queueStates()
 		st := states["fw.jobs.default"]
 		return st.dead == 2 && st.deadAt.Equal(at.Add(time.Second)) && !st.deadStored
 	})
+}
+
+// Stable publishDead IDs deduplicate deliveries in fallback accounting;
+// neither equal run IDs nor equal payloads imply equal dead-letter events.
+func TestDeadLettersDeduplicateEventIDs(t *testing.T) {
+	f := &Fleet{queues: newQueues(nil), log: quietLogger()}
+	onDead := f.onDead("fw.jobs.default")
+	at := time.Date(2026, 10, 19, 3, 4, 5, 0, time.UTC)
+	e := fw.MustEvent("same-run", fw.EvIntakeDead, map[string]string{"reason": "failed"})
+	e.ID, e.Time = "stable-dead-id", at
+	if err := onDead(e); err != nil {
+		t.Fatal(err)
+	}
+	// A replay does not increase the count or move its last-event time.
+	e.Time = at.Add(time.Hour)
+	if err := onDead(e); err != nil {
+		t.Fatal(err)
+	}
+	dc := f.queues.dead["fw.jobs.default"]
+	if dc.n != 1 || !dc.at.Equal(at) {
+		t.Fatalf("duplicate = %+v", dc)
+	}
+	// Distinct IDs count even when they name the same run and payload.
+	e.ID = "another-dead-id"
+	if err := onDead(e); err != nil {
+		t.Fatal(err)
+	}
+	if dc.n != 2 || !dc.at.Equal(e.Time) {
+		t.Fatalf("distinct ID = %+v", dc)
+	}
+	// IDs are scoped to the queue, not shared across subscriptions.
+	if err := f.onDead("fw.jobs.other")(e); err != nil {
+		t.Fatal(err)
+	}
+	if f.queues.dead["fw.jobs.other"].n != 1 {
+		t.Fatal("ID deduplicated across queues")
+	}
+	// An absent ID cannot establish event identity: count both deliveries.
+	e.ID = ""
+	_ = onDead(e)
+	_ = onDead(e)
+	if dc.n != 4 {
+		t.Fatalf("empty-ID deliveries count = %d, want 4", dc.n)
+	}
+}
+
+func TestDeadLetterIDWindowEvictsOldest(t *testing.T) {
+	d := &deadCount{}
+	for i := 0; i < deadIDWindow; i++ {
+		if !d.accept(fmt.Sprint(i)) {
+			t.Fatalf("new ID %d rejected", i)
+		}
+	}
+	if d.accept("0") {
+		t.Fatal("duplicate accepted before eviction")
+	}
+	if !d.accept("next") {
+		t.Fatal("new ID rejected at capacity")
+	}
+	if !d.accept("0") {
+		t.Fatal("oldest ID was not evicted")
+	}
+	if d.accept("next") {
+		t.Fatal("recent ID was evicted")
+	}
+	if len(d.ids) != deadIDWindow || len(d.fifo) != deadIDWindow {
+		t.Fatalf("unbounded dedup storage: %d IDs, %d FIFO entries", len(d.ids), len(d.fifo))
+	}
 }
 
 // The wake on queue depth is on by default with atespaces and an intake
