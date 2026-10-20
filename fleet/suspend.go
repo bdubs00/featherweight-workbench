@@ -9,7 +9,8 @@ package fleet
 // nobody because the Task runs, and calls SuspendTask on the ax API. The
 // router wakes the Task on the next request: an approval, a message, or a
 // run. A worker that sleeps reads no queue, so a job for a profile wakes
-// the suspended Tasks that serve it.
+// the suspended Tasks that serve it: right after the enqueue of the front,
+// and when the front finds jobs that wait in the queue (queues.go).
 
 import (
 	"context"
@@ -107,6 +108,12 @@ func taskOf(m *platformMember) string {
 	return strings.TrimPrefix(m.name, m.atespace+"/")
 }
 
+// Causes of a wake, as the log names them.
+const (
+	wakeEnqueue = "enqueue" // a job of the front went on the queue (Enqueue)
+	wakeQueue   = "queue"   // jobs wait in the queue (queues.go)
+)
+
 // WakeFor wakes the suspended Tasks that serve a profile, after a job went
 // on the queue of that profile. A Task that sleeps reads no queue, and the
 // router wakes a Task on a request only, so the front sends each one a
@@ -117,11 +124,22 @@ func taskOf(m *platformMember) string {
 // one of them may serve the profile, and the first wake teaches the front
 // what each one serves.
 func (f *Fleet) WakeFor(agent string) {
+	f.wakeFor(agent, wakeEnqueue, 0)
+}
+
+// wakeFor wakes the sleeping Tasks for a profile as WakeFor says, and
+// returns how many wakes it started. It leaves out a Task whose wake still
+// runs, and, with hold above zero, a Task that a wake reached within hold,
+// so a Task that just woke has time to take a job. The ax API records no
+// reason for a suspend, so the front cannot tell a Task that a person
+// suspended from one that the controller suspended, and wakes both.
+func (f *Fleet) wakeFor(agent, cause string, hold time.Duration) int {
 	p := f.platform
 	agent = strings.TrimSpace(agent)
 	if p == nil || agent == "" {
-		return
+		return 0
 	}
+	now := time.Now()
 	p.mu.Lock()
 	var sleeping, unknown []*platformMember
 	for _, m := range p.members {
@@ -135,24 +153,37 @@ func (f *Fleet) WakeFor(agent string) {
 			unknown = append(unknown, m)
 		}
 	}
-	p.mu.Unlock()
 	if len(sleeping) == 0 {
 		sleeping = unknown
 	}
+	var wake []*platformMember
 	for _, m := range sleeping {
-		go p.wake(f.ctx, m, agent)
+		if m.waking || (hold > 0 && now.Sub(m.wokeAt) < hold) {
+			continue
+		}
+		m.waking, m.wokeAt = true, now
+		wake = append(wake, m)
 	}
+	p.mu.Unlock()
+	for _, m := range wake {
+		go p.wake(f.ctx, m, agent, cause)
+	}
+	return len(wake)
 }
 
 // wake reads the status of a sleeping Task through the router, which
 // resumes it, and makes the phase of the Task follow (resumed).
-func (p *platform) wake(ctx context.Context, m *platformMember, agent string) {
+func (p *platform) wake(ctx context.Context, m *platformMember, agent, cause string) {
 	var st view.Status
-	if err := p.read(ctx, m, "/v1/status", &st); err != nil {
-		p.f.log.Warn("fleet: wake a Task for a job", "member", m.name, "agent", agent, "error", err)
+	err := p.read(ctx, m, "/v1/status", &st)
+	p.mu.Lock()
+	m.waking = false
+	p.mu.Unlock()
+	if err != nil {
+		p.f.log.Warn("fleet: wake a Task for a job", "member", m.name, "agent", agent, "cause", cause, "error", err)
 		return
 	}
-	p.f.log.Info("fleet: woke a Task for a job", "member", m.name, "agent", agent)
+	p.f.log.Info("fleet: woke a Task for a job", "member", m.name, "agent", agent, "cause", cause)
 	p.resumed(m.name)
 }
 

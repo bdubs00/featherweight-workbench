@@ -47,8 +47,10 @@ func Queue(cfg *fw.Config, agent string) (string, error) {
 // Enqueue puts the requests on the intake queue of the agent and returns
 // the queue. Each request keeps its fields; the caller sets the person, the
 // batch, and the idempotency key. A publish that fails stops the call and
-// returns how many requests went out before it. After the publish, the
-// fleet wakes the suspended Tasks that serve the agent (suspend.go).
+// returns how many requests went out before it. The fleet records the
+// requests that went out in the job record of their batch (jobs.go), and
+// after the publish it wakes the suspended Tasks that serve the agent
+// (suspend.go).
 func Enqueue(ctx context.Context, a *fw.Agent, agent string, reqs []fw.RunRequest) (queue string, sent int, err error) {
 	if a == nil || a.Bus() == nil {
 		return "", 0, errors.New("fleet: the agent has no bus")
@@ -60,6 +62,13 @@ func Enqueue(ctx context.Context, a *fw.Agent, agent string, reqs []fw.RunReques
 	if err != nil {
 		return "", 0, err
 	}
+	// The requests that went out are jobs of their batch, also when a
+	// later one fails.
+	defer func() {
+		if f, ok := Of(a).(*Fleet); ok && f != nil && sent > 0 {
+			f.recordJobs(ctx, queue, reqs[:sent])
+		}
+	}()
 	for i, req := range reqs {
 		req.Agent = strings.TrimSpace(agent)
 		if strings.TrimSpace(req.Input) == "" && len(req.Files) == 0 {

@@ -18,6 +18,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/teams"
 	"github.com/bdubs00/featherweight-workbench/titles"
 )
@@ -444,6 +445,31 @@ func SaveAsAgentInput(ctx context.Context, a *fw.Agent, id string) (string, erro
 		return "", err
 	}
 	return fold.text(run.Agent), nil
+}
+
+// SaveAsAgentInputOn is SaveAsAgentInput for a run that another member of
+// the fleet v holds. A worker serves the native API of the kernel alone,
+// so the first message comes from the run and the events of the owner,
+// read with the credential of the caller in ctx, and the builder then runs
+// in this process. The terms are those of SaveAsAgentInput. A run in a
+// Task of its own has no parent in its own ledger, so the parent that the
+// view knows counts too.
+func SaveAsAgentInputOn(ctx context.Context, a *fw.Agent, v fleet.View, member, id string) (string, error) {
+	run, err := fleet.MemberRun(ctx, v, member, id)
+	if err != nil {
+		return "", err
+	}
+	if vr, err := v.Run(ctx, id); err == nil && run.Parent == "" {
+		run.Parent = vr.Parent
+	}
+	if err := saveTerms(ctx, a, run, false); err != nil {
+		return "", err
+	}
+	_, events, err := fleet.MemberLedger(ctx, v, member, id)
+	if err != nil {
+		return "", err
+	}
+	return saveAsAgentText(run.Agent, events), nil
 }
 
 // ProposalProfile turns the input of a propose_agent call into a profile:

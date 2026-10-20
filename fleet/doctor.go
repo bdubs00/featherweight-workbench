@@ -9,7 +9,8 @@ import (
 )
 
 // DoctorCheck is the line of fw doctor about the fleet (cli.DoctorCheck):
-// off, or on with its sources and the state of the suspend controller.
+// off, or on with its sources, the queues, the wake on queue depth, and
+// the state of the suspend controller.
 // cmd/fw-workbench registers it.
 func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duration) (bool, string) {
 	c, err := Load(cfg)
@@ -31,6 +32,16 @@ func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duratio
 	}
 	if c.Intake != "" {
 		parts = append(parts, "sends jobs to "+c.Intake+".<agent>")
+		if cfg.Bus.Driver == "nats" {
+			parts = append(parts, "reads the depth and the dead letters of each queue from the nats server")
+		} else {
+			parts = append(parts, "reads no queue depth, because the bus is "+firstNonEmpty(cfg.Bus.Driver, "mem")+" and not nats")
+		}
+		if c.wakeOnQueue() {
+			parts = append(parts, "wakes the sleeping Tasks for the jobs that wait in a queue")
+		} else if len(c.Atespaces) > 0 {
+			parts = append(parts, "wakes the Tasks after its own enqueue only (workbench.fleet.wakeOnQueue is off)")
+		}
 	}
 	if d := c.suspendAfter(); d > 0 {
 		parts = append(parts, "suspends a Task that idles for "+d.String())

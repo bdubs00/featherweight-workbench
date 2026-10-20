@@ -12,14 +12,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -78,7 +77,7 @@ func (s *server) addWorkViewTools(readOnly func() *sdk.ToolAnnotations) {
 		Title: "Run result",
 		Description: "Return what a run produced and what it needs next, in the order that a person reads it: the title and the status, " +
 			"the answer of the agent, the files that the run changed, the steps that ran with their outcomes, the decision that waits, " +
-			"the limits that affect the run, and the next actions. A run of another fleet member comes from that member.",
+			"the limits that affect the run, and the next actions. A run of another fleet member is read from that member and built here.",
 		InputSchema: json.RawMessage(runResultSchema),
 		Annotations: readOnly(),
 	}, s.runResultTool)
@@ -109,14 +108,25 @@ func (s *server) runResultTool(ctx context.Context, req *sdk.CallToolRequest, in
 		case ferr != nil:
 			err = ferr
 		case member != "":
-			res = dashboard.Result{}
-			err = s.callMember(ctx, member, http.MethodGet, "/v1/runs/"+url.PathEscape(in.RunID)+"/result", nil, "", &res)
+			res, err = s.memberResult(ctx, member, in.RunID)
 		}
 	}
 	if err != nil {
 		return failResult(err), nil, nil
 	}
 	return result(res.String(), resultView{View: viewResult, Result: res}), nil, nil
+}
+
+// memberResult builds the result of a run of another member from the run
+// and the events of its owner, read with the credential of the caller. A
+// worker serves the native API of the kernel alone and no result route,
+// so the result is built here, as GET /v1/runs/{id}/result builds it.
+func (s *server) memberResult(ctx context.Context, member, id string) (dashboard.Result, error) {
+	run, events, err := fleet.MemberLedger(ctx, fleet.Of(s.a), member, id)
+	if err != nil {
+		return dashboard.Result{}, memberErr(err)
+	}
+	return dashboard.ResultFrom(ctx, s.a, run, events)
 }
 
 func (s *server) agentBuilder(ctx context.Context, req *sdk.CallToolRequest, in builderArgs) (*sdk.CallToolResult, any, error) {
@@ -131,9 +141,13 @@ func (s *server) agentBuilder(ctx context.Context, req *sdk.CallToolRequest, in 
 			member, ferr := s.ownerOf(ctx, from)
 			switch {
 			case ferr != nil:
-				return failResult(ferr), nil, nil
+				err = ferr
 			case member != "":
-				return s.builderOn(ctx, member, from), nil, nil
+				// A worker serves no builder route, so the first message
+				// comes from the ledger of the owner, and the builder runs
+				// here.
+				text, err = dashboard.SaveAsAgentInputOn(ctx, s.a, fleet.Of(s.a), member, from)
+				err = memberErr(err)
 			}
 		}
 		if err != nil {
@@ -152,18 +166,6 @@ func (s *server) agentBuilder(ctx context.Context, req *sdk.CallToolRequest, in 
 	}
 	s.log.Info("mcp agent builder started", "run", r.ID, "from_run", from, "principal", principal)
 	return builderResult(r), nil, nil
-}
-
-// builderOn starts the builder on the member that owns the run fromRun,
-// because only that member reads the run. The builder runs there, and the
-// work tools reach it by its id.
-func (s *server) builderOn(ctx context.Context, member, fromRun string) *sdk.CallToolResult {
-	r, err := s.memberRun(ctx, member, http.MethodPost, "/v1/builder", map[string]any{"fromRun": fromRun}, "")
-	if err != nil {
-		return failResult(err)
-	}
-	s.log.Info("mcp agent builder started on a fleet member", "run", r.ID, "from_run", fromRun, "member", member)
-	return builderResult(r)
 }
 
 // builderResult is the result of agent_builder: the run object, and a text

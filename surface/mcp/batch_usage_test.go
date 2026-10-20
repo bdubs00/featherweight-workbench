@@ -394,3 +394,59 @@ func TestBatchRunOfNoKnownJob(t *testing.T) {
 		t.Fatalf("the finished job = %+v; text %q", b, text)
 	}
 }
+
+// TestBatchCountsTheJobsInTheQueue sends a job of three items that no
+// worker took yet. The tool batch counts the jobs that wait in the queue,
+// and the job reads as finished only when every job has a run and every
+// run ended.
+func TestBatchCountsTheJobsInTheQueue(t *testing.T) {
+	ctx := testCtx(t)
+	t.Setenv(fleet.EnvIntake, "fw.jobs")
+	t.Setenv(fleet.EnvEgress, "")
+	t.Setenv(fleet.EnvAtespaces, "")
+	bus := newOrderedBus()
+	front := newAgent(t, newScript().model(), fw.WithBus(bus), fw.WithAuthn(people))
+	f, err := fleet.Open(ctx, front, fleet.Config{Name: "front", Egress: "fw.events", Interval: 40 * time.Millisecond, Expire: fleet.DefaultExpire})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	attach(front, f)
+	cs := as(t, ctx, serveAgent(t, front, nil).URL, "alice-token")
+	call := func() (batchResult, string) {
+		res := callTool(t, ctx, cs, toolBatch, map[string]any{"batch": "q"})
+		var b batchResult
+		structured(t, res, &b)
+		return b, textOf(res)
+	}
+	res := callTool(t, ctx, cs, toolEnqueue, map[string]any{"agent": "default", "batch": "q",
+		"items": []map[string]any{{"input": "one"}, {"input": "two"}, {"input": "three"}}})
+	if res.IsError {
+		t.Fatal(textOf(res))
+	}
+
+	b, text := call()
+	if b.Total != 0 || b.Jobs != 3 || b.Queued == nil || *b.Queued != 3 || b.Finished {
+		t.Fatalf("batch before any run = %+v; text %q", b, text)
+	}
+	if !strings.Contains(text, "3 jobs of the 3 that you sent wait in the queue: no Task took them yet.") {
+		t.Fatalf("batch text = %q", text)
+	}
+	// One job has a run that finished, and two wait: the job is not
+	// finished.
+	per := fw.RunUsage{Usage: fw.Usage{InputTokens: 10, OutputTokens: 1}, Turns: 1}
+	publishInOrder(t, ctx, bus, f, "q", fw.NewID(), finishedEvents("q", "one", per))
+	b, text = call()
+	if b.Total != 1 || b.States["completed"] != 1 || *b.Queued != 2 || b.Finished || strings.Contains(text, "finished") {
+		t.Fatalf("batch with jobs in the queue = %+v; text %q", b, text)
+	}
+	if !strings.Contains(text, "Batch q: 1 runs on 1 members. completed: 1. 2 jobs of the 3 that you sent wait in the queue") {
+		t.Fatalf("batch text = %q", text)
+	}
+	publishInOrder(t, ctx, bus, f, "q", fw.NewID(), finishedEvents("q", "two", per))
+	publishInOrder(t, ctx, bus, f, "q", fw.NewID(), finishedEvents("q", "three", per))
+	b, text = call()
+	if b.Total != 3 || *b.Queued != 0 || !b.Finished || !strings.Contains(text, "No job of the 3 that you sent waits in the queue. The job is finished.") {
+		t.Fatalf("batch when every job ended = %+v; text %q", b, text)
+	}
+}

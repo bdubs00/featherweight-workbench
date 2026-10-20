@@ -34,6 +34,8 @@ const (
 	// EnvSuspendAfter is how long a Task stays idle before the front
 	// suspends it, a duration such as 10m, or off (suspend.go).
 	EnvSuspendAfter = "FW_WORKBENCH_FLEET_SUSPEND_AFTER"
+	// EnvWakeOnQueue turns the wake on queue depth on or off (queues.go).
+	EnvWakeOnQueue = "FW_WORKBENCH_FLEET_WAKE_ON_QUEUE"
 )
 
 // Config configures the fleet. The fleet is on when Atespaces or Egress
@@ -55,6 +57,11 @@ const (
 // SuspendAfter is how long a Task of those atespaces stays idle before the
 // front suspends it (suspend.go). Nil means the default of ten minutes when
 // Atespaces is set, and zero turns the controller off.
+//
+// WakeOnQueue lets the front wake the sleeping Tasks that serve a profile
+// when jobs wait in the intake queue of that profile (queues.go). Nil means
+// on when Atespaces and Intake are set, and false turns it off. The front
+// still wakes the Tasks after its own enqueue.
 type Config struct {
 	Name      string        `yaml:"name"`
 	Interval  time.Duration `yaml:"interval"`
@@ -64,6 +71,7 @@ type Config struct {
 	Intake    string        `yaml:"intake"`
 
 	SuspendAfter *time.Duration `yaml:"suspendAfter"`
+	WakeOnQueue  *bool          `yaml:"wakeOnQueue"`
 }
 
 // On reports whether the configuration names a source of members.
@@ -76,6 +84,12 @@ func (c Config) suspendAfter() time.Duration {
 		return 0
 	}
 	return *c.SuspendAfter
+}
+
+// wakeOnQueue reports whether the front wakes the sleeping Tasks for the
+// jobs that wait in a queue.
+func (c Config) wakeOnQueue() bool {
+	return c.WakeOnQueue != nil && *c.WakeOnQueue
 }
 
 // block is the part of the workbench block that this package reads.
@@ -121,6 +135,13 @@ func Load(cfg *fw.Config) (Config, error) {
 		}
 		c.SuspendAfter = &d
 	}
+	if v, ok := lookup(EnvWakeOnQueue); ok {
+		on, err := parseSwitch(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("fleet: %s=%q is not on or off", EnvWakeOnQueue, v)
+		}
+		c.WakeOnQueue = &on
+	}
 	for _, e := range []struct {
 		env string
 		dst *time.Duration
@@ -144,6 +165,10 @@ func Load(cfg *fw.Config) (Config, error) {
 		d := DefaultSuspendAfter
 		c.SuspendAfter = &d
 	}
+	if c.WakeOnQueue == nil && len(c.Atespaces) > 0 && c.Intake != "" {
+		on := true
+		c.WakeOnQueue = &on
+	}
 	if c.On() {
 		c.Name = defaults(c.Name, cfg)
 	}
@@ -151,6 +176,17 @@ func Load(cfg *fw.Config) (Config, error) {
 		return Config{}, fmt.Errorf("fleet: %s", strings.Join(problems, "; "))
 	}
 	return c, nil
+}
+
+// parseSwitch reads on, off, true, false, yes, no, 1, or 0.
+func parseSwitch(v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "true", "yes", "1":
+		return true, nil
+	case "off", "false", "no", "0":
+		return false, nil
+	}
+	return false, fmt.Errorf("fleet: %q is not on or off", v)
 }
 
 func lookup(name string) (string, bool) {
@@ -217,6 +253,9 @@ func check(c Config) []string {
 		p = append(p, fmt.Sprintf("workbench.fleet.suspendAfter %s is negative", d))
 	} else if d > 0 && len(c.Atespaces) == 0 {
 		p = append(p, "workbench.fleet.suspendAfter needs workbench.fleet.atespaces, the Tasks that the front can suspend")
+	}
+	if c.wakeOnQueue() && (len(c.Atespaces) == 0 || c.Intake == "") {
+		p = append(p, "workbench.fleet.wakeOnQueue needs workbench.fleet.atespaces, the Tasks that the front can wake, and workbench.fleet.intake, the queues that it reads")
 	}
 	return p
 }

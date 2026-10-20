@@ -71,6 +71,9 @@ type platform struct {
 	gone     map[string]forgotRun       // by run id: the runs that the view dropped
 	conn     *grpc.ClientConn
 	client   v1alpha1.AXClient
+	// ends counts the ends of runs that the stream carried, for the
+	// metrics (metrics.go).
+	ends runEnds
 }
 
 // childLink is where a child of a run lives, from the fw.run.child event
@@ -102,6 +105,11 @@ type platformMember struct {
 	// resuming is true while a ResumeTask call runs for the member
 	// (suspend.go), so a burst of requests makes one call.
 	resuming bool
+	// waking is true while a wake for a job runs for the member, and
+	// wokeAt is when the last one started (suspend.go), so the front
+	// sends one wake at a time and gives a woken Task time to take a job.
+	waking bool
+	wokeAt time.Time
 	// liveSince is when the phase of the Task last became Running; the
 	// suspend controller counts idle time from it when the member has
 	// no run (suspend.go).
@@ -167,6 +175,7 @@ func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv strin
 		runs:      map[string]*platformRun{},
 		children:  map[string]childLink{},
 		gone:      map[string]forgotRun{},
+		ends:      newRunEnds(),
 	}
 	if len(p.atespaces) > 0 {
 		if p.server == "" {
@@ -568,6 +577,11 @@ func (p *platform) onEvent(e fw.Event) error {
 		r.lateEnd(e, p.prices)
 	default:
 		return nil
+	}
+	if e.Type == fw.EvRunFinished {
+		// An end that the view applied counts once: a repeated event
+		// changes nothing above.
+		p.ends.count(agentOf(r.run, e), name, e)
 	}
 	if e.Type == fw.EvRunQueued {
 		r.queued = true
