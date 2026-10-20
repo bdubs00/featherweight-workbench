@@ -1,0 +1,316 @@
+package pools
+
+// This file renders the Workspace and the Task of one worker of a pool, as
+// the front applies them through the ax API and as the dry run prints
+// them. A variable that names a variable of the front takes its value from
+// a Lookup, so the dry run prints a placeholder where the front writes a
+// secret.
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/bdubs00/featherweight-kernel/ax"
+	v1alpha1 "github.com/google/ax/pkg/apis/v1alpha1"
+	"gopkg.in/yaml.v3"
+)
+
+// Lookup returns the value of a variable of the front.
+type Lookup func(name string) (string, bool)
+
+// Placeholders is the Lookup of the dry run: it gives each variable of the
+// front a placeholder that names it, never its value.
+func Placeholders(name string) (string, bool) {
+	return "<secret: " + name + " of the front>", true
+}
+
+// Values holds the values of the variables of the front that the pools
+// copy into their Tasks. The front reads them once at its start and keeps
+// them in memory only.
+type Values struct {
+	m     map[string]string
+	order []string // the forms of the values to redact, the longest first
+}
+
+// redactMin is the shortest value that Redact replaces. A shorter value is
+// no secret, and replacing it would garble any text.
+const redactMin = 8
+
+// Lookup returns the value of a variable of the front (a Lookup).
+func (v *Values) Lookup(name string) (string, bool) {
+	if v == nil {
+		return "", false
+	}
+	s, ok := v.m[name]
+	return s, ok
+}
+
+// Redact replaces every value in s with a placeholder, so an error of the
+// ax API that echoes a Task never carries a secret into a log line or a
+// view. It leaves a value shorter than redactMin as it is.
+func (v *Values) Redact(s string) string {
+	if v == nil {
+		return s
+	}
+	for _, val := range v.order {
+		s = strings.ReplaceAll(s, val, "<secret>")
+	}
+	return s
+}
+
+// Resolve reads every variable of the front that the pools copy into their
+// Tasks, once, with getenv, os.LookupEnv by default. A variable that is
+// unset or empty is an error that names it and the pools that need it.
+func Resolve(list []*Pool, getenv func(string) (string, bool)) (*Values, error) {
+	if getenv == nil {
+		getenv = os.LookupEnv
+	}
+	v := &Values{m: map[string]string{}}
+	var missing []string
+	for _, name := range FromEnv(list) {
+		val, ok := getenv(name)
+		if !ok || strings.TrimSpace(val) == "" {
+			var users []string
+			for _, p := range list {
+				for _, e := range p.env {
+					if e.FromEnv == name {
+						users = append(users, p.Name)
+						break
+					}
+				}
+			}
+			missing = append(missing, fmt.Sprintf("%s (for the pool %s)", name, strings.Join(users, ", ")))
+			continue
+		}
+		v.m[name] = val
+		if len(val) >= redactMin {
+			// An error can quote the value, as Go or as JSON does.
+			q, _ := json.Marshal(val)
+			for _, form := range []string{val, strings.Trim(strconv.Quote(val), `"`), strings.Trim(string(q), `"`)} {
+				if !slices.Contains(v.order, form) {
+					v.order = append(v.order, form)
+				}
+			}
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("pools: the front has no value for the variable %s; set it in the environment of the front", strings.Join(missing, ", "))
+	}
+	// The front can hide only a value of redactMin characters or more, so
+	// a shorter static token stops the start.
+	for _, p := range list {
+		for _, e := range p.env {
+			if e.Name == p.tokenEnv && e.FromEnv != "" && len(v.m[e.FromEnv]) < redactMin {
+				return nil, fmt.Errorf("pools: the static token in %s has fewer than %d characters; the front copies it into every Task, so use a longer token", e.FromEnv, redactMin)
+			}
+		}
+	}
+	sort.Slice(v.order, func(i, j int) bool { return len(v.order[i]) > len(v.order[j]) })
+	return v, nil
+}
+
+// computeHash is the hash of what every Task of the pool shares: the image,
+// the variables with the name of each variable of the front instead of its
+// value, the egress, the resources, the files with the rendered fw.yaml,
+// and the revision. The dry run therefore computes the same hash as the
+// front, and the hash never depends on a secret.
+func (p *Pool) computeHash() string {
+	type envEntry struct {
+		Name    string  `json:"name"`
+		Value   *string `json:"value,omitempty"`
+		FromEnv string  `json:"fromEnv,omitempty"`
+	}
+	in := struct {
+		Image     string           `json:"image"`
+		Revision  string           `json:"revision,omitempty"`
+		Env       []envEntry       `json:"env"`
+		Egress    *ax.EgressSpec   `json:"egress,omitempty"`
+		Resources ax.ResourcesSpec `json:"resources"`
+		Files     []ax.File        `json:"files"`
+	}{Image: p.Image, Revision: p.Revision, Egress: p.Egress, Resources: p.Resources, Files: p.files}
+	for _, e := range p.env {
+		in.Env = append(in.Env, envEntry{Name: e.Name, Value: e.Value, FromEnv: e.FromEnv})
+	}
+	b, _ := json.Marshal(in)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8])
+}
+
+// Render returns the Task of the pool at index and its Workspace. The
+// variables of the front take their values from lookup; a missing one is
+// an error.
+func (p *Pool) Render(index int, lookup Lookup) (*v1alpha1.Task, *v1alpha1.Workspace, error) {
+	name, wsName := p.TaskName(index), p.WorkspaceName(index)
+	spec := &v1alpha1.TaskSpec{
+		Image:      p.Image,
+		Workspaces: []*v1alpha1.WorkspaceRef{{Name: wsName, Path: WorkspacePath}},
+		Egress:     egressOf(p.Egress),
+	}
+	for _, e := range p.env {
+		v := ""
+		switch {
+		case e.FromEnv != "":
+			got, ok := lookup(e.FromEnv)
+			if !ok {
+				return nil, nil, fmt.Errorf("pools: %s needs the variable %s of the front, which is not set", p.key(), e.FromEnv)
+			}
+			v = got
+		case e.Value != nil:
+			v = *e.Value
+		}
+		spec.Env = append(spec.Env, &v1alpha1.EnvVar{Name: e.Name, Value: v})
+	}
+	spec.Env = append(spec.Env, &v1alpha1.EnvVar{Name: EnvSpec, Value: p.hash})
+	if r := p.Resources; r.Requests != (ax.ResourceList{}) || r.Limits != (ax.ResourceList{}) {
+		spec.Resources = &v1alpha1.ResourcesSpec{Requests: resourceList(r.Requests), Limits: resourceList(r.Limits)}
+	}
+	task := &v1alpha1.Task{
+		ApiVersion: ax.APIVersion,
+		Kind:       ax.KindTask,
+		Metadata:   &v1alpha1.ObjectMeta{Name: name, Atespace: p.Atespace},
+		Spec:       spec,
+	}
+	ws := &v1alpha1.Workspace{
+		ApiVersion: ax.APIVersion,
+		Kind:       ax.KindWorkspace,
+		Metadata:   &v1alpha1.ObjectMeta{Name: wsName, Atespace: p.Atespace},
+		Spec:       &v1alpha1.WorkspaceSpec{},
+	}
+	for _, f := range p.files {
+		ws.Spec.Files = append(ws.Spec.Files, &v1alpha1.File{Path: f.Path, Content: f.Content})
+	}
+	return task, ws, nil
+}
+
+// resourceList converts a quantity pair, and returns nil for an empty one.
+func resourceList(l ax.ResourceList) *v1alpha1.ResourceList {
+	if l == (ax.ResourceList{}) {
+		return nil
+	}
+	return &v1alpha1.ResourceList{Cpu: l.CPU, Memory: l.Memory}
+}
+
+// ownsWorkspace reports whether a Workspace is one that the pool rendered:
+// its fw.yaml starts with the header of the pool.
+func (p *Pool) ownsWorkspace(ws *v1alpha1.Workspace) bool {
+	for _, f := range ws.GetSpec().GetFiles() {
+		if strings.TrimPrefix(f.GetPath(), "./") == ConfigFile {
+			return strings.HasPrefix(f.GetContent(), header(p.Name))
+		}
+	}
+	return false
+}
+
+// egressOf converts the egress of a pool to the API type.
+func egressOf(e *ax.EgressSpec) *v1alpha1.EgressSpec {
+	if e == nil {
+		return nil
+	}
+	hosts := func(h *ax.EgressHosts) *v1alpha1.EgressHosts {
+		return &v1alpha1.EgressHosts{Hostnames: append([]string(nil), h.Hostnames...), Ports: append([]int32(nil), h.Ports...)}
+	}
+	out := &v1alpha1.EgressSpec{}
+	for _, r := range e.Rules {
+		rule := &v1alpha1.EgressRule{}
+		switch {
+		case r.HTTP != nil:
+			rule.Http = hosts(r.HTTP)
+		case r.HTTPS != nil:
+			rule.Https = hosts(r.HTTPS)
+		case r.TLS != nil:
+			rule.Tls = hosts(r.TLS)
+		}
+		out.Rules = append(out.Rules, rule)
+	}
+	return out
+}
+
+// Write prints the Workspaces and the Tasks of the pools as one stream of
+// YAML documents, in the order in which the front applies them, with a
+// placeholder for every variable of the front. A person reviews a change
+// with it. The comment before each pool names its queue, its hash, and
+// its warnings.
+func Write(w io.Writer, list []*Pool) error {
+	if len(list) == 0 {
+		_, err := fmt.Fprintln(w, "# The configuration names no pool under workbench.pools.")
+		return err
+	}
+	var out strings.Builder
+	docs := 0
+	for _, p := range list {
+		var b strings.Builder
+		fmt.Fprintf(&b, "Pool %s: %d %s of the agent %s in the atespace %s, on the queue %s.\n", p.Name, p.replicas(), plural(p.replicas(), "Task", "Tasks"), p.Agent, p.Atespace, p.Intake)
+		fmt.Fprintf(&b, "Each Task carries %s=%s and %s=%s. A Task with another %s runs an older configuration.\n", EnvPool, p.Name, EnvSpec, p.hash, EnvSpec)
+		for _, name := range FromEnv([]*Pool{p}) {
+			fmt.Fprintf(&b, "The front copies the variable %s from its own environment; this output shows a placeholder.\n", name)
+		}
+		b.WriteString("This output is for review. Do not apply it: a placeholder is not a value, and the front replaces a Task that holds one.\n")
+		for _, warn := range p.warnings {
+			fmt.Fprintf(&b, "Warning: %s\n", warn)
+		}
+		if p.replicas() == 0 {
+			b.WriteString("The pool wants no Task, so the front deletes each Task of the pool once it is idle.\n")
+		}
+		if docs > 0 {
+			out.WriteString("---\n")
+		}
+		out.WriteString(comment(b.String()))
+		for i := 0; i < p.replicas(); i++ {
+			task, ws, err := p.Render(i, Placeholders)
+			if err != nil {
+				return err
+			}
+			for j, doc := range []any{ws, task} {
+				text, err := encode(doc)
+				if err != nil {
+					return fmt.Errorf("pools: encode the pool %s: %w", p.Name, err)
+				}
+				if i > 0 || j > 0 {
+					out.WriteString("---\n")
+				}
+				out.WriteString(text)
+			}
+		}
+		docs++
+	}
+	_, err := io.WriteString(w, out.String())
+	return err
+}
+
+// encode renders one resource of the ax API as YAML with an indent of two.
+func encode(doc any) (string, error) {
+	var b strings.Builder
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	if err := enc.Encode(doc); err != nil {
+		return "", err
+	}
+	if err := enc.Close(); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+// comment turns lines of text into YAML comment lines.
+func comment(text string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		b.WriteString("# " + line + "\n")
+	}
+	return b.String()
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
