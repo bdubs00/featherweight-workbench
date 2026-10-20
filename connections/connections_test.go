@@ -149,10 +149,15 @@ func TestFinishResumesThePausedCall(t *testing.T) {
 		t.Fatal("Finish took a bad code")
 	}
 	notices := make(chan tokens.Connected, 1)
+	gone := make(chan tokens.Disconnected, 1)
 	stop, err := a.Bus().Subscribe(ctx, fw.DefaultTokensSubject, func(e fw.Event) error {
 		var n tokens.Connected
-		if e.Type == tokens.EvConnected && e.Decode(&n) == nil {
+		var d tokens.Disconnected
+		switch {
+		case e.Type == tokens.EvConnected && e.Decode(&n) == nil:
 			notices <- n
+		case e.Type == tokens.EvDisconnected && e.Decode(&d) == nil:
+			gone <- d
 		}
 		return nil
 	})
@@ -194,6 +199,15 @@ func TestFinishResumesThePausedCall(t *testing.T) {
 	}
 	if conns, _ := List(ctx, a, ada); conns[0].Connected {
 		t.Fatal("still connected after Disconnect")
+	}
+	// The members and the other fronts learn about the disconnect too.
+	select {
+	case d := <-gone:
+		if d.Subject != "ada" || len(d.Servers) != 1 || d.Servers[0] != "tickets" {
+			t.Fatalf("notice of the disconnect = %+v", d)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no notice of the disconnect on the bus")
 	}
 	for _, p := range []*fw.Principal{nil, {Subject: "token", Kind: fw.KindToken}, {Subject: "spiffe://td/x", Kind: fw.KindWorkload}} {
 		if _, err := Begin(ctx, a, p, "tickets", "https://fw.example/cb"); !errors.Is(err, ErrNotPerson) {
@@ -311,5 +325,66 @@ func TestStartKeepsNoGrantsBehindABroker(t *testing.T) {
 	c, err := Start(context.Background(), a)
 	if err != nil || c != nil {
 		t.Fatalf("Start behind a broker = %v, %v; want nothing", c, err)
+	}
+}
+
+// A notice of another front drops the tokens and the pending grants of the
+// person in the broker of this front. A notice of this front changes
+// nothing, because its own Disconnect cleared its broker already.
+func TestListenDropsTheTokensOfAnotherFront(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cfg := fw.DefaultConfig()
+	cfg.Node = "front-1:8080"
+	a := newAgent(t, cfg)
+	c := New(a)
+	c.broker = newBroker()
+	key := func(subject string) GrantKey {
+		return GrantKey{Subject: subject, Issuer: "https://as.example", ClientID: "fw"}
+	}
+	for _, s := range []string{"ada", "bob"} {
+		l := c.broker.lockFor(key(s))
+		l.Lock()
+		c.broker.keep(tokenKey{grant: key(s), server: "tickets"}, &tokenAnswer{AccessToken: "at-" + s})
+		c.broker.mu.Lock()
+		c.broker.pending[key(s)] = Grant{}
+		c.broker.mu.Unlock()
+		l.Unlock()
+	}
+	has := func(s string) (token, pending bool) {
+		_, token = c.broker.cached(tokenKey{grant: key(s), server: "tickets"})
+		c.broker.mu.Lock()
+		_, pending = c.broker.pending[key(s)]
+		c.broker.mu.Unlock()
+		return token, pending
+	}
+	stop, err := c.listen(ctx)
+	if err != nil || stop == nil {
+		t.Fatalf("listen = %v", err)
+	}
+	defer stop()
+	publish := func(node, subject string) {
+		ev := fw.MustEvent("", tokens.EvDisconnected, tokens.Disconnected{Subject: subject, Servers: []string{"tickets"}})
+		ev.Node = node
+		if err := a.Bus().Publish(ctx, fw.DefaultTokensSubject, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The bus keeps the order, so the notice of this front for bob arrives
+	// before the notice of the other front for ada.
+	publish("front-1:8080", "bob")
+	publish("front-2:8080", "ada")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if tok, _ := has("ada"); !tok || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if tok, pending := has("ada"); tok || pending {
+		t.Fatalf("ada after the notice of another front: token %v, pending %v", tok, pending)
+	}
+	if tok, pending := has("bob"); !tok || !pending {
+		t.Fatalf("bob after the notice of this front: token %v, pending %v", tok, pending)
 	}
 }

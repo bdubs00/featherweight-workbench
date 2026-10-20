@@ -609,6 +609,40 @@ func (b *broker) clear(key GrantKey) {
 	delete(b.pending, key)
 }
 
+// clearSubject drops every token and pending grant of a person, under the
+// lock of each grant key, as Disconnect does for one key. Another front
+// announced that the person connected or disconnected (Connections.listen).
+func (b *broker) clearSubject(subject string) {
+	b.mu.Lock()
+	var keys []GrantKey
+	for key := range b.locks {
+		if key.Subject == subject {
+			keys = append(keys, key)
+		}
+	}
+	b.mu.Unlock()
+	for _, key := range keys {
+		l := b.lockFor(key)
+		l.Lock()
+		b.clear(key)
+		l.Unlock()
+	}
+	// A token is kept under the lock of its key, so none is left here, but
+	// a key without a lock goes too.
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for k := range b.tokens {
+		if k.grant.Subject == subject {
+			delete(b.tokens, k)
+		}
+	}
+	for key := range b.pending {
+		if key.Subject == subject {
+			delete(b.pending, key)
+		}
+	}
+}
+
 // load returns the grant and its revision. A refreshed grant that the store
 // did not take comes first, with the revision of the store.
 func (b *broker) load(ctx context.Context, store Store, key GrantKey) (Grant, uint64, error) {

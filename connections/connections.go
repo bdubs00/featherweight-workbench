@@ -103,6 +103,7 @@ type Connections struct {
 	list    []Connector
 	closers []io.Closer
 	log     *slog.Logger
+	broker  *broker // the access tokens of people in memory, from Open; nil for New
 }
 
 var _ fw.PersonTokens = (*Connections)(nil)
@@ -197,30 +198,76 @@ func (c *Connections) Finish(ctx context.Context, p *fw.Principal, at Attempt, c
 	}
 	if c.a != nil && len(connected) > 0 {
 		c.a.Connected(subject, connected...)
-		c.announce(ctx, subject, connected)
+		c.announce(ctx, tokens.EvConnected, subject, connected)
 	}
 	return conns, nil
 }
 
 // announce tells the other processes of the fleet that the person connected
-// the services, through the bus notice of the token broker (the kernel
-// package tokens). Each member turns it into fw.Agent.Connected.
-func (c *Connections) announce(ctx context.Context, subject string, servers []string) {
+// or disconnected the services, through the bus notices of the token broker
+// (the kernel package tokens), typ tokens.EvConnected or
+// tokens.EvDisconnected. Each member drops its cached tokens of the person
+// and turns a connection into fw.Agent.Connected. Each other front drops the
+// tokens of the person in its broker (listen). The event names this process
+// in Node, so listen skips the notices of its own process.
+func (c *Connections) announce(ctx context.Context, typ, subject string, servers []string) {
 	bus := c.a.Bus()
 	if bus == nil {
 		return
 	}
-	topic := strings.TrimSpace(c.a.Config().Tokens.Subject)
-	if topic == "" {
-		topic = fw.DefaultTokensSubject
+	var data any = tokens.Connected{Subject: subject, Servers: servers}
+	if typ == tokens.EvDisconnected {
+		data = tokens.Disconnected{Subject: subject, Servers: servers}
 	}
-	ev, err := fw.NewEvent("", tokens.EvConnected, tokens.Connected{Subject: subject, Servers: servers})
+	ev, err := fw.NewEvent("", typ, data)
 	if err == nil {
-		err = bus.Publish(context.WithoutCancel(ctx), topic, ev)
+		ev.Node = c.a.Node()
+		err = bus.Publish(context.WithoutCancel(ctx), noticeSubject(c.a.Config()), ev)
 	}
 	if err != nil {
-		c.log.Warn("the notice of a connection did not reach the bus", "subject", subject, "error", err)
+		c.log.Warn("the notice of a connection did not reach the bus", "type", typ, "subject", subject, "error", err)
 	}
+}
+
+// noticeSubject is the bus subject of the notices of the token broker.
+func noticeSubject(cfg *fw.Config) string {
+	if s := strings.TrimSpace(cfg.Tokens.Subject); s != "" {
+		return s
+	}
+	return fw.DefaultTokensSubject
+}
+
+// listen drops the tokens and the pending grants of a person in the broker
+// of this process when another front of the fleet announces that the person
+// connected or disconnected a service. A front keeps the access tokens of
+// people in memory until they expire, so without the notice a second front
+// went on serving the token of a grant that the first one deleted. It
+// returns nil without a bus or a broker.
+func (c *Connections) listen(ctx context.Context) (func(), error) {
+	if c.a == nil || c.broker == nil {
+		return nil, nil
+	}
+	bus := c.a.Bus()
+	if bus == nil {
+		return nil, nil
+	}
+	self := c.a.Node()
+	return bus.Subscribe(context.WithoutCancel(ctx), noticeSubject(c.a.Config()), func(e fw.Event) error {
+		if e.Type != tokens.EvConnected && e.Type != tokens.EvDisconnected {
+			return nil
+		}
+		if self != "" && e.Node == self {
+			return nil
+		}
+		var n struct {
+			Subject string `json:"subject"`
+		}
+		if err := e.Decode(&n); err != nil || n.Subject == "" {
+			return nil
+		}
+		c.broker.clearSubject(n.Subject)
+		return nil
+	})
 }
 
 // TokenInfo is Token with the expiry of the token, when the connector
@@ -245,7 +292,8 @@ func (c *Connections) TokenInfo(ctx context.Context, subject, server string) (st
 	return tok, exp, nil
 }
 
-// Disconnect deletes the grant of p for server.
+// Disconnect deletes the grant of p for server and announces it, so the
+// other processes of the fleet stop using the tokens of the grant.
 func (c *Connections) Disconnect(ctx context.Context, p *fw.Principal, server string) error {
 	subject, err := subjectOf(p)
 	if err != nil {
@@ -255,7 +303,13 @@ func (c *Connections) Disconnect(ctx context.Context, p *fw.Principal, server st
 	if err != nil {
 		return err
 	}
-	return k.Disconnect(ctx, subject)
+	if err := k.Disconnect(ctx, subject); err != nil {
+		return err
+	}
+	if c.a != nil {
+		c.announce(ctx, tokens.EvDisconnected, subject, []string{server})
+	}
+	return nil
 }
 
 // Token implements fw.PersonTokens.
@@ -274,10 +328,14 @@ func (c *Connections) Reject(ctx context.Context, subject, server, used string) 
 	}
 }
 
-// Forget implements fw.PersonTokens.
+// Forget implements fw.PersonTokens. The grant ends, so Forget announces
+// it as Disconnect does.
 func (c *Connections) Forget(ctx context.Context, subject, server string) {
 	if k, err := c.connector(server); err == nil {
 		k.Forget(ctx, subject)
+		if c.a != nil {
+			c.announce(ctx, tokens.EvDisconnected, subject, []string{server})
+		}
 	}
 }
 
@@ -412,8 +470,13 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	if cl, ok := store.(io.Closer); ok {
 		c.closers = append(c.closers, cl)
 	}
+	stop, err := c.listen(ctx)
+	if err != nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("connections: subscribe to %s: %w", noticeSubject(cfg), err)
+	}
 	Install(a, c)
-	return service{a: a, c: c}, nil
+	return service{a: a, c: c, stop: stop}, nil
 }
 
 // Open builds the connections of a: one OAuth connector per entry, which
@@ -435,16 +498,22 @@ func Open(a *fw.Agent, store Store, entries []fw.MCPServerConfig, oidc *fw.OIDCC
 	}
 	c := New(a, connectors...)
 	c.log = log
+	c.broker = b
 	return c, nil
 }
 
-// service uninstalls the connections of an agent and closes them.
+// service uninstalls the connections of an agent, ends the subscription of
+// listen, and closes them.
 type service struct {
-	a *fw.Agent
-	c *Connections
+	a    *fw.Agent
+	c    *Connections
+	stop func()
 }
 
 func (s service) Close() error {
+	if s.stop != nil {
+		s.stop()
+	}
 	Install(s.a, nil)
 	return s.c.Close()
 }
