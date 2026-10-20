@@ -15,6 +15,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/agents"
 	"github.com/bdubs00/featherweight-workbench/connections"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/sources"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 
 	_ "github.com/bdubs00/featherweight-kernel/authn/spiffe"
@@ -51,6 +52,7 @@ func init() {
 	cli.AgentsDelete = agents.Delete
 	cli.RegisterDoctorCheck(connections.DoctorCheck)
 	cli.RegisterDoctorCheck(fleet.DoctorCheck)
+	cli.RegisterDoctorCheck(sources.DoctorCheck)
 	// With workbench.access.external, a control plane decides who can do
 	// what; every agent of the binary gets the plug, and the verbs know it.
 	cli.AgentOptions = func() []fw.Option { return []fw.Option{fw.WithAuthzFrom(access.Build)} }
