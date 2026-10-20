@@ -224,7 +224,8 @@ func (f *Fleet) Batch(ctx context.Context, batch string) (BatchRuns, error) {
 		out.Unknown, out.UnknownActive = f.platform.unknown(members)
 		f.platform.mu.Unlock()
 	}
-	for member, runs := range f.platform.forgotten(batch) {
+	forgotten := f.platform.forgotten(batch)
+	for member, runs := range forgotten {
 		ok, _, err := f.allow(ctx, f.forgotRecord(member, runs), runs, false)
 		if err != nil {
 			return BatchRuns{}, err
@@ -235,6 +236,9 @@ func (f *Fleet) Batch(ctx context.Context, batch string) (BatchRuns, error) {
 			}
 		}
 	}
+	// The jobs of the caller that no Task took yet are part of the job
+	// too: the front published them, and the view holds no run of them.
+	out.Jobs, out.Queued, out.JobsShared = f.queuedJobs(ctx, batch, out.Runs, forgotten)
 	return out, nil
 }
 

@@ -63,12 +63,12 @@ func (q *fakeQueues) readCount() int {
 }
 
 // withBusServer makes the fronts of a test read the server of the bus
-// through src.
-func withBusServer(t *testing.T, src queueSource) {
+// through src and keep the job records in shared.
+func withBusServer(t *testing.T, src queueSource, shared jobStore) {
 	t.Helper()
 	old := openBusServer
-	openBusServer = func(context.Context, *fw.Config, *slog.Logger) (queueSource, func(), error) {
-		return src, nil, nil
+	openBusServer = func(context.Context, *fw.Config, time.Duration, *slog.Logger) (queueSource, jobStore, func(), error) {
+		return src, shared, nil, nil
 	}
 	t.Cleanup(func() { openBusServer = old })
 }
@@ -131,7 +131,7 @@ func waitReads(t *testing.T, q *fakeQueues, n int) {
 // sleeps on.
 func TestWakeOnQueueDepth(t *testing.T) {
 	q := &fakeQueues{}
-	withBusServer(t, q)
+	withBusServer(t, q, nil)
 	front, ax, tasks := queueFront(t, true)
 
 	// Nothing waits: nobody wakes.
@@ -178,7 +178,7 @@ func TestWakeOnQueueDepth(t *testing.T) {
 // that Task does not take the jobs.
 func TestWakeOnStalledQueue(t *testing.T) {
 	q := &fakeQueues{}
-	withBusServer(t, q)
+	withBusServer(t, q, nil)
 	_, _, tasks := queueFront(t, true)
 	q.set(func(q *fakeQueues) {
 		q.pending = func(int) map[string]uint64 { return map[string]uint64{"fw.jobs.reviewer": 5} }
@@ -194,7 +194,7 @@ func TestWakeOnStalledQueue(t *testing.T) {
 // wakes no Task for them.
 func TestWakeOnQueueOff(t *testing.T) {
 	q := &fakeQueues{pending: func(int) map[string]uint64 { return map[string]uint64{"fw.jobs.reviewer": 5} }}
-	withBusServer(t, q)
+	withBusServer(t, q, nil)
 	front, _, tasks := queueFront(t, false)
 	emit(t, front.f, "ax:team/alpha", "01ALPHA", 1, fw.EvRunQueued, fw.RunQueuedData{Agent: "reviewer", Input: "job", Origin: fw.OriginBus, Principal: "ada"})
 	emit(t, front.f, "ax:team/alpha", "01ALPHA", 2, fw.EvRunStarted, fw.RunStartedData{Model: "fake/m"})
@@ -241,7 +241,7 @@ func TestDeadLettersFromTheStream(t *testing.T) {
 	first := time.Date(2026, 10, 19, 3, 4, 5, 0, time.UTC)
 	q := &fakeQueues{filters: []string{"fw.>"}, stored: map[string]uint64{"fw.jobs.default.dead": 2},
 		last: map[string]time.Time{"fw.jobs.default.dead": first}}
-	withBusServer(t, q)
+	withBusServer(t, q, nil)
 	front := newMember(t, fw.NewMemBus(), "front", func(_ *fw.Config, fc *Config) { fc.Intake = "fw.jobs" })
 	state := func() queueState {
 		states, _ := front.f.queueStates()
@@ -273,7 +273,7 @@ func TestDeadLettersFromTheStream(t *testing.T) {
 // that reach its subscription.
 func TestDeadLettersBySubscription(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "")
-	withBusServer(t, nil)
+	withBusServer(t, nil, nil)
 	bus := fw.NewMemBus()
 	front := newMember(t, bus, "front", func(_ *fw.Config, fc *Config) { fc.Intake = "fw.jobs" })
 	eventually(t, "the front subscribes to the dead letters", func() bool {

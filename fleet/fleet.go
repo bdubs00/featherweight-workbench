@@ -100,9 +100,10 @@ type Fleet struct {
 	// The members that the platforms know (platform.go).
 	platform *platform
 
-	// The intake queues (queues.go), and the end of the connection to
-	// the server of the bus (nats.go).
+	// The intake queues (queues.go), the job records (jobs.go), and the
+	// end of the connection to the server of the bus (nats.go).
 	queues      *queues
+	jobs        *jobBook
 	closeServer func()
 }
 
@@ -152,15 +153,18 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 		return nil, err
 	}
 	var src queueSource
+	var shared jobStore
 	if f.intake != "" {
 		var err error
-		src, f.closeServer, err = openBusServer(ctx, cfg, f.log)
+		src, shared, f.closeServer, err = openBusServer(ctx, cfg, f.expire, f.log)
 		if err != nil {
-			// The front still sends jobs; it reads no queue.
+			// The front still sends jobs; it reads no queue and keeps the
+			// job records of this replica alone.
 			f.log.Warn("fleet: open the server of the bus; the front reads no intake queue", "error", err)
-			src, f.closeServer = nil, nil
+			src, shared, f.closeServer = nil, nil, nil
 		}
 	}
+	f.jobs = newJobBook(shared, f.expire, f.log)
 	f.startQueues(src)
 	return f, nil
 }

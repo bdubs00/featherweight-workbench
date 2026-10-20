@@ -161,11 +161,25 @@ type BatchView interface {
 // and only while such a run works: a caller learns nothing of the members
 // where the caller has no run of the batch, and a run of someone else
 // keeps no finished batch from being finished.
+//
+// Jobs counts the run requests that the caller put on the intake queues
+// under the batch, one per idempotency key, from the job record of the
+// front (jobs.go), and Queued counts those that no Task took yet: the jobs
+// less the top-level runs of the caller that a queue started, those that
+// the view forgot included, and never more than the jobs that the queues
+// still hold once the front read the queues after the last enqueue. Both
+// are zero when the front knows no such record, as for a batch of another
+// front or one older than the expire time. JobsShared is true when the
+// record lives on the server of the bus, so every replica of the front
+// counts the same jobs; else each replica counts the jobs that it sent.
 type BatchRuns struct {
 	Runs          []*fw.Run
 	Forgotten     int
 	Unknown       int
 	UnknownActive int
+	Jobs          int
+	Queued        int
+	JobsShared    bool
 }
 
 // Errors of the fleet. A surface answers ErrNoRoute with 502 and

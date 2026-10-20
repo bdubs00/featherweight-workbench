@@ -50,7 +50,7 @@ func TestFleetMetrics(t *testing.T) {
 		pending: func(int) map[string]uint64 { return map[string]uint64{"fw.jobs.default": 7} },
 		acked:   map[string]uint64{"fw.jobs.default": 2},
 	}
-	withBusServer(t, q)
+	withBusServer(t, q, nil)
 	front := newMember(t, fw.NewMemBus(), "front", func(_ *fw.Config, fc *Config) { fc.Intake = "fw.jobs" })
 	f := front.f
 	queued := fw.MustEvent("", fw.EvRunQueued, fw.RunQueuedData{Agent: "default", Input: "x", Origin: fw.OriginBus, Principal: "ada"})

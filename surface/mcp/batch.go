@@ -102,6 +102,16 @@ type batchResult struct {
 	// Unknown counts the runs of the view that have no identity yet, so
 	// that their job is unknown (fleet.BatchRuns). Any job can hold them.
 	Unknown int `json:"unknown,omitempty"`
+	// Jobs counts the jobs that the caller put on the intake queues under
+	// the batch, and Queued those of them that no Task took yet, so no run
+	// stands for them (fleet.BatchRuns). Queued is absent when the front
+	// knows no record of the jobs. A run in the state queued is a job that
+	// a Task took and has not started; Queued never counts it.
+	// JobsShared is true when every replica of the front counts the same
+	// jobs.
+	Jobs       int  `json:"jobs,omitempty"`
+	Queued     *int `json:"queued,omitempty"`
+	JobsShared bool `json:"jobsShared,omitempty"`
 }
 
 // batchUsage is the usage of a job: the sum of the usage of its runs that
@@ -249,6 +259,21 @@ func unknownText(n int) string {
 	return fmt.Sprintf(" The view holds %s whose job it does not know yet, because it missed their start, so the counts and the usage can leave out runs of this job.", plural(n, "run", "runs"))
 }
 
+// queuedText tells how many of the jobs of the caller wait in the queue,
+// or says nothing when the front knows no record of them.
+func queuedText(b fleet.BatchRuns) string {
+	if b.Jobs == 0 {
+		return ""
+	}
+	if b.Queued == 0 {
+		return fmt.Sprintf(" No job of the %d that you sent waits in the queue.", b.Jobs)
+	}
+	if b.Queued == 1 {
+		return fmt.Sprintf(" 1 job of the %d that you sent waits in the queue: no Task took it yet.", b.Jobs)
+	}
+	return fmt.Sprintf(" %d jobs of the %d that you sent wait in the queue: no Task took them yet.", b.Queued, b.Jobs)
+}
+
 // plural writes a number with the singular or the plural noun.
 func plural(n int, one, many string) string {
 	if n == 1 {
@@ -288,7 +313,7 @@ func (s *server) addBatchTools() {
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolBatch,
 		Title:       "Job status",
-		Description: "Tell how a job goes: how many runs it has in each state, which members hold them, which runs wait for you, and which failed, with their errors. It also sums the tokens, turns, tool calls, and cost of the runs, counting each run once and a branch for its own work, and says when the sum is partial: a run reports no usage yet, a run is not finished, or the view forgot runs of the job.",
+		Description: "Tell how a job goes: how many of the jobs that you sent wait in the queue because no Task took them yet, how many runs it has in each state, which members hold them, which runs wait for you, and which failed, with their errors. The job is finished only when no job waits in the queue and every run ended. It also sums the tokens, turns, tool calls, and cost of the runs, counting each run once and a branch for its own work, and says when the sum is partial: a run reports no usage yet, a run is not finished, or the view forgot runs of the job.",
 		InputSchema: json.RawMessage(batchSchema),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, s.batch)
@@ -377,9 +402,13 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 	}
 	runs, forgotten := found.Runs, found.Forgotten
 	// A run whose job the view does not know can be a run of this job that
-	// still works.
+	// still works, and a job in the queue has no run yet.
 	out := batchResult{View: "batch", Batch: batch, Total: len(runs), States: map[string]int{}, Members: []string{},
-		Finished: len(runs) > 0 && found.UnknownActive == 0, Forgotten: forgotten, Unknown: found.Unknown}
+		Finished: len(runs) > 0 && found.UnknownActive == 0 && found.Queued == 0, Forgotten: forgotten, Unknown: found.Unknown,
+		Jobs: found.Jobs, JobsShared: found.JobsShared}
+	if found.Jobs > 0 {
+		out.Queued = &found.Queued
+	}
 	members := map[string]bool{}
 	for _, r := range runs {
 		out.States[string(r.State)]++
@@ -417,6 +446,7 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 	sort.Strings(out.Members)
 	if len(runs) == 0 {
 		text := fmt.Sprintf("No run of batch %s is in view. A run appears when a worker takes it from the queue, and a finished run leaves the view after workbench.fleet.expire.", batch)
+		text += queuedText(found)
 		if forgotten > 0 {
 			text += fmt.Sprintf(" The view forgot %s of it.", plural(forgotten, "run", "runs"))
 		}
@@ -437,6 +467,7 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 	for _, st := range states {
 		fmt.Fprintf(&b, " %s: %d.", st, out.States[st])
 	}
+	b.WriteString(queuedText(found))
 	if out.Finished {
 		b.WriteString(" The job is finished.")
 	}
