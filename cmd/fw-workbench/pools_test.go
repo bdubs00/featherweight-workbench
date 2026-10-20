@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
 // pools render prints the Workspaces and the Tasks of the example with a
@@ -20,6 +26,14 @@ func TestPoolsRender(t *testing.T) {
 	if err := os.WriteFile(path, example, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The front keeps an overlay for the pool, which the dry run merges.
+	store := pools.NewMemOverlays()
+	_ = store.PutProfile(context.Background(), "triage", pools.OverlayProfile{Profile: fw.AgentProfile{Name: "helper", Description: "Helps the triage."}, By: "alice"})
+	old := fleet.OpenOverlays
+	fleet.OpenOverlays = func(context.Context, *fw.Config, *slog.Logger) (pools.OverlayStore, func(), error) {
+		return store, nil, nil
+	}
+	t.Cleanup(func() { fleet.OpenOverlays = old })
 	var out, errs strings.Builder
 	if code := runPools([]string{"render", path}, &out, &errs); code != 0 {
 		t.Fatalf("exit %d: %s", code, errs.String())
@@ -30,7 +44,8 @@ func TestPoolsRender(t *testing.T) {
 			t.Fatalf("the dry run holds the secret %q", secret)
 		}
 	}
-	for _, want := range []string{"name: triage-0-ws", "name: triage-2", "kind: Task", "intake: fw.jobs.triage", "<secret: FW_API_TOKEN of the front>", "<secret: TICKETS_TOKEN of the front>"} {
+	for _, want := range []string{"name: triage-0-ws", "name: triage-2", "kind: Task", "intake: fw.jobs.triage", "<secret: FW_API_TOKEN of the front>", "<secret: TICKETS_TOKEN of the front>",
+		"The overlay of the front sets the profile helper in fw.agents by alice", "Helps the triage."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the dry run has no %q", want)
 		}

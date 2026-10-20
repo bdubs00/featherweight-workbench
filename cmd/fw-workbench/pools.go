@@ -7,6 +7,7 @@ package main
 // a change before the front acts on it.
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -20,7 +21,9 @@ import (
 const poolsUsage = `Usage: fw-workbench pools render [-config file] [file]
 
 render prints the Workspaces and the Tasks that the front applies for the
-pools under workbench.pools, as YAML documents in the order of the apply.
+pools under workbench.pools, as YAML documents in the order of the apply,
+with the profiles and the rules that the front adds to each pool from the
+key-value store of the bus.
 Every value that the front copies from its own environment, such as
 FW_API_TOKEN, is a placeholder. The file is the configuration of the front:
 the argument, else -config, else $FW_CONFIG, ./fw.yaml, or $FW_HOME/fw.yaml.
@@ -75,6 +78,12 @@ func runPools(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "fw-workbench: %v\n", err)
 		return 1
+	}
+	// The front merges the overlay of each pool, the profiles and the rules
+	// that people added, so the output shows the same.
+	list, err = fleet.MergeOverlays(context.Background(), cfg, list)
+	if err != nil {
+		fmt.Fprintf(stderr, "fw-workbench: %v; the output shows such a pool without its overlay\n", err)
 	}
 	if err := pools.Write(stdout, list); err != nil {
 		fmt.Fprintf(stderr, "fw-workbench: %v\n", err)

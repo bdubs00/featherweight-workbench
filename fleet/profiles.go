@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -50,6 +51,41 @@ var OpenOverlays = func(ctx context.Context, cfg *fw.Config, log *slog.Logger) (
 		return pools.NewMemOverlays(), nil, nil
 	}
 	return nil, nil, nil
+}
+
+// MergeOverlays returns the pools of the configuration cfg with the
+// overlays that the front keeps for them, for the dry run (fw-workbench
+// pools render). A pool whose overlay does not answer or does not fit
+// stays as the configuration says, and the error names it.
+func MergeOverlays(ctx context.Context, cfg *fw.Config, list []*pools.Pool) ([]*pools.Pool, error) {
+	if len(list) == 0 {
+		return list, nil
+	}
+	store, closeStore, err := OpenOverlays(ctx, cfg, slog.New(slog.DiscardHandler))
+	if err != nil || store == nil {
+		return list, err
+	}
+	if closeStore != nil {
+		defer closeStore()
+	}
+	ctx, cancel := context.WithTimeout(ctx, overlayTimeout)
+	defer cancel()
+	out := slices.Clone(list)
+	var problems []string
+	for i, p := range list {
+		o, err := store.Read(ctx, p.Name)
+		if err == nil {
+			out[i], err = p.WithOverlay(o)
+		}
+		if err != nil {
+			out[i] = p
+			problems = append(problems, fmt.Sprintf("the pool %s: %v", p.Name, err))
+		}
+	}
+	if len(problems) > 0 {
+		return out, fmt.Errorf("fleet: the overlays %s: %s", store.Describe(), strings.Join(problems, "; "))
+	}
+	return out, nil
 }
 
 // mergedPool reads the overlay of a pool and merges it into the pool. A
