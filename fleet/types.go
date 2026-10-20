@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
 // Defaults and limits of the fleet.
@@ -147,6 +148,13 @@ type View interface {
 // name that two people use tells neither of the runs of the other.
 type BatchView interface {
 	Batch(ctx context.Context, batch string) (BatchRuns, error)
+}
+
+// PoolView is a View that keeps pools of Tasks (pools.go). Pools returns
+// the state of every pool whose agent the principal in ctx can view, in
+// the order of the configuration, after the last pass of each.
+type PoolView interface {
+	Pools(ctx context.Context) ([]pools.Status, error)
 }
 
 // BatchRuns is the answer of BatchView.Batch.

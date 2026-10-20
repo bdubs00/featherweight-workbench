@@ -14,6 +14,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
 // fakeFleet is a fleet with one other member, "owner", that a test server
@@ -297,5 +298,34 @@ func TestFleetListAndRead(t *testing.T) {
 	}
 	if h := p.fleet.forwarded(); len(h) == 0 || h[len(h)-1].Get("Authorization") != asAlice {
 		t.Fatalf("forwarded headers = %v", h)
+	}
+}
+
+// poolFleet is a fake fleet that keeps pools.
+type poolFleet struct {
+	*fakeFleet
+	pools []pools.Status
+}
+
+func (f *poolFleet) Pools(context.Context) ([]pools.Status, error) { return f.pools, nil }
+
+// GET /v1/fleet carries the pools that the caller can see, and no key for
+// a caller who sees none.
+func TestFleetShowsPools(t *testing.T) {
+	pf := &poolFleet{
+		fakeFleet: &fakeFleet{name: "view", members: []fleet.Member{{Name: "view", Self: true, State: fleet.MemberLive}}},
+		pools:     []pools.Status{{Name: "triage", Atespace: "team", Wanted: 3, Actual: 2, Ready: 2, Gaps: []string{"the pool created triage-2; it starts"}}},
+	}
+	srv := serve(t, attach(newAgent(t, newScript().model()), pf))
+	resp, b := do(t, "GET", srv.URL+"/v1/fleet", "")
+	var fl struct{ Pools []pools.Status }
+	decodeJSON(t, resp, b, http.StatusOK, &fl)
+	if len(fl.Pools) != 1 || fl.Pools[0].Wanted != 3 || fl.Pools[0].Actual != 2 || fl.Pools[0].Gaps[0] != "the pool created triage-2; it starts" {
+		t.Fatalf("fleet = %s", b)
+	}
+	pf.pools = nil
+	resp, b = do(t, "GET", srv.URL+"/v1/fleet", "")
+	if resp.StatusCode != http.StatusOK || strings.Contains(string(b), `"pools"`) {
+		t.Fatalf("fleet without pools = %s", b)
 	}
 }

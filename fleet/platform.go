@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/pools"
 	v1alpha1 "github.com/google/ax/pkg/apis/v1alpha1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -71,6 +72,12 @@ type platform struct {
 	gone     map[string]forgotRun       // by run id: the runs that the view dropped
 	conn     *grpc.ClientConn
 	client   v1alpha1.AXClient
+
+	// The pools that the front keeps (pools.go), and the state of each
+	// after its last pass, by name, which mu guards.
+	pools      []*pools.Pool
+	reconciler *pools.Reconciler
+	poolState  map[string]pools.Status
 }
 
 // childLink is where a child of a run lives, from the fw.run.child event
@@ -154,8 +161,9 @@ type forgotRun struct {
 }
 
 // startPlatform starts the sources that the configuration names: the Task
-// list for the atespaces, and the egress stream.
-func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv string) error {
+// list for the atespaces, and the egress stream. The pools reconcile with
+// the Task list, with the values of the variables of the front in vals.
+func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv string, list []*pools.Pool, vals *pools.Values) error {
 	p := &platform{
 		f:         f,
 		atespaces: atespaces,
@@ -190,6 +198,7 @@ func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv strin
 		f.stops = append(f.stops, stop)
 		f.viewMu.Unlock()
 	}
+	p.startPools(list, vals)
 	f.platform = p
 	if p.client != nil {
 		go p.loop(f.ctx)
@@ -229,7 +238,8 @@ func (p *platform) loop(ctx context.Context) {
 
 // poll reads the Tasks of every atespace and updates the members. A Task
 // that disappears from the list leaves the view, and a Task that starts to
-// run gets its runs read once.
+// run gets its runs read once. Then the suspend controller and the pools
+// act on the list.
 func (p *platform) poll(ctx context.Context) {
 	p.mu.Lock()
 	client := p.client
@@ -241,9 +251,12 @@ func (p *platform) poll(ctx context.Context) {
 	seen := map[string]bool{}
 	var fill []*platformMember
 	var learn []*v1alpha1.Task
+	listed, failed := map[string][]*v1alpha1.Task{}, map[string]error{}
 	for _, atespace := range p.atespaces {
 		tasks, err := p.listTasks(ctx, client, atespace)
+		listed[atespace] = tasks
 		if err != nil {
+			failed[atespace] = err
 			p.f.log.Warn("fleet: list the Tasks", "atespace", atespace, "error", err)
 			// The members of this atespace keep their last state.
 			p.mu.Lock()
@@ -304,6 +317,7 @@ func (p *platform) poll(ctx context.Context) {
 		p.learn(ctx, client, t)
 	}
 	p.suspendIdle(ctx, now)
+	p.reconcilePools(ctx, listed, failed, now)
 }
 
 // learn reads the profiles that a Task serves from the configuration file
@@ -474,9 +488,19 @@ func (m *platformMember) serves(agent string) {
 // of the fleet, and decodes the JSON answer into out. The caller makes sure
 // that the Task is awake, or means to wake it.
 func (p *platform) read(ctx context.Context, m *platformMember, path string, out any) error {
-	token, err := fw.EnvSecrets{}.Get(ctx, p.tokenEnv)
-	if err != nil || strings.TrimSpace(token) == "" {
-		return fmt.Errorf("no static token in the secret %s", p.tokenEnv)
+	return p.readAs(ctx, m, path, "", out)
+}
+
+// readAs is read with token instead of the static token of the fleet, when
+// token is not empty: a pool reads a Task with the token that the Task
+// holds, which is older than the token of the front after a rotation.
+func (p *platform) readAs(ctx context.Context, m *platformMember, path, token string, out any) error {
+	if strings.TrimSpace(token) == "" {
+		t, err := fw.EnvSecrets{}.Get(ctx, p.tokenEnv)
+		if err != nil || strings.TrimSpace(t) == "" {
+			return fmt.Errorf("no static token in the secret %s", p.tokenEnv)
+		}
+		token = t
 	}
 	cctx, cancel := context.WithTimeout(fw.WithCredential(ctx, "Bearer "+strings.TrimSpace(token)), readTimeout)
 	defer cancel()
@@ -491,13 +515,21 @@ func (p *platform) read(ctx context.Context, m *platformMember, path string, out
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s answered %d", path, resp.StatusCode)
+		return &answerError{path: path, code: resp.StatusCode}
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, RecordLimit*4)).Decode(out); err != nil {
 		return fmt.Errorf("decode %s: %w", path, err)
 	}
 	return nil
 }
+
+// answerError is an answer of a member other than 200 to a read.
+type answerError struct {
+	path string
+	code int
+}
+
+func (e *answerError) Error() string { return fmt.Sprintf("%s answered %d", e.path, e.code) }
 
 // readTimeout bounds one read of a Task through the router. A wake of a
 // sleeping Task takes a few seconds, so it is longer than one request.

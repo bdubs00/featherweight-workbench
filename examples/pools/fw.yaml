@@ -1,0 +1,102 @@
+# The fw.yaml of a front that keeps a pool of three workers of the profile
+# triage (docs/ARCHITECTURE.md section 13). The front creates the Tasks
+# triage-0, triage-1, and triage-2 in the atespace default, with a
+# Workspace each, and keeps them as this file says. Each worker takes the
+# jobs of the queue fw.jobs.triage.
+#
+# Replace these placeholders before you use the file:
+#   the image digest              the kernel image of a worker, by digest
+#   model-proxy.models.svc...     an OpenAI-compatible model server in the cluster
+#   example-model                 the model id of that server
+#   tickets-mcp.example.com       an MCP server of a ticket system
+#
+# The front reads two variables from its own environment, for example from
+# a Kubernetes Secret: FW_API_TOKEN, the static token of the fleet, which
+# the front copies into each worker, and TICKETS_TOKEN, the token of the
+# ticket system. This file holds neither value.
+#
+# Review a change before the front applies it:
+#   fw-workbench pools render -config fw.yaml
+
+auth:
+  mode: token
+
+# The front and the workers share one bus. A worker in a Substrate sandbox
+# reaches NATS over its WebSocket listener, so the pool sets its own URL.
+bus:
+  driver: nats
+  url: nats://nats.agents.svc.cluster.local:4222
+
+ax:
+  server: ax-server.ax-system.svc.cluster.local:8080
+  router: atenet-router.ate-system.svc.cluster.local
+
+workbench:
+  fleet:
+    atespaces: [default]
+    egress: fw.events
+    intake: fw.jobs
+  pools:
+    - name: triage
+      replicas: 3
+      image: ghcr.io/bdubs00/featherweight-kernel@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      # The atespace, the agent, and the queue take their defaults: the
+      # only atespace of the fleet, the only profile, and fw.jobs.triage.
+      env:
+        # The model proxy holds the key of the model, so the worker sends a
+        # placeholder.
+        - name: OPENAI_API_KEY
+          value: the-proxy-holds-the-key
+        # The front copies this value from its own variable TICKETS_TOKEN.
+        - name: TICKETS_TOKEN
+          fromEnv: TICKETS_TOKEN
+      # A worker reaches these hosts and no other. ax creates the egress
+      # policy of each Task from this list before the Task first runs.
+      egress:
+        rules:
+          - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
+          - http: {hostnames: [model-proxy.models.svc.cluster.local], ports: [8080]}
+          - https: {hostnames: [tickets-mcp.example.com]}
+      resources:
+        requests: {cpu: 500m, memory: 1Gi}
+        limits: {cpu: "2", memory: 2Gi}
+      files:
+        - path: notes/queues.md
+          content: |
+            Each ticket goes to one queue: billing, access, or bugs.
+      # The fw.yaml of each worker. The front adds the bus keys that it
+      # reads (the queue, the egress stream, and its event types), the
+      # static token mode, and the ax API.
+      fw:
+        model: openai/example-model
+        effort: low
+        bus:
+          url: ws://nats.agents.svc.cluster.local:8080
+        providers:
+          openai:
+            baseUrl: http://model-proxy.models.svc.cluster.local:8080/v1
+            apiKeyEnv: OPENAI_API_KEY
+        tools:
+          builtin: [files, clock]
+          mcp:
+            - name: tickets
+              endpoint: https://tickets-mcp.example.com/mcp
+              auth:
+                bearer: TICKETS_TOKEN
+        # The sandbox is the boundary, so the tools run without a question.
+        # The one tool that writes to the ticket system waits for a person.
+        policy:
+          default: allow
+          ask: [tickets.update_ticket]
+        agents:
+          triage:
+            description: Reads new tickets and sorts each one into a queue.
+            tools: [files, tickets.search_tickets, tickets.get_ticket, tickets.update_ticket]
+            budget:
+              maxTurns: 20
+              deadline: 10m
+            system: |
+              You sort one ticket. The input names the ticket. Read it with
+              tickets.get_ticket, choose one queue from notes/queues.md, and
+              set the queue with tickets.update_ticket. Answer with the queue
+              and one sentence that says why.

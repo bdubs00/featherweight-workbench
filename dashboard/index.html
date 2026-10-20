@@ -960,13 +960,27 @@ function markOpen(el) {
     if (on) r.setAttribute('aria-current', 'true'); else r.removeAttribute('aria-current');
   }
 }
-// loadMembers reads the agents that the person can see, by fleet member.
-// Without the fleet, this process is the only member.
+// loadMembers reads the agents that the person can see, by fleet member,
+// and the pools of the front. Without the fleet, this process is the only
+// member.
 async function loadMembers(force) {
   if (S.members && !force && Date.now() - S.membersAt < 30000) return S.members;
-  S.members = fleetOn() ? ((await api.fleet()).members || []) : [{self: true, name: '', agents: await api.agents()}];
+  if (fleetOn()) {
+    const f = await api.fleet();
+    S.members = f.members || [];
+    S.pools = f.pools || [];
+  } else {
+    S.members = [{self: true, name: '', agents: await api.agents()}];
+    S.pools = [];
+  }
   S.membersAt = Date.now();
   return S.members;
+}
+// poolLine says how a pool of the front stands: its ready Tasks against
+// the Tasks that it wants, and the first reason for a gap.
+function poolLine(p) {
+  const head = `Pool ${p.name}: ${num(p.ready)} of ${num(p.wanted)} ${p.wanted === 1 ? 'Task' : 'Tasks'} ready`;
+  return head + (p.gaps && p.gaps.length ? '. ' + cap(p.gaps[0]) + (p.gaps.length > 1 ? ' (and ' + num(p.gaps.length - 1) + ' more)' : '') : '');
 }
 // startable lists the agents that the person can start: owner or operator,
 // on this process or on a member that this process can reach.
@@ -1121,7 +1135,7 @@ screens.agents = {
     const m = await loadMembers(force);
     const box = $('#alist', el);
     if (!box) return;
-    const key = JSON.stringify(m);
+    const key = JSON.stringify([m, S.pools]);
     if (box.dataset.key !== key) { box.dataset.key = key; morph(box, this.draw(m)); }
     markOpen(el);
   },
@@ -1139,7 +1153,8 @@ screens.agents = {
     }).join('');
     const head = `<div class="head"><p class="glance">${n === 0 ? 'No agent is shared with you yet.' : n === 1 ? 'One agent works for you.' : num(n) + ' agents work for you.'}</p>`
       + (S.me && S.me.canCreate ? '<button class="btn small" data-action="go" data-view="create">New agent</button>' : '') + '</div>';
-    return head + (groups ? `<div style="margin-top:14px">${groups}</div>` : '');
+    const pools = (S.pools || []).map(p => `<p class="sub" data-key="pool:${esc(p.name)}">${esc(poolLine(p))}</p>`).join('');
+    return head + pools + (groups ? `<div style="margin-top:14px">${groups}</div>` : '');
   },
 };
 // isBuilder reports whether a run is a conversation that creates an agent.

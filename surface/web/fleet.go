@@ -1,6 +1,6 @@
 package web
 
-// This file serves GET /v1/fleet, the members of the fleet, and
+// This file serves GET /v1/fleet, the members and the pools of the fleet, and
 // GET /v1/fleet/runs, the runs of the whole fleet (docs/ARCHITECTURE.md,
 // section 4.7). The relay of the fleet answers a request about a run that
 // another member owns through the native surface of the kernel, and starts
@@ -20,8 +20,9 @@ import (
 // fleetOff is the problem detail of a fleet route without a fleet.
 const fleetOff = "the fleet is off; set workbench.fleet.atespaces (FW_WORKBENCH_FLEET_ATESPACES) or workbench.fleet.egress to turn it on"
 
-// fleet answers GET /v1/fleet with the name of this member and the members
-// that the caller can see.
+// fleet answers GET /v1/fleet with the name of this member, the members
+// that the caller can see, and the pools whose agent the caller can view,
+// each with its wanted and actual Tasks and the reasons for a gap.
 func (s *server) fleet(w http.ResponseWriter, r *http.Request) {
 	f := fleet.Of(s.a)
 	if f == nil {
@@ -36,7 +37,18 @@ func (s *server) fleet(w http.ResponseWriter, r *http.Request) {
 	if members == nil {
 		members = []fleet.Member{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": f.Name(), "members": members})
+	body := map[string]any{"name": f.Name(), "members": members}
+	if pv, ok := f.(fleet.PoolView); ok {
+		ps, err := pv.Pools(r.Context())
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		if len(ps) > 0 {
+			body["pools"] = ps
+		}
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // fleetRuns answers GET /v1/fleet/runs with the runs of the whole fleet that

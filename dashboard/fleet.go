@@ -1,8 +1,8 @@
 package dashboard
 
-// This file holds the members of the fleet as text (docs/ARCHITECTURE.md,
-// the fleet). The runs of the whole fleet come from package view of the
-// kernel.
+// This file holds the members and the pools of the fleet as text
+// (docs/ARCHITECTURE.md, the fleet). The runs of the whole fleet come from
+// package view of the kernel.
 
 import (
 	"fmt"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
 // MembersText describes the members of a fleet, one line each. Name is the
@@ -65,6 +66,35 @@ func MemberLine(m fleet.Member) string {
 		b.WriteString("; read-only from here, because it has no address that this process can reach")
 	}
 	return b.String()
+}
+
+// PoolsText describes the pools of the front: per pool, the Tasks that it
+// wants, the Tasks that exist and are ready, its queue, and one line per
+// reason for a gap.
+func PoolsText(ps []pools.Status) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s of the front:", count(len(ps), "pool", "pools"))
+	for _, p := range ps {
+		fmt.Fprintf(&b, "\n- %s in %s: %d of %d %s ready, %d %s; agent %s on the queue %s",
+			p.Name, p.Atespace, p.Ready, p.Wanted, word(p.Wanted, "Task", "Tasks"), p.Actual, word(p.Actual, "exists", "exist"), p.Agent, p.Intake)
+		if p.CheckedAt.IsZero() {
+			b.WriteString("; not read yet")
+		} else {
+			b.WriteString("; checked " + ago(p.CheckedAt) + " ago")
+		}
+		for _, g := range p.Gaps {
+			b.WriteString("\n  - " + g)
+		}
+	}
+	return b.String()
+}
+
+// word picks the singular or the plural form for n.
+func word(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // ago is how long ago a time was, in one unit.

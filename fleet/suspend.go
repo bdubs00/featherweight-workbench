@@ -96,7 +96,10 @@ func (p *platform) suspendIdle(ctx context.Context, now time.Time) {
 			idleFor = now.Sub(*st.IdleSince)
 		}
 		p.mu.Lock()
-		m.state, m.seen = MemberQuiet, now
+		// The phase follows the suspend, so a wake through the router
+		// before the next Task list makes the front resume the Task
+		// (resumed), as after any other suspend.
+		m.state, m.phase, m.seen = MemberQuiet, phaseSuspended, now
 		p.mu.Unlock()
 		p.f.log.Info("fleet: suspended an idle Task", "member", m.name, "idle", idleFor.Round(time.Second).String())
 	}

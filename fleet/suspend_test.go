@@ -53,15 +53,38 @@ type fakeTasks struct {
 	mu     sync.Mutex
 	status map[string]view.Status
 	reads  map[string]int
+	// runs holds the runs that each actor answers on GET /v1/runs/{id},
+	// and tokens the bearer tokens that each actor takes besides the
+	// token of the fleet.
+	runs   map[string]map[string]*fw.Run
+	tokens map[string]string
 }
 
 func newFakeTasks(t *testing.T) *fakeTasks {
 	t.Helper()
-	ft := &fakeTasks{status: map[string]view.Status{}, reads: map[string]int{}}
+	ft := &fakeTasks{status: map[string]view.Status{}, reads: map[string]int{}, runs: map[string]map[string]*fw.Run{}, tokens: map[string]string{}}
 	ft.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		actor := r.Header.Get("ate-target-actor")
-		if actor == "" || r.Header.Get("Authorization") != "Bearer fleet-secret" {
+		ft.mu.Lock()
+		own := ft.tokens[actor]
+		ft.mu.Unlock()
+		auth := r.Header.Get("Authorization")
+		if actor == "" || (auth != "Bearer fleet-secret" && (own == "" || auth != "Bearer "+own)) {
 			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		if id, ok := strings.CutPrefix(r.URL.Path, "/v1/runs/"); ok {
+			ft.mu.Lock()
+			run := ft.runs[actor][id]
+			ft.mu.Unlock()
+			switch {
+			case run == nil:
+				http.Error(w, "no run", http.StatusNotFound)
+			case run.State == "":
+				http.Error(w, "forbidden", http.StatusForbidden)
+			default:
+				_ = json.NewEncoder(w).Encode(run)
+			}
 			return
 		}
 		switch r.URL.Path {

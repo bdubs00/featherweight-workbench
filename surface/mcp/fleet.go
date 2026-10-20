@@ -21,6 +21,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/pools"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -33,11 +34,13 @@ const viewFleet = "fleet"
 // maxMemberBody bounds an answer of a member.
 const maxMemberBody = 64 << 20
 
-// fleetResult is the structured result of the fleet tool.
+// fleetResult is the structured result of the fleet tool. Pools holds the
+// pools whose agent the caller can view.
 type fleetResult struct {
 	View    string         `json:"view"`
 	Name    string         `json:"name"`
 	Members []fleet.Member `json:"members"`
+	Pools   []pools.Status `json:"pools,omitempty"`
 }
 
 // addFleetTool adds the fleet tool when the fleet is on.
@@ -48,7 +51,7 @@ func (s *server) addFleetTool() {
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolFleet,
 		Title:       "Fleet",
-		Description: "List the members of the fleet that you can see: the fw processes that share this bus. Each member has its state (live, quiet, or stopped), when it was last heard, its authorization mode, the agents that you can see, and its counts of active runs and of runs that wait for input. runs_list lists the runs of every member, and the work tools act on a run of any member by its id.",
+		Description: "List the members of the fleet that you can see: the fw processes that share this bus. Each member has its state (live, quiet, or stopped), when it was last heard, its authorization mode, the agents that you can see, and its counts of active runs and of runs that wait for input. The pools of the front follow, each with the Tasks that it wants, the Tasks that exist and are ready, and the reason for a gap. runs_list lists the runs of every member, and the work tools act on a run of any member by its id.",
 		InputSchema: json.RawMessage(emptySchema),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, s.fleetTool)
@@ -59,7 +62,11 @@ func (s *server) fleetTool(ctx context.Context, _ *sdk.CallToolRequest, _ struct
 	if err != nil {
 		return failResult(err), nil, nil
 	}
-	return result(withPageURL(s.a, dashboard.MembersText(res.Name, res.Members)), res), nil, nil
+	text := dashboard.MembersText(res.Name, res.Members)
+	if len(res.Pools) > 0 {
+		text += "\n\n" + dashboard.PoolsText(res.Pools)
+	}
+	return result(withPageURL(s.a, text), res), nil, nil
 }
 
 // withPageURL ends a text with the address of the dashboard page when the
@@ -84,7 +91,13 @@ func (s *server) members(ctx context.Context) (fleetResult, error) {
 	if members == nil {
 		members = []fleet.Member{}
 	}
-	return fleetResult{View: viewFleet, Name: f.Name(), Members: members}, nil
+	res := fleetResult{View: viewFleet, Name: f.Name(), Members: members}
+	if pv, ok := f.(fleet.PoolView); ok {
+		if res.Pools, err = pv.Pools(ctx); err != nil {
+			return fleetResult{}, err
+		}
+	}
+	return res, nil
 }
 
 // errFleetOff answers a request that needs the fleet when the fleet is off.
