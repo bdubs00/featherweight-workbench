@@ -111,6 +111,11 @@ type Fleet struct {
 	queues      *queues
 	jobs        *jobBook
 	closeServer func()
+
+	// The store of the overlays of the pools (profiles.go), nil when the
+	// pools run their configuration alone, and its end.
+	overlays      pools.OverlayStore
+	closeOverlays func()
 }
 
 // Open builds the fleet of an agent from a configuration that Load filled
@@ -168,9 +173,20 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 			return nil, fmt.Errorf("fleet: %w", err)
 		}
 		vals = v
+		// The pass of a pool merges the overlay of the pool, so the store
+		// opens before the first pass.
+		store, closeStore, err := OpenOverlays(ctx, cfg, f.log)
+		if err != nil {
+			f.cancel()
+			return nil, fmt.Errorf("fleet: the store of the overlays of the pools: %w", err)
+		}
+		f.overlays, f.closeOverlays = store, closeStore
 	}
 	if err := f.startPlatform(fc.Atespaces, egress, cfg.AX.Server, tokenEnv, fc.Pools, vals); err != nil {
 		f.cancel()
+		if f.closeOverlays != nil {
+			f.closeOverlays()
+		}
 		return nil, err
 	}
 	var src queueSource
@@ -215,6 +231,9 @@ func (f *Fleet) Close() error {
 		f.cancel()
 		if f.closeServer != nil {
 			f.closeServer()
+		}
+		if f.closeOverlays != nil {
+			f.closeOverlays()
 		}
 		f.client.CloseIdleConnections()
 	})
