@@ -873,8 +873,9 @@ Each run request carries this metadata:
 | `fw.title` | The title from the template `title`, when the source sets one |
 | `workbench.source` | The name of the source |
 | `workbench.sourceKey` | The de-duplication key of the event |
+| `workbench.sourceGeneration` | With `redrive`, the generation of the claim of the event (section 13.9) |
 
-The metadata of the configuration comes on top. The idempotency key of the request is `<source>/<key>`, so a worker that gets the same request twice returns the first run.
+The metadata of the configuration comes on top. The idempotency key of the request is `<source>/<key>`, so a worker that gets the same request twice returns the first run. A redrive has the key `/source-redrive/<generation>` instead (section 13.9).
 
 A run of a source acts as `runAs`, which is `source:<name>` of the kind `workload` by default. In the rules mode, the admins and the owners, operators, and viewers of the profile see these runs (the kernel architecture, section 13.2). To let the runs act for a person at a service (section 11), set `runAs` to the subject of that person and `runAsKind` to `user`. That person must have connected the service.
 
@@ -900,6 +901,9 @@ Each entry of `workbench.sources` takes these keys. No variable sets the list.
 | `metadata` | Templates of metadata, by key | none |
 | `key` | The template of the de-duplication key, at most 512 bytes | required |
 | `dedupFor` | How long a key blocks a second run, one minute or more | `168h` (7 days) |
+| `redrive` | Lets an event whose job reached the dead letter run again (section 13.9). Without the key, a dead-lettered event stays a duplicate for `dedupFor`. | off |
+| `redrive.maxAttempts` | The runs of one event that the source starts, the first one included, 2 to 10 | `3` |
+| `redrive.cooldown` | The time from the dead letter to the next run, one minute or more and shorter than `dedupFor` | `5m` |
 | `runAs` | The principal of the runs | `source:<name>` |
 | `runAsKind` | The kind of that principal, `workload` or `user` | `workload` |
 
@@ -911,6 +915,7 @@ The sources need `workbench.fleet.intake` (section 4.6), and the bus `nats` for 
 - A metadata key is one that the source sets, or one that the kernel reserves.
 - `workbench.fleet.intake` is empty.
 - The bus is neither `nats` nor `mem`.
+- A source has `redrive`, and the bus is not `nats`, or `redrive.maxAttempts` or `redrive.cooldown` is out of its range.
 
 A template is a Go `text/template` over one event. A field that the event does not have is an error, so `{{.id}}` refuses an event without `id`, and a key never comes out empty by accident. A template reads an optional field with `index`, such as `{{index . "assignee"}}`. Besides the built-in functions, a template can call `json` (a value as compact JSON, such as `{{json .}}` for the whole event), `lower`, `upper`, `trim`, and `default` (such as `{{index . "priority" | default "normal"}}`). A number keeps every digit of the body. A key must not be empty, and it must not hold a field whose value is null. The loader of `fw.yaml` expands `${NAME}` in every value first (the kernel architecture, section 12.1), so a template that needs the text `${` writes `$${`. A variable of a template, such as `$i`, needs no escape.
 
@@ -920,7 +925,7 @@ Choose a key that changes when the work changes. For a ticket, the id and the ti
 
 The keys live in NATS JetStream, so every replica of the front shares them, and a restart keeps them. Each source has one key-value bucket, `<stream>_SOURCE_<name>`, where `<stream>` is `bus.options.stream`, `FW` by default. The TTL of the bucket is `dedupFor`, so the server forgets a key when its window ends. At the first claim of a source after a start, the front makes the bucket when it is missing, and it sets the TTL of a bucket that exists to the value of the configuration. The front opens its own connection for the keys, with `bus.url` and the options `credentials` and `token` of the bus. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_SOURCE_*.>`.
 
-The name of a key in the bucket is the SHA-256 of the de-duplication key, because a key can hold any character. The value holds the state of the claim, the key, the name of the replica, and the time.
+The name of a key in the bucket is the SHA-256 of the de-duplication key, because a key can hold any character. The value holds the state of the claim, the key, the name of the replica, and the time. With `redrive`, it also holds the generation, the attempt, and the time of the failure (section 13.9).
 
 A source handles each event in four steps:
 
@@ -931,7 +936,7 @@ A source handles each event in four steps:
 
 When a claim exists, the source does this:
 
-- A `done` claim makes the event a duplicate. The event makes no run.
+- A `done` claim makes the event a duplicate. The event makes no run. With `redrive`, a claim whose job reached the dead letter can run again (section 13.9).
 - A `pending` claim younger than two minutes means that another replica handles the event now. The event is busy: a webhook answers 503, and a poll meets the item again at its next poll.
 - A `pending` claim older than two minutes means that its replica stopped in the middle. The next delivery takes the claim over, with a compare of the revision, so only one replica takes it.
 
@@ -1038,6 +1043,7 @@ workbench:
       title: "Triage {{.id}}"
       metadata: { ticket: "{{.id}}" }
       key: "{{.id}}/{{.updated}}"
+      redrive: { maxAttempts: 3, cooldown: 10m }
     - name: alerts
       agent: oncall
       poll:
@@ -1050,6 +1056,24 @@ workbench:
       key: "{{.fingerprint}}/{{.startsAt}}"
       dedupFor: 24h
 ```
+
+### 13.9 Redrive after a dead letter
+
+A claim is done once its run request is on the queue, not once its run ends well. When the run of the job fails after its last attempt, the worker sends the job to the dead letter of the queue, `<queue>.dead` (the kernel architecture, section 9.3), and the key of the event still blocks a second run for `dedupFor`. Each later delivery of the event, such as a webhook that a sweeper sends again, is a duplicate. Without `redrive`, only a person brings such an event back: the person reads the record of the dead letter and starts the run again with `enqueue`.
+
+With `redrive`, the dead letter gives the event another run. The source works as follows:
+
+1. Each claim holds a generation, a random token, and an attempt, from 1. The run request carries the generation in `workbench.sourceGeneration`. A retry of the kernel intake (`bus.intakeRetries`) copies the metadata of the request, so every run of one job carries the same generation.
+2. Every replica of the front reads `<queue>.dead` through one durable JetStream consumer of the source, `sources_redrive_<hash>`, which the replicas share. Each record therefore reaches one replica, and a restart goes on where the consumer stopped. The consumer is not the consumer of a worker intake, so it takes no job from a worker.
+3. A record of a failed or rejected job marks the claim `failed` when it matches the claim: the source, the key, and the generation in the metadata of the request, the agent of the source, and `runAs` and `runAsKind`. The front acknowledges the record after it wrote the claim. A record of another source, of a run that a person queued, or of an older generation changes nothing. A second record of the same failure leaves the time of the failure as it was, so it never moves the cooldown. A record that does not read is skipped with a log line that names the source only. When NATS does not answer, the record comes back after a second.
+4. After `redrive.cooldown`, the next delivery of the event takes the failed claim again, with a compare of the revision, so only one replica takes it. The claim gets a new generation and the next attempt, and the run request gets the idempotency key `/source-redrive/<generation>`, because a worker returns the failed run for the old key. The metadata `workbench.source` and `workbench.sourceKey` stay. The webhook checks its credential first, as for any delivery.
+5. A delivery before the cooldown ends, and every delivery after the last attempt, is a duplicate.
+
+The source never sends a job by itself: an event runs again only when the outside system delivers it again, or when the next poll finds it. A failure after a done claim, a dead letter that arrives before the claim is done, and a publish that fails all keep the generation and the attempt. A failed publish releases the claim, and the next delivery runs the same generation. A stale pending claim goes to the next delivery with its generation too. A key that ran well stays a duplicate.
+
+The bound of the attempts lasts as long as the key. Each write of a claim starts the window of the key again, and the cooldown is shorter than `dedupFor`, so a key never expires during its cooldown. When no delivery comes for `dedupFor` after the last write, the server forgets the key, and the next delivery starts again at the first attempt.
+
+`redrive` needs the bus `nats`. A claim from before `redrive`, or a record of the dead letter from before it, holds no generation and matches no record, so that event still needs a person and `enqueue`. A pending claim from before `redrive` goes to the next delivery after two minutes, as in section 13.3. When a source turns `redrive` off, its consumer stays on the NATS server, and an operator can remove it with `nats consumer rm`. The redrive does not read the state of the failed run. A person who continues a failed run of a source, with a follow-up or a new budget, can therefore meet a second run of the same event, as with `bus.intakeRetries` (the kernel architecture, section 9.3).
 
 ## 14. Pools
 

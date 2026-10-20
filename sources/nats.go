@@ -42,25 +42,30 @@ const bucketSuffix = "_SOURCE_"
 
 // claim is the value of a key in a bucket.
 type claim struct {
-	State string    `json:"state"`
-	Key   string    `json:"key"`
-	By    string    `json:"by,omitempty"`
-	At    time.Time `json:"at"`
+	State      string    `json:"state"`
+	Key        string    `json:"key"`
+	By         string    `json:"by,omitempty"`
+	At         time.Time `json:"at"`
+	Generation string    `json:"generation,omitempty"`
+	Attempt    int       `json:"attempt,omitempty"`
+	FailedAt   time.Time `json:"failedAt,omitempty"`
 }
 
 // natsStore is the store of a front whose bus is NATS.
 type natsStore struct {
-	nc      *nats.Conn
-	js      jetstream.JetStream
-	stream  string
-	windows map[string]time.Duration
-	by      func() string
-	now     func() time.Time
-	stale   time.Duration
-	log     *slog.Logger
+	nc       *nats.Conn
+	js       jetstream.JetStream
+	stream   string
+	windows  map[string]time.Duration
+	redrives map[string]Redrive // the sources with redrive; set before the start
+	by       func() string
+	now      func() time.Time
+	stale    time.Duration
+	log      *slog.Logger
 
-	mu      sync.Mutex
-	buckets map[string]jetstream.KeyValue
+	mu          sync.Mutex
+	buckets     map[string]jetstream.KeyValue
+	nextSkipLog time.Time // the earliest time of the next line of skipMalformed
 }
 
 // openNATS connects to the NATS server of the bus of cfg for the claims of
@@ -182,6 +187,9 @@ func keyID(key string) string {
 }
 
 func (n *natsStore) Take(ctx context.Context, source, key string) (ticket, error) {
+	if r, ok := n.redrives[source]; ok {
+		return n.takeRedrive(ctx, source, key, r)
+	}
 	if !n.nc.IsConnected() {
 		return ticket{}, fmt.Errorf("%w: not connected to NATS", ErrStore)
 	}
@@ -221,21 +229,24 @@ func (n *natsStore) Take(ctx context.Context, source, key string) (ticket, error
 			return ticket{}, fmt.Errorf("%w: %w", ErrStore, err)
 		}
 		var c claim
-		if json.Unmarshal(e.Value(), &c) != nil || c.State != statePending {
+		if json.Unmarshal(e.Value(), &c) != nil || (c.State != statePending && c.State != stateReleased) {
 			// A value that does not read is a claim of a newer version or a
 			// damaged one: it counts as done, so it never makes a second
 			// run.
 			return ticket{}, ErrDuplicate
 		}
-		if n.now().Sub(e.Created()) < n.stale {
+		if c.State == statePending && n.now().Sub(e.Created()) < n.stale {
 			return ticket{}, ErrInFlight
 		}
-		// The replica of the pending claim stopped before its end. The
-		// next delivery takes the claim, and the compare of the revision
-		// lets only one caller take it.
+		// The replica of the pending claim stopped before its end, or the
+		// source had redrive and released the claim after a failed
+		// publish. The next delivery takes the claim, and the compare of
+		// the revision lets only one caller take it.
 		rev, err = kv.Update(ctx, id, val, e.Revision())
 		if err == nil {
-			n.log.Warn("sources: took over a claim that stayed pending", "source", source, "by", c.By, "since", e.Created())
+			if c.State == statePending {
+				n.log.Warn("sources: took over a claim that stayed pending", "source", source, "by", c.By, "since", e.Created())
+			}
 			return ticket{source: source, key: key, id: id, rev: rev}, nil
 		}
 		if !errors.Is(err, jetstream.ErrKeyRevisionMismatch) && !errors.Is(err, jetstream.ErrKeyExists) {
@@ -246,6 +257,9 @@ func (n *natsStore) Take(ctx context.Context, source, key string) (ticket, error
 }
 
 func (n *natsStore) Finish(ctx context.Context, t ticket) error {
+	if t.generation != "" {
+		return n.endRedrive(ctx, t, stateDone)
+	}
 	ctx, cancel := context.WithTimeout(ctx, storeTimeout)
 	defer cancel()
 	kv, err := n.bucket(ctx, t.source)
@@ -263,6 +277,9 @@ func (n *natsStore) Finish(ctx context.Context, t ticket) error {
 }
 
 func (n *natsStore) Release(ctx context.Context, t ticket) error {
+	if t.generation != "" {
+		return n.endRedrive(ctx, t, stateReleased)
+	}
 	ctx, cancel := context.WithTimeout(ctx, storeTimeout)
 	defer cancel()
 	kv, err := n.bucket(ctx, t.source)

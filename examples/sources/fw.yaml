@@ -37,6 +37,10 @@ workbench:
       # The id and the time of the change: each change starts one run, and a
       # change that arrives twice starts one run.
       key: "{{.id}}/{{.updated}}"
+      # A change whose job reached the dead letter runs again when the ticket
+      # system sends it again ten minutes later or more, three runs at most
+      # (docs/ARCHITECTURE.md section 13.9).
+      redrive: { maxAttempts: 3, cooldown: 10m }
 
     # An alert system without webhooks. Every replica of the front reads the
     # firing alerts every two minutes, and the claims keep the runs single.
