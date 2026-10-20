@@ -81,6 +81,9 @@ type platform struct {
 	pools      []*pools.Pool
 	reconciler *pools.Reconciler
 	poolState  map[string]pools.Status
+	// merged holds each pool with the overlay that its last pass merged
+	// (profiles.go), by name.
+	merged map[string]*pools.Pool
 }
 
 // childLink is where a child of a run lives, from the fw.run.child event

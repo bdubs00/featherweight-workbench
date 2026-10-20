@@ -1,0 +1,383 @@
+package pools
+
+// This file is the overlay of a pool (docs/ARCHITECTURE.md section 14.9):
+// the profiles and the allow rules that people add to the block fw of a
+// pool while the front runs, through agent_put, agent_delete, and the
+// approval card. The front keeps the overlay of each pool in a store that
+// every replica of the front shares. WithOverlay merges it into the fw.yaml
+// of the workers, and the hash of the pool covers the merged file, so a
+// change of the overlay replaces the Tasks of the pool at the next pass,
+// with no restart of the front.
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/bdubs00/featherweight-kernel/fw"
+	"gopkg.in/yaml.v3"
+)
+
+// Overlay is what the front adds to the block fw of a pool. Profiles are
+// added to fw.agents or replace the profile of the same name there, sorted
+// by name. Allow holds the rules that the merge adds to fw.policy.allow,
+// sorted by rule.
+type Overlay struct {
+	Profiles []OverlayProfile `json:"profiles,omitempty"`
+	Allow    []OverlayRule    `json:"allow,omitempty"`
+}
+
+// OverlayProfile is one profile of an overlay, with the subject that wrote
+// it and the time.
+type OverlayProfile struct {
+	Profile fw.AgentProfile `json:"profile"`
+	By      string          `json:"by,omitempty"`
+	At      time.Time       `json:"at"`
+}
+
+// OverlayRule is one allow rule of an overlay: the name of a tool as the
+// policy names it, such as github.create_pull_request or bash. Agent and
+// Run name the approval that made the rule, By the subject that chose it,
+// At the time, and Note what the person wrote, so a person sees why the
+// rule exists.
+type OverlayRule struct {
+	Rule  string    `json:"rule"`
+	Agent string    `json:"agent,omitempty"`
+	Run   string    `json:"run,omitempty"`
+	By    string    `json:"by,omitempty"`
+	At    time.Time `json:"at"`
+	Note  string    `json:"note,omitempty"`
+}
+
+// Empty reports whether the overlay adds nothing.
+func (o Overlay) Empty() bool { return len(o.Profiles) == 0 && len(o.Allow) == 0 }
+
+// Profile returns the profile of that name in the overlay.
+func (o Overlay) Profile(name string) (OverlayProfile, bool) {
+	for _, e := range o.Profiles {
+		if e.Profile.Name == name {
+			return e, true
+		}
+	}
+	return OverlayProfile{}, false
+}
+
+// WithProfile returns a copy of the overlay with e in place of the profile
+// of the same name.
+func (o Overlay) WithProfile(e OverlayProfile) Overlay {
+	out := Overlay{Allow: slices.Clone(o.Allow)}
+	for _, old := range o.Profiles {
+		if old.Profile.Name != e.Profile.Name {
+			out.Profiles = append(out.Profiles, old)
+		}
+	}
+	out.Profiles = append(out.Profiles, e)
+	out.sort()
+	return out
+}
+
+// WithRule returns a copy of the overlay with the rule r, in place of a
+// rule with the same text.
+func (o Overlay) WithRule(r OverlayRule) Overlay {
+	out := Overlay{Profiles: slices.Clone(o.Profiles)}
+	for _, old := range o.Allow {
+		if old.Rule != r.Rule {
+			out.Allow = append(out.Allow, old)
+		}
+	}
+	out.Allow = append(out.Allow, r)
+	out.sort()
+	return out
+}
+
+func (o *Overlay) sort() {
+	sort.Slice(o.Profiles, func(i, j int) bool { return o.Profiles[i].Profile.Name < o.Profiles[j].Profile.Name })
+	sort.Slice(o.Allow, func(i, j int) bool { return o.Allow[i].Rule < o.Allow[j].Rule })
+}
+
+// OverlayStore keeps the overlays of the pools, by the name of the pool.
+// Read returns the overlay of a pool, sorted, and an empty overlay for a
+// pool without one. PutProfile writes one profile, in place of the profile
+// of the same name, DeleteProfile removes one and reports whether it was
+// there, and AddRule writes one allow rule, in place of a rule with the
+// same text. Describe says in a few words where the overlays live.
+type OverlayStore interface {
+	Read(ctx context.Context, pool string) (Overlay, error)
+	PutProfile(ctx context.Context, pool string, e OverlayProfile) error
+	DeleteProfile(ctx context.Context, pool, name string) (bool, error)
+	AddRule(ctx context.Context, pool string, r OverlayRule) error
+	Describe() string
+}
+
+// MemOverlays keeps the overlays in the memory of the process. It serves a
+// front on the bus mem, which has no replica, and the tests.
+type MemOverlays struct {
+	mu sync.Mutex
+	m  map[string]Overlay
+}
+
+// NewMemOverlays returns an empty store in memory.
+func NewMemOverlays() *MemOverlays { return &MemOverlays{m: map[string]Overlay{}} }
+
+// Describe implements OverlayStore.
+func (s *MemOverlays) Describe() string {
+	return "in the memory of this process, which a restart forgets and no replica shares"
+}
+
+// Read implements OverlayStore.
+func (s *MemOverlays) Read(_ context.Context, pool string) (Overlay, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o := s.m[pool]
+	return Overlay{Profiles: slices.Clone(o.Profiles), Allow: slices.Clone(o.Allow)}, nil
+}
+
+// PutProfile implements OverlayStore.
+func (s *MemOverlays) PutProfile(_ context.Context, pool string, e OverlayProfile) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[pool] = s.m[pool].WithProfile(e)
+	return nil
+}
+
+// DeleteProfile implements OverlayStore.
+func (s *MemOverlays) DeleteProfile(_ context.Context, pool, name string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o := s.m[pool]
+	if _, ok := o.Profile(name); !ok {
+		return false, nil
+	}
+	out := Overlay{Allow: o.Allow}
+	for _, e := range o.Profiles {
+		if e.Profile.Name != name {
+			out.Profiles = append(out.Profiles, e)
+		}
+	}
+	s.m[pool] = out
+	return true, nil
+}
+
+// AddRule implements OverlayStore.
+func (s *MemOverlays) AddRule(_ context.Context, pool string, r OverlayRule) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[pool] = s.m[pool].WithRule(r)
+	return nil
+}
+
+// Overlay returns the overlay that WithOverlay merged into the pool, empty
+// for a pool of the configuration alone.
+func (p *Pool) Overlay() Overlay { return p.overlay }
+
+// WithOverlay returns a copy of the pool with the overlay merged into fw:
+// each profile of the overlay is added to fw.agents or replaces the profile
+// of the same name, and each rule is added to fw.policy.allow. A policy
+// asks before it allows (the kernel architecture, section 7.5), so the
+// merge also removes from fw.policy.ask the entries that name the same
+// tool as a rule; an ask by a glob, a flag, or a pattern still holds. The
+// copy is rendered and checked as Load renders a pool, and its hash covers
+// the merged fw.yaml. The pool itself does not change.
+func (p *Pool) WithOverlay(o Overlay) (*Pool, error) {
+	if p.worker == nil {
+		return nil, fmt.Errorf("pools: %s is not loaded", p.key())
+	}
+	c := *p
+	c.overlay = o
+	merged, err := overlayFW(p.FW, o)
+	if err != nil {
+		return nil, fmt.Errorf("pools: the overlay of the pool %s: %w", p.Name, err)
+	}
+	c.FW = merged
+	if problems := c.render(p.front); len(problems) > 0 {
+		return nil, fmt.Errorf("pools: the overlay of the pool %s does not fit: %s", p.Name, strings.Join(problems, "; "))
+	}
+	return &c, nil
+}
+
+// overlayFW returns the block fw of a pool with the overlay on top. Neither
+// argument changes.
+func overlayFW(base map[string]any, o Overlay) (map[string]any, error) {
+	out := make(map[string]any, len(base))
+	for k, v := range base {
+		out[k] = v
+	}
+	if len(o.Profiles) > 0 {
+		agents := map[string]any{}
+		if m, ok := base["agents"].(map[string]any); ok {
+			for k, v := range m {
+				agents[k] = v
+			}
+		}
+		for _, e := range o.Profiles {
+			m, err := profileMap(e.Profile)
+			if err != nil {
+				return nil, err
+			}
+			agents[e.Profile.Name] = m
+		}
+		out["agents"] = agents
+	}
+	if len(o.Allow) > 0 {
+		policy := map[string]any{}
+		if m, ok := base["policy"].(map[string]any); ok {
+			for k, v := range m {
+				policy[k] = v
+			}
+		}
+		allow, ask := stringList(policy["allow"]), stringList(policy["ask"])
+		for _, r := range o.Allow {
+			rule := escapeDollars(strings.TrimSpace(r.Rule))
+			if !slices.Contains(allow, rule) {
+				allow = append(allow, rule)
+			}
+			ask = slices.DeleteFunc(ask, func(s string) bool { return strings.TrimSpace(s) == rule })
+		}
+		policy["allow"] = allow
+		if len(ask) > 0 {
+			policy["ask"] = ask
+		} else {
+			delete(policy, "ask")
+		}
+		out["policy"] = policy
+	}
+	return out, nil
+}
+
+// stringList reads a list of strings of a decoded YAML value.
+func stringList(v any) []string {
+	var out []string
+	switch l := v.(type) {
+	case []any:
+		for _, x := range l {
+			out = append(out, fmt.Sprint(x))
+		}
+	case []string:
+		out = append(out, l...)
+	}
+	return out
+}
+
+// profileMap turns a profile into the value of its key under fw.agents.
+// The worker expands ${NAME} in its fw.yaml and reads $$ as one $, so each
+// text is escaped and comes back to the worker as a person wrote it: a
+// profile never reads a variable of the worker. The worker also reads a
+// system prompt or an instruction of one line as the path of a file when
+// such a file exists, so such a text gets a line break at its end: a
+// profile never reads a file of the worker, such as /proc/self/environ.
+// An empty skills list means no skill, while an absent one means every
+// skill, so the empty list stays.
+func profileMap(p fw.AgentProfile) (map[string]any, error) {
+	p.System = noPath(p.System)
+	p.Instructions = slices.Clone(p.Instructions)
+	for i, s := range p.Instructions {
+		p.Instructions[i] = noPath(s)
+	}
+	var n yaml.Node
+	if err := n.Encode(p); err != nil {
+		return nil, fmt.Errorf("encode the profile %s: %w", p.Name, err)
+	}
+	escapeNode(&n)
+	m := map[string]any{}
+	if err := n.Decode(&m); err != nil {
+		return nil, fmt.Errorf("encode the profile %s: %w", p.Name, err)
+	}
+	delete(m, "name")
+	if p.Skills != nil && len(p.Skills) == 0 {
+		m["skills"] = []any{}
+	}
+	return m, nil
+}
+
+// noPath returns a text of one line with a line break at its end, so the
+// loader of the worker never takes it for a path.
+func noPath(s string) string {
+	if s == "" || strings.ContainsAny(s, "\n\r") {
+		return s
+	}
+	return s + "\n"
+}
+
+// escapeNode escapes the texts under n, as the profile store of the kernel
+// does: ${ becomes $${ and $$ becomes $$$$.
+func escapeNode(n *yaml.Node) {
+	if n.Kind == yaml.ScalarNode {
+		n.Value = escapeDollars(n.Value)
+		return
+	}
+	for _, c := range n.Content {
+		escapeNode(c)
+	}
+}
+
+func escapeDollars(s string) string {
+	if !strings.Contains(s, "$") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '$' && i+1 < len(s) && (s[i+1] == '{' || s[i+1] == '$') {
+			b.WriteString("$$" + s[i+1:i+2])
+			if s[i+1] == '$' {
+				b.WriteString("$")
+			}
+			i++
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// Profiles returns the profiles that the workers of the pool run, by name:
+// the profiles of fw.agents, with the profiles of the overlay as they were
+// written.
+func (p *Pool) Profiles() map[string]fw.AgentProfile {
+	out := map[string]fw.AgentProfile{}
+	if p.worker != nil {
+		for name, prof := range p.worker.Agents {
+			prof.Name = name
+			out[name] = prof
+		}
+	}
+	for _, e := range p.overlay.Profiles {
+		out[e.Profile.Name] = e.Profile
+	}
+	return out
+}
+
+// Policy returns fw.policy of the workers, with the rules of the overlay.
+func (p *Pool) Policy() fw.PolicyConfig {
+	if p.worker == nil {
+		return fw.PolicyConfig{}
+	}
+	return p.worker.Policy
+}
+
+// Owns reports whether a Task of that name is a Task of the pool by its
+// name, <pool>-<index>, in the atespace of the pool.
+func (p *Pool) Owns(atespace, task string) bool {
+	_, ok := p.indexOf(task)
+	return ok && atespace == p.Atespace
+}
+
+// Decide returns how the workers of the pool decide a call of the tool with
+// input for the profile agent, by fw.policy and by the policy of the
+// profile. It knows no flag of the tool, so a rule by a flag, such as ask
+// destructive, matches no call here, and the caller checks such a rule
+// itself.
+func (p *Pool) Decide(agent, tool string, input json.RawMessage) fw.Decision {
+	rules := p.Policy().Rules
+	if prof, ok := p.Profiles()[agent]; ok && prof.Policy != nil {
+		rules = fw.MergeRules(rules, *prof.Policy)
+	}
+	if len(input) == 0 {
+		input = json.RawMessage(`{}`)
+	}
+	return fw.NewRulesPolicy(rules).Decide(context.Background(), fw.ToolCall{Agent: agent, Spec: fw.ToolSpec{Name: tool}, Input: input})
+}

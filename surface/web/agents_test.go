@@ -107,3 +107,20 @@ func TestPutAgentDryRun(t *testing.T) {
 	resp, b = do(t, "PUT", srv.URL+"/v1/agents/reviewer?dryRun=true", `{}`, "Authorization", asBob)
 	decodeProblem(t, resp, b, http.StatusForbidden)
 }
+
+// Without pools, ?pool= of the agent routes is a 400, and the route of an
+// approval rule answers 409, because a rule needs a pool.
+func TestAgentRoutesWithoutPools(t *testing.T) {
+	a := manageAgent(t, newScript().model())
+	srv := serve(t, a)
+	resp, b := do(t, "PUT", srv.URL+"/v1/agents/reviewer?pool=triage", `{"description":"mine"}`, "Authorization", asAlice)
+	if p := decodeProblem(t, resp, b, http.StatusBadRequest); !strings.Contains(p.Detail, "keeps no pool") {
+		t.Fatalf("problem = %+v", p)
+	}
+	resp, b = do(t, "DELETE", srv.URL+"/v1/agents/reviewer?pool=triage", "", "Authorization", asAlice)
+	decodeProblem(t, resp, b, http.StatusBadRequest)
+	resp, b = do(t, "POST", srv.URL+"/v1/runs/01RUN/approvals/01ASK/rule", `{"note":"why"}`, "Authorization", asAlice)
+	if p := decodeProblem(t, resp, b, http.StatusConflict); !strings.Contains(p.Detail, "approval rules need a pool") {
+		t.Fatalf("problem = %+v", p)
+	}
+}

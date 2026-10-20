@@ -94,6 +94,8 @@ type Pool struct {
 	files    []ax.File  // the rendered fw.yaml first, then Files
 	hash     string
 	warnings []string
+	front    Front   // what the pool took from the front, for a render with an overlay
+	overlay  Overlay // the overlay that WithOverlay merged, empty for the configuration alone
 }
 
 // EnvVar is one variable of the workers. Exactly one of Value and FromEnv
@@ -286,6 +288,7 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // complete fills the defaults of one pool, renders the configuration of
 // its workers, and lists its problems.
 func (p *Pool) complete(front Front) []string {
+	p.front = front
 	var problems []string
 	add := func(format string, args ...any) {
 		problems = append(problems, p.key()+": "+fmt.Sprintf(format, args...))

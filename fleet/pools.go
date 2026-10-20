@@ -61,6 +61,7 @@ func (p *platform) startPools(list []*pools.Pool, vals *pools.Values) {
 	p.pools = list
 	p.reconciler = &pools.Reconciler{AX: p.client, Check: poolCheck{p}, Values: vals, Log: p.f.log}
 	p.poolState = map[string]pools.Status{}
+	p.merged = map[string]*pools.Pool{}
 	var names []string
 	for _, pool := range list {
 		names = append(names, pool.Name)
@@ -81,13 +82,23 @@ func (p *platform) reconcilePools(ctx context.Context, listed map[string][]*v1al
 	}
 	for _, pool := range p.pools {
 		var st pools.Status
-		if err := failed[pool.Atespace]; err != nil {
+		wait := func(why string) {
 			p.mu.Lock()
 			st = p.poolState[pool.Name]
 			p.mu.Unlock()
-			st.Gaps = []string{p.reconciler.Values.Redact(fmt.Sprintf("the front could not list the Tasks of the atespace %s, so the pool waits: %v", pool.Atespace, err))}
+			st.Gaps = []string{p.reconciler.Values.Redact(why)}
+		}
+		if err := failed[pool.Atespace]; err != nil {
+			wait(fmt.Sprintf("the front could not list the Tasks of the atespace %s, so the pool waits: %v", pool.Atespace, err))
+		} else if merged, err := p.f.mergedPool(ctx, pool); err != nil {
+			// A pass without the overlay takes the profiles and the
+			// rules of the overlay away from every Task, so the pool waits.
+			wait(fmt.Sprintf("the pool waits: %v", err))
 		} else {
-			st = p.reconciler.Reconcile(ctx, pool, listed[pool.Atespace], now)
+			st = p.reconciler.Reconcile(ctx, merged, listed[pool.Atespace], now)
+			p.mu.Lock()
+			p.merged[pool.Name] = merged
+			p.mu.Unlock()
 		}
 		p.mu.Lock()
 		prev := p.poolState[pool.Name]
@@ -193,14 +204,19 @@ func (f *Fleet) Pools(ctx context.Context) ([]pools.Status, error) {
 	}
 	p.mu.Lock()
 	states := make([]pools.Status, len(p.pools))
+	current := make([]*pools.Pool, len(p.pools))
 	for i, pool := range p.pools {
 		states[i] = p.poolState[pool.Name]
+		current[i] = pool
+		if m := p.merged[pool.Name]; m != nil {
+			current[i] = m
+		}
 	}
 	p.mu.Unlock()
 	cfg := f.a.Config()
 	out := []pools.Status{}
 	for i, pool := range p.pools {
-		access := pool.AgentAccess()
+		access := current[i].AgentAccess()
 		if prof, ok := f.a.ProfileNamed(pool.Agent); ok {
 			access = prof.Access
 		}
