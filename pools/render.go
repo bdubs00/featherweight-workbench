@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bdubs00/featherweight-kernel/ax"
 	v1alpha1 "github.com/google/ax/pkg/apis/v1alpha1"
@@ -256,6 +257,12 @@ func Write(w io.Writer, list []*Pool) error {
 		for _, warn := range p.warnings {
 			fmt.Fprintf(&b, "Warning: %s\n", warn)
 		}
+		for _, e := range p.overlay.Profiles {
+			fmt.Fprintf(&b, "The overlay of the front sets the profile %s in fw.agents%s.\n", e.Profile.Name, written(e.By, e.At, ""))
+		}
+		for _, r := range p.overlay.Allow {
+			fmt.Fprintf(&b, "The overlay of the front adds the rule %q to fw.policy.allow%s.\n", r.Rule, written(r.By, r.At, r.Run))
+		}
 		if p.replicas() == 0 {
 			b.WriteString("The pool wants no Task, so the front deletes each Task of the pool once it is idle.\n")
 		}
@@ -283,6 +290,21 @@ func Write(w io.Writer, list []*Pool) error {
 	}
 	_, err := io.WriteString(w, out.String())
 	return err
+}
+
+// written says who wrote an entry of the overlay, when, and for which run.
+func written(by string, at time.Time, run string) string {
+	var out string
+	if by != "" {
+		out += " by " + by
+	}
+	if !at.IsZero() {
+		out += " at " + at.UTC().Format(time.RFC3339)
+	}
+	if run != "" {
+		out += " for the run " + run
+	}
+	return out
 }
 
 // encode renders one resource of the ax API as YAML with an indent of two.
