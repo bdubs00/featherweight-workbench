@@ -11,6 +11,15 @@ package fleet
 // run. A worker that sleeps reads no queue, so a job for a profile wakes
 // the suspended Tasks that serve it: right after the enqueue of the front,
 // and when the front finds jobs that wait in the queue (queues.go).
+//
+// A storage failure, such as a full /workspace, blocks the kernel of a
+// Task: it writes nothing, keeps its open runs in their last state, and
+// sends no event. The view then shows those runs as running for ever. So
+// the controller also reads the status of a Task that holds a queued or
+// running run but sent nothing for the grace period, at most once per
+// interval, and suspends the Task when the status says blocked. A suspend
+// and a resume restart the process under ax, and the fresh process
+// rebuilds from its ledger.
 
 import (
 	"context"
@@ -25,12 +34,29 @@ import (
 // suspendTimeout bounds one SuspendTask call.
 const suspendTimeout = 30 * time.Second
 
+// blockedNoReason is the mark of a Task whose status says blocked without
+// a reason, so the mark is never empty.
+const blockedNoReason = "the Task reports a storage failure and gives no reason"
+
+// candidate is a Task that the controller reads before it acts. busy is
+// true when the view holds a queued or running run of the Task, so only a
+// blocked status makes the controller suspend it.
+type candidate struct {
+	m    *platformMember
+	busy bool
+}
+
 // suspendIdle suspends every running Task of the atespaces that has been
-// idle for the grace period. The view decides who is a candidate: a Task
-// whose phase is Running, with no run queued or running, whose newest run
-// update, or whose last start, is older than the grace period. The status
-// body of the Task confirms it, so a view that missed an event suspends
-// nobody who works.
+// idle for the grace period, and every running Task that a storage failure
+// blocked. The view decides who is a candidate: a Task whose phase is
+// Running and whose newest run update, or whose last start, is older than
+// the grace period. A Task with no run queued or running is idle, and the
+// controller reads its status at every interval. A Task with such a run is
+// busy, and the controller reads its status at most once per interval. The
+// status body of the Task decides. A Task that says blocked is suspended at
+// once. An idle Task is suspended when the body says idle for the grace
+// period, so a view that missed an event suspends nobody who works. A busy
+// Task that is not blocked is left alone: its runs can work slowly.
 func (p *platform) suspendIdle(ctx context.Context, now time.Time) {
 	after := p.f.suspendAfter
 	if after <= 0 {
@@ -38,7 +64,7 @@ func (p *platform) suspendIdle(ctx context.Context, now time.Time) {
 	}
 	p.mu.Lock()
 	client := p.client
-	var idle []*platformMember
+	var check []candidate
 	for _, m := range p.members {
 		if m.atespace == "" || m.state != MemberLive || m.liveSince.IsZero() {
 			continue
@@ -48,9 +74,10 @@ func (p *platform) suspendIdle(ctx context.Context, now time.Time) {
 			if r.member != m.name {
 				continue
 			}
-			if r.run.State == fw.StateQueued || r.run.State == fw.StateRunning {
+			// A run that a storage failure blocked does no work, whatever
+			// its last recorded state (fw.Run.Blocked).
+			if (r.run.State == fw.StateQueued || r.run.State == fw.StateRunning) && r.run.Blocked == "" {
 				working = true
-				break
 			}
 			if r.updated.After(since) {
 				since = r.updated
@@ -68,18 +95,41 @@ func (p *platform) suspendIdle(ctx context.Context, now time.Time) {
 				break
 			}
 		}
-		if !working && now.Sub(since) >= after {
-			idle = append(idle, m)
+		if now.Sub(since) < after {
+			continue
 		}
+		if working {
+			// One read per interval at most, whatever calls the
+			// controller. A pass that comes a moment early, by the jitter
+			// of the ticker, leaves the read to the next pass.
+			if now.Sub(m.statusAt) < p.f.interval {
+				continue
+			}
+			m.statusAt = now
+		}
+		check = append(check, candidate{m: m, busy: working})
 	}
 	p.mu.Unlock()
 	if client == nil {
 		return
 	}
-	for _, m := range idle {
+	for _, c := range check {
+		m := c.m
 		var st view.Status
 		if err := p.read(ctx, m, "/v1/status", &st); err != nil {
-			p.f.log.Warn("fleet: read the status of an idle Task before a suspend", "member", m.name, "error", err)
+			if c.busy {
+				p.f.log.Debug("fleet: read the status of a busy Task that sent no event for the grace period", "member", m.name, "error", err)
+			} else {
+				p.f.log.Warn("fleet: read the status of an idle Task before a suspend", "member", m.name, "error", err)
+			}
+			continue
+		}
+		if st.Blocked {
+			p.suspendBlocked(ctx, client, m, st.BlockedReason, now)
+			continue
+		}
+		if c.busy {
+			p.f.log.Debug("fleet: a busy Task sent no event for the grace period and is not blocked; the front leaves it", "member", m.name)
 			continue
 		}
 		if !st.Idle || (st.IdleSince != nil && now.Sub(*st.IdleSince) < after) {
@@ -104,6 +154,35 @@ func (p *platform) suspendIdle(ctx context.Context, now time.Time) {
 		p.mu.Unlock()
 		p.f.log.Info("fleet: suspended an idle Task", "member", m.name, "idle", idleFor.Round(time.Second).String())
 	}
+}
+
+// suspendBlocked suspends a Task whose status says that a storage failure
+// blocked it, and marks the member as blocked with the reason until its
+// next event (unblock), so the view tells a person why the Task went to
+// sleep. The mark stays when the suspend fails, because the Task is still
+// blocked, and the controller tries again at a later interval. The worker
+// redacts the reason, and the front redacts it again with its own secrets
+// and cuts it to TextLimit before the reason reaches the view or the log.
+func (p *platform) suspendBlocked(ctx context.Context, client v1alpha1.AXClient, m *platformMember, reason string, now time.Time) {
+	reason = cut(strings.TrimSpace(p.f.a.Redact(reason)), TextLimit)
+	if reason == "" {
+		reason = blockedNoReason
+	}
+	cctx, cancel := context.WithTimeout(ctx, suspendTimeout)
+	_, err := client.SuspendTask(cctx, &v1alpha1.SuspendTaskRequest{Atespace: m.atespace, Name: taskOf(m)})
+	cancel()
+	p.mu.Lock()
+	m.blocked = reason
+	if err == nil {
+		// The phase follows the suspend, as for an idle Task.
+		m.state, m.phase, m.seen = MemberQuiet, phaseSuspended, now
+	}
+	p.mu.Unlock()
+	if err != nil {
+		p.f.log.Warn("fleet: suspend a Task that a storage failure blocked", "member", m.name, "reason", reason, "error", err)
+		return
+	}
+	p.f.log.Warn("fleet: suspended a Task that a storage failure blocked; the next request restarts it from its ledger", "member", m.name, "reason", reason)
 }
 
 // taskOf returns the Task name of a member "<atespace>/<task>".

@@ -89,6 +89,7 @@ func TestFleetMetrics(t *testing.T) {
 		`fw_fleet_runs_budget_exceeded_total{agent=default,limit=maxRepeats,member=box:8080}`: 1,
 		`fw_fleet_approvals_pending{agent=default}`:                                           2,
 		`fw_fleet_approvals_oldest_timestamp_seconds{agent=default}`:                          float64(asked.Time.Unix()),
+		`fw_fleet_members_blocked{}`:                                                          0,
 	}
 	for k, v := range want {
 		if got[k] != v {

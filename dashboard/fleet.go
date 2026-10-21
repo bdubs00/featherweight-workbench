@@ -30,8 +30,9 @@ func MembersText(name string, members []fleet.Member) string {
 }
 
 // MemberLine is one member on one line: its state, when it was last heard,
-// its authorization mode, its agents with the role of the caller, its runs,
-// and whether this process can act on its runs.
+// its authorization mode, the reason when a storage failure blocked it, its
+// agents with the role of the caller, its runs, and whether this process
+// can act on its runs.
 func MemberLine(m fleet.Member) string {
 	var b strings.Builder
 	b.WriteString("- " + m.Name)
@@ -44,6 +45,9 @@ func MemberLine(m fleet.Member) string {
 	}
 	if m.AccessMode != "" {
 		b.WriteString(", access " + m.AccessMode)
+	}
+	if m.BlockedReason != "" {
+		b.WriteString("; blocked by a storage failure (" + m.BlockedReason + "), so the front suspends its Task, and the next request restarts it")
 	}
 	if len(m.Agents) == 0 {
 		b.WriteString("; no agent you can see")

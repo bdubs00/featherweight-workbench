@@ -3,12 +3,13 @@ package fleet
 // This file adds the series of the fleet to the metrics of the front
 // (docs/ARCHITECTURE.md section 4.14): the depth and the dead letters of
 // each intake queue, the ends of the runs of the workers by outcome and by
-// budget limit, and the approvals that wait on the workers. The kernel of
-// a worker exports facts about its own runs; the front shows the fleet as
-// the egress stream and the server of the bus tell it, so an alert needs
-// no scrape of a Task, and a scrape of the front wakes nobody. The series
-// reach Prometheus through /metrics and a collector through the OTLP push
-// of the front, like every series of its registry.
+// budget limit, the approvals that wait on the workers, and the members
+// that a storage failure blocked. The kernel of a worker exports facts
+// about its own runs; the front shows the fleet as the egress stream and
+// the server of the bus tell it, so an alert needs no scrape of a Task,
+// and a scrape of the front wakes nobody. The series reach Prometheus
+// through /metrics and a collector through the OTLP push of the front,
+// like every series of its registry.
 
 import (
 	"strings"
@@ -126,6 +127,7 @@ type Collector struct {
 	dead, deadAt        *prometheus.Desc
 	finished, stops     *prometheus.Desc
 	approvals, oldest   *prometheus.Desc
+	blocked             *prometheus.Desc
 }
 
 // NewCollector returns the fleet collector of a (metrics.CollectorCtor). It
@@ -158,12 +160,15 @@ func NewCollector(a *fw.Agent) prometheus.Collector {
 		oldest: prometheus.NewDesc("fw_fleet_approvals_oldest_timestamp_seconds",
 			"Unix time of the request of the oldest approval that waits on the workers, by agent. An agent without such an approval has no series.",
 			[]string{"agent"}, nil),
+		blocked: prometheus.NewDesc("fw_fleet_members_blocked",
+			"Members whose status said blocked by a storage failure when the suspend controller read it, until their next event. The front suspends such a Task, and the next request restarts it from its ledger.",
+			nil, nil),
 	}
 }
 
 // Describe implements prometheus.Collector.
 func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
-	for _, d := range []*prometheus.Desc{c.pending, c.ackPending, c.dead, c.deadAt, c.finished, c.stops, c.approvals, c.oldest} {
+	for _, d := range []*prometheus.Desc{c.pending, c.ackPending, c.dead, c.deadAt, c.finished, c.stops, c.approvals, c.oldest, c.blocked} {
 		ch <- d
 	}
 }
@@ -205,7 +210,11 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		stops[k] = v
 	}
 	approvals := map[string]*waiting{}
+	blocked := 0
 	for _, m := range p.members {
+		if m.blocked != "" {
+			blocked++
+		}
 		for ag := range m.agents {
 			if approvals[ag] == nil {
 				approvals[ag] = &waiting{}
@@ -243,6 +252,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			ch <- prometheus.MustNewConstMetric(c.oldest, prometheus.GaugeValue, unixSeconds(w.oldest), ag)
 		}
 	}
+	ch <- prometheus.MustNewConstMetric(c.blocked, prometheus.GaugeValue, float64(blocked))
 }
 
 // unixSeconds is a time as a Unix timestamp in seconds, as a gauge holds it.

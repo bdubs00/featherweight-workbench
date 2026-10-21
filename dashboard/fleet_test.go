@@ -50,12 +50,14 @@ func TestMembersText(t *testing.T) {
 		{Name: "here", Self: true, State: fleet.MemberLive, AccessMode: fw.AccessModeRules, Agents: []fleet.RecordAgent{{Name: "reviewer", Role: "owner"}}, Active: 1},
 		{Name: "there", State: fleet.MemberQuiet, LastSeen: time.Now().Add(-3 * time.Minute), AccessMode: fw.AccessModeExternal, CanForward: true, Agents: []fleet.RecordAgent{{Name: "deployer", Role: "operator"}}, InputRequired: 2},
 		{Name: "far", State: fleet.MemberStopped, LastSeen: time.Now().Add(-50 * time.Hour)},
+		{Name: "full", State: fleet.MemberQuiet, LastSeen: time.Now().Add(-10 * time.Second), BlockedReason: "storage unavailable: no space left on device"},
 	})
 	for _, want := range []string{
 		"This process is the fleet member here.",
 		"- here (this process): live, access rules; agents reviewer (you are owner); 1 active run, 0 waiting for input",
 		"- there: quiet, heard 3m ago, access external; agents deployer (you are operator); 0 active runs, 2 waiting for input; this process can act on its runs",
 		"- far: stopped, heard 2d ago; no agent you can see",
+		"- full: quiet, heard 10s ago; blocked by a storage failure (storage unavailable: no space left on device), so the front suspends its Task, and the next request restarts it; no agent you can see",
 		"read-only from here",
 	} {
 		if !strings.Contains(text, want) {

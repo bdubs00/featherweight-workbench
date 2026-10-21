@@ -140,6 +140,18 @@ type platformMember struct {
 	// while the Task sleeps still shows it to the people who can use it.
 	agents  map[string]bool
 	learned bool // the Workspaces of the Task were read once
+	// blocked is the reason from the status of the Task when the suspend
+	// controller found it blocked by a storage failure, and empty
+	// otherwise. statusAt is when the controller last read the status of
+	// the Task while the view held a queued or running run of it, so it
+	// reads a busy Task at most once per interval (suspend.go).
+	// runsBlocked is true while a run of the member in the view carries
+	// fw.Run.Blocked from a read (backfill). The next event of the member
+	// clears all three marks (unblock), because a process that a storage
+	// failure blocked sends no event.
+	blocked     string
+	statusAt    time.Time
+	runsBlocked bool
 }
 
 // platformRun is one run of a member, projected from the stream.
@@ -516,6 +528,12 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 		}
 		m.serves(r.Agent)
 		delete(p.gone, r.ID) // the run is in view again, not forgotten
+		if r.Blocked != "" {
+			// The kernel gives the storage failure of a run as it is, and
+			// redacts only the reason of its status, so the front takes
+			// out its own secrets, which a worker can share.
+			r.Blocked = cut(p.f.a.Redact(r.Blocked), TextLimit)
+		}
 		cur, ok := p.runs[r.ID]
 		switch {
 		case !ok || cur.run.Seq < r.Seq || (!cur.queued && cur.run.Seq == r.Seq):
@@ -524,6 +542,16 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 			p.runs[r.ID] = &platformRun{run: r, member: m.name, updated: now, queued: true, stateSeq: r.Seq}
 		case !cur.queued:
 			cur.identify(r)
+		case cur.run.Seq == r.Seq:
+			// The read is as new as the view. fw.Run.Blocked is no event, so
+			// only a read brings it: a storage failure stopped the process,
+			// and the run keeps its last recorded state. The time of the
+			// last update stays, so the suspend controller still sees how
+			// long the run sent nothing.
+			cur.run.Blocked = r.Blocked
+		}
+		if p.runs[r.ID].run.Blocked != "" {
+			m.runsBlocked = true
 		}
 	}
 	for _, ag := range agents.Agents {
@@ -670,6 +698,9 @@ func (p *platform) onEvent(e fw.Event) error {
 		r.kept = max(r.kept, kept)
 	}
 	r.member, r.updated = name, now
+	if m.blocked != "" || m.runsBlocked {
+		p.unblock(m)
+	}
 	m.serves(r.run.Agent)
 	if e.Type == fw.EvRunChild {
 		var d fw.RunChildData
@@ -679,6 +710,19 @@ func (p *platform) onEvent(e fw.Event) error {
 		}
 	}
 	return nil
+}
+
+// unblock clears the marks of a storage failure on a member and on its
+// runs, after a new event of the member. A process that a storage failure
+// blocked writes no event, so a new event comes from a process that works
+// again, such as the fresh process after a suspend. The caller holds p.mu.
+func (p *platform) unblock(m *platformMember) {
+	m.blocked, m.runsBlocked = "", false
+	for _, r := range p.runs {
+		if r.member == m.name {
+			r.run.Blocked = ""
+		}
+	}
 }
 
 // drop removes a run from the view and counts it for its batch. The caller
@@ -966,15 +1010,16 @@ func (p *platform) records(now time.Time, all bool) []remote {
 			}
 		}
 		rec := &Record{
-			Name:      m.name,
-			URL:       m.url,
-			Atespace:  m.atespace,
-			Access:    Access{Mode: p.f.a.AccessMode(), Default: cfg.Access.Default, Admins: cfg.Access.Admins},
-			Agents:    []RecordAgent{},
-			Runs:      kept,
-			Omitted:   omitted,
-			State:     m.state,
-			UpdatedAt: m.seen,
+			Name:          m.name,
+			URL:           m.url,
+			Atespace:      m.atespace,
+			Access:        Access{Mode: p.f.a.AccessMode(), Default: cfg.Access.Default, Admins: cfg.Access.Admins},
+			Agents:        []RecordAgent{},
+			Runs:          kept,
+			Omitted:       omitted,
+			State:         m.state,
+			BlockedReason: m.blocked,
+			UpdatedAt:     m.seen,
 		}
 		// The agents of a member are the profiles that it serves, read
 		// from the Task once (backfill), and the ones that its runs name,

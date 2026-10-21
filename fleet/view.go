@@ -73,6 +73,9 @@ func (f *Fleet) Members(ctx context.Context) ([]Member, error) {
 			CanForward: f.canForward(r.rec.URL),
 			AccessMode: r.rec.Access.Mode,
 			Agents:     []RecordAgent{},
+			// The reason comes from the status of the Task, which the
+			// worker redacts, and the front redacts it again (suspend.go).
+			BlockedReason: r.rec.BlockedReason,
 		}
 		for i, ag := range r.rec.Agents {
 			if roles[i] != "" {

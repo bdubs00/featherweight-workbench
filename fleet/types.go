@@ -67,8 +67,14 @@ type Record struct {
 	Omitted  int           `json:"omitted,omitempty"`
 	// State is the state of the member when a platform says it, such as the
 	// phase of an ax Task. A member that only the stream knows has none.
-	State     string    `json:"state,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	State string `json:"state,omitempty"`
+	// BlockedReason says why the status of the Task said blocked when the
+	// suspend controller last read it: a storage failure stopped the
+	// process, so the front suspended the Task to restart it (suspend.go).
+	// It is empty when the member is not blocked, and the next event of
+	// the member clears it.
+	BlockedReason string    `json:"blockedReason,omitempty"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 // Access is the authorization of a member. Default and Admins are set in
@@ -93,7 +99,9 @@ type RecordAgent struct {
 // Member is one member as the view shows it to a caller. Agents holds the
 // agents that the caller can view. Active and InputRequired count the runs
 // that the caller can view. CanForward reports whether this process can
-// send a request to the member.
+// send a request to the member. BlockedReason is the reason of
+// Record.BlockedReason: it tells a person why the front suspended a Task
+// that a storage failure blocked.
 type Member struct {
 	Name          string        `json:"name"`
 	URL           string        `json:"url,omitempty"`
@@ -105,6 +113,7 @@ type Member struct {
 	Agents        []RecordAgent `json:"agents"`
 	Active        int           `json:"active"`
 	InputRequired int           `json:"inputRequired"`
+	BlockedReason string        `json:"blockedReason,omitempty"`
 }
 
 // View is the view of the other members of the fleet.
