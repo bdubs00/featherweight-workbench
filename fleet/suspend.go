@@ -208,6 +208,10 @@ func (p *platform) resumed(member string) {
 	now := time.Now()
 	if m.state != MemberLive {
 		m.state, m.liveSince = MemberLive, now
+		// The next poll reads the runs again, because the worker can lose
+		// its final events when it sleeps. An answer of a Task that is
+		// live already asks for no read.
+		m.filled = false
 	}
 	m.seen = now
 	if m.phase == phaseRunning || m.resuming {

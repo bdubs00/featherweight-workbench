@@ -1,0 +1,281 @@
+package fleet
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/surface/view"
+	v1alpha1 "github.com/google/ax/pkg/apis/v1alpha1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+)
+
+// repairTask serves snapshots independently of the stream, including a
+// failed read or an event arriving while a snapshot is in flight.
+type repairTask struct {
+	mu          sync.Mutex
+	srv         *httptest.Server
+	run         fw.Run
+	reads       int
+	fail        bool
+	beforeReply func()
+}
+
+func newRepairTask(t *testing.T) *repairTask {
+	t.Helper()
+	x := &repairTask{run: fw.Run{ID: "run", Agent: "default", State: fw.StateRunning, Seq: 2}}
+	x.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/runs":
+			x.mu.Lock()
+			x.reads++
+			run, fail, before := x.run, x.fail, x.beforeReply
+			x.beforeReply = nil
+			x.mu.Unlock()
+			if before != nil {
+				before()
+			}
+			if fail {
+				http.Error(w, "retry", http.StatusServiceUnavailable)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"runs": []*fw.Run{&run}})
+		case "/v1/agents":
+			_ = json.NewEncoder(w).Encode(map[string]any{"agents": []map[string]string{{"name": "default"}}})
+		case "/v1/status":
+			long := time.Now().Add(-time.Hour)
+			_ = json.NewEncoder(w).Encode(view.Status{Idle: true, IdleSince: &long})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(x.srv.Close)
+	return x
+}
+
+// No platform loop runs: tests drive polls and age the repair/retry
+// deadlines explicitly instead of sleeping for the one-minute interval.
+func repairFront(t *testing.T, ax *fakeAX, task *repairTask, name string) *platform {
+	t.Helper()
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
+	front := newMember(t, fw.NewMemBus(), name, func(cfg *fw.Config, fc *Config) {
+		cfg.AX.Router = strings.TrimPrefix(task.srv.URL, "http://")
+		fc.Atespaces = nil
+	})
+	p := front.f.platform
+	conn, err := grpc.NewClient(ax.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.conn, p.client, p.atespaces = conn, v1alpha1.NewAXClient(conn), []string{"team"}
+	return p
+}
+
+func (x *repairTask) count() int {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return x.reads
+}
+
+func repairDue(p *platform) {
+	p.mu.Lock()
+	p.members["team/alpha"].fillRead = time.Now().Add(-fillRepairInterval)
+	p.mu.Unlock()
+}
+
+func assertRepairState(t *testing.T, p *platform, state fw.RunState) {
+	t.Helper()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	r := p.runs["run"]
+	if r == nil || r.run.State != state {
+		t.Fatalf("run = %+v, want %s", r, state)
+	}
+}
+
+// Both replicas repair a lost final event even if a short suspend/resume
+// happened entirely between polls and neither observed a phase transition.
+func TestPlatformRepairConvergesWithoutPhaseTransition(t *testing.T) {
+	ax := newFakeAX(t, map[string]map[string]string{"team": {"alpha": phaseRunning}})
+	task := newRepairTask(t)
+	a, b := repairFront(t, ax, task, "front-a"), repairFront(t, ax, task, "front-b")
+	ctx := context.Background()
+	a.poll(ctx)
+	b.poll(ctx)
+	task.mu.Lock()
+	task.run.State, task.run.Seq = fw.StateFailed, 3
+	task.mu.Unlock()
+	for _, p := range []*platform{a, b} {
+		p.poll(ctx)
+		assertRepairState(t, p, fw.StateRunning)
+		repairDue(p)
+		p.poll(ctx)
+		assertRepairState(t, p, fw.StateFailed)
+	}
+	// Once repaired, the stale running projection no longer excludes the
+	// Task from idle suspension. The worker's own status still confirms it.
+	a.f.suspendAfter = time.Second
+	a.mu.Lock()
+	a.members["team/alpha"].liveSince = time.Now().Add(-time.Hour)
+	a.runs["run"].updated = time.Now().Add(-time.Hour)
+	a.mu.Unlock()
+	a.suspendIdle(ctx, time.Now())
+	if got := ax.phase("team", "alpha"); got != phaseSuspended {
+		t.Fatalf("phase = %s", got)
+	}
+}
+
+func TestPlatformRepairAfterWake(t *testing.T) {
+	for _, wake := range []string{"external", "front"} {
+		t.Run(wake, func(t *testing.T) {
+			ax := newFakeAX(t, map[string]map[string]string{"team": {"alpha": phaseRunning}})
+			task := newRepairTask(t)
+			p := repairFront(t, ax, task, "front")
+			ctx := context.Background()
+			p.poll(ctx)
+			task.mu.Lock()
+			task.run.State, task.run.Seq = fw.StateFailed, 3
+			task.mu.Unlock()
+			ax.set("team", "alpha", phaseSuspended)
+			p.poll(ctx)
+			if task.count() != 1 {
+				t.Fatalf("sleeping Task read %d times", task.count())
+			}
+			if wake == "external" {
+				ax.set("team", "alpha", phaseRunning)
+			} else {
+				req, _ := http.NewRequest(http.MethodGet, "/v1/status", nil)
+				resp, err := p.f.Forward(fw.WithCredential(ctx, "Bearer fleet-secret"), "team/alpha", req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_ = resp.Body.Close()
+				eventually(t, "the front wake updates the phase", func() bool {
+					p.mu.Lock()
+					defer p.mu.Unlock()
+					return p.members["team/alpha"].phase == phaseRunning
+				})
+			}
+			p.poll(ctx)
+			assertRepairState(t, p, fw.StateFailed)
+			if task.count() != 2 {
+				t.Fatalf("wake reads = %d, want 2", task.count())
+			}
+			// Every backfill is itself forwarded; those ordinary live
+			// answers must not perpetually invalidate the snapshot.
+			p.poll(ctx)
+			if task.count() != 2 {
+				t.Fatalf("already-live answers caused %d reads", task.count())
+			}
+		})
+	}
+}
+
+func TestPlatformRepairRetriesFailedRead(t *testing.T) {
+	ax := newFakeAX(t, map[string]map[string]string{"team": {"alpha": phaseRunning}})
+	task := newRepairTask(t)
+	p := repairFront(t, ax, task, "front")
+	p.f.interval = time.Minute
+	ctx := context.Background()
+	p.poll(ctx)
+	repairDue(p)
+	task.mu.Lock()
+	task.fail = true
+	task.mu.Unlock()
+	p.poll(ctx)
+	p.mu.Lock()
+	m := p.members["team/alpha"]
+	if m.filled || m.filling || m.fillFails != 1 || m.fillAt.IsZero() {
+		t.Fatalf("failed fill = %+v", m)
+	}
+	if p.needsFill(m, m.fillAt.Add(-time.Nanosecond)) {
+		t.Fatal("retry before backoff expired")
+	}
+	if !p.needsFill(m, m.fillAt) {
+		t.Fatal("no retry at deadline")
+	}
+	m.fillAt = time.Time{}
+	p.mu.Unlock()
+	task.mu.Lock()
+	task.fail = false
+	task.run.State, task.run.Seq = fw.StateFailed, 3
+	task.mu.Unlock()
+	p.poll(ctx)
+	assertRepairState(t, p, fw.StateFailed)
+	if task.count() != 3 {
+		t.Fatalf("reads = %d, want 3", task.count())
+	}
+}
+
+func TestPlatformRepairKeepsNewerEventsAndWakeRequest(t *testing.T) {
+	ax := newFakeAX(t, map[string]map[string]string{"team": {"alpha": phaseRunning}})
+	task := newRepairTask(t)
+	p := repairFront(t, ax, task, "front")
+	ctx := context.Background()
+	p.poll(ctx)
+	repairDue(p)
+	task.mu.Lock()
+	task.beforeReply = func() {
+		// The snapshot was taken before this newer event and wake.
+		emit(t, p.f, "ax:team/alpha", "run", 5, fw.EvRunFinished, fw.RunFinishedData{Outcome: "failed"})
+		p.mu.Lock()
+		p.members["team/alpha"].state = MemberQuiet
+		p.mu.Unlock()
+		p.resumed("team/alpha")
+	}
+	task.mu.Unlock()
+	p.poll(ctx)
+	assertRepairState(t, p, fw.StateFailed)
+	p.mu.Lock()
+	m := p.members["team/alpha"]
+	if m.filled || m.filling || !p.needsFill(m, time.Now()) {
+		t.Fatalf("new wake request lost: %+v", m)
+	}
+	p.mu.Unlock()
+	p.poll(ctx)
+	assertRepairState(t, p, fw.StateFailed)
+	if task.count() != 3 {
+		t.Fatalf("reads = %d, want 3", task.count())
+	}
+}
+
+func TestPlatformRepairEligibility(t *testing.T) {
+	now := time.Now()
+	m := &platformMember{name: "team/alpha", state: MemberLive, filled: true, fillRead: now}
+	p := &platform{runs: map[string]*platformRun{"run": {member: m.name, run: &fw.Run{State: fw.StateRunning}}}}
+	if p.needsFill(m, now.Add(fillRepairInterval-time.Nanosecond)) {
+		t.Fatal("repair too early")
+	}
+	if !p.needsFill(m, now.Add(fillRepairInterval)) {
+		t.Fatal("repair not due at bound")
+	}
+	p.runs["run"].run.State = fw.StateQueued
+	if !p.needsFill(m, now.Add(fillRepairInterval)) {
+		t.Fatal("apparently queued run not eligible for repair")
+	}
+	m.filling = true
+	if p.needsFill(m, now.Add(fillRepairInterval)) {
+		t.Fatal("concurrent read allowed")
+	}
+	m.filling = false
+	for _, state := range []string{MemberQuiet, MemberStopped} {
+		m.state, m.filled = state, false
+		if p.needsFill(m, now.Add(fillRepairInterval)) {
+			t.Fatalf("refresh of %s member", state)
+		}
+	}
+	m.state, m.filled = MemberLive, true
+	for _, state := range []fw.RunState{fw.StateCompleted, fw.StateFailed, fw.StateInputRequired} {
+		p.runs["run"].run.State = state
+		if p.needsFill(m, now.Add(fillRepairInterval)) {
+			t.Fatalf("periodic repair of %s run", state)
+		}
+	}
+}
