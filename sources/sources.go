@@ -101,7 +101,17 @@ func openStore(ctx context.Context, a *fw.Agent, list []Source) (store, error) {
 	}
 	switch d := a.Config().Bus.Driver; d {
 	case "nats":
-		return openNATS(ctx, a.Config(), a.Secrets(), windows, memberOf(a), a.Logger())
+		st, err := openNATS(ctx, a.Config(), a.Secrets(), windows, memberOf(a), a.Logger())
+		if err != nil {
+			return nil, err
+		}
+		st.redrives = map[string]Redrive{}
+		for _, src := range list {
+			if src.Redrive != nil {
+				st.redrives[src.Name] = *src.Redrive
+			}
+		}
+		return st, nil
 	case "", "mem":
 		a.Logger().Warn("sources: the bus is mem, so the de-duplication keys live in memory, and a restart forgets them")
 		return newMemStore(windows), nil
@@ -209,9 +219,14 @@ func secretOf(ctx context.Context, secrets fw.Secrets, source, key, name string)
 	return strings.TrimSpace(v), nil
 }
 
-// start starts the poll sources.
+// start starts the poll sources and the consumers of the dead letter of
+// the sources with redrive.
 func (s *Sources) start() {
 	for _, src := range s.list {
+		if src.cfg.Redrive != nil {
+			s.wg.Add(1)
+			go s.consumeOutcomes(src)
+		}
 		if src.poll != nil {
 			s.wg.Add(1)
 			go s.polls(src)
@@ -272,6 +287,16 @@ func (s *Sources) deliver(ctx context.Context, src *source, items []rendered) de
 	for i, it := range items {
 		t, err := s.store.Take(ctx, src.cfg.Name, it.key)
 		if err == nil {
+			if t.generation != "" {
+				it.req.Metadata[MetaGeneration] = t.generation
+				if t.attempt > 1 {
+					// A redrive is a new run, so it needs a key of its
+					// own: a worker returns the failed run for the old
+					// key. No name of a source starts with "/", so this
+					// key never equals the key of a first attempt.
+					it.req.IdempotencyKey = "/source-redrive/" + t.generation
+				}
+			}
 			claimed, tickets = append(claimed, it), append(tickets, t)
 			continue
 		}

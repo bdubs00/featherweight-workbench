@@ -23,7 +23,8 @@ func TestExampleLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 2 || list[0].Kind() != "webhook" || list[1].Kind() != "poll" || list[1].Poll.Every.String() != "2m0s" {
+	if len(list) != 2 || list[0].Kind() != "webhook" || list[1].Kind() != "poll" || list[1].Poll.Every.String() != "2m0s" ||
+		list[0].Redrive == nil || list[0].Redrive.Cooldown.String() != "10m0s" || list[1].Redrive != nil {
 		t.Fatalf("sources = %+v", list)
 	}
 	sec := secrets("TICKETS_WEBHOOK_KEY", "k", "ALERTS_API_TOKEN", "t")

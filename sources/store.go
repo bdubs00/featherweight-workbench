@@ -10,7 +10,8 @@ package sources
 // flight. When the publish fails, the source releases the claim, so the
 // next delivery of the event makes the run. A pending claim that stays
 // longer than staleClaim, because its replica stopped between the claim
-// and the end, goes to the next delivery of the event.
+// and the end, goes to the next delivery of the event. A source with
+// redrive has two more states, failed and released (redrive.go).
 
 import (
 	"context"
@@ -60,6 +61,8 @@ type ticket struct {
 	source, key string
 	id          string // the name of the claim in the store
 	rev         uint64
+	generation  string // the generation of the claim, with redrive
+	attempt     int    // the attempt of the generation, from 1, with redrive
 }
 
 // claimStates of a claim.
