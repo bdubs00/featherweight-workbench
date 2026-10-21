@@ -1092,6 +1092,7 @@ Each entry of `workbench.pools` has these keys. A key that a pool does not know 
 | `agent` | The profile of `fw.agents` whose queue the workers take. | the only profile of `fw.agents` |
 | `intake` | The intake queue of the workers. | `<workbench.fleet.intake>.<agent>`, else `fw.jobs.<agent>` |
 | `revision` | Free text. A new value replaces every Task, for example to start every worker again with a new Workspace. | none |
+| `generation` | A number of 0 or more that orders the configurations of the pool (section 14.5). A new value replaces every Task. With more than one replica of the front, raise it with every change of the pool. | `0`, no order |
 | `env` | The variables of the workers. Each entry has `name` and `value`, or `name` and `fromEnv`, the name of a variable of the front. | none |
 | `egress` | `spec.egress` of each Task: `rules`, each with one of `http`, `https`, and `tls`, which hold `hostnames` and `ports`. ax creates the egress policy of the actor from it before the Task first runs. | required |
 | `resources` | `requests` and `limits` of each Task, each with `cpu` and `memory`. | none |
@@ -1104,10 +1105,11 @@ The front writes `fw` to `.fw/fw.yaml` in the Workspace of each Task. The Worksp
 - The defaults that `fw` can change: `bus.driver` and `bus.url` of the front, `auth.mode: token`, and `ax.server` and `ax.router` of the front. A worker in a Substrate sandbox reaches NATS over WebSocket, so a pool usually sets its own `bus.url`. The front never copies a bus URL that holds a credential.
 - On NATS, the default `bus.options.concurrency: 1`. A Task runs one run at a time. The NATS intake takes four messages at a time by default, so one worker can hold four jobs while the other workers idle.
 
-The front adds four variables to each Task:
+The front adds these variables to each Task:
 
 - `FW_POOL`, the name of the pool.
 - `FW_POOL_SPEC`, the hash of the configuration of the pool.
+- `FW_POOL_GENERATION`, the generation of the pool, when it is above 0.
 - `FW_BASH_HIDE`, which keeps `AX_TASK_YAML`, the token variable, and each variable with `fromEnv` out of the bash tool of the worker. `AX_TASK_YAML` holds every variable of the Task.
 - The static token of the front, under `auth.tokenEnv` of the worker, which is `FW_API_TOKEN` by default (section 14.6).
 
@@ -1188,11 +1190,15 @@ The front never touches another Task. It needs both marks:
 
 A Workspace has no variables, so the front marks it in its file: the first line of the rendered `fw.yaml` names the pool. The front writes and deletes only a Workspace with that line, or a Workspace that does not exist. A Workspace of that name without the line keeps its content, and the pool takes the next free name.
 
-A pool that leaves the configuration, or that moves to another atespace, leaves its Tasks as they are. The front cannot tell a removed pool from a pool of another front. To remove a pool, set `replicas: 0`, wait until its Tasks are gone, and then remove the entry. Delete a Task that failed after it ran by hand.
+A pool with a generation above 0 has one more Workspace, its marker `<name>-generation`. Its file `.fw/generation` names the pool in its first line and holds the newest generation of the pool that a front runs (section 14.5). The front writes the marker only when its own generation is higher, and never a Workspace of that name without the line. No Task binds the marker.
+
+A pool that leaves the configuration, or that moves to another atespace, leaves its Tasks as they are. The front cannot tell a removed pool from a pool of another front. To remove a pool, set `replicas: 0`, wait until its Tasks are gone, and then remove the entry. Delete a Task that failed after it ran by hand, and the marker of the pool too (`ax delete workspace <name>-generation`).
 
 ### 14.4 A pass
 
-At every `workbench.fleet.interval`, the front reads the Task list and runs the suspend controller. Then it runs one pass for each pool over the Tasks of its atespace. A current Task of the pool carries the hash of the pool in `FW_POOL_SPEC`. It also holds the values that the front holds now for its variables. So a new value of a variable of the front, such as a new static token, makes every Task older too. The front compares the values in constant time and never logs them. A pass has these steps:
+At every `workbench.fleet.interval`, the front reads the Task list and runs the suspend controller. Then it runs one pass for each pool over the Tasks of its atespace. A current Task of the pool carries the hash of the pool in `FW_POOL_SPEC`. It also holds the values that the front holds now for its variables. So a new value of a variable of the front, such as a new static token, makes every Task older too. The front compares the values in constant time and never logs them. A Task of a lower generation than the pool is older too.
+
+First, a pass compares generations (section 14.5). When the marker or a Task of the pool carries a higher generation than the pool of this front, or a Task of the same generation carries another hash, the pass changes nothing, and the state of the pool says why. Else a pool with a generation above 0 records it in the marker, if the marker holds a lower one. Then a pass has these steps:
 
 1. It sends the delete again for a Task of the pool in the phase `Terminating`. Substrate can refuse a delete while an actor resumes, and nothing else tries again. When the view holds a run of such a Task, the front asks the Task, and a Task that holds the run waits.
 2. It puts aside a Task that failed after it ran. Such a Task can hold runs that nobody can read, so the pool never deletes it, and the Task does not count toward `replicas`. The state of the pool asks a person to delete it. It also names a run of the Task that the view still holds, because the actor can still work.
@@ -1229,10 +1235,20 @@ No replica of the front leads. Every replica runs every pass, and every action i
 
 - A name comes from the pool and the index, so two creates of one Task make one Task. Before a create, the front reads the Task, and it writes no Workspace for a Task that exists. ax refuses a second create, and the front takes the refusal as the work of the other replica.
 - A resume, a write of a Workspace with the same content, and a delete of a Task that is gone change nothing.
-- Before a delete, the front reads the Task again. It deletes only the Task that the pass judged: the same `FW_POOL`, the same `FW_POOL_SPEC`, the same create time, and for a delete that it sends again, still the phase `Terminating`. So a replica with an older list never deletes a Task that the other replica made since. The front deletes a Workspace only while no Task of its name exists.
+- Before a delete, the front reads the Task again. It deletes only the Task that the pass judged: the same `FW_POOL`, the same `FW_POOL_SPEC` and `FW_POOL_GENERATION`, the same create time, and for a delete that it sends again, still the phase `Terminating`. So a replica with an older list never deletes a Task that the other replica made since. The front deletes a Workspace only while no Task of its name exists.
 - Two replicas can choose different idle Tasks above the replica count. Then the pool has one Task too few for one interval, and the next pass creates it.
 
-A leader needs a lease, and the front has none: the ax API offers no lock, and the bus of the fleet can be NATS or Redis. A rolling update of the front can run two configurations at once. Then the replicas disagree about the hash, and each replica can replace an idle Task of the other. A replacement waits for an idle Task, and the disagreement ends with the old replica.
+A leader needs a lease, and the front has none: the ax API offers no lock, and the bus of the fleet can be NATS or Redis. A rolling update of the front can run two configurations at once, for example when a deploy changes the configuration and one replica restarts before the other. A hash says that two configurations differ, not which one is newer. So without an order, each replica takes the Tasks of the other for an older configuration, and the two replace each other's Tasks at every interval for as long as both run. The ticket soak of the lab saw this (finding 6 of `e2e/fleet/tickets/FINDINGS.md` in featherweight-lab).
+
+The generation gives the order. A deploy raises `generation` with every change of a pool, and the front stamps it on each Task in `FW_POOL_GENERATION`:
+
+- A Task of a lower generation runs an older configuration, and the pool replaces it as section 14.4 says.
+- A replica that sees a Task of a higher generation is superseded. It changes nothing in the pool: no create, no resume, no delete, and no write of a Workspace. It keeps the highest generation that it saw until it stops. Its state says `superseded: generation 7 of another front runs this pool, and this front holds generation 6, so it changes nothing in the pool`.
+- A Task of the same generation with another hash is a conflict. Two configurations claim one generation, and no replica can tell which one is newer. Neither replica changes the pool until a deploy gives one of them a higher generation. A rollback is a new, higher generation too. A generation that goes down, to 0 too, leaves every replica superseded by the marker and the Tasks of the higher one, until a person deletes them.
+- A newer replica deletes a Task before it creates the next one, and an older replica would fill that gap with a Task of its own. So a replica of a generation above 0 first records its generation in the marker of the pool (section 14.3), before it changes a Task, and every replica reads the marker at each pass and again before it creates a Task. An older replica therefore stops before the first gap opens, and the pool converges on the newer configuration. A pool of a generation above 0 that cannot read or write its marker changes nothing.
+- With generation 0 on both replicas, the hash alone decides, as before pools had a generation, and two configurations still fight.
+
+The front logs each new state of the order once.
 
 ### 14.6 The token
 
@@ -1246,7 +1262,7 @@ To rotate the token, change the Secret of the front and restart the front. Every
 
 `GET /v1/fleet` carries `pools`, and the MCP tool `fleet` lists them after the members. Each pool has these fields:
 
-- `name`, `atespace`, `agent`, `intake`, and `hash`.
+- `name`, `atespace`, `agent`, `intake`, `hash`, and `generation`, when it is above 0.
 - `wanted`, the replica count.
 - `actual`, the Tasks of the pool that exist, are not being deleted, and did not fail after a run.
 - `ready`, the Tasks of those that run the current configuration and are up.
@@ -1262,4 +1278,7 @@ The Agents place of the page shows one line for each pool. A caller who can view
 - A worker can take a job from the queue in the moment between the last question to the view and the delete. The intake acknowledges a job once its run is queued in the ledger of the worker, so the bus does not deliver the job again, and the run goes with the Task. The window is the time between the last question and the delete. Until the kernel can stop the intake of a worker before a delete, scale a pool down when its queue is empty.
 - The bash tool of a worker gets each variable of `env` with a `value`. A variable with `fromEnv` stays out of it. To give a command in bash such a secret, name it in `fw.tools.bash.env` under another name, as `$${NAME}`.
 - A Workspace of a Task that the pool deleted to replace it stays until the pool creates the Task again. When the delete of a Workspace above the replica count fails, the Workspace stays. Such a Workspace is small and holds no secret.
+- The generation orders the configuration of a pool, not the values of the variables of the front. Two replicas that hold two values of a variable of the front, such as a static token during a rotation, still replace each other's Tasks until both hold the same value.
+- The generation stops a lasting fight, not every race. The ax API has no conditional delete and no conditional write of a Workspace, so it cannot refuse a call of an older replica. A delete that an older replica sent before it learned of the newer generation can still land on a Task of the newer one, and a pass that started before the marker changed can create one older Task. The newer replica replaces such a Task at its next pass. Strict protection needs a fence in the ax API.
+- A replica of an older version of fw-workbench knows no generation. Upgrade every replica of the front before the configuration sets one.
 - A pass runs in the loop of the Task list, one call after another. A slow delete waits for Substrate, and it can hold the next read of the Task list back for up to two minutes.

@@ -120,8 +120,9 @@ func Resolve(list []*Pool, getenv func(string) (string, bool)) (*Values, error) 
 // computeHash is the hash of what every Task of the pool shares: the image,
 // the variables with the name of each variable of the front instead of its
 // value, the egress, the resources, the files with the rendered fw.yaml,
-// and the revision. The dry run therefore computes the same hash as the
-// front, and the hash never depends on a secret.
+// the revision, and the generation. The dry run therefore computes the
+// same hash as the front, and the hash never depends on a secret. A
+// generation of 0 leaves the hash as it was before pools had one.
 func (p *Pool) computeHash() string {
 	type envEntry struct {
 		Name    string  `json:"name"`
@@ -129,13 +130,14 @@ func (p *Pool) computeHash() string {
 		FromEnv string  `json:"fromEnv,omitempty"`
 	}
 	in := struct {
-		Image     string           `json:"image"`
-		Revision  string           `json:"revision,omitempty"`
-		Env       []envEntry       `json:"env"`
-		Egress    *ax.EgressSpec   `json:"egress,omitempty"`
-		Resources ax.ResourcesSpec `json:"resources"`
-		Files     []ax.File        `json:"files"`
-	}{Image: p.Image, Revision: p.Revision, Egress: p.Egress, Resources: p.Resources, Files: p.files}
+		Image      string           `json:"image"`
+		Revision   string           `json:"revision,omitempty"`
+		Generation int              `json:"generation,omitempty"`
+		Env        []envEntry       `json:"env"`
+		Egress     *ax.EgressSpec   `json:"egress,omitempty"`
+		Resources  ax.ResourcesSpec `json:"resources"`
+		Files      []ax.File        `json:"files"`
+	}{Image: p.Image, Revision: p.Revision, Generation: p.Generation, Egress: p.Egress, Resources: p.Resources, Files: p.files}
 	for _, e := range p.env {
 		in.Env = append(in.Env, envEntry{Name: e.Name, Value: e.Value, FromEnv: e.FromEnv})
 	}
@@ -169,6 +171,9 @@ func (p *Pool) Render(index int, lookup Lookup) (*v1alpha1.Task, *v1alpha1.Works
 		spec.Env = append(spec.Env, &v1alpha1.EnvVar{Name: e.Name, Value: v})
 	}
 	spec.Env = append(spec.Env, &v1alpha1.EnvVar{Name: EnvSpec, Value: p.hash})
+	if p.Generation > 0 {
+		spec.Env = append(spec.Env, &v1alpha1.EnvVar{Name: EnvGeneration, Value: strconv.Itoa(p.Generation)})
+	}
 	if r := p.Resources; r.Requests != (ax.ResourceList{}) || r.Limits != (ax.ResourceList{}) {
 		spec.Resources = &v1alpha1.ResourcesSpec{Requests: resourceList(r.Requests), Limits: resourceList(r.Limits)}
 	}
@@ -188,6 +193,55 @@ func (p *Pool) Render(index int, lookup Lookup) (*v1alpha1.Task, *v1alpha1.Works
 		ws.Spec.Files = append(ws.Spec.Files, &v1alpha1.File{Path: f.Path, Content: f.Content})
 	}
 	return task, ws, nil
+}
+
+// markerFile is the file of the Workspace that records the generation of a
+// pool.
+const markerFile = ".fw/generation"
+
+// MarkerName returns the name of the Workspace that records the newest
+// generation of the pool that a front runs, <name>-generation.
+func (p *Pool) MarkerName() string { return p.Name + "-generation" }
+
+// markerHeader is the first line of the file of the marker. It names the
+// pool, so the front writes only a marker of its own pool.
+func markerHeader(pool string) string {
+	return "# This file is written by the pool " + pool + " of fw-workbench. It holds the newest generation of the pool that a front runs.\n"
+}
+
+// Marker returns the Workspace that records the generation of the pool.
+// The ax API keeps no labels, so a Workspace carries the generation to the
+// other replicas of the front before any Task of it exists.
+func (p *Pool) Marker() *v1alpha1.Workspace {
+	return &v1alpha1.Workspace{
+		ApiVersion: ax.APIVersion,
+		Kind:       ax.KindWorkspace,
+		Metadata:   &v1alpha1.ObjectMeta{Name: p.MarkerName(), Atespace: p.Atespace},
+		Spec: &v1alpha1.WorkspaceSpec{Files: []*v1alpha1.File{
+			{Path: markerFile, Content: markerHeader(p.Name) + strconv.Itoa(p.Generation) + "\n"},
+		}},
+	}
+}
+
+// markerOf returns the generation that a marker records, and false for a
+// Workspace that the pool did not write. A value that is not a number of
+// 0 or more reads as 0.
+func (p *Pool) markerOf(ws *v1alpha1.Workspace) (int, bool) {
+	for _, f := range ws.GetSpec().GetFiles() {
+		if strings.TrimPrefix(f.GetPath(), "./") != markerFile {
+			continue
+		}
+		rest, ok := strings.CutPrefix(f.GetContent(), markerHeader(p.Name))
+		if !ok {
+			return 0, false
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(rest))
+		if err != nil || n < 0 {
+			return 0, true
+		}
+		return n, true
+	}
+	return 0, false
 }
 
 // resourceList converts a quantity pair, and returns nil for an empty one.
@@ -248,7 +302,12 @@ func Write(w io.Writer, list []*Pool) error {
 	for _, p := range list {
 		var b strings.Builder
 		fmt.Fprintf(&b, "Pool %s: %d %s of the agent %s in the atespace %s, on the queue %s.\n", p.Name, p.replicas(), plural(p.replicas(), "Task", "Tasks"), p.Agent, p.Atespace, p.Intake)
-		fmt.Fprintf(&b, "Each Task carries %s=%s and %s=%s. A Task with another %s runs an older configuration.\n", EnvPool, p.Name, EnvSpec, p.hash, EnvSpec)
+		if p.Generation > 0 {
+			fmt.Fprintf(&b, "Each Task carries %s=%s, %s=%s, and %s=%d. A Task of a lower generation runs an older configuration, and the front leaves a Task of a higher generation alone.\n", EnvPool, p.Name, EnvSpec, p.hash, EnvGeneration, p.Generation)
+			fmt.Fprintf(&b, "Before it changes a Task, the front records generation %d in the Workspace %s.\n", p.Generation, p.MarkerName())
+		} else {
+			fmt.Fprintf(&b, "Each Task carries %s=%s and %s=%s. A Task with another %s runs an older configuration.\n", EnvPool, p.Name, EnvSpec, p.hash, EnvSpec)
+		}
 		for _, name := range FromEnv([]*Pool{p}) {
 			fmt.Fprintf(&b, "The front copies the variable %s from its own environment; this output shows a placeholder.\n", name)
 		}
@@ -263,6 +322,16 @@ func Write(w io.Writer, list []*Pool) error {
 			out.WriteString("---\n")
 		}
 		out.WriteString(comment(b.String()))
+		if p.Generation > 0 {
+			text, err := encode(p.Marker())
+			if err != nil {
+				return fmt.Errorf("pools: encode the pool %s: %w", p.Name, err)
+			}
+			out.WriteString(text)
+			if p.replicas() > 0 {
+				out.WriteString("---\n")
+			}
+		}
 		for i := 0; i < p.replicas(); i++ {
 			task, ws, err := p.Render(i, Placeholders)
 			if err != nil {

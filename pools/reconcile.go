@@ -15,7 +15,10 @@ package pools
 // comes from the pool and the index, so two creates of one Task make one
 // Task. A delete reads the Task again first and deletes it only when it is
 // the Task that the pass judged, after the Task said that it holds no
-// active run.
+// active run. The generation of a pool orders its configurations: a front
+// that sees a Task of a higher generation than its own changes nothing in
+// the pool, so two replicas with two configurations do not undo each
+// other.
 
 import (
 	"context"
@@ -27,6 +30,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	v1alpha1 "github.com/google/ax/pkg/apis/v1alpha1"
@@ -84,6 +88,10 @@ type Reconciler struct {
 	Check  Checker
 	Values *Values
 	Log    *slog.Logger
+
+	mu    sync.Mutex
+	newer map[string]int    // the highest generation seen on a Task or a marker, by atespace/pool
+	held  map[string]string // why each held pool changes nothing, as last logged
 }
 
 // Status is the state of a pool after a pass. Wanted is the replica
@@ -93,17 +101,18 @@ type Reconciler struct {
 // run. Gaps says in words why the pool is not as the configuration wants
 // it, one reason each.
 type Status struct {
-	Name      string       `json:"name"`
-	Atespace  string       `json:"atespace"`
-	Agent     string       `json:"agent"`
-	Intake    string       `json:"intake"`
-	Wanted    int          `json:"wanted"`
-	Actual    int          `json:"actual"`
-	Ready     int          `json:"ready"`
-	Hash      string       `json:"hash"`
-	Tasks     []TaskStatus `json:"tasks"`
-	Gaps      []string     `json:"gaps,omitempty"`
-	CheckedAt time.Time    `json:"checkedAt"`
+	Name       string       `json:"name"`
+	Atespace   string       `json:"atespace"`
+	Agent      string       `json:"agent"`
+	Intake     string       `json:"intake"`
+	Wanted     int          `json:"wanted"`
+	Actual     int          `json:"actual"`
+	Ready      int          `json:"ready"`
+	Hash       string       `json:"hash"`
+	Generation int          `json:"generation,omitempty"`
+	Tasks      []TaskStatus `json:"tasks"`
+	Gaps       []string     `json:"gaps,omitempty"`
+	CheckedAt  time.Time    `json:"checkedAt"`
 }
 
 // TaskStatus is one Task of a pool. Current is true when it runs the
@@ -119,7 +128,7 @@ type TaskStatus struct {
 // Initial returns the state of a pool before its first pass.
 func Initial(p *Pool, why string) Status {
 	return Status{Name: p.Name, Atespace: p.Atespace, Agent: p.Agent, Intake: p.Intake, Wanted: p.replicas(), Hash: p.hash,
-		Tasks: []TaskStatus{}, Gaps: []string{why}}
+		Generation: p.Generation, Tasks: []TaskStatus{}, Gaps: []string{why}}
 }
 
 // member is one Task of the pool in a pass.
@@ -129,6 +138,7 @@ type member struct {
 	index    int
 	phase    string
 	hash     string
+	gen      int // FW_POOL_GENERATION of the Task, 0 without one
 	current  bool
 	older    string // what is old when the Task is not current
 	started  bool   // ax resumed the Task once: it has the condition WorkspaceReady
@@ -172,6 +182,16 @@ func (p *Pool) indexOf(name string) (int, bool) {
 	return n, err == nil
 }
 
+// genOf returns the generation of a Task. A Task without FW_POOL_GENERATION,
+// or with a value that is not a number of 0 or more, has generation 0.
+func genOf(t *v1alpha1.Task) int {
+	n, err := strconv.Atoi(envOf(t, EnvGeneration))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
 // envOf returns the value of a variable of a Task.
 func envOf(t *v1alpha1.Task, name string) string {
 	for _, e := range t.GetSpec().GetEnv() {
@@ -186,7 +206,7 @@ func envOf(t *v1alpha1.Task, name string) string {
 // ax API listed them, and returns the state of the pool.
 func (r *Reconciler) Reconcile(ctx context.Context, p *Pool, tasks []*v1alpha1.Task, now time.Time) Status {
 	st := Status{Name: p.Name, Atespace: p.Atespace, Agent: p.Agent, Intake: p.Intake, Wanted: p.replicas(), Hash: p.hash,
-		Tasks: []TaskStatus{}, CheckedAt: now}
+		Generation: p.Generation, Tasks: []TaskStatus{}, CheckedAt: now}
 	gap := func(format string, args ...any) { st.Gaps = append(st.Gaps, fmt.Sprintf(format, args...)) }
 
 	var owned []*member
@@ -205,6 +225,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, p *Pool, tasks []*v1alpha1.T
 		owned = append(owned, r.memberOf(t, idx, p))
 	}
 	sort.Slice(owned, func(i, j int) bool { return owned[i].index < owned[j].index })
+
+	// A Task of a newer generation, or of the same generation with another
+	// configuration, stops the pass before any change.
+	if why := r.hold(ctx, p, owned); why != "" {
+		gap("%s", why)
+		return r.summary(st, p, owned, nil, nil)
+	}
 
 	// A delete that ax did not finish, for example because Substrate
 	// refused it while the actor resumed, is sent again: the Task was
@@ -325,7 +352,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, p *Pool, tasks []*v1alpha1.T
 	}
 
 	r.replace(ctx, p, counted, len(created) == 0 && deleted == 0, now, gap)
+	return r.summary(st, p, owned, created, existed)
+}
 
+// summary adds the Tasks of the pool and their counts to the state of a
+// pass, and redacts the values of the front from it.
+func (r *Reconciler) summary(st Status, p *Pool, owned []*member, created []string, existed map[string]bool) Status {
+	gap := func(format string, args ...any) { st.Gaps = append(st.Gaps, fmt.Sprintf(format, args...)) }
 	for _, m := range owned {
 		st.Tasks = append(st.Tasks, TaskStatus{Name: m.name, Phase: m.phase, Current: m.current, Note: m.note})
 		if m.gone || m.phase == v1alpha1.PhaseTerminating || m.broken() {
@@ -445,7 +478,8 @@ func countGone(ms []*member) int {
 // the hash of the pool and the values of the variables of the front that
 // the front holds now, so a new value of the front, such as a new static
 // token, replaces the Task too. The values are compared in constant time
-// and never logged.
+// and never logged. A Task of a higher generation, or of the same
+// generation with another hash, is not older: hold stops the pass first.
 func (r *Reconciler) memberOf(t *v1alpha1.Task, idx int, p *Pool) *member {
 	m := &member{
 		name:     t.GetMetadata().GetName(),
@@ -453,10 +487,13 @@ func (r *Reconciler) memberOf(t *v1alpha1.Task, idx int, p *Pool) *member {
 		index:    idx,
 		phase:    t.GetStatus().GetPhase(),
 		hash:     envOf(t, EnvSpec),
+		gen:      genOf(t),
 		created:  t.GetMetadata().GetCreateTime(),
 		token:    envOf(t, p.tokenEnv),
 	}
 	switch {
+	case m.gen < p.Generation:
+		m.older = fmt.Sprintf("an older configuration of generation %d", m.gen)
 	case m.hash != p.hash:
 		m.older = "an older configuration"
 	case !r.sameValues(t, p):
@@ -479,6 +516,131 @@ func (r *Reconciler) memberOf(t *v1alpha1.Task, idx int, p *Pool) *member {
 		}
 	}
 	return m
+}
+
+// hold returns why a pass must change nothing in the pool, or "". The
+// generation orders the configurations of a pool. A front is superseded
+// when the marker of the pool or a Task of the pool carries a higher
+// generation than the pool of the front: another front runs a newer
+// configuration, and this one leaves the pool to it. A Task of the same
+// generation with another hash is a conflict: two configurations claim one
+// generation, and no front can tell which one is newer. A generation of 0
+// on both sides orders nothing, as before pools had a generation.
+//
+// A front of a generation above 0 records it in the marker before its
+// first change. A newer front deletes a Task before it creates the next
+// one, so an older front learns of the newer one from the marker before
+// that gap opens, and does not fill it. A front also keeps the highest
+// generation that it saw until it stops. Without the marker, a pool of a
+// generation above 0 changes nothing. The log names each new reason once.
+func (r *Reconciler) hold(ctx context.Context, p *Pool, owned []*member) string {
+	top := 0
+	for _, m := range owned {
+		top = max(top, m.gen)
+	}
+	mark, foreign, err := r.readMarker(ctx, p)
+	key := p.Atespace + "/" + p.Name
+	top = r.saw(key, max(top, mark))
+	why, conflict := "", (*member)(nil)
+	switch {
+	case top > p.Generation:
+		why = fmt.Sprintf("superseded: generation %d of another front runs this pool, and this front holds generation %d, so it changes nothing in the pool", top, p.Generation)
+	case p.Generation == 0:
+	case err != nil:
+		why = fmt.Sprintf("the front could not read the generation of the pool (%v), so it changes nothing in the pool", err)
+	case foreign:
+		why = fmt.Sprintf("the Workspace %s exists and belongs to no pool, so the front cannot record the generation of the pool and changes nothing in it; delete that Workspace or rename the pool", p.MarkerName())
+	default:
+		for _, m := range owned {
+			if m.gen == p.Generation && m.hash != p.hash {
+				conflict = m
+				why = fmt.Sprintf("conflict: %s carries generation %d with another configuration (%s, and this front has %s), so the pool changes nothing; give each configuration of the pool its own generation", m.name, m.gen, orWord(m.hash, "no hash"), p.hash)
+				break
+			}
+		}
+		if why == "" && mark < p.Generation {
+			if err := r.writeMarker(ctx, p); err != nil {
+				why = fmt.Sprintf("the front could not record generation %d of the pool (%v), so it changes nothing in the pool", p.Generation, err)
+			} else {
+				r.Log.Info("pools: recorded the generation of the pool", "pool", p.Name, "workspace", p.Atespace+"/"+p.MarkerName(), "generation", p.Generation, "from", mark)
+			}
+		}
+	}
+	r.mu.Lock()
+	if r.held == nil {
+		r.held = map[string]string{}
+	}
+	prev := r.held[key]
+	if why == "" {
+		delete(r.held, key)
+	} else {
+		r.held[key] = why
+	}
+	r.mu.Unlock()
+	switch {
+	case why == prev:
+	case conflict != nil:
+		r.Log.Warn("pools: two configurations claim one generation of the pool; the pool changes nothing", "pool", p.Name, "generation", p.Generation, "task", conflict.id(), "from", conflict.hash, "to", p.hash)
+	case top > p.Generation:
+		r.Log.Info("pools: another front runs a newer generation of the pool; this front changes nothing in it", "pool", p.Name, "generation", p.Generation, "newer", top)
+	case why != "":
+		r.Log.Warn("pools: the pool changes nothing", "pool", p.Name, "generation", p.Generation, "reason", r.Values.Redact(why))
+	default:
+		r.Log.Info("pools: the pool no longer waits", "pool", p.Name, "generation", p.Generation)
+	}
+	return why
+}
+
+// readMarker reads the generation that the marker of the pool records. A
+// pool without a marker has generation 0, and foreign is true for a
+// Workspace of that name that the pool did not write.
+func (r *Reconciler) readMarker(ctx context.Context, p *Pool) (gen int, foreign bool, err error) {
+	cctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	ws, err := r.AX.GetWorkspace(cctx, &v1alpha1.GetWorkspaceRequest{Atespace: p.Atespace, Name: p.MarkerName()})
+	switch {
+	case status.Code(err) == codes.NotFound:
+		return 0, false, nil
+	case err != nil:
+		return 0, false, fmt.Errorf("pools: read the Workspace %s: %w", p.MarkerName(), err)
+	}
+	gen, ok := p.markerOf(ws)
+	return gen, !ok, nil
+}
+
+// writeMarker records the generation of the pool in its marker.
+func (r *Reconciler) writeMarker(ctx context.Context, p *Pool) error {
+	cctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	if _, err := r.AX.UpdateWorkspace(cctx, &v1alpha1.UpdateWorkspaceRequest{Workspace: p.Marker()}); err != nil {
+		return fmt.Errorf("pools: write the Workspace %s: %w", p.MarkerName(), err)
+	}
+	return nil
+}
+
+// saw records the generation of a Task of a pool and returns the highest
+// generation that the front saw on a Task of it.
+func (r *Reconciler) saw(key string, gen int) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.newer == nil {
+		r.newer = map[string]int{}
+	}
+	if gen > r.newer[key] {
+		r.newer[key] = gen
+	}
+	return r.newer[key]
+}
+
+// superseded returns an error when the front saw a Task of the pool with a
+// higher generation than its own. Each call that changes the pool checks
+// it first, so a newer generation that a read learned in a pass stops the
+// rest of that pass too.
+func (r *Reconciler) superseded(p *Pool) error {
+	if top := r.saw(p.Atespace+"/"+p.Name, 0); top > p.Generation {
+		return fmt.Errorf("pools: generation %d of another front runs the pool %s, and this front holds generation %d, so it changes nothing", top, p.Name, p.Generation)
+	}
+	return nil
 }
 
 // sameValues reports whether a Task holds the value of every variable that
@@ -583,6 +745,9 @@ var errForeign = errors.New("belongs to no pool")
 // Workspace of that name that the pool did not render stays as it is, and
 // the pool uses another name.
 func (r *Reconciler) create(ctx context.Context, p *Pool, index int) (exists bool, err error) {
+	if err := r.superseded(p); err != nil {
+		return false, err
+	}
 	task, ws, err := p.Render(index, r.Values.Lookup)
 	if err != nil {
 		return false, err
@@ -590,11 +755,25 @@ func (r *Reconciler) create(ctx context.Context, p *Pool, index int) (exists boo
 	cctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	name, wsName := task.GetMetadata().GetName(), ws.GetMetadata().GetName()
-	if _, err := r.AX.GetTask(cctx, &v1alpha1.GetTaskRequest{Atespace: p.Atespace, Name: name}); err == nil {
+	if cur, err := r.AX.GetTask(cctx, &v1alpha1.GetTaskRequest{Atespace: p.Atespace, Name: name}); err == nil {
+		r.saw(p.Atespace+"/"+p.Name, genOf(cur))
 		r.Log.Info("pools: the Task exists already; another replica of the front made it", "pool", p.Name, "task", p.Atespace+"/"+name)
 		return true, nil
 	} else if status.Code(err) != codes.NotFound {
 		return false, fmt.Errorf("pools: read the Task %s: %w", name, err)
+	}
+	// A newer front can record its generation while this pass runs. The
+	// marker is read once more, right before the gap is filled. A pool of
+	// a generation above 0 fills no gap without it.
+	mark, _, merr := r.readMarker(cctx, p)
+	if merr != nil && p.Generation > 0 {
+		return false, merr
+	}
+	if merr == nil {
+		r.saw(p.Atespace+"/"+p.Name, mark)
+		if err := r.superseded(p); err != nil {
+			return false, err
+		}
 	}
 	cur, err := r.AX.GetWorkspace(cctx, &v1alpha1.GetWorkspaceRequest{Atespace: p.Atespace, Name: wsName})
 	switch {
@@ -622,6 +801,9 @@ func (r *Reconciler) create(ctx context.Context, p *Pool, index int) (exists boo
 
 // resume resumes a Task of the pool, which runs it.
 func (r *Reconciler) resume(ctx context.Context, p *Pool, name string) error {
+	if err := r.superseded(p); err != nil {
+		return err
+	}
 	cctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	if _, err := r.AX.ResumeTask(cctx, &v1alpha1.ResumeTaskRequest{Atespace: p.Atespace, Name: name}); err != nil {
@@ -632,13 +814,17 @@ func (r *Reconciler) resume(ctx context.Context, p *Pool, name string) error {
 
 // deleteTask deletes a Task of the pool that a pass judged, and with
 // workspace its Workspace too. It reads the Task first and deletes it only
-// when it is the Task that the pass judged: the same pool, the same hash,
-// the same create time, and still in the phase Terminating when the pass
-// sends a delete again. So a replica of the front with an older list never
-// deletes a Task that another replica made since. It asks the view once
-// more, so a run that started after the check keeps the Task. A Task that
-// is gone is not an error.
+// when it is the Task that the pass judged: the same pool, the same hash
+// and generation, the same create time, and still in the phase Terminating
+// when the pass sends a delete again. So a replica of the front with an
+// older list never deletes a Task that another replica made since, and a
+// Task that a front of a newer generation made in between stops the pass.
+// It asks the view once more, so a run that started after the check keeps
+// the Task. A Task that is gone is not an error.
 func (r *Reconciler) deleteTask(ctx context.Context, p *Pool, m *member, workspace bool) error {
+	if err := r.superseded(p); err != nil {
+		return err
+	}
 	cctx, cancel := context.WithTimeout(ctx, deleteTimeout)
 	defer cancel()
 	cur, err := r.AX.GetTask(cctx, &v1alpha1.GetTaskRequest{Atespace: p.Atespace, Name: m.name})
@@ -648,7 +834,11 @@ func (r *Reconciler) deleteTask(ctx context.Context, p *Pool, m *member, workspa
 	if err != nil {
 		return fmt.Errorf("pools: read the Task %s: %w", m.name, err)
 	}
-	if envOf(cur, EnvPool) != p.Name || envOf(cur, EnvSpec) != m.hash || !sameTime(cur.GetMetadata().GetCreateTime(), m.created) ||
+	if g := genOf(cur); g > p.Generation {
+		r.saw(p.Atespace+"/"+p.Name, g)
+		return fmt.Errorf("pools: the Task %s carries generation %d now, newer than generation %d of this front, so the pool leaves it alone", m.name, g, p.Generation)
+	}
+	if envOf(cur, EnvPool) != p.Name || envOf(cur, EnvSpec) != m.hash || genOf(cur) != m.gen || !sameTime(cur.GetMetadata().GetCreateTime(), m.created) ||
 		(m.phase == v1alpha1.PhaseTerminating && cur.GetStatus().GetPhase() != v1alpha1.PhaseTerminating) {
 		return fmt.Errorf("pools: the Task %s changed since the pass read it; the pool looks at it again at the next interval", m.name)
 	}
