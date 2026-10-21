@@ -53,7 +53,7 @@ const fillPauseMax = 5 * time.Minute
 var EgressTypes = []string{
 	fw.EvRunQueued, fw.EvRunStarted, fw.EvRunResumed, fw.EvRunSuspended, fw.EvRunFinished,
 	fw.EvApprovalRequested, fw.EvApprovalDecided, fw.EvRunAnnotated, fw.EvTurnStarted, fw.EvMessageReceived,
-	fw.EvRunChild,
+	fw.EvRunChild, fw.EvOutcomeEvaluated,
 }
 
 // platform is the view of the members that the platforms know.
@@ -81,6 +81,9 @@ type platform struct {
 	pools      []*pools.Pool
 	reconciler *pools.Reconciler
 	poolState  map[string]pools.Status
+	// merged holds each pool with the overlay that its last pass merged
+	// (profiles.go), by name.
+	merged map[string]*pools.Pool
 }
 
 // childLink is where a child of a run lives, from the fw.run.child event

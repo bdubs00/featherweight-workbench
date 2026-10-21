@@ -375,6 +375,9 @@ func (s *server) startOn(ctx context.Context, member string, in runArgs) *sdk.Ca
 	if in.Profile != nil {
 		body["profile"] = in.Profile
 	}
+	if in.Outcome != nil {
+		body["outcome"] = in.Outcome
+	}
 	if in.Budget != nil {
 		body["budget"] = in.Budget
 	}

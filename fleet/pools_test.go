@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"path/filepath"
 	"slices"
@@ -187,6 +188,7 @@ pools:
 // poolFront configures a front that keeps the pools of block, over the ax
 // API and the router of a test.
 func poolFront(t *testing.T, ax *poolAX, router string, block string) func(*fw.Config, *Config) {
+	useMemOverlays(t)
 	return func(cfg *fw.Config, fc *Config) {
 		off := time.Duration(0)
 		fc.Atespaces = []string{"team"}
@@ -208,6 +210,17 @@ func poolFront(t *testing.T, ax *poolAX, router string, block string) func(*fw.C
 		}
 		fc.Pools = list
 	}
+}
+
+// useMemOverlays makes the fronts of a test keep the overlays of their
+// pools in memory, because the configuration names the bus nats.
+func useMemOverlays(t *testing.T) {
+	t.Helper()
+	old := OpenOverlays
+	OpenOverlays = func(context.Context, *fw.Config, *slog.Logger) (pools.OverlayStore, func(), error) {
+		return pools.NewMemOverlays(), nil, nil
+	}
+	t.Cleanup(func() { OpenOverlays = old })
 }
 
 // setRunState changes the state of a run in the view, as its next event

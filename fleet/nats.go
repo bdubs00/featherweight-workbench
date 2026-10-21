@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/pools"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -50,6 +51,7 @@ type natsServer struct {
 	js     jetstream.JetStream
 	stream string
 	ttl    time.Duration
+	log    *slog.Logger
 
 	mu sync.Mutex
 	kv jetstream.KeyValue // made at the first use
@@ -97,7 +99,7 @@ func openNATS(ctx context.Context, cfg *fw.Config, expire time.Duration, log *sl
 	if !nc.IsConnected() {
 		log.Warn("fleet: the bus server is not reachable yet; the front reads the queues once it connects")
 	}
-	return &natsServer{nc: nc, js: js, stream: stream, ttl: expire}, nil
+	return &natsServer{nc: nc, js: js, stream: stream, ttl: expire, log: log}, nil
 }
 
 // redactURL drops the URL from a parse error, because the URL can hold a
@@ -269,4 +271,197 @@ func kvRead(ctx context.Context, b kvBucket, key string) (jobRecord, uint64, err
 		return jobRecord{}, 0, fmt.Errorf("fleet: decode a job record: %w", err)
 	}
 	return rec, e.Revision(), nil
+}
+
+// poolBucketInfix comes between the stream name and the pool name in the
+// name of the bucket of the overlay of a pool.
+const poolBucketInfix = "_POOL_"
+
+// PoolBucket returns the name of the key-value bucket that holds the
+// overlay of a pool on the NATS server of the bus: <stream>_POOL_<pool>.
+func PoolBucket(stream, pool string) string { return stream + poolBucketInfix + pool }
+
+// Keys of the entries of an overlay bucket. Each profile and each rule is
+// one entry, so two replicas that write two entries never race; a second
+// write of one entry replaces it. The name after the prefix is base64url,
+// because a key holds letters, digits, and a few marks only.
+const (
+	overlayProfileKey = "profile."
+	overlayRuleKey    = "allow."
+)
+
+// overlayHistory is how many values of each entry a bucket keeps, so an
+// operator can read what an entry held before.
+const overlayHistory = 10
+
+// natsOverlays keeps the overlays of the pools in the key-value buckets of
+// the NATS server (pools.OverlayStore). A read never makes a bucket, and
+// the first write to a pool makes its bucket.
+type natsOverlays struct {
+	n *natsServer
+
+	mu sync.Mutex
+	kv map[string]jetstream.KeyValue
+}
+
+func newNATSOverlays(n *natsServer) *natsOverlays {
+	return &natsOverlays{n: n, kv: map[string]jetstream.KeyValue{}}
+}
+
+func (o *natsOverlays) Describe() string {
+	return "from the key-value bucket " + PoolBucket(o.n.stream, "<pool>")
+}
+
+// bucket returns the bucket of a pool. Without create, a bucket that does
+// not exist is jetstream.ErrBucketNotFound.
+func (o *natsOverlays) bucket(ctx context.Context, pool string, create bool) (jetstream.KeyValue, error) {
+	o.mu.Lock()
+	kv := o.kv[pool]
+	o.mu.Unlock()
+	if kv != nil {
+		return kv, nil
+	}
+	name := PoolBucket(o.n.stream, pool)
+	var err error
+	if create {
+		kv, err = o.n.js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+			Bucket:      name,
+			Description: "The profiles and the allow rules that the front of a featherweight fleet adds to the pool " + pool + ".",
+			History:     overlayHistory,
+			Storage:     jetstream.FileStorage,
+		})
+	} else {
+		kv, err = o.n.js.KeyValue(ctx, name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	o.mu.Lock()
+	o.kv[pool] = kv
+	o.mu.Unlock()
+	return kv, nil
+}
+
+// forget drops the handle of a bucket, so the next request opens it again,
+// as after a restart of a server without storage.
+func (o *natsOverlays) forget(pool string) {
+	o.mu.Lock()
+	delete(o.kv, pool)
+	o.mu.Unlock()
+}
+
+// bucketGone reports whether an error means that the bucket is gone.
+func bucketGone(err error) bool {
+	return errors.Is(err, jetstream.ErrBucketNotFound) || errors.Is(err, jetstream.ErrStreamNotFound)
+}
+
+// Read implements pools.OverlayStore. A pool without a bucket has an empty
+// overlay. An entry that does not decode is left out, and the log names
+// its key.
+func (o *natsOverlays) Read(ctx context.Context, pool string) (pools.Overlay, error) {
+	var out pools.Overlay
+	kv, err := o.bucket(ctx, pool, false)
+	if bucketGone(err) {
+		o.forget(pool)
+		return out, nil
+	}
+	if err != nil {
+		return out, err
+	}
+	w, err := kv.WatchAll(ctx, jetstream.IgnoreDeletes())
+	if bucketGone(err) {
+		o.forget(pool)
+		return out, nil
+	}
+	if err != nil {
+		return out, err
+	}
+	defer func() { _ = w.Stop() }()
+	for {
+		var e jetstream.KeyValueEntry
+		select {
+		case <-ctx.Done():
+			return pools.Overlay{}, ctx.Err()
+		case e = <-w.Updates():
+		}
+		if e == nil {
+			break // the end of the entries that the bucket holds now
+		}
+		var bad error
+		switch {
+		case strings.HasPrefix(e.Key(), overlayProfileKey):
+			var v pools.OverlayProfile
+			if bad = json.Unmarshal(e.Value(), &v); bad == nil {
+				out.Profiles = append(out.Profiles, v)
+			}
+		case strings.HasPrefix(e.Key(), overlayRuleKey):
+			var v pools.OverlayRule
+			if bad = json.Unmarshal(e.Value(), &v); bad == nil {
+				out.Allow = append(out.Allow, v)
+			}
+		}
+		if bad != nil {
+			o.n.log.Warn("fleet: an entry of the overlay of a pool does not decode", "pool", pool, "key", e.Key(), "error", bad)
+		}
+	}
+	// The sort of the store in memory is the sort of the overlay.
+	sorted := pools.Overlay{}
+	for _, e := range out.Profiles {
+		sorted = sorted.WithProfile(e)
+	}
+	for _, r := range out.Allow {
+		sorted = sorted.WithRule(r)
+	}
+	return sorted, nil
+}
+
+// put writes one entry, and makes the bucket again once when it is gone.
+func (o *natsOverlays) put(ctx context.Context, pool, key string, v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("fleet: encode an entry of the overlay: %w", err)
+	}
+	for try := 0; ; try++ {
+		kv, err := o.bucket(ctx, pool, true)
+		if err == nil {
+			_, err = kv.Put(ctx, key, data)
+		}
+		if bucketGone(err) && try == 0 {
+			o.forget(pool)
+			continue
+		}
+		return err
+	}
+}
+
+// PutProfile implements pools.OverlayStore.
+func (o *natsOverlays) PutProfile(ctx context.Context, pool string, e pools.OverlayProfile) error {
+	return o.put(ctx, pool, overlayProfileKey+base64.RawURLEncoding.EncodeToString([]byte(e.Profile.Name)), e)
+}
+
+// AddRule implements pools.OverlayStore.
+func (o *natsOverlays) AddRule(ctx context.Context, pool string, r pools.OverlayRule) error {
+	return o.put(ctx, pool, overlayRuleKey+base64.RawURLEncoding.EncodeToString([]byte(r.Rule)), r)
+}
+
+// DeleteProfile implements pools.OverlayStore.
+func (o *natsOverlays) DeleteProfile(ctx context.Context, pool, name string) (bool, error) {
+	kv, err := o.bucket(ctx, pool, false)
+	if bucketGone(err) {
+		o.forget(pool)
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	key := overlayProfileKey + base64.RawURLEncoding.EncodeToString([]byte(name))
+	if _, err := kv.Get(ctx, key); errors.Is(err, jetstream.ErrKeyNotFound) || errors.Is(err, jetstream.ErrKeyDeleted) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	if err := kv.Delete(ctx, key); err != nil {
+		return false, err
+	}
+	return true, nil
 }
