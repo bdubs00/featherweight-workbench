@@ -34,6 +34,17 @@ const (
 	MaxKeyBytes = 512
 	// DefaultKind is the kind of the principal of the runs of a source.
 	DefaultKind = fw.KindWorkload
+	// DefaultRedriveAttempts is the number of runs of an event with
+	// redrive, the first one included.
+	DefaultRedriveAttempts = 3
+	// MinRedriveAttempts and MaxRedriveAttempts bound redrive.maxAttempts.
+	MinRedriveAttempts, MaxRedriveAttempts = 2, 10
+	// DefaultRedriveCooldown is the time from a dead letter to the next
+	// run of the event.
+	DefaultRedriveCooldown = 5 * time.Minute
+	// MinRedriveCooldown is the shortest cooldown that the configuration
+	// takes.
+	MinRedriveCooldown = time.Minute
 )
 
 // Modes of the authentication of a webhook source.
@@ -46,8 +57,9 @@ const (
 // Keys of the metadata that a source gives each run, beside fw.batch and
 // fw.title.
 const (
-	MetaSource = "workbench.source"    // the name of the source
-	MetaKey    = "workbench.sourceKey" // the de-duplication key of the event
+	MetaSource     = "workbench.source"           // the name of the source
+	MetaKey        = "workbench.sourceKey"        // the de-duplication key of the event
+	MetaGeneration = "workbench.sourceGeneration" // the generation of the claim, with redrive
 )
 
 // Source is one entry of workbench.sources. A source with Poll reads an
@@ -73,8 +85,20 @@ type Source struct {
 	Metadata  map[string]string `yaml:"metadata"`
 	Key       string            `yaml:"key"`
 	DedupFor  time.Duration     `yaml:"dedupFor"`
+	Redrive   *Redrive          `yaml:"redrive"`
 	RunAs     string            `yaml:"runAs"`
 	RunAsKind string            `yaml:"runAsKind"`
+}
+
+// Redrive lets an event whose job reached the dead letter run again
+// (redrive.go). After the cooldown, the next delivery of the event makes a
+// new run, until the event made MaxAttempts runs. MaxAttempts counts the
+// runs that the source started, the first one included, and not the
+// retries of the kernel intake. The cooldown starts when the front reads
+// the record of the dead letter. Redrive needs the bus nats.
+type Redrive struct {
+	MaxAttempts int           `yaml:"maxAttempts"`
+	Cooldown    time.Duration `yaml:"cooldown"`
 }
 
 // Auth is how the caller of a webhook source proves itself. Mode is
@@ -173,6 +197,16 @@ func withDefaults(s Source) Source {
 	if s.DedupFor == 0 {
 		s.DedupFor = DefaultDedupFor
 	}
+	if s.Redrive != nil {
+		r := *s.Redrive
+		if r.MaxAttempts == 0 {
+			r.MaxAttempts = DefaultRedriveAttempts
+		}
+		if r.Cooldown == 0 {
+			r.Cooldown = DefaultRedriveCooldown
+		}
+		s.Redrive = &r
+	}
 	s.RunAs, s.RunAsKind = strings.TrimSpace(s.RunAs), strings.TrimSpace(s.RunAsKind)
 	if s.RunAs == "" {
 		s.RunAs = "source:" + s.Name
@@ -214,7 +248,7 @@ func check(cfg *fw.Config, at string, s Source) []string {
 	}
 	for k := range s.Metadata {
 		switch {
-		case k == fw.MetaBatch || k == fw.MetaTitle || k == MetaSource || k == MetaKey:
+		case k == fw.MetaBatch || k == fw.MetaTitle || k == MetaSource || k == MetaKey || k == MetaGeneration:
 			add("metadata.%s is set by the source", k)
 		default:
 			if err := fw.CheckMetadata(map[string]string{k: "x"}); err != nil {
@@ -224,6 +258,22 @@ func check(cfg *fw.Config, at string, s Source) []string {
 	}
 	if s.DedupFor < MinDedupFor {
 		add("dedupFor %s is shorter than %s", s.DedupFor, MinDedupFor)
+	}
+	if r := s.Redrive; r != nil {
+		if cfg == nil || cfg.Bus.Driver != "nats" {
+			add("redrive needs bus.driver nats, which keeps the claims and the dead letter")
+		}
+		if r.MaxAttempts < MinRedriveAttempts || r.MaxAttempts > MaxRedriveAttempts {
+			add("redrive.maxAttempts %d is not %d to %d; it counts the first run too", r.MaxAttempts, MinRedriveAttempts, MaxRedriveAttempts)
+		}
+		switch {
+		case r.Cooldown < MinRedriveCooldown:
+			add("redrive.cooldown %s is shorter than %s", r.Cooldown, MinRedriveCooldown)
+		case r.Cooldown >= s.DedupFor:
+			// The window of a key starts again at each write of its claim,
+			// so a key never expires during its cooldown.
+			add("redrive.cooldown %s is not shorter than dedupFor %s", r.Cooldown, s.DedupFor)
+		}
 	}
 	if s.RunAsKind != fw.KindWorkload && s.RunAsKind != fw.KindUser {
 		add("runAsKind %q is not %s or %s", s.RunAsKind, fw.KindWorkload, fw.KindUser)

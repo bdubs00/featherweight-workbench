@@ -5,9 +5,10 @@ package fleet
 // API gives the members, their addresses, and their phases, and the egress
 // stream of the workers gives the state of every run. A member that
 // publishes no record, a bare kernel in a Task, is visible this way. The
-// view reads the running Tasks once when they appear and lives on the
-// stream after that; it never polls a Task, because a request wakes a
-// Task that sleeps.
+// view reads the runs of a Task each time it becomes live, and again once a
+// minute while the view holds one of its runs as queued or running. Between
+// those reads it lives on the stream. It never reads a Task that sleeps,
+// because a request wakes it.
 
 import (
 	"context"
@@ -43,6 +44,12 @@ const listPage = 500
 // fillPauseMax bounds the pause before the front reads the runs of a Task
 // again after a read failed (fillPause).
 const fillPauseMax = 5 * time.Minute
+
+// fillRepairInterval is how often the front reads the runs of a live Task
+// again while the view holds one of its runs as queued or running. A lost
+// final event keeps such a run open, so a read repairs it within this time
+// and one interval of the Task list.
+const fillRepairInterval = time.Minute
 
 // EgressTypes are the ledger event types that a worker publishes for the
 // view of the front: enough for the state, the title, the pending
@@ -107,7 +114,9 @@ type platformMember struct {
 	state    string
 	phase    string // the phase of the Task as the ax API last gave it
 	seen     time.Time
-	filled   bool // the runs of the member were read once
+	filled   bool      // the runs were read since the Task last became live
+	filling  bool      // a read of the runs is in flight
+	fillRead time.Time // when the last read of the runs succeeded
 	// fillFails counts the reads of the runs of the member that failed in a
 	// row, and fillAt is the time of the next read after a failure (fillPause).
 	fillFails int
@@ -249,9 +258,10 @@ func (p *platform) loop(ctx context.Context) {
 }
 
 // poll reads the Tasks of every atespace and updates the members. A Task
-// that disappears from the list leaves the view, and a Task that starts to
-// run gets its runs read once. Then the suspend controller and the pools
-// act on the list.
+// that disappears from the list leaves the view. A Task that becomes live
+// gets its runs read, and so does a live Task with a queued or running run
+// in the view once per fillRepairInterval. Then the suspend controller and
+// the pools act on the list.
 func (p *platform) poll(ctx context.Context) {
 	p.mu.Lock()
 	client := p.client
@@ -297,10 +307,12 @@ func (p *platform) poll(ctx context.Context) {
 			m.phase = t.GetStatus().GetPhase()
 			m.state, m.seen = stateOfPhase(m.phase), now
 			if m.state == MemberLive && was != MemberLive {
-				m.liveSince = now
+				m.liveSince, m.filled = now, false
 			}
-			if m.state == MemberLive && !m.filled && !now.Before(m.fillAt) {
-				m.filled = true
+			if p.needsFill(m, now) {
+				// The read takes the request now, so a wake during the read
+				// sets filled to false again and the next poll reads again.
+				m.filled, m.filling = true, true
 				fill = append(fill, m)
 			}
 			if !m.learned && len(m.agents) == 0 {
@@ -323,7 +335,15 @@ func (p *platform) poll(ctx context.Context) {
 	}
 	p.mu.Unlock()
 	for _, m := range fill {
-		p.backfill(ctx, m)
+		p.mu.Lock()
+		live := p.members[m.name] == m && m.state == MemberLive
+		if !live {
+			m.filling, m.filled = false, false
+		}
+		p.mu.Unlock()
+		if live {
+			p.backfill(ctx, m)
+		}
 	}
 	for _, t := range learn {
 		p.learn(ctx, client, t)
@@ -433,10 +453,33 @@ func stateOfPhase(phase string) string {
 	return MemberStopped
 }
 
-// backfill reads the runs and the agents of a running Task once, with the
-// static token of the fleet, so the view knows the runs that started before
-// the front listened and the profiles that the Task serves. A running Task
-// is awake, so the reads wake nobody.
+// needsFill reports whether the front reads the runs of a member now: a
+// live member that became live since its last read, or one that the view
+// holds a queued or running run of, once per fillRepairInterval. A member
+// that sleeps is never read. The caller holds p.mu.
+func (p *platform) needsFill(m *platformMember, now time.Time) bool {
+	if m.state != MemberLive || m.filling || now.Before(m.fillAt) {
+		return false
+	}
+	if !m.filled {
+		return true
+	}
+	if now.Sub(m.fillRead) < fillRepairInterval {
+		return false
+	}
+	for _, r := range p.runs {
+		if r.member == m.name && (r.run.State == fw.StateQueued || r.run.State == fw.StateRunning) {
+			return true
+		}
+	}
+	return false
+}
+
+// backfill reads the runs and the agents of a live Task with the static
+// token of the fleet, so the view knows the runs that started before the
+// front listened, the runs whose final event the stream lost, and the
+// profiles that the Task serves. A read never replaces a newer state of the
+// stream. The poller sets filling under p.mu before the read.
 func (p *platform) backfill(ctx context.Context, m *platformMember) {
 	var runs struct {
 		Runs []*fw.Run `json:"runs"`
@@ -453,6 +496,10 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 	now := time.Now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	m.filling = false
+	if p.members[m.name] != m {
+		return // the Task left the view while the read was in flight
+	}
 	if runsErr != nil {
 		// The runs that the stream reaches until then have no identity, so
 		// the front reads the Task again after a pause.
@@ -461,7 +508,7 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 		m.fillAt = now.Add(fillPause(p.f.interval, m.fillFails))
 		p.f.log.Warn("fleet: read the runs of a Task; the view reads it again later", "member", m.name, "retryAt", m.fillAt, "error", runsErr)
 	} else {
-		m.fillFails, m.fillAt = 0, time.Time{}
+		m.fillFails, m.fillAt, m.fillRead = 0, time.Time{}, now
 	}
 	for _, r := range runs.Runs {
 		if r == nil || r.ID == "" {

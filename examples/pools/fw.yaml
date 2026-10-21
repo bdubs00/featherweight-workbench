@@ -39,6 +39,10 @@ workbench:
   pools:
     - name: triage
       replicas: 3
+      # Raise the generation with each change of this pool. With more than
+      # one replica of the front, a replica of a lower generation then
+      # leaves the pool to the newer configuration.
+      generation: 1
       image: ghcr.io/bdubs00/featherweight-kernel@sha256:0000000000000000000000000000000000000000000000000000000000000000
       # The atespace, the agent, and the queue take their defaults: the
       # only atespace of the fleet, the only profile, and fw.jobs.triage.

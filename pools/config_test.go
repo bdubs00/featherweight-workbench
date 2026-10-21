@@ -62,6 +62,8 @@ func TestLoadNamesWhatToSet(t *testing.T) {
 		{"image without digest", testImage, "ghcr.io/example/fw:latest", "has no digest"},
 		{"no model", "      model: openai/some-model\n", "", "set fw.model"},
 		{"negative replicas", "replicas: 3", "replicas: -1", "replicas -1 is below 0"},
+		{"negative generation", "replicas: 3", "replicas: 3\n    generation: -1", "generation -1 is below 0"},
+		{"the generation in env", "- name: OPENAI_API_KEY", "- name: FW_POOL_GENERATION", "remove FW_POOL_GENERATION: the front sets it to the generation of the pool"},
 		{"no replicas", "replicas: 3", "", "set replicas"},
 		{"the token in the file", "- name: OPENAI_API_KEY", "- name: FW_API_TOKEN", "remove FW_API_TOKEN: the front gives each worker its own static token"},
 		{"value and fromEnv", "fromEnv: FRONT_TICKETS_TOKEN", "fromEnv: FRONT_TICKETS_TOKEN\n        value: x", "sets value and fromEnv"},
@@ -141,8 +143,14 @@ func TestHashFollowsTheConfiguration(t *testing.T) {
 	if b := loadFixture(t, strings.Replace(fixture, "replicas: 3", "replicas: 5", 1))[0].Hash(); a != b {
 		t.Fatalf("the replica count changed the hash")
 	}
+	// A generation of 0 leaves the hash of a pool without one, so an
+	// upgrade of the front replaces no Task.
+	if b := loadFixture(t, strings.Replace(fixture, "replicas: 3", "replicas: 3\n    generation: 0", 1))[0].Hash(); a != b {
+		t.Fatalf("generation 0 changed the hash")
+	}
 	for _, change := range []struct{ from, to string }{
 		{"replicas: 3", "replicas: 3\n    revision: \"2\""},
+		{"replicas: 3", "replicas: 3\n    generation: 1"},
 		{"effort: low", "effort: medium"},
 		{"the-proxy-needs-no-key", "another"},
 		{"FRONT_TICKETS_TOKEN", "OTHER_TICKETS_TOKEN"},

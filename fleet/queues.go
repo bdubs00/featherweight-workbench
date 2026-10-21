@@ -30,6 +30,10 @@ const DeadSuffix = ".dead"
 // queueReadTimeout bounds one read of the queues from the server.
 const queueReadTimeout = 10 * time.Second
 
+// deadIDWindow is how many event ids of dead letters the front keeps for
+// each queue. A repeated id counts once while it is among the last ones.
+const deadIDWindow = 4096
+
 // stallIntervals is how many intervals the jobs of a queue can wait
 // without one of them leaving before the front wakes the sleeping Tasks
 // that serve the profile even though an awake Task seems to have room.
@@ -78,8 +82,10 @@ type consumerState struct {
 // queue, so every message that the stream stores for it waits. dead counts
 // the dead letters of the queue: with deadStored, the records that the
 // stream holds on "<queue>.dead", which every replica reads alike; else the
-// records that this replica received since it started. deadAt is the time
-// of the last one.
+// records that this replica received since it started, each event id once
+// within the last deadIDWindow ids (a record without an id counts at each
+// delivery). This count can differ from the records that the stream holds.
+// deadAt is the time of the last record that counted.
 type queueState struct {
 	queue, agent string
 	depthKnown   bool
@@ -93,10 +99,36 @@ type queueState struct {
 }
 
 // deadCount is what one replica received on the dead-letter subject of a
-// queue.
+// queue, with the last event ids in the order they came (fifo).
 type deadCount struct {
-	n  uint64
-	at time.Time
+	n    uint64
+	at   time.Time
+	ids  map[string]bool
+	fifo []string
+	next int
+}
+
+// accept reports whether a record counts: an id that is not among the last
+// deadIDWindow ids, or an empty id. The caller holds queues.mu.
+func (d *deadCount) accept(id string) bool {
+	if id == "" {
+		return true
+	}
+	if d.ids[id] {
+		return false
+	}
+	if d.ids == nil {
+		d.ids = map[string]bool{}
+	}
+	if len(d.fifo) < deadIDWindow {
+		d.fifo = append(d.fifo, id)
+	} else {
+		delete(d.ids, d.fifo[d.next])
+		d.fifo[d.next] = id
+		d.next = (d.next + 1) % deadIDWindow
+	}
+	d.ids[id] = true
+	return true
 }
 
 // queueWait is what the front remembers of a queue between two reads: the
@@ -358,8 +390,10 @@ func (f *Fleet) subscribeDead(names []string) {
 	}
 }
 
-// onDead counts one dead letter of a queue. The record names the job, so
-// the log line names the event and its run, and nothing of its data.
+// onDead counts one dead letter of a queue. The kernel gives the dead letter
+// of a job the same id at every try, so a record that two processes sent
+// counts once. The record names the job, so the log line names the event
+// and its run, and nothing of its data.
 func (f *Fleet) onDead(queue string) func(fw.Event) error {
 	return func(e fw.Event) error {
 		at := e.Time
@@ -372,6 +406,10 @@ func (f *Fleet) onDead(queue string) func(fw.Event) error {
 		if dc == nil {
 			dc = &deadCount{}
 			q.dead[queue] = dc
+		}
+		if !dc.accept(e.ID) {
+			q.mu.Unlock()
+			return nil
 		}
 		dc.n++
 		if at.After(dc.at) {

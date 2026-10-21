@@ -35,10 +35,13 @@ const (
 
 // Variables that the front sets in every Task of a pool. FW_POOL marks the
 // owner, and FW_POOL_SPEC holds the hash of the rendered specification, so
-// the front sees which Tasks run an older configuration.
+// the front sees which Tasks run an older configuration. FW_POOL_GENERATION
+// holds the generation of the pool when it is above 0, so a front sees a
+// Task of a newer configuration than its own.
 const (
-	EnvPool = "FW_POOL"
-	EnvSpec = "FW_POOL_SPEC"
+	EnvPool       = "FW_POOL"
+	EnvSpec       = "FW_POOL_SPEC"
+	EnvGeneration = "FW_POOL_GENERATION"
 )
 
 // Defaults and fixed places of a pool.
@@ -65,7 +68,11 @@ const (
 // of fw.agents whose queue the workers take; it defaults to the only
 // profile. Intake is that queue, "<workbench.fleet.intake>.<agent>" by
 // default. Revision is free text: a new value replaces every Task, for
-// example to start every worker again with a new Workspace.
+// example to start every worker again with a new Workspace. Generation
+// orders the configurations of the pool: a front never replaces a Task of
+// a higher generation than its own, so a replica with an older
+// configuration leaves the pool to the newer one. 0 keeps the order of
+// the hash alone.
 //
 // Env holds the variables of the workers, each with a value or with
 // FromEnv, the name of a variable of the front, so the file holds no
@@ -73,18 +80,19 @@ const (
 // and Files the extra files of its Workspace. FW is the fw.yaml of the
 // workers: the agents, the policy, the model, and the providers.
 type Pool struct {
-	Name      string           `yaml:"name"`
-	Atespace  string           `yaml:"atespace,omitempty"`
-	Replicas  *int             `yaml:"replicas"`
-	Image     string           `yaml:"image"`
-	Agent     string           `yaml:"agent,omitempty"`
-	Intake    string           `yaml:"intake,omitempty"`
-	Revision  string           `yaml:"revision,omitempty"`
-	Env       []EnvVar         `yaml:"env,omitempty"`
-	Egress    *ax.EgressSpec   `yaml:"egress,omitempty"`
-	Resources ax.ResourcesSpec `yaml:"resources,omitempty"`
-	Files     []ax.File        `yaml:"files,omitempty"`
-	FW        map[string]any   `yaml:"fw"`
+	Name       string           `yaml:"name"`
+	Atespace   string           `yaml:"atespace,omitempty"`
+	Replicas   *int             `yaml:"replicas"`
+	Image      string           `yaml:"image"`
+	Agent      string           `yaml:"agent,omitempty"`
+	Intake     string           `yaml:"intake,omitempty"`
+	Revision   string           `yaml:"revision,omitempty"`
+	Generation int              `yaml:"generation,omitempty"`
+	Env        []EnvVar         `yaml:"env,omitempty"`
+	Egress     *ax.EgressSpec   `yaml:"egress,omitempty"`
+	Resources  ax.ResourcesSpec `yaml:"resources,omitempty"`
+	Files      []ax.File        `yaml:"files,omitempty"`
+	FW         map[string]any   `yaml:"fw"`
 
 	// The parts that Load fills.
 	index    int        // the position in workbench.pools
@@ -306,6 +314,9 @@ func (p *Pool) complete(front Front) []string {
 	case *p.Replicas < 0:
 		add("replicas %d is below 0; set 0 or more", *p.Replicas)
 	}
+	if p.Generation < 0 {
+		add("generation %d is below 0; set 0 or more, and raise it with each change of the pool", p.Generation)
+	}
 	if n := len(p.WorkspaceName(p.replicas())); p.Name != "" && n > v1alpha1.MaxNameLength {
 		add("the name %q is too long for %d Tasks: the Workspace %s has %d characters, and ax takes %d", p.Name, p.replicas(), p.WorkspaceName(p.replicas()), n, v1alpha1.MaxNameLength)
 	}
@@ -354,6 +365,11 @@ func (p *Pool) complete(front Front) []string {
 	if err := v1alpha1.ValidateWorkspace(ws); err != nil {
 		add("the Workspace does not fit the ax API: %v", err)
 	}
+	if p.Generation > 0 {
+		if err := v1alpha1.ValidateWorkspace(p.Marker()); err != nil {
+			add("the Workspace %s, which records the generation, does not fit the ax API: %v", p.MarkerName(), err)
+		}
+	}
 	if len(problems) == 0 {
 		p.warnings = p.reach()
 	}
@@ -374,6 +390,8 @@ func (p *Pool) reserved(name, tokenEnv string) string {
 		return "the front sets it to the name of the pool"
 	case name == EnvSpec:
 		return "the front sets it to the hash of the configuration of the pool"
+	case name == EnvGeneration:
+		return "the front sets it to the generation of the pool; set generation instead"
 	case name == "FW_CONFIG":
 		return "the pool writes the configuration of the workers to " + WorkspacePath + "/" + ConfigFile
 	case strings.HasPrefix(name, "FW_"):
