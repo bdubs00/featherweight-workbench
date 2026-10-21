@@ -138,7 +138,8 @@ type member struct {
 	index    int
 	phase    string
 	hash     string
-	gen      int // FW_POOL_GENERATION of the Task, 0 without one
+	base     string // FW_POOL_BASE of the Task, empty without one
+	gen      int    // FW_POOL_GENERATION of the Task, 0 without one
 	current  bool
 	older    string // what is old when the Task is not current
 	started  bool   // ax resumed the Task once: it has the condition WorkspaceReady
@@ -479,7 +480,9 @@ func countGone(ms []*member) int {
 // the front holds now, so a new value of the front, such as a new static
 // token, replaces the Task too. The values are compared in constant time
 // and never logged. A Task of a higher generation, or of the same
-// generation with another hash, is not older: hold stops the pass first.
+// generation with another configuration, is not older: hold stops the pass
+// first. A Task of the same generation and configuration with another
+// overlay is older.
 func (r *Reconciler) memberOf(t *v1alpha1.Task, idx int, p *Pool) *member {
 	m := &member{
 		name:     t.GetMetadata().GetName(),
@@ -487,6 +490,7 @@ func (r *Reconciler) memberOf(t *v1alpha1.Task, idx int, p *Pool) *member {
 		index:    idx,
 		phase:    t.GetStatus().GetPhase(),
 		hash:     envOf(t, EnvSpec),
+		base:     envOf(t, EnvBase),
 		gen:      genOf(t),
 		created:  t.GetMetadata().GetCreateTime(),
 		token:    envOf(t, p.tokenEnv),
@@ -552,9 +556,9 @@ func (r *Reconciler) hold(ctx context.Context, p *Pool, owned []*member) string 
 		why = fmt.Sprintf("the Workspace %s exists and belongs to no pool, so the front cannot record the generation of the pool and changes nothing in it; delete that Workspace or rename the pool", p.MarkerName())
 	default:
 		for _, m := range owned {
-			if m.gen == p.Generation && m.hash != p.hash {
+			if theirs, ours := m.config(p); m.gen == p.Generation && theirs != ours {
 				conflict = m
-				why = fmt.Sprintf("conflict: %s carries generation %d with another configuration (%s, and this front has %s), so the pool changes nothing; give each configuration of the pool its own generation", m.name, m.gen, orWord(m.hash, "no hash"), p.hash)
+				why = fmt.Sprintf("conflict: %s carries generation %d with another configuration (%s, and this front has %s), so the pool changes nothing; give each configuration of the pool its own generation", m.name, m.gen, orWord(theirs, "no hash"), ours)
 				break
 			}
 		}
@@ -580,7 +584,8 @@ func (r *Reconciler) hold(ctx context.Context, p *Pool, owned []*member) string 
 	switch {
 	case why == prev:
 	case conflict != nil:
-		r.Log.Warn("pools: two configurations claim one generation of the pool; the pool changes nothing", "pool", p.Name, "generation", p.Generation, "task", conflict.id(), "from", conflict.hash, "to", p.hash)
+		theirs, ours := conflict.config(p)
+		r.Log.Warn("pools: two configurations claim one generation of the pool; the pool changes nothing", "pool", p.Name, "generation", p.Generation, "task", conflict.id(), "from", theirs, "to", ours)
 	case top > p.Generation:
 		r.Log.Info("pools: another front runs a newer generation of the pool; this front changes nothing in it", "pool", p.Name, "generation", p.Generation, "newer", top)
 	case why != "":
@@ -589,6 +594,19 @@ func (r *Reconciler) hold(ctx context.Context, p *Pool, owned []*member) string 
 		r.Log.Info("pools: the pool no longer waits", "pool", p.Name, "generation", p.Generation)
 	}
 	return why
+}
+
+// config returns the hash of the configuration of the Task and of the
+// pool that the generation orders. The overlay of the front is not part of
+// it: every replica reads the overlay from one store, so a Task whose hash
+// differs from the pool by the overlay alone runs an older configuration,
+// and the pool replaces it. A Task without FW_POOL_BASE compares by its
+// full hash.
+func (m *member) config(p *Pool) (theirs, ours string) {
+	if m.base == "" {
+		return m.hash, p.hash
+	}
+	return m.base, p.baseHash()
 }
 
 // readMarker reads the generation that the marker of the pool records. A

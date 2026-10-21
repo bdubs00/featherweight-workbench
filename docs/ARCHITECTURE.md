@@ -1111,7 +1111,7 @@ The front adds these variables to each Task:
 
 - `FW_POOL`, the name of the pool.
 - `FW_POOL_SPEC`, the hash of the configuration of the pool.
-- `FW_POOL_GENERATION`, the generation of the pool, when it is above 0.
+- `FW_POOL_GENERATION`, the generation of the pool, when it is above 0, and beside it `FW_POOL_BASE`, the hash of the configuration of the pool without the overlay of the front (section 14.9).
 - `FW_BASH_HIDE`, which keeps `AX_TASK_YAML`, the token variable, and each variable with `fromEnv` out of the bash tool of the worker. `AX_TASK_YAML` holds every variable of the Task.
 - The static token of the front, under `auth.tokenEnv` of the worker, which is `FW_API_TOKEN` by default (section 14.6).
 
@@ -1246,8 +1246,9 @@ The generation gives the order. A deploy raises `generation` with every change o
 
 - A Task of a lower generation runs an older configuration, and the pool replaces it as section 14.4 says.
 - A replica that sees a Task of a higher generation is superseded. It changes nothing in the pool: no create, no resume, no delete, and no write of a Workspace. It keeps the highest generation that it saw until it stops. Its state says `superseded: generation 7 of another front runs this pool, and this front holds generation 6, so it changes nothing in the pool`.
-- A Task of the same generation with another hash is a conflict. Two configurations claim one generation, and no replica can tell which one is newer. Neither replica changes the pool until a deploy gives one of them a higher generation. A rollback is a new, higher generation too. A generation that goes down, to 0 too, leaves every replica superseded by the marker and the Tasks of the higher one, until a person deletes them.
+- A Task of the same generation with another configuration is a conflict. Two configurations claim one generation, and no replica can tell which one is newer. Neither replica changes the pool until a deploy gives one of them a higher generation. A rollback is a new, higher generation too. A generation that goes down, to 0 too, leaves every replica superseded by the marker and the Tasks of the higher one, until a person deletes them.
 - A newer replica deletes a Task before it creates the next one, and an older replica would fill that gap with a Task of its own. So a replica of a generation above 0 first records its generation in the marker of the pool (section 14.3), before it changes a Task, and every replica reads the marker at each pass and again before it creates a Task. An older replica therefore stops before the first gap opens, and the pool converges on the newer configuration. A pool of a generation above 0 that cannot read or write its marker changes nothing.
+- The overlay of the front (section 14.9) changes the hash of the pool and not its generation. Every replica reads the overlay from one store, so the generation does not order it: a Task whose `FW_POOL_BASE` matches the pool, with another `FW_POOL_SPEC`, runs an older overlay, and the pool replaces it. A conflict compares `FW_POOL_BASE`, or `FW_POOL_SPEC` for a Task without it.
 - With generation 0 on both replicas, the hash alone decides, as before pools had a generation, and two configurations still fight.
 
 The front logs each new state of the order once.

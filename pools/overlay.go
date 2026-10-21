@@ -189,6 +189,7 @@ func (p *Pool) WithOverlay(o Overlay) (*Pool, error) {
 	}
 	c := *p
 	c.overlay = o
+	c.base = p.baseHash()
 	merged, err := overlayFW(p.FW, o, p.worker.Agents)
 	if err != nil {
 		return nil, fmt.Errorf("pools: the overlay of the pool %s: %w", p.Name, err)

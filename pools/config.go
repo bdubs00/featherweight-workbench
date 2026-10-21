@@ -37,11 +37,15 @@ const (
 // owner, and FW_POOL_SPEC holds the hash of the rendered specification, so
 // the front sees which Tasks run an older configuration. FW_POOL_GENERATION
 // holds the generation of the pool when it is above 0, so a front sees a
-// Task of a newer configuration than its own.
+// Task of a newer configuration than its own. FW_POOL_BASE holds, beside
+// it, the hash of the configuration alone, without the overlay of the
+// front, so a front tells two configurations of one generation from a
+// change of the overlay.
 const (
 	EnvPool       = "FW_POOL"
 	EnvSpec       = "FW_POOL_SPEC"
 	EnvGeneration = "FW_POOL_GENERATION"
+	EnvBase       = "FW_POOL_BASE"
 )
 
 // Defaults and fixed places of a pool.
@@ -101,6 +105,7 @@ type Pool struct {
 	env      []EnvVar   // Env and the variables of the front, in the order of the Task
 	files    []ax.File  // the rendered fw.yaml first, then Files
 	hash     string
+	base     string // the hash without the overlay, when WithOverlay merged one
 	warnings []string
 	front    Front   // what the pool took from the front, for a render with an overlay
 	overlay  Overlay // the overlay that WithOverlay merged, empty for the configuration alone
@@ -141,6 +146,15 @@ func (p *Pool) Wanted() int { return p.replicas() }
 // Task of the pool that runs the current configuration carries it in
 // FW_POOL_SPEC.
 func (p *Pool) Hash() string { return p.hash }
+
+// baseHash returns the hash of the configuration of the pool alone,
+// without the overlay of the front.
+func (p *Pool) baseHash() string {
+	if p.base != "" {
+		return p.base
+	}
+	return p.hash
+}
 
 // Warnings returns what Load found odd but not wrong, such as a bus that
 // no egress rule reaches. The front logs them at its start, and the dry
@@ -390,6 +404,8 @@ func (p *Pool) reserved(name, tokenEnv string) string {
 		return "the front sets it to the name of the pool"
 	case name == EnvSpec:
 		return "the front sets it to the hash of the configuration of the pool"
+	case name == EnvBase:
+		return "the front sets it to the hash of the configuration of the pool without its overlay"
 	case name == EnvGeneration:
 		return "the front sets it to the generation of the pool; set generation instead"
 	case name == "FW_CONFIG":

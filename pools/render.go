@@ -174,6 +174,7 @@ func (p *Pool) Render(index int, lookup Lookup) (*v1alpha1.Task, *v1alpha1.Works
 	spec.Env = append(spec.Env, &v1alpha1.EnvVar{Name: EnvSpec, Value: p.hash})
 	if p.Generation > 0 {
 		spec.Env = append(spec.Env, &v1alpha1.EnvVar{Name: EnvGeneration, Value: strconv.Itoa(p.Generation)})
+		spec.Env = append(spec.Env, &v1alpha1.EnvVar{Name: EnvBase, Value: p.baseHash()})
 	}
 	if r := p.Resources; r.Requests != (ax.ResourceList{}) || r.Limits != (ax.ResourceList{}) {
 		spec.Resources = &v1alpha1.ResourcesSpec{Requests: resourceList(r.Requests), Limits: resourceList(r.Limits)}
