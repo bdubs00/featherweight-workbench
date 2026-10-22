@@ -54,6 +54,13 @@ type front struct {
 // started, and everyone can run the profile manager.
 func newFront(t *testing.T, mut func(*fw.Config)) *front {
 	t.Helper()
+	return newFrontOn(t, fw.NewMemBus(), mut)
+}
+
+// newFrontOn is newFront on the bus, so two fronts on one mem bus act as
+// two replicas of one front.
+func newFrontOn(t *testing.T, bus *fw.MemBus, mut func(*fw.Config)) *front {
+	t.Helper()
 	t.Setenv("FW_ATESPACE", "")
 	t.Setenv(EnvEnabled, "on")
 	cfg := fw.DefaultConfig()
@@ -66,7 +73,6 @@ func newFront(t *testing.T, mut func(*fw.Config)) *front {
 	if mut != nil {
 		mut(cfg)
 	}
-	bus := fw.NewMemBus()
 	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(people{}),
 		fw.WithModel(fw.ModelFunc{GenerateFn: func(context.Context, *fw.Request) (*fw.Response, error) {
 			return &fw.Response{Content: []fw.Block{fw.Text("done")}, StopReason: fw.StopEndTurn}, nil

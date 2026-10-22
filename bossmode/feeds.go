@@ -5,12 +5,15 @@ package bossmode
 // bridge.member from the hooks of the bridges, page from the hook of the
 // wiki, and face from the hook of the faces. Each event goes to the stream
 // of each agent of the process that runs bossmode, through PublishTo, with
-// an Allow bound to that agent: the stream asks the rule of the routes of
-// the package once per event and per stream, for the caller of the
-// stream, and keeps no decision for another caller or another event.
+// the decision of its scope bound to that agent: the stream asks the rule
+// of the routes of the package once per event and per stream, for the
+// caller of the stream, and keeps no decision for another caller or
+// another event. A hook runs on the replica that made the change, so the
+// event also goes to the other replicas of the front, which decide with
+// their own stores (relay.go). A seat is the exception: each replica gives
+// the seats of its own view, so bridge.member stays on its replica.
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 
@@ -68,33 +71,18 @@ func agents() []*fw.Agent {
 	return out
 }
 
-// seeBridge decides an event of the bridge id for the caller in ctx, as
-// GET /v1/bridges/{id} decides (bridges.Store.Visible), with the bridges
-// that the agent has at the time of the decision. A store that does not
-// answer hides the event.
-func seeBridge(a *fw.Agent, id string) func(context.Context) bool {
-	return func(ctx context.Context) bool {
-		s := bridges.Of(a)
-		if s == nil {
-			return false
-		}
-		ok, err := s.Visible(ctx, id)
-		return err == nil && ok
-	}
-}
-
 // feedMessage publishes a new or changed entry of a channel.
 func feedMessage(bridge string, m bridges.Message) {
 	for _, a := range agents() {
 		if bridges.Of(a) == nil {
 			continue
 		}
-		err := PublishTo(a, KindBridgeMessage, bridge, bridgeMessage{Bridge: bridge, Message: m}, Allow(seeBridge(a, bridge)))
+		err := PublishTo(a, KindBridgeMessage, bridge, bridgeMessage{Bridge: bridge, Message: m}, ForBridge(bridge))
 		if errors.Is(err, ErrTooLarge) && m.Decision != nil {
 			d := *m.Decision
 			d.Input, d.Schema = nil, nil
 			m.Decision = &d
-			err = PublishTo(a, KindBridgeMessage, bridge, bridgeMessage{Bridge: bridge, Message: m, Partial: true}, Allow(seeBridge(a, bridge)))
+			err = PublishTo(a, KindBridgeMessage, bridge, bridgeMessage{Bridge: bridge, Message: m, Partial: true}, ForBridge(bridge))
 		}
 		if err != nil {
 			logOf(a).Warn("bossmode: an entry of a channel is not on the stream", "bridge", bridge, "seq", m.Seq, "error", err)
@@ -102,13 +90,18 @@ func feedMessage(bridge string, m bridges.Message) {
 	}
 }
 
-// feedMember publishes a new or changed seat.
+// feedMember publishes a new or changed seat to the streams of this
+// replica. Each replica watches the view on its own and gives the seats
+// that it sees (bridges.OnMember), also the changes that another replica
+// made to the record. A seat from the view of another replica can show
+// another presence, and the roster of the page then flaps between two
+// views.
 func feedMember(bridge string, m bridges.Member) {
 	for _, a := range agents() {
 		if bridges.Of(a) == nil {
 			continue
 		}
-		if err := PublishTo(a, KindBridgeMember, bridge, bridgeMember{Bridge: bridge, Member: m}, Allow(seeBridge(a, bridge))); err != nil {
+		if err := PublishTo(a, KindBridgeMember, bridge, bridgeMember{Bridge: bridge, Member: m}, ForBridge(bridge), onlyHere()); err != nil {
 			logOf(a).Warn("bossmode: a seat is not on the stream", "bridge", bridge, "member", m.Handle, "error", err)
 		}
 	}
@@ -121,8 +114,7 @@ func feedPage(info pages.PageInfo, deleted bool) {
 		if pages.Of(a) == nil {
 			continue
 		}
-		allow := func(ctx context.Context) bool { return pages.Allowed(ctx, a, false) == nil }
-		if err := PublishTo(a, KindPage, info.Path, pageEvent{PageInfo: info, Deleted: deleted}, Allow(allow)); err != nil {
+		if err := PublishTo(a, KindPage, info.Path, pageEvent{PageInfo: info, Deleted: deleted}, ForPage(info.Path)); err != nil {
 			logOf(a).Warn("bossmode: a page is not on the stream", "path", info.Path, "error", err)
 		}
 	}
@@ -135,10 +127,8 @@ func feedFace(f faces.Face) {
 		if faces.Of(a) == nil {
 			continue
 		}
-		agent := f.Agent
-		allow := func(ctx context.Context) bool { return faces.Check(ctx, a, agent, fw.ActionAgentView) == nil }
-		if err := PublishTo(a, KindFace, agent, f, Allow(allow)); err != nil {
-			logOf(a).Warn("bossmode: a face is not on the stream", "agent", agent, "error", err)
+		if err := PublishTo(a, KindFace, f.Agent, f, ForAgent(f.Agent)); err != nil {
+			logOf(a).Warn("bossmode: a face is not on the stream", "agent", f.Agent, "error", err)
 		}
 	}
 }

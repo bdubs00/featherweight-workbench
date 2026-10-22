@@ -6,7 +6,9 @@
 // fleet view (fleet.Watcher), the entries and the seats of the bridges,
 // the pages of the wiki, and the faces of the agents, which the hooks of
 // those packages feed (feeds.go), and the events that other packages
-// publish with Publish. It shows each caller only what the caller can see.
+// publish with Publish. The events of Publish also reach the other
+// replicas of the front through the bus (relay.go). It shows each caller
+// only what the caller can see.
 //
 // The package is a service of the kernel (fw.RegisterService), mounts its
 // routes through native.Extend, reads workbench.bossmode and
@@ -126,8 +128,10 @@ func Start(_ context.Context, a *fw.Agent) (io.Closer, error) {
 	if c.Dir != "" && !hasIndex(c.Dir) {
 		h.log.Warn("bossmode: the directory of the page holds no index.html, so /bossmode answers 503 until the page is built there", "dir", c.Dir)
 	}
+	h.listen()
 	attach(a, h)
 	go h.feed()
+	go h.send()
 	return closer{a: a, h: h}, nil
 }
 
@@ -143,8 +147,10 @@ func (c closer) Close() error {
 }
 
 // Hub is the stream of one agent: the ring of the newest events, the
-// count of the open streams, and the feed from the fleet view. It also
-// holds the logo of the theme, which the service read at its start.
+// count of the open streams, the feed from the fleet view, and the relay
+// of the events of Publish to and from the other replicas of the front
+// (relay.go). It also holds the logo of the theme, which the service read
+// at its start.
 type Hub struct {
 	a    *fw.Agent
 	cfg  Config
@@ -158,6 +164,17 @@ type Hub struct {
 	wake    chan struct{}
 	streams int
 	refused uint64
+
+	// replica names this hub in the events that it relays, so it skips
+	// its own; prefix is the subject prefix of the relay. out holds the
+	// events that wait for the bus, and sent closes when the sender ends.
+	// relayDropped counts the events that found out full.
+	replica      string
+	prefix       string
+	out          chan outgoing
+	sent         chan struct{}
+	stopRelay    func()
+	relayDropped int
 
 	keepAlive time.Duration
 	life      time.Duration
@@ -194,6 +211,10 @@ func newHub(a *fw.Agent, c Config) *Hub {
 		keepAlive: KeepAlive,
 		life:      StreamLife,
 		done:      make(chan struct{}),
+		replica:   newReplica(),
+		prefix:    RelayPrefix(a.Config()),
+		out:       make(chan outgoing, relayQueue),
+		sent:      make(chan struct{}),
 		// The ids start at the time of the start in microseconds, so an id
 		// of an earlier process, or of another replica that started
 		// earlier, is below every id of this process and makes the stream
@@ -206,10 +227,14 @@ func newHub(a *fw.Agent, c Config) *Hub {
 	return h
 }
 
-// Close ends the feed and every open stream.
+// Close ends the feed, the relay, and every open stream.
 func (h *Hub) Close() error {
+	if h.stopRelay != nil {
+		h.stopRelay()
+	}
 	h.cancel()
 	<-h.done
+	<-h.sent
 	return nil
 }
 
@@ -357,17 +382,62 @@ func (h *Hub) release() {
 // Option shapes an event of Publish.
 type Option func(*publishOptions)
 
+// publishOptions are the options of one event: allow, a decision of this
+// replica alone; sc, a decision that every replica makes; and here, which
+// keeps the event on this replica.
 type publishOptions struct {
 	allow func(context.Context) bool
+	sc    *scope
+	here  bool
 }
 
 // Allow limits an event of Publish to the callers for whom allow returns
 // true. The stream calls allow with the context of each stream, which
 // holds the principal of its caller (fw.PrincipalFrom), once per event and
-// stream, also when a stream resumes. Without Allow, every caller of the
-// stream gets the event.
+// stream, also when a stream resumes. Without Allow or an option For,
+// every caller of the stream gets the event. A function does not cross the
+// bus, so an event with Allow reaches the streams of this replica only;
+// ForBridge, ForPage, and ForAgent reach every replica. The last of these
+// options wins.
 func Allow(allow func(ctx context.Context) bool) Option {
-	return func(o *publishOptions) { o.allow = allow }
+	return func(o *publishOptions) { o.allow, o.sc = allow, nil }
+}
+
+// ForBridge limits an event to the callers who can see the bridge id, as
+// GET /v1/bridges/{id} decides (bridges.Store.Visible). Every replica of
+// the front decides it with its bridges, which the replicas share, so the
+// event reaches the streams of every replica.
+func ForBridge(id string) Option {
+	return func(o *publishOptions) { o.allow, o.sc = nil, &scope{Bridge: id} }
+}
+
+// ForPage limits an event about the page path to the callers who read the
+// wiki (pages.Allowed), on every replica.
+func ForPage(path string) Option {
+	return func(o *publishOptions) { o.allow, o.sc = nil, &scope{Page: path} }
+}
+
+// ForAgent limits an event to the callers who can view the agent name
+// (faces.Check with agent.view), on every replica.
+func ForAgent(name string) Option {
+	return func(o *publishOptions) { o.allow, o.sc = nil, &scope{Agent: name} }
+}
+
+// onlyHere keeps an event on the streams of this replica.
+func onlyHere() Option { return func(o *publishOptions) { o.here = true } }
+
+// publish puts an event into the ring of the hub and, unless its decision
+// is a function of this replica or it stays here, on the bus for the other
+// replicas.
+func (h *Hub) publish(kind, id string, raw []byte, o publishOptions) {
+	allow := o.allow
+	if o.sc != nil {
+		allow = allowOf(h.a, *o.sc)
+	}
+	h.add(kind, id, raw, nil, allow)
+	if o.allow == nil && !o.here {
+		h.relay(kind, id, raw, o.sc)
+	}
 }
 
 // Errors of Publish.
@@ -377,35 +447,41 @@ var (
 )
 
 // Publish puts an event on the stream of every caller of every agent of
-// the process that runs bossmode, which is one agent in fw-workbench. kind
-// names the event, such as bridge.message: 1 to 64 lower-case letters,
-// digits, dots, dashes, and underscores, and not one of the kinds of this
-// package (run, member, task, and reset). id names the object of the
-// event, such as the id of a bridge; the stream sends data alone, as JSON
-// and unchanged, so data carries what a page needs. data is at most
-// MaxEventBytes as JSON. Without the option Allow, every caller of the
-// stream gets the event; with it, only the callers that it allows. While
-// bossmode is off, Publish drops the event and returns nil.
+// the process that runs bossmode, which is one agent in fw-workbench, and
+// of every other replica of the front. kind names the event, such as
+// bridge.message: 1 to 64 lower-case letters, digits, dots, dashes, and
+// underscores, and not one of the kinds of this package (run, member,
+// task, and reset). id names the object of the event, such as the id of a
+// bridge; the stream sends data alone, as JSON and unchanged, so data
+// carries what a page needs. data is at most MaxEventBytes as JSON.
+// Without an option, every caller of the stream gets the event. ForBridge,
+// ForPage, and ForAgent limit it to the callers that their decision
+// allows, on every replica. Allow limits it to the callers that a function
+// allows, on this replica alone. Each hub puts the event on the bus of its
+// agent without waiting, on the subject RelayPrefix.<kind>, and the hubs
+// of the other replicas put it into their rings (relay.go). While bossmode
+// is off, Publish drops the event and returns nil.
 func Publish(kind, id string, data any, opts ...Option) error {
 	raw, o, err := prepare(kind, data, opts)
 	if err != nil {
 		return err
 	}
 	hubs.Range(func(_, v any) bool {
-		v.(*Hub).add(kind, id, raw, nil, o.allow)
+		v.(*Hub).publish(kind, id, raw, o)
 		return true
 	})
 	return nil
 }
 
-// PublishTo is Publish for the stream of one agent.
+// PublishTo is Publish for the stream of one agent and the other replicas
+// of its front.
 func PublishTo(a *fw.Agent, kind, id string, data any, opts ...Option) error {
 	raw, o, err := prepare(kind, data, opts)
 	if err != nil {
 		return err
 	}
 	if h := Of(a); h != nil {
-		h.add(kind, id, raw, nil, o.allow)
+		h.publish(kind, id, raw, o)
 	}
 	return nil
 }
