@@ -153,6 +153,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `GET /v1/bossmode` | The settings of the page of bossmode: the manager for the caller, the placement, and the size of a roster (section 17.4). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/stream` | The events of bossmode as server-sent events: the changes of the fleet, the entries and the seats of the bridges, the pages of the wiki, the faces, and the events of other packages that the caller can see, with `Last-Event-ID` to resume (section 17.3). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/skills` | The catalog of the skills of the front, each with the keys of a slash command (section 20.1). With `workbench.bossmode.enabled`. |
+| `POST /v1/bossmode/runs/{id}/skill` | A slash command of the caller for a conversation that is no bridge, `{"name", "args", "text"}`: the expanded skill reaches the run as a pinned message of the caller. 202 with the run object (section 20.3). With `workbench.bossmode.enabled`. |
 | `GET /v1/bridges` | The bridges of the caller and of the teams of the caller, open first, each with `lastSeq`, `read`, `unread`, `memberCount`, and `needsYou` (section 18.10). |
 | `POST /v1/bridges` | Open a bridge from `{"title", "goal", "placement", "members", "delegation", "caps"}` and seat its members. 201 with the record and its members. |
 | `GET /v1/bridges/{id}` | One bridge with the presence and the activity of each member and the usage of its runs. |
@@ -604,6 +605,7 @@ The MCP server carries these management tools beside the work tools:
 | `bridge_read`, `bridge_post` | For a run of a seat of a bridge, or the manager run of a bridge: read the last messages of the channel, and post a message with `to` (section 18.11) |
 | `bridge_list` | The open bridges of the person of the run, for the manager |
 | `skills_list` | The catalog of the skills of the front, read-only (section 20.1) |
+| `skill_send` | A slash command of a person: `{name, args, text}` with `runId`, or with `bridge` and `to`. The expanded skill reaches the run, or the members of the bridge, as a pinned message of the person. `destructiveHint` is true, because it starts work. A call of a run of the fleet gets an error (section 20.3). |
 | `bridge_open` | Open a bridge from a plan as the person of the run, for the manager. Its title, "Open bridge", is the label of the approval that the policy of the manager asks for. |
 | `bridge_add_member`, `bridge_remove_member`, `bridge_close` | Add a seat, fire a seat, or close a bridge, for the manager when the operator delegates it in that bridge |
 
@@ -1570,7 +1572,7 @@ Bossmode reads the block `bossmode` under the key `workbench` of `fw.yaml` (sect
 
 | Key | Variable | Meaning | Default |
 |---|---|---|---|
-| `workbench.bossmode.enabled` | `FW_WORKBENCH_BOSSMODE_ENABLED` | Serves the page at `/bossmode`, the settings at `/v1/bossmode`, and the stream at `/v1/bossmode/stream`. `on` or `off`. | off |
+| `workbench.bossmode.enabled` | `FW_WORKBENCH_BOSSMODE_ENABLED` | Serves the page at `/bossmode`, the settings at `/v1/bossmode`, the stream at `/v1/bossmode/stream`, and the skills under `/v1/bossmode/skills` and `/v1/bossmode/runs/{id}/skill` with the tools of section 20. `on` or `off`. | off |
 | `workbench.bossmode.dir` | `FW_WORKBENCH_BOSSMODE_DIR` | The directory of the static files of the page: the `dist` directory of the build of `featherweight-bossmode`. Empty serves the copy that the binary embeds: the build of the page in `bossmode/static`, else the placeholder in `bossmode/placeholder` (sections 1.2 and 17.2). | empty |
 | `workbench.bossmode.manager` | `FW_WORKBENCH_BOSSMODE_MANAGER` | The profile name of the manager agent. The settings of the page, the bridges, the delegation checks, and the doctor lines read it. Empty means no manager. | empty |
 
@@ -2135,3 +2137,19 @@ The message is a message of the person:
 - On the route of a run, the front sends it with the credential of the caller. A run of this process gets it through the kernel, and a run of another member through the forward of the fleet (section 4.5). So the owner of the run authorizes the person as for any follow-up and records the person as the sender, in `by`. A credential that the owner does not accept answers 403, an owner that fails or does not answer 502, and another refusal of the owner its own status and words.
 
 The pinned messages of a run hold at most 64 KB together (`fw.MaxPinnedBytes`). The kernel refuses a message past the bound as an invalid request whose words name the bound. The kernel exports no error of its own for it, so the front reads those words. The route of a run answers 413 with the words of the kernel, never 502. A delivery of a bridge runs after the answer of the route, so the channel gets one line with the event `failed` that names the member and the bound, as for any delivery that fails (section 18.5).
+
+### 20.5 The routes and the tools
+
+| Method and path | Body | Answer |
+|---|---|---|
+| `GET /v1/bossmode/skills` | none | `{"skills": [...]}`, the catalog (section 20.1) |
+| `GET /v1/agents/{name}/skills` | none, `?pool=` | `{"agent", "pool", "allowlist", "skills"}` (section 20.2) |
+| `POST /v1/bridges/{id}/messages` | `{"text", "to", "replyTo", "skill": {"name", "args"}}` | 201 with the entry, which records `skill` |
+| `POST /v1/bossmode/runs/{id}/skill` | `{"name", "args", "text"}` | 202 with the run object |
+
+| Tool | Arguments | Hints |
+|---|---|---|
+| `skills_list` | none | `readOnlyHint` |
+| `skill_send` | `name`, `args`, `text`, and `runId`, or `bridge` with `to` | `destructiveHint` |
+
+The routes and the tools under `/v1/bossmode` exist with `workbench.bossmode.enabled`. The tools join the MCP server through `mcp.RegisterTools` (section 3.1). The route of a bridge exists with the bridges (section 18). The page of bossmode reads the catalog once for its composer, shows `argumentHint` after the name of a skill, offers only the skills with `userInvocable`, and sends a slash command of a bridge to the route of the bridge and every other slash command to the route of the run.

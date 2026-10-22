@@ -16,13 +16,20 @@ import (
 	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
-// people takes the bearer token as the subject of a person.
+// people takes the bearer token as the subject of a person, and
+// staticToken as the static token of the fleet.
 type people struct{}
+
+// staticToken is the bearer token that people takes as the static token.
+const staticToken = "the-static-token"
 
 func (people) Authenticate(r *http.Request) (*fw.Principal, error) {
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if tok == "" || tok == r.Header.Get("Authorization") {
 		return nil, fw.ErrUnauthorized
+	}
+	if tok == staticToken {
+		return &fw.Principal{Subject: fw.KindToken, Kind: fw.KindToken}, nil
 	}
 	return &fw.Principal{Subject: tok, Kind: fw.KindUser}, nil
 }

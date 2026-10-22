@@ -35,6 +35,7 @@ type Catalog struct {
 // mountSkills mounts the routes of the skills.
 func mountSkills(k *native.Kit) {
 	k.Handle("GET /v1/bossmode/skills", catalogRoute(k))
+	k.Handle("POST /v1/bossmode/runs/{id}/skill", skillRunRoute(k))
 }
 
 // catalogRoute answers GET /v1/bossmode/skills with every skill that the
@@ -109,6 +110,7 @@ func skillTools(s *mcp.Server) []mcp.Tool {
 			list := skills.Catalog(a)
 			return mcp.Result(catalogText(list), Catalog{Skills: list}), nil, nil
 		}),
+		skillSendTool(a),
 	}
 }
 
