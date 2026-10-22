@@ -33,7 +33,9 @@ func (m tokenMap) Authenticate(r *http.Request) (*fw.Principal, error) {
 	return nil, fw.ErrUnauthorized
 }
 
-func (m tokenMap) Challenge(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }
+func (m tokenMap) Challenge(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusUnauthorized)
+}
 
 // callers: alice may create agents, bob has no role, and carol is an admin
 // of the front.

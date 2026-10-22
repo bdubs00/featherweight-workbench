@@ -22,10 +22,10 @@ import (
 // so the front bounds them, and the deployer sets the rest in the
 // template.
 const (
-	MaxRuntimeReplicas  = 64
-	MaxRuntimeEnv       = 32
-	MaxRuntimeEnvValue  = 4096
-	maxRuntimeRevision  = 256
+	MaxRuntimeReplicas = 64
+	MaxRuntimeEnv      = 32
+	MaxRuntimeEnvValue = 4096
+	maxRuntimeRevision = 256
 )
 
 // Runtime is the entry of a runtime pool in the store of the front. Name
