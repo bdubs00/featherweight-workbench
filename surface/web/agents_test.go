@@ -1,10 +1,15 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/agents"
 )
@@ -122,5 +127,57 @@ func TestAgentRoutesWithoutPools(t *testing.T) {
 	resp, b = do(t, "POST", srv.URL+"/v1/runs/01RUN/approvals/01ASK/rule", `{"note":"why"}`, "Authorization", asAlice)
 	if p := decodeProblem(t, resp, b, http.StatusConflict); !strings.Contains(p.Detail, "approval rules need a pool") {
 		t.Fatalf("problem = %+v", p)
+	}
+}
+
+// TestAgentSkillsRoute checks GET /v1/agents/{name}/skills: the skills
+// of the front that a glob allows, none for an empty list, every skill
+// without a list, and 404 for an agent that does not exist.
+func TestAgentSkillsRoute(t *testing.T) {
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	for _, n := range []string{"review-go", "review-sql", "deploy"} {
+		d := filepath.Join(cfg.Home, "skills", n)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, fw.SkillFile), []byte("---\nname: "+n+"\ndescription: "+n+" text\n---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := newAgent(t, newScript().model(), fw.WithConfig(cfg),
+		fw.WithProfile(fw.AgentProfile{Name: "reviewer", Skills: []string{"review-*"}}),
+		fw.WithProfile(fw.AgentProfile{Name: "none", Skills: []string{}}),
+		fw.WithProfile(fw.AgentProfile{Name: "every"}),
+	)
+	srv := serve(t, a)
+	read := func(name string) AgentSkills {
+		resp, b := do(t, http.MethodGet, srv.URL+"/v1/agents/"+name+"/skills", "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %d %s", name, resp.StatusCode, b)
+		}
+		var out AgentSkills
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	r := read("reviewer")
+	if len(r.Skills) != 2 || r.Skills[0].Name != "review-go" || r.Skills[0].Description != "review-go text" || !reflect.DeepEqual(r.Allowlist, []string{"review-*"}) {
+		t.Fatalf("reviewer = %+v", r)
+	}
+	if n := read("none"); len(n.Skills) != 0 || n.Skills == nil || n.Allowlist == nil {
+		t.Fatalf("none = %+v", n)
+	}
+	if e := read("every"); len(e.Skills) != 3 || e.Allowlist != nil {
+		t.Fatalf("every = %+v", e)
+	}
+	resp, b := do(t, http.MethodGet, srv.URL+"/v1/agents/nope/skills", "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("nope: %d %s", resp.StatusCode, b)
+	}
+	resp, b = do(t, http.MethodGet, srv.URL+"/v1/agents/reviewer/skills?pool=x", "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("pool without pools: %d %s", resp.StatusCode, b)
 	}
 }

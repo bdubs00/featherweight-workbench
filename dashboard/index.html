@@ -709,6 +709,7 @@ const mcp = (() => {
     home: () => call('dashboard', {view: 'home'}).then(r => r.home || {}),
     agents: () => call('agents_list').then(r => r.agents || []),
     agent: name => call('agent_get', {name}).then(r => r.agent),
+    agentSkills: name => call('agent_get', {name}).then(r => ({skills: (r.agent && r.agent.resolvedSkills) || []})),
     putAgent: p => call('agent_put', p).then(r => r.agent),
     deleteAgent: name => call('agent_delete', {name}),
     runs: f => call('runs_list', clean(f)),
@@ -781,6 +782,7 @@ const native = (() => {
     home: () => req('GET', '/v1/home'),
     agents: () => req('GET', '/v1/agents').then(r => r.agents || []),
     agent: name => req('GET', '/v1/agents/' + enc(name)),
+    agentSkills: name => req('GET', '/v1/agents/' + enc(name) + '/skills'),
     putAgent: p => req('PUT', '/v1/agents/' + enc(p.name), p),
     deleteAgent: name => req('DELETE', '/v1/agents/' + enc(name)),
     runs: f => req('GET', '/v1/runs' + qs(f)),
@@ -1929,6 +1931,13 @@ function abilities(all) {
   const html = abilityGroups(all).map(g => `<p class="sub">${g.title}</p><div class="group">${g.rows.map(x => `<div class="row can"><span class="main"><span>${esc(x.text)}</span>${(x.notes || []).map(n => `<span class="s">${esc(n)}</span>`).join('')}</span></div>`).join('')}</div>`).join('');
   return html ? `<h2 class="sec">What it can do</h2>${html}` : '';
 }
+// skillList names the skills that an agent can load, from the catalog of
+// the front, so a person never reads a glob to learn them.
+function skillList(sk) {
+  if (!sk || !sk.skills) return '';
+  if (!sk.skills.length) return '<h2 class="sec">Skills</h2><div class="group"><div class="row can"><span class="main"><span>It can load no skill.</span></span></div></div>';
+  return '<h2 class="sec">Skills</h2><div class="group">' + sk.skills.map(x => `<div class="row can"><span class="main"><span class="t">${esc(x.name)}</span>${x.description ? `<span class="s">${esc(x.description)}</span>` : ''}</span>${x.origin ? `<span class="end">${esc(x.origin)}</span>` : ''}</div>`).join('') + '</div>';
+}
 // fillDraft checks a proposal on the server and draws it as the contact card
 // of the agent. A proposal that matches a saved agent shows Start run.
 async function fillDraft(el) {
@@ -1980,6 +1989,7 @@ screens.agent = {
     const m = remote ? (await loadMembers()).find(x => x.name === s.member) || {} : {};
     const a = remote ? Object.assign({name: s.name}, (m.agents || []).find(x => x.name === s.name)) : await api.agent(s.name);
     const runs = ((await api.runs({agent: s.name, member: s.member, limit: 20}).catch(() => ({}))).runs || []).filter(r => !r.parent);
+    const sk = remote ? null : await api.agentSkills(s.name).catch(() => null);
     if (top() !== s) return;
     const acc = a.access || {};
     const row = (k, v) => v ? `<div class="row kv"><span class="main">${esc(k)}</span><span class="end">${esc(v)}</span></div>` : '';
@@ -1988,9 +1998,10 @@ screens.agent = {
       <p>${esc(a.description || (remote ? 'Runs on ' + s.member + '.' : 'No description yet.'))}</p>
       ${canRun(a.role) && reach ? `<button class="btn primary" data-action="start" data-agent="${esc(a.name)}" data-member="${esc(s.member || '')}">Start run</button>` : ''}</div>
       ${abilities(a.abilities)}
+      ${skillList(sk)}
       ${runs.length ? `<h2 class="sec">Recent work</h2><div class="group">${runs.map(r => runRow(r)).join('')}</div>` : ''}
       <h2 class="sec">About</h2><div class="group">${row('Your role', cap(a.role || 'none'))}${row('Model', [a.model || (remote ? '' : 'Default'), a.effort ? a.effort + ' effort' : ''].filter(Boolean).join(', '))}
-        ${a.abilities ? '' : row('Tools', a.tools && a.tools.length ? a.tools.join(', ') : remote ? '' : 'Every tool')}${row('Skills', a.skills ? (a.skills.length ? a.skills.join(', ') : 'None') : remote ? '' : 'Every skill')}
+        ${a.abilities ? '' : row('Tools', a.tools && a.tools.length ? a.tools.join(', ') : remote ? '' : 'Every tool')}${sk ? '' : row('Skills', a.skills ? (a.skills.length ? a.skills.join(', ') : 'None') : remote ? '' : 'Every skill')}
         ${row('Limits', limits(a.budget))}${row('Time zone', a.timeZone)}${row('Teams', agentTeams(a).join(', '))}${row('Fleet member', remote ? s.member + ', ' + memberWord(m) : '')}</div>
       <h2 class="sec">Access</h2><div class="group">${row('Owners', (acc.owners || []).join(', ') || 'Not set. Everyone who can run agents here can use it.')}${row('Operators', (acc.operators || []).join(', '))}${row('Viewers', (acc.viewers || []).join(', '))}</div>
       ${a.role === 'owner' && !remote ? a.locked ? '<p class="hint" style="margin-top:30px">The configuration file defines this agent. Change it there.</p>' : `<div class="group" style="margin-top:30px"><button class="row link" data-action="edit" data-name="${esc(a.name)}"><span class="main"><span class="t">Edit agent</span></span></button>
