@@ -68,6 +68,16 @@ func TestDoctorCheck(t *testing.T) {
 	if ok, line := check(fw.DefaultConfig()); !ok || !strings.Contains(line, "bossmode: off") || !strings.Contains(line, EnvEnabled) {
 		t.Errorf("off: %v %s", ok, line)
 	}
+	// The one line also names the stores: the wiki, the faces, and the
+	// bridges, on or off, and a store that does not load fails it.
+	for _, want := range []string{"; pages: ", "; faces: ", "; bridges: "} {
+		if _, line := check(fw.DefaultConfig()); !strings.Contains(line, want) {
+			t.Errorf("the line has no %q: %s", want, line)
+		}
+	}
+	if ok, line := check(withBlock(t, "bossmode: {enabled: true}\nbridges: {placement: sideways}\n")); ok || !strings.Contains(line, "workbench.bridges.placement") {
+		t.Errorf("bridges that do not load: %v %s", ok, line)
+	}
 	ok, line := check(withBlock(t, "bossmode: {enabled: true}\n"))
 	if !ok || !strings.Contains(line, "placeholder") || !strings.Contains(line, "names no manager") || !strings.Contains(line, "fw_bossmode_streams_open") {
 		t.Errorf("embedded: %v %s", ok, line)

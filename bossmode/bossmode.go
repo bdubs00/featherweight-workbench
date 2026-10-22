@@ -2,13 +2,16 @@
 // (docs/ARCHITECTURE.md section 17): the static files of the page at
 // /bossmode, its settings at /v1/bossmode, and one stream of server-sent
 // events at /v1/bossmode/stream. The stream carries the changes of the
-// fleet view (fleet.Watcher) and the events that other packages publish
-// with Publish, and it shows each caller only what the caller can see.
+// fleet view (fleet.Watcher), the entries and the seats of the bridges,
+// the pages of the wiki, and the faces of the agents, which the hooks of
+// those packages feed (feeds.go), and the events that other packages
+// publish with Publish. It shows each caller only what the caller can see.
 //
 // The package is a service of the kernel (fw.RegisterService), mounts its
 // routes through native.Extend, reads workbench.bossmode and
-// FW_WORKBENCH_BOSSMODE_*, and adds a line to fw doctor and a gauge to the
-// metrics. Nothing in it calls a model.
+// FW_WORKBENCH_BOSSMODE_*, and adds a gauge to the metrics and a line to
+// fw doctor, which also names the stores of the wiki, the faces, and the
+// bridges. Nothing in it calls a model.
 package bossmode
 
 import (

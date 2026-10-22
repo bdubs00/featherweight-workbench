@@ -7,16 +7,36 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/bridges"
+	"github.com/bdubs00/featherweight-workbench/faces"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/pages"
 )
 
 // DoctorCheck is the line of fw doctor about bossmode (cli.DoctorCheck):
-// off, or on with the page that it serves, whether the directory of the
-// page holds index.html, the manager profile and where it is defined, and
-// the open streams. A directory without index.html and a manager that no
-// profile of fw.agents and no pool defines fail the check.
-// cmd/fw-workbench registers it.
+// the page, the manager, and the stores, in one line. It says off, or on
+// with the page that it serves, whether the directory of the page holds
+// index.html, the manager profile and where it is defined, and the open
+// streams. Then, on or off, it gives the lines of the stores that bossmode
+// reads: the wiki (pages.Status), the faces (faces.Status), and the
+// bridges (bridges.Status). A directory without index.html, a manager
+// that no profile of fw.agents and no pool defines, and a store whose
+// configuration does not load fail the check. cmd/fw-workbench registers
+// it. The line manager of the package manager says more about the pool of
+// the manager.
 func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duration) (bool, string) {
+	ok, line := pageCheck(cfg)
+	for _, status := range []func(*fw.Config) (bool, string){pages.Status, faces.Status, bridges.Status} {
+		good, text := status(cfg)
+		ok = ok && good
+		line += "; " + text
+	}
+	return ok, line
+}
+
+// pageCheck is the part of the doctor line about the page, the manager,
+// and the streams.
+func pageCheck(cfg *fw.Config) (bool, string) {
 	c, err := Load(cfg)
 	if err != nil {
 		return false, err.Error()
@@ -28,7 +48,7 @@ func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duratio
 	var parts []string
 	switch {
 	case c.Dir == "" && embeddedPlaceholder():
-		parts = append(parts, "serves the placeholder page that the binary embeds; set workbench.bossmode.dir ("+EnvDir+") to the dist directory of the page")
+		parts = append(parts, "serves the placeholder page that the binary embeds; set workbench.bossmode.dir ("+EnvDir+") to the dist directory of the page, or build the binary with make page")
 	case c.Dir == "":
 		parts = append(parts, "serves the page that the binary embeds")
 	default:
