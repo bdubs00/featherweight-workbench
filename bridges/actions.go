@@ -46,14 +46,15 @@ func (s *Store) allows(ctx context.Context, rec *record) error {
 }
 
 // listed reports whether the list of the caller in ctx holds a bridge:
-// a bridge of the caller, or of a team of the caller that the caller can
-// see.
-func (s *Store) listed(ctx context.Context, rec *record) (bool, error) {
+// a bridge of the caller, of a team of the caller that the caller can
+// see, or, when admin is true, any bridge that the caller can see. The
+// caller of a list decides admin once, with isAdmin.
+func (s *Store) listed(ctx context.Context, rec *record, admin bool) (bool, error) {
 	p := fw.PrincipalFrom(ctx)
 	if p == nil || (p.Subject != "" && p.Subject == rec.Operator) {
 		return true, nil
 	}
-	if !teams.Shares(rec.Teams, teams.Of(teams.Patterns(s.a.Config()), p)) {
+	if !admin && !teams.Shares(rec.Teams, teams.Of(teams.Patterns(s.a.Config()), p)) {
 		return false, nil
 	}
 	err := s.allows(ctx, rec)
@@ -61,6 +62,14 @@ func (s *Store) listed(ctx context.Context, rec *record) (bool, error) {
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// isAdmin reports whether the caller in ctx is an admin of the process
+// (fw.ActionAdmin): the admins of the access configuration, or whoever
+// the control plane names. A decision point that does not answer makes
+// the caller no admin, and the rule of the teams decides alone.
+func (s *Store) isAdmin(ctx context.Context) bool {
+	return s.a.Authorize(ctx, fw.ActionAdmin, fw.Target{}) == nil
 }
 
 // Visible reports whether the caller in ctx can see the bridge id, by the

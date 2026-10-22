@@ -2069,7 +2069,7 @@ A close marks the record closed and stops the fan-out. It cancels nothing. With 
 
 ### 18.10 The routes
 
-Every route needs the authentication of the native surface. A bridge is for its operator and for anyone with the operator role on every agent of its members, as the page at `/ui` decides for a run: the role on the profile in the pool that runs the agent, else on the profile of this process, else on an agent that a member of the view serves. A caller without it gets 403, and a decision point that does not answer gives 503. `GET /v1/bridges` lists the bridges of the caller and of the teams of the caller (section 8) that the caller can use, open first and the newest first in each group. Opening a bridge and adding a seat need the operator role on each agent of the seats.
+Every route needs the authentication of the native surface. A bridge is for its operator and for anyone with the operator role on every agent of its members, as the page at `/ui` decides for a run: the role on the profile in the pool that runs the agent, else on the profile of this process, else on an agent that a member of the view serves. A caller without it gets 403, and a decision point that does not answer gives 503. `GET /v1/bridges` lists the bridges of the caller and of the teams of the caller (section 8) that the caller can use, open first and the newest first in each group. An admin of the process (`access.admins`, or whoever the control plane names) lists every bridge that it can use. So an admin sees the bridges that the static token of the fleet opened, such as the bridges of a seed script. Opening a bridge and adding a seat need the operator role on each agent of the seats.
 
 | Method and path | Answer |
 |---|---|

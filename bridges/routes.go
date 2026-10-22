@@ -123,7 +123,8 @@ func (rt *routes) answer(w http.ResponseWriter, r *http.Request, s *Store, rec *
 }
 
 // list answers GET /v1/bridges with the bridges of the caller and of the
-// teams of the caller, open first.
+// teams of the caller, open first. An admin of the process lists every
+// bridge that it can see.
 func (rt *routes) list(w http.ResponseWriter, r *http.Request) {
 	s, ok := rt.store(w, r)
 	if !ok {
@@ -135,9 +136,10 @@ func (rt *routes) list(w http.ResponseWriter, r *http.Request) {
 		rt.fail(w, r, err)
 		return
 	}
+	admin := s.isAdmin(ctx)
 	items := []Item{}
 	for _, rec := range recs {
-		ok, err := s.listed(ctx, rec)
+		ok, err := s.listed(ctx, rec, admin)
 		if err != nil {
 			rt.fail(w, r, err)
 			return

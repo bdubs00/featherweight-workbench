@@ -365,3 +365,52 @@ func TestServiceWatches(t *testing.T) {
 		t.Fatalf("Close = %v, store %v", err, Of(a))
 	}
 }
+
+// The list of a person holds the bridges of the person and of the teams
+// of the person. An admin of the process lists every bridge that it can
+// use, also a bridge of the static token, which has no team.
+func TestListAdmin(t *testing.T) {
+	a := newAgent(t, func(c *fw.Config) {
+		c.Access.Admins = []string{"carol", "kind:token"}
+	})
+	newStore(t, a, nil)
+	url := serve(t, a)
+	it := open(t, url)
+	resp, body := do(t, http.MethodPost, url+"/v1/bridges", "dave", `{"title":"Private","members":[{"handle":"p","agent":"private","task":"Do it"}]}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("dave opens = %d %s", resp.StatusCode, body)
+	}
+	resp, body = do(t, http.MethodPost, url+"/v1/bridges", "fleet", `{"title":"Seeded","members":[{"handle":"m","agent":"migrator","task":"Seed"}]}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("the token opens = %d %s", resp.StatusCode, body)
+	}
+	list := func(token string) []string {
+		t.Helper()
+		resp, body := do(t, http.MethodGet, url+"/v1/bridges", token, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("list as %s = %d %s", token, resp.StatusCode, body)
+		}
+		var out struct {
+			Bridges []Item `json:"bridges"`
+		}
+		decodeJSON(t, body, &out)
+		var titles []string
+		for _, b := range out.Bridges {
+			titles = append(titles, b.Title)
+		}
+		return titles
+	}
+	// bob shares team-a with alice and dave and operates the agents of
+	// alice alone. The token has no team and sees its own bridge.
+	if got := list("bob"); strings.Join(got, ",") != it.Title {
+		t.Errorf("bob lists %v", got)
+	}
+	if got := list("alice"); strings.Join(got, ",") != it.Title {
+		t.Errorf("alice lists %v", got)
+	}
+	// carol has no team and no role, and is an admin: she lists all three.
+	got := list("carol")
+	if len(got) != 3 || !strings.Contains(strings.Join(got, ","), "Seeded") || !strings.Contains(strings.Join(got, ","), "Private") {
+		t.Errorf("carol lists %v", got)
+	}
+}
