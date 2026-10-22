@@ -242,10 +242,11 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 			}
 			cards = append(cards, s.facts(ctx, rec, r, seat, ends[r.ID], verdicts[r.ID], lost[r.ID], add)...)
 		}
-		for _, l := range sleepLines(rec, runs, states) {
+		slept, marked := sleepLines(rec, runs, states, now, s.sleepHold)
+		for _, l := range slept {
 			add(l)
 		}
-		if !changed && len(lines) == 0 && len(cards) == 0 {
+		if !changed && !marked && len(lines) == 0 && len(cards) == 0 {
 			return errNoChange
 		}
 		return nil
@@ -723,9 +724,20 @@ func (s *Store) rewriteCard(ctx context.Context, id string, c Message) {
 }
 
 // sleepLines returns the lines of the seats whose Task went to sleep or
-// woke since the channel last said so, and moves the marks.
-func sleepLines(rec *record, runs map[string]*fw.Run, states map[string]string) []Message {
+// woke since the channel last said so, moves the marks, and reports
+// whether it changed the record. The lines follow the record, which every
+// replica shares, and not the view of one replica: the first replica that
+// sees the Task of the newest run of a seat quiet marks the time, a
+// replica that sees the Task live, stopped, or blocked clears the mark,
+// and the line asleep comes once the mark is hold old. The line woke up
+// comes once per line asleep, when a replica sees the Task live again.
+// The change of the record that moves a mark gives the line its seq, so
+// of two replicas one posts it. A Task that sleeps and wakes within hold
+// posts nothing. A replica whose view does not know the Task changes
+// nothing.
+func sleepLines(rec *record, runs map[string]*fw.Run, states map[string]string, now time.Time, hold time.Duration) ([]Message, bool) {
 	var out []Message
+	changed := false
 	for _, m := range rec.Members {
 		if m.Fired {
 			continue
@@ -736,19 +748,34 @@ func sleepLines(rec *record, runs map[string]*fw.Run, states map[string]string) 
 		}
 		sm := rec.seat(m.Handle)
 		switch taskOf(r, states) {
+		case "":
 		case fleet.MemberQuiet:
-			if !sm.Asleep {
-				sm.Asleep = true
+			if sm.Asleep {
+				continue
+			}
+			if sm.QuietAt == nil || sm.QuietOn != r.Member {
+				at := now
+				sm.QuietAt, sm.QuietOn = &at, r.Member
+				changed = true
+			}
+			if now.Sub(*sm.QuietAt) >= hold {
+				sm.Asleep, sm.QuietAt, sm.QuietOn = true, nil, ""
+				changed = true
 				out = append(out, system(EventAsleep, m.Handle+" went to sleep. A message wakes its Task."))
 			}
-		case fleet.MemberLive:
-			if sm.Asleep {
+		default:
+			if sm.QuietAt != nil {
+				sm.QuietAt, sm.QuietOn = nil, ""
+				changed = true
+			}
+			if taskOf(r, states) == fleet.MemberLive && sm.Asleep {
 				sm.Asleep = false
+				changed = true
 				out = append(out, system(EventStarted, m.Handle+" woke up."))
 			}
 		}
 	}
-	return out
+	return out, changed
 }
 
 // show gives the OnMember hooks every member whose presence, activity, or

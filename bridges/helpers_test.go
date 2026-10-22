@@ -118,8 +118,17 @@ func newAgentWith(t *testing.T, mut func(*fw.Config), opts ...fw.Option) *fw.Age
 }
 
 // newStore attaches bridges in memory to the agent, with short pauses for
-// the retries. The test drives the watch with poll.
+// the retries and no hold before a line asleep. The test drives the watch
+// with poll.
 func newStore(t *testing.T, a *fw.Agent, mut func(*Config)) *Store {
+	t.Helper()
+	rc, cc := bucketConfigs()
+	return newStoreOn(t, a, bucket.NewMem(rc), bucket.NewMem(cc), mut)
+}
+
+// newStoreOn is newStore on the buckets of the records and the channels,
+// so two stores over the same buckets act as two replicas of the front.
+func newStoreOn(t *testing.T, a *fw.Agent, records, channels bucket.Bucket, mut func(*Config)) *Store {
 	t.Helper()
 	cfg, err := Load(a.Config())
 	if err != nil {
@@ -128,9 +137,9 @@ func newStore(t *testing.T, a *fw.Agent, mut func(*Config)) *Store {
 	if mut != nil {
 		mut(&cfg)
 	}
-	rc, cc := bucketConfigs()
-	s := New(a, bucket.NewMem(rc), bucket.NewMem(cc), cfg, quiet())
+	s := New(a, records, channels, cfg, quiet())
 	s.pollEvery, s.retryFirst, s.retryMax, s.retryFor = time.Hour, 10*time.Millisecond, 40*time.Millisecond, 3*time.Second
+	s.sleepHold = 0
 	s.runWorkers()
 	Attach(a, s)
 	t.Cleanup(func() {

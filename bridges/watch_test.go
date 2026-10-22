@@ -11,6 +11,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/internal/bucket"
 )
 
 func ev(typ string, data any) fw.Event { return fw.MustEvent("", typ, data) }
@@ -357,5 +358,163 @@ func TestCardOfAnUnreadableRun(t *testing.T) {
 	s.poll(ctx)
 	if got := len(fm.find(http.MethodGet, "/v1/runs/r-mig/events")); got != reads || len(channel(t, s, it.ID)) != n {
 		t.Fatalf("after the restore: %d reads after %d, %d entries after %d", got, reads, len(channel(t, s, it.ID)), n)
+	}
+}
+
+// testClock is a clock that a test moves, which the stores of two
+// replicas share.
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *testClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *testClock) set(t time.Time) {
+	c.mu.Lock()
+	c.t = t
+	c.mu.Unlock()
+}
+
+// replicas is two stores over the same buckets, each with the view of its
+// own replica of the front, and the bridge of one seat migrator-1, whose
+// run works on the Task default/crew-0 of both views.
+type replicas struct {
+	stores [2]*Store
+	views  [2]*fakeView
+	clock  *testClock
+	bridge string
+	start  time.Time
+}
+
+func newReplicas(t *testing.T) *replicas {
+	t.Helper()
+	rc, cc := bucketConfigs()
+	records, channels := bucket.NewMem(rc), bucket.NewMem(cc)
+	r := &replicas{clock: &testClock{}, start: time.Date(2026, 10, 22, 4, 0, 0, 0, time.UTC)}
+	r.clock.set(r.start)
+	for i := range r.stores {
+		a := newAgent(t, nil)
+		s := newStoreOn(t, a, records, channels, nil)
+		s.sleepHold, s.now = sleepHold, r.clock.now
+		v, _ := withFleet(t, a)
+		v.state("default/crew-0", fleet.MemberLive, "migrator")
+		r.stores[i], r.views[i] = s, v
+	}
+	rec, err := r.stores[0].open(context.Background(), OpenSpec{Title: "Flapping", Members: []SeatSpec{{Handle: "migrator-1", Agent: "migrator", Task: "Migrate"}}}, callers["alice"], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.bridge = rec.ID
+	for _, v := range r.views {
+		v.put(workerRun("r-mig", rec.ID, "migrator-1", "migrator", fw.StateRunning))
+	}
+	return r
+}
+
+// at moves the clock to the second sec after the start, gives each view
+// its state of the Task, and lets each replica look once, in turn.
+func (r *replicas) at(sec int, states ...string) {
+	r.clock.set(r.start.Add(time.Duration(sec) * time.Second))
+	for i, v := range r.views {
+		v.state("default/crew-0", states[i%len(states)])
+	}
+	for _, s := range r.stores {
+		s.poll(context.Background())
+	}
+}
+
+// lines returns the lines asleep and woke up of the channel.
+func (r *replicas) lines(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, m := range channel(t, r.stores[0], r.bridge) {
+		if m.Event == EventAsleep || strings.HasSuffix(m.Text, " woke up.") {
+			out = append(out, m.Text)
+		}
+	}
+	return out
+}
+
+// Two replicas see the Task of a seat flap between quiet and live, and
+// for a while they disagree. The channel says nothing until the Task
+// stayed quiet for sleepHold in the record that both share, then one line
+// asleep, then one line woke up when the Task runs again, and nothing for
+// the flaps after that: one pair of lines between the two replicas.
+func TestSleepLinesFollowTheSharedRecord(t *testing.T) {
+	r := newReplicas(t)
+	quiet, live := fleet.MemberQuiet, fleet.MemberLive
+	r.at(0, live)
+	if got := withEvent(channel(t, r.stores[0], r.bridge), EventStarted); len(got) != 1 {
+		t.Fatalf("starts = %+v", got)
+	}
+	// The flaps of both views, each shorter than the hold.
+	for sec := 1; sec <= 20; sec++ {
+		if sec%2 == 1 {
+			r.at(sec, quiet)
+		} else {
+			r.at(sec, live)
+		}
+	}
+	// The replicas disagree for longer than the hold: one sees the Task
+	// quiet, the other live.
+	for sec := 21; sec <= 70; sec += 5 {
+		r.at(sec, quiet, live)
+	}
+	if got := r.lines(t); len(got) != 0 {
+		t.Fatalf("lines before the Task held quiet = %q", got)
+	}
+	// Both see the Task quiet, for the hold and longer.
+	for sec := 71; sec <= 130; sec += 5 {
+		r.at(sec, quiet)
+		if sec < 71+30 && len(r.lines(t)) != 0 {
+			t.Fatalf("a line asleep at %ds, %ds after the Task went quiet", sec, sec-71)
+		}
+	}
+	// It runs again, and flaps once more.
+	r.at(131, live)
+	for sec := 132; sec <= 150; sec++ {
+		if sec%2 == 0 {
+			r.at(sec, quiet)
+		} else {
+			r.at(sec, live)
+		}
+	}
+	r.at(151, live, quiet)
+	want := []string{"migrator-1 went to sleep. A message wakes its Task.", "migrator-1 woke up."}
+	if got := r.lines(t); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("lines = %q, want %q", got, want)
+	}
+}
+
+// A Task that sleeps and wakes within sleepHold posts no line, while the
+// roster shows the presence of the view at once.
+func TestShortSleepPostsNothing(t *testing.T) {
+	h := hooked(t)
+	r := newReplicas(t)
+	r.at(0, fleet.MemberLive)
+	r.at(1, fleet.MemberQuiet)
+	if ms := h.member("migrator-1"); len(ms) == 0 || ms[len(ms)-1].Presence != PresenceAsleep {
+		t.Fatalf("the presence of a quiet Task = %+v", ms)
+	}
+	r.at(29, fleet.MemberQuiet)
+	r.at(30, fleet.MemberLive)
+	if ms := h.member("migrator-1"); ms[len(ms)-1].Presence != PresenceWorking {
+		t.Fatalf("the presence of a live Task = %s", ms[len(ms)-1].Presence)
+	}
+	r.at(45, fleet.MemberLive)
+	if got := r.lines(t); len(got) != 0 {
+		t.Fatalf("a short sleep posted %q", got)
+	}
+	rec, _, err := r.stores[1].b.get(context.Background(), r.bridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sm := rec.Seats["migrator-1"]; sm == nil || sm.Asleep || sm.QuietAt != nil || sm.QuietOn != "" {
+		t.Fatalf("the mark of the seat = %+v", sm)
 	}
 }

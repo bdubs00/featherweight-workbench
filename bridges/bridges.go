@@ -87,6 +87,10 @@ const (
 	// lostEvery is the time between two reads of a run whose card shows
 	// the state unknown.
 	lostEvery = time.Minute
+	// sleepHold is how long the Task of a seat stays quiet, with no
+	// replica that sees it in another state, before the channel says that
+	// it went to sleep (sleepLines).
+	sleepHold = 30 * time.Second
 	// workers is the number of deliveries that run at once, and queueSize
 	// the deliveries that wait.
 	workers   = 4
@@ -118,6 +122,7 @@ type Store struct {
 	retryFor    time.Duration
 	reportWait  time.Duration
 	lostEvery   time.Duration
+	sleepHold   time.Duration
 	now         func() time.Time
 
 	// following is true while the service follows the changes of the
@@ -159,6 +164,7 @@ func New(a *fw.Agent, records, channels bucket.Bucket, cfg Config, log *slog.Log
 		retryFor:    retryFor,
 		reportWait:  reportWait,
 		lostEvery:   lostEvery,
+		sleepHold:   sleepHold,
 		now:         time.Now,
 		checked:     map[string]uint64{},
 		tries:       map[string]int{},

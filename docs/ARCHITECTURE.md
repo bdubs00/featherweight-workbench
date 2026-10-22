@@ -1852,7 +1852,7 @@ Every run of a bridge carries the batch `bridge:<id>` in the metadata `fw.batch`
 
 A seat has `handle`, `agent`, `pool`, `task`, `runs`, `fired`, and `muted`. A handle is lower-case letters, digits, dots, dashes, and underscores, at most 32, with a letter or a digit first, and unique in the bridge. The handles `operator` and `manager` are reserved: `operator` addresses the people of a bridge, and `manager` names the manager run in the channel. `pool` is the pool that runs the agent, when a pool does. A seat that names no pool gets the pool whose `agent` is its agent, as section 14.9 picks it, so the pool of the manager, which holds the profiles of the seats of a spawn bridge for its child Tasks, needs no `pool` on a seat of a queue bridge. `runs` lists the runs of the seat in the bridge, oldest first, at most 32, and the last one is the newest. A route and a hook also give `presence` and `activity` of each seat (section 18.7), and the store keeps neither. A bridge has at most `workbench.bridges.maxMembers` seats.
 
-Beside these fields, the stored record holds the bookkeeping of the front: the kind of the principal of the operator and the teams of the operator at the open, the count of seatings of each seat, the budget of each seat, a mark for each run of what the channel holds of it (section 18.6), the cards that wait for a decision, the counters of the caps, and the wait for a report. No route shows it.
+Beside these fields, the stored record holds the bookkeeping of the front: the kind of the principal of the operator and the teams of the operator at the open, the count of seatings of each seat, the budget of each seat, the sleep of each seat, a mark for each run of what the channel holds of it (section 18.6), the cards that wait for a decision, the counters of the caps, and the wait for a report. No route shows it.
 
 ### 18.2 The channel
 
@@ -1928,8 +1928,8 @@ The front watches the view of the fleet for the runs of each bridge by its batch
 | `finished` | The run completed with no answer | A line that says so |
 | `failed` | The run failed | `<handle> failed: <error>` |
 | `canceled` | The run was canceled | A line that says so |
-| `asleep` | The Task of the newest run of a seat went quiet | `<handle> went to sleep. A message wakes its Task.` |
-| `started` | That Task runs again | `<handle> woke up.` |
+| `asleep` | The Task of the newest run of a seat stayed quiet for 30 seconds | `<handle> went to sleep. A message wakes its Task.` |
+| `started` | That Task runs again after the line `asleep` | `<handle> woke up.` |
 
 The decision of a card is the pending decision of the run as the result of a run words it (`dashboard.Decision`, section 6.3), with `run`, `state: pending`, and `always`, which is true when the card can offer Always allow by the rule of a pool (section 14.9): a run of a worker, a call of one tool, and an ask of the default or of a rule that names the tool, never a flag such as `destructive` and never a pattern. When the run no longer waits for the card, the front reads the events of the run after the card from its owner, with the static token, and finds the decision with its decider, its note, and the answer of a form. It writes the card again under the same seq with `state`, `decidedBy`, `decidedAt`, `note`, and `answer`, gives it to the hook `OnMessage` again, and posts the line. A card whose run no longer waits for it without a decision, because the run ended or asked again after a resume, is written again as denied with a note and no line.
 
@@ -1938,6 +1938,8 @@ The front can fail to read the run of a card, such as when its Task does not ans
 For the end of a run, the front reads the last 20 events of the run from its owner, so the message holds the whole output up to 4 KB and mirrors the exact seq of the `fw.run.finished`. A run that finishes again after a follow-up gets one more message.
 
 The actions post their lines in the change of the record that makes them: `opened`, `closed`, `reopened`, `joined`, `fired`, `muted` (also for an unmute), `task`, `changed` (a change of the title, the delegation, or the caps, and the line of a report), and `cap`. A job of a fired seat that waited in the queue and starts after the fire stops: the watch cancels it.
+
+The lines of a sleep follow the record of the bridge, which every replica shares, and not the view of one replica. Each replica reads the phase of a Task on its own, and two views can disagree for a while, so the lines of one view alone flap. The first replica that sees the Task of the newest run of a seat quiet records the time and the Task in the mark of the seat. A replica that sees that Task live, stopped, or blocked clears the time. A replica that finds the time 30 seconds old and the Task still quiet posts `asleep` in the change of the record that marks the seat asleep, so of two replicas one posts it. The first replica that then sees the Task live posts `woke up` in the same way and clears the mark. A Task that sleeps and wakes within 30 seconds therefore posts nothing, and each sleep gets at most one pair of lines. The watch reads the view at least every ten seconds (section 18.12), so the line `asleep` comes 30 to 40 seconds after the Task went quiet. A replica whose view does not know the Task changes no mark. The presence of the seat on the roster does not wait: it comes from the view of the replica at once (section 18.7).
 
 ### 18.7 Presence
 

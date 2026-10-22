@@ -66,6 +66,7 @@ func runningStore(t *testing.T, a *fw.Agent, pollEvery time.Duration) *Store {
 	s := New(a, bucket.NewMem(rc), bucket.NewMem(cc), cfg, quiet())
 	s.pollEvery, s.sweepEvery, s.pollGap, s.followRetry = pollEvery, time.Hour, 5*time.Millisecond, 10*time.Millisecond
 	s.retryFirst, s.retryMax, s.retryFor = 10*time.Millisecond, 40*time.Millisecond, 3*time.Second
+	s.sleepHold = 0
 	s.run()
 	Attach(a, s)
 	t.Cleanup(func() {

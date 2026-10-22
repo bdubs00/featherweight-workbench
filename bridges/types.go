@@ -293,6 +293,12 @@ type seatMark struct {
 	// Asleep is true when the channel says that the Task of the seat
 	// sleeps and no line after it says that it woke.
 	Asleep bool `json:"asleep,omitempty"`
+	// QuietAt is the time at which a replica first saw the Task QuietOn of
+	// the newest run of the seat quiet. A replica that sees that Task in
+	// another state clears both, so the channel says that the Task sleeps
+	// only once no replica saw it awake for sleepHold (sleepLines).
+	QuietAt *time.Time `json:"quietAt,omitempty"`
+	QuietOn string     `json:"quietOn,omitempty"`
 	// Again is the newest run of the seat when the bridge last seated it
 	// again, and AgainAt the time, so a second patch with the same task
 	// before a new run shows seats nothing more (giveTask).
