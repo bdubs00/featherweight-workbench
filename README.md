@@ -32,7 +32,29 @@ After the kernel has a release, depend on the release instead:
 2. Remove the `replace` directive from `go.mod`.
 3. Remove the build context `kernel` from the Makefile and the two Dockerfiles.
 
-Container images: `make image` builds `fw-workbench:static` on distroless, and `make image-toolbox` builds `fw-workbench:toolbox` on Debian with git. Both use `docker buildx` with the kernel as a second build context. Both contain the symlinks `ax-task-runner` and `fw`, so ax starts the binary and `ax ssh <task> -- fw events <run>` works.
+Container images: `make image` builds `fw-workbench:static` on distroless, and `make image-toolbox` builds `fw-workbench:toolbox` on Debian with git. Both use `docker buildx` with the kernel as a second build context, and with the page of bossmode as a third one when `PAGE` holds a checkout of it (below). Both contain the symlinks `ax-task-runner` and `fw`, so ax starts the binary and `ax ssh <task> -- fw events <run>` works.
+
+### The page of bossmode
+
+The page of bossmode lives in its own repository, featherweight-bossmode, and builds with Node 22 and npm. To embed it in the binary, clone it next to the workbench and run `make page` before the build. The target runs `npm ci && npm run build` in the checkout that `PAGE` names, `../featherweight-bossmode` by default, and copies its `dist` directory into `bossmode/static`. git ignores that copy, and `make page-clean` removes it. Without a copy, the binary embeds a placeholder page that names `workbench.bossmode.dir`, so `go build` works either way.
+
+```
+git clone https://github.com/bdubs00/featherweight-bossmode
+make page     # builds ../featherweight-bossmode into bossmode/static
+make build
+```
+
+For an image with the page, pass the checkout as the build context `page` and the argument `PAGE=build`. For an image with the placeholder, pass neither. `make image` chooses by itself.
+
+```
+docker buildx build --build-context kernel=../featherweight-kernel \
+  --build-context page=../featherweight-bossmode --build-arg PAGE=build \
+  -t ghcr.io/bdubs00/featherweight-workbench:static .
+docker buildx build --build-context kernel=../featherweight-kernel \
+  -t ghcr.io/bdubs00/featherweight-workbench:static .
+```
+
+Add `-f Dockerfile.toolbox` and the tag `:toolbox` for the toolbox image. Section 1.2 of the architecture has the details.
 
 ## Start here
 
@@ -96,6 +118,10 @@ Each agent has a face: an SVG, a display name, and a tagline. An agent without a
 
 On a NATS bus, both live in key-value buckets of the stream of the fleet, `<stream>_PAGES` and `<stream>_FACES`, so every replica of the front reads the same pages and faces. On the bus `mem`, they live in the memory of the process. Sections 15 and 16 of the architecture have the rules.
 
+## Bossmode
+
+Bossmode is the operator front of the fleet, a chat client in which an operator runs a team of agents. With `workbench.bossmode.enabled`, the front serves the page at `/bossmode`, its settings at `GET /v1/bossmode`, and one stream of server-sent events at `GET /v1/bossmode/stream`. The stream carries the runs, the members, and the Tasks of the fleet, the entries and the seats of the bridges, the pages of the wiki, and the faces, each to the people who can see it. `fw-workbench doctor` has one line for bossmode: the page, the manager, and the stores of the wiki, the faces, and the bridges. Section 17 of the architecture has the rules.
+
 ## Bridges
 
 A bridge is one large job split into seats, with one agent on each seat and one channel where the agents and the operator talk. The operator opens a bridge with `POST /v1/bridges`, and the front puts one run per seat on the queue of the pool of its agent, or lets the manager seat the members as child runs. A message in the channel reaches the runs of the members as a follow-up that names its sender, under caps that stop a ping-pong between two agents. The channel mirrors the life of each run: the start, an approval with its card, the answer of a turn, a failure, and the sleep of a Task. A thumb on an answer is a quality receipt, and a heart writes the result into `agents/<agent>/learned.md` of the wiki, which the next runs of the agent read. The members read and post with the MCP tools `bridge_read` and `bridge_post`, and the manager opens and changes bridges with `bridge_open`, `bridge_list`, `bridge_add_member`, `bridge_remove_member`, and `bridge_close`. The records and the channels live in `<stream>_BRIDGES` and `<stream>_CHANNELS` on a NATS bus, and in memory on the bus `mem`. Section 18 of the architecture has the rules.
@@ -127,6 +153,7 @@ The workbench changes no kernel code. It uses these hooks of the kernel:
 | `pages` | the wiki of the fleet |
 | `faces` | the faces of the agents, the sanitizer, and the identicon |
 | `bridges` | the bridges of bossmode: the records, the channels, the fan-out, and the system lines |
+| `bossmode` | the page of bossmode, its settings, and its stream with the feeds of the bridges, the wiki, and the faces |
 | `internal/bucket` | the key-value bucket under the stores of the front |
 | `internal/behalf` | the run behind an MCP call, and the guard of a person of the static token |
 | `manager` | the manager of bossmode: the on-behalf-of, the attribution, and the delegation checks |

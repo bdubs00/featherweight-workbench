@@ -20,8 +20,14 @@ The workbench changes no kernel code. It plugs in through the extension points o
 - `fw.Agent.SetPersonTokens` gives the tool sources of the kernel the access tokens of people, and `fw.Agent.Connected` resumes the calls that wait for a connection. The package `connections` uses both (section 11).
 - The package `sources` uses `fw.RegisterService`, `native.Extend`, and `cli.RegisterDoctorCheck` too: its service runs the sources, its route takes the events of webhooks, and its doctor line names the sources (section 13).
 - The packages `pages`, `faces`, and `bridges` use `fw.RegisterService` and `native.Extend`, and `mcp.RegisterTools` of the MCP server of the workbench (section 3.1): the service keeps the store, the routes serve it to people, and the tools offer it to MCP clients and agents (sections 15, 16, and 18). The service of `bridges` also watches the view of the fleet and fans the messages of a channel out to the runs of its members.
-- The package `bossmode` uses `fw.RegisterService`, `native.Extend`, `metrics.RegisterCollector`, and `cli.RegisterDoctorCheck`: its service keeps the stream of the page, its routes serve the page, its settings, and the stream, and its doctor line names the page, the manager, and the streams (section 17).
+- The package `bossmode` uses `fw.RegisterService`, `native.Extend`, `metrics.RegisterCollector`, and `cli.RegisterDoctorCheck`: its service keeps the stream of the page, its routes serve the page, its settings, and the stream, and its doctor line names the page, the manager, the streams, and the stores of the wiki, the faces, and the bridges (section 17).
 - The package `manager` holds what makes an agent of the fleet a manager (section 19). `cmd/fw-workbench` wraps the authorization plug of every agent with `manager.Guard` through `fw.WithAuthzFrom`. It also adds the line `manager` to `fw doctor` with `cli.RegisterDoctorCheck`. Each tool of the MCP server that reads or acts calls `manager.OnBehalf` at its start.
+- The packages of bossmode meet at five seams in the workbench, and none of them is a hook of the kernel:
+  - The service of `bridges` gives its store to `manager.SetBridges` when it starts and takes it back with `manager.ClearBridges` when it stops. So a manager run on a run of a bridge gets what the record of that bridge delegates (section 19.4).
+  - The service of `bridges` follows the changes of the view, `fleet.Of(a).(fleet.Watcher).Watch(ctx)`, and reads the view at each change that can concern a bridge. Without a fleet that sends its changes, it reads the view every two seconds (section 18.12).
+  - The package `bridges` words the activity of a seat with `fleet.ActivityPhrase` (`bridges.UsePhrase` in `init`), the words of the `run` events of the stream, so the roster and the stream say the same thing (sections 17.3 and 18.7).
+  - The package `bossmode` registers the hooks `bridges.OnMessage`, `bridges.OnMember`, `pages.OnChange`, and `faces.OnChange` in `init`, and puts what they get on the stream with `bossmode.PublishTo` and the rule of each package for the caller of each stream (section 17.5).
+  - Each key of the configuration has one reader. The package `manager` reads `workbench.bossmode.manager` (`manager.Load`), the package `bridges` reads the block `workbench.bridges` (`bridges.Load`), and the package `bossmode` reads the rest of `workbench.bossmode` and asks the other two (section 17.1).
 
 Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary, the `oidc` authentication mode of the kernel included, because the front verifies the tokens of people.
 
@@ -40,12 +46,29 @@ The `replace` directive in `go.mod` points the module `github.com/bdubs00/feathe
 go build ./... && go vet ./... && go test ./...
 ```
 
-To build an image, pass the kernel checkout as the build context `kernel`:
+The page of bossmode builds from a checkout of `featherweight-bossmode`, by default next to the workbench checkout, with Node 22 and npm. `make page` runs `npm ci && npm run build` in the checkout that `PAGE` names, `../featherweight-bossmode` by default, and copies its `dist` directory into `bossmode/static`, which the binary embeds. git ignores everything in `bossmode/static` but the empty file `.gitkeep`, which keeps the directory for `go:embed`, so the repository never holds a build. `make page-clean` removes the copy. Without a build there, the binary embeds the placeholder in `bossmode/placeholder`, so `go build` works with the page and without it (section 17.2). A test builds the package with an overlay that hides a build, so a checkout that holds one still checks the placeholder.
+
+```
+make page PAGE=../featherweight-bossmode
+go build ./cmd/fw-workbench
+```
+
+To build an image, pass the kernel checkout as the build context `kernel`. To embed the page, also pass the checkout of the page as the build context `page`, with the argument `PAGE=build`. A node stage then runs `npm ci && npm run build` and copies `dist` into `bossmode/static` before the Go build:
+
+```
+docker buildx build --build-context kernel=../featherweight-kernel \
+  --build-context page=../featherweight-bossmode --build-arg PAGE=build \
+  -t ghcr.io/bdubs00/featherweight-workbench:static .
+```
+
+Without the page, leave out both. The argument `PAGE` is `none` by default, BuildKit builds only the stage that it names, and the binary embeds the placeholder. A build with `PAGE=build` and without the build context `page` fails, because BuildKit then looks for an image named `page`.
 
 ```
 docker buildx build --build-context kernel=../featherweight-kernel \
   -t ghcr.io/bdubs00/featherweight-workbench:static .
 ```
+
+`Dockerfile.toolbox` takes the same build contexts and the same argument. `make image` and `make image-toolbox` pass the page when `PAGE` holds a checkout with a `package.json`, and build with the placeholder otherwise. The node stage copies `package.json`, `package-lock.json`, `index.html`, `tsconfig.json`, `vite.config.ts`, `src`, and `public` of the page, so a file that a later build of the page needs must join that list.
 
 ### 1.3 Layout
 
@@ -67,8 +90,9 @@ faces/                  the faces of the agents: an SVG, a display name, and a t
                         the sanitizer, and the identicon (section 16)
 internal/bucket/        the key-value bucket under the stores of the front: a bucket of the
                         NATS server of the bus, or the memory of the process
-bossmode/               the page of bossmode at /bossmode, its settings, and its stream of
-                        events (section 17); static/ holds the embedded copy of the page
+bossmode/               the page of bossmode at /bossmode, its settings, its stream of events,
+                        and the feeds of the stream (section 17); static/ holds the build of
+                        the page that make page copies, and placeholder/ the placeholder
 internal/behalf/        the run behind an MCP call, and the guard that keeps a person of the
                         static token within what the token can do (section 19)
 manager/                the manager of bossmode: the on-behalf-of, the guard of the authorization,
@@ -124,7 +148,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `DELETE /v1/faces/{agent}` | Back to the identicon. Answers the entry. |
 | `PATCH /v1/faces/{agent}` | Set `displayName`, at most 64 characters, and `tagline`, at most 140. Answers the entry. |
 | `GET /v1/bossmode` | The settings of the page of bossmode: the manager for the caller, the placement, and the size of a roster (section 17.4). With `workbench.bossmode.enabled`. |
-| `GET /v1/bossmode/stream` | The events of bossmode as server-sent events: the changes of the fleet and the events of other packages that the caller can see, with `Last-Event-ID` to resume (section 17.3). With `workbench.bossmode.enabled`. |
+| `GET /v1/bossmode/stream` | The events of bossmode as server-sent events: the changes of the fleet, the entries and the seats of the bridges, the pages of the wiki, the faces, and the events of other packages that the caller can see, with `Last-Event-ID` to resume (section 17.3). With `workbench.bossmode.enabled`. |
 | `GET /v1/bridges` | The bridges of the caller and of the teams of the caller, open first, each with `lastSeq`, `read`, `unread`, `memberCount`, and `needsYou` (section 18.10). |
 | `POST /v1/bridges` | Open a bridge from `{"title", "goal", "placement", "members", "delegation", "caps"}` and seat its members. 201 with the record and its members. |
 | `GET /v1/bridges/{id}` | One bridge with the presence and the activity of each member and the usage of its runs. |
@@ -135,7 +159,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `POST /v1/bridges/{id}/messages/{seq}/reactions` | A reaction of the caller on an entry, `{"reaction", "note"}`: `up`, `down`, or `heart`. 200 with the entry. |
 | `POST /v1/bridges/{id}/members` | Add a seat, `{"handle", "agent", "task"}`, and start its run. 201 with the seat. |
 | `DELETE /v1/bridges/{id}/members/{handle}` | Fire a seat: cancel its open runs and mute it. 200 with the fired seat. |
-| `PATCH /v1/bridges/{id}/members/{handle}` | Mute or unmute a seat, or give it a new task, `{"muted", "task"}`. 200 with the seat. |
+| `PATCH /v1/bridges/{id}/members/{handle}` | Mute or unmute a seat, or give it a task, `{"muted", "task"}`. A task seats a seat whose newest run failed or was canceled again, also with the same text (section 18.9). 200 with the seat. |
 
 ### 2.1 Connections
 
@@ -1422,7 +1446,7 @@ On the bus `mem`, the wiki lives in the memory of the process, with the same rul
 
 A list reads the keys and the revisions of the bucket without the values, and it reads a page only when its revision differs from the one that the last list of the process read. A replica therefore reads every page once after its start, and the first list, search, or index of a replica reads the whole wiki. After that, a search reads at most 16 MB of text (section 15.3). An entry that does not decode reads as no page in a list. A write or a removal without a hash replaces it, and a hash never matches it.
 
-Other packages of the workbench use the wiki through Go. `pages.Of(a)` returns the `*pages.Store` of an agent, or nil when the process has no wiki. The store has `Read(ctx, path, version)`, `Write(ctx, path, text, by, summary, ifHash)`, `WriteAs`, which also records the run, `Delete(ctx, path, by, ifHash)`, `List(ctx)`, `Search(ctx, q, limit)`, `Find`, which also says how much text it read, and `History(ctx, path)`. A package that writes a page for the front passes `pages.ByFront` as `by`. The condition `ifHash` is a hash of 64 hex digits in any case, also quoted or weak as an ETag, `pages.IfAny` (`""`, no condition), `pages.IfExists` (`*`, the page must exist), or `pages.IfAbsent` (`absent`, the page must not exist). Any other condition, such as an empty quoted hash, is `pages.ErrInvalid`, so a condition never turns into no condition. A condition that does not hold is `pages.ErrConflict`. The other errors are `pages.ErrNotFound`, `pages.ErrLimit`, and `pages.ErrInvalid`. Each error of the store is a `*pages.Error` with the reason, and `pages.Reason(err)` returns the reason. `pages.Allowed(ctx, a, write)` decides who reads and who writes (section 15.7). `pages.CheckPath` checks a path, and `pages.Hash` computes a hash.
+Other packages of the workbench use the wiki through Go. `pages.Of(a)` returns the `*pages.Store` of an agent, or nil when the process has no wiki. The store has `Read(ctx, path, version)`, `Write(ctx, path, text, by, summary, ifHash)`, `WriteAs`, which also records the run, `Delete(ctx, path, by, ifHash)`, `List(ctx)`, `Search(ctx, q, limit)`, `Find`, which also says how much text it read, and `History(ctx, path)`. A package that writes a page for the front passes `pages.ByFront` as `by`. The condition `ifHash` is a hash of 64 hex digits in any case, also quoted or weak as an ETag, `pages.IfAny` (`""`, no condition), `pages.IfExists` (`*`, the page must exist), or `pages.IfAbsent` (`absent`, the page must not exist). Any other condition, such as an empty quoted hash, is `pages.ErrInvalid`, so a condition never turns into no condition. A condition that does not hold is `pages.ErrConflict`. The other errors are `pages.ErrNotFound`, `pages.ErrLimit`, and `pages.ErrInvalid`. Each error of the store is a `*pages.Error` with the reason, and `pages.Reason(err)` returns the reason. `pages.Allowed(ctx, a, write)` decides who reads and who writes (section 15.7). `pages.CheckPath` checks a path, and `pages.Hash` computes a hash. `pages.OnChange(func(info PageInfo, deleted bool))` registers a hook that gets each page that a write created or changed, and each page that a removal took away, with `deleted` true and the remover in `by`. A write that changes nothing and the index give nothing. The package `bossmode` sends each change on its stream as the event `page` (section 17.5).
 
 ### 15.3 The routes
 
@@ -1475,7 +1499,7 @@ The wiki reads the block `pages` under the key `workbench` of `fw.yaml`. Each va
 | `workbench.pages.maxPages` | `FW_WORKBENCH_PAGES_MAX_PAGES` | The most pages of the wiki, the index not counted, 1 to 100000 | `10000` |
 | `workbench.pages.history` | `FW_WORKBENCH_PAGES_HISTORY` | The versions of each page that the wiki keeps, the newest one included, 1 to 64 | `64` |
 
-A value outside its bound stops the start, and the error names the key. `pages.Status(cfg)` returns whether the configuration fits and one line that says where the wiki lives and with which limits, or that it is off. A line of `fw-workbench doctor` can print it.
+A value outside its bound stops the start, and the error names the key. `pages.Status(cfg)` returns whether the configuration fits and one line that says where the wiki lives and with which limits, or that it is off. The line `bossmode` of `fw-workbench doctor` holds it (section 17.6).
 
 ### 15.7 Who reads and who writes
 
@@ -1529,11 +1553,11 @@ The name of the agent holds 1 to 64 letters, digits, `-`, `_`, or `.`, as a prof
 
 On a NATS bus, the faces live in the key-value bucket `<stream>_FACES`. Each agent with a face, a display name, or a tagline is one entry, `face.<agent>` with the name in base64url. The value is one line of JSON with the display name, the tagline, the hash, the writer, and the time, a line break, and the SVG. The bucket keeps the last ten values of each entry. Each change reads the entry and writes at the revision that it read, so two replicas of the front never lose a change. A stored SVG passes the sanitizer again on each read, so a value that something else wrote into the bucket never reaches a browser: such a face reads as the identicon, and so does an entry that does not decode, until a change replaces it. The log says so. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_FACES.>`. On the bus `mem`, the faces live in the memory of the process, and two processes share nothing. On another bus, the front logs once that the faces are off, mounts no route, and offers no tool.
 
-Other packages of the workbench use the faces through Go. `faces.Of(a)` returns the `*faces.Store` of an agent, or nil. The store has `Get(ctx, agent)`, which gives the identicon for an agent without a face, `Put(ctx, agent, svg, by)`, which sanitizes first, `Meta(ctx, agent, displayName, tagline, by)`, `Patch`, which leaves a nil value as it is, and `Delete(ctx, agent, by)`. Each returns the `faces.Face` after the change, the entry of the routes. `faces.List(ctx, a)` returns the entries of the agents that the caller can view. A refused face is a `*faces.Refusal`, which is `faces.ErrRefused`. `faces.Check(ctx, a, agent, action)` decides an action on an agent as the routes do. `faces.Status(cfg)` gives one line for `fw-workbench doctor`. No key of the configuration sets the faces.
+Other packages of the workbench use the faces through Go. `faces.Of(a)` returns the `*faces.Store` of an agent, or nil. The store has `Get(ctx, agent)`, which gives the identicon for an agent without a face, `Put(ctx, agent, svg, by)`, which sanitizes first, `Meta(ctx, agent, displayName, tagline, by)`, `Patch`, which leaves a nil value as it is, and `Delete(ctx, agent, by)`. Each returns the `faces.Face` after the change, the entry of the routes. `faces.List(ctx, a)` returns the entries of the agents that the caller can view. A refused face is a `*faces.Refusal`, which is `faces.ErrRefused`. `faces.Check(ctx, a, agent, action)` decides an action on an agent as the routes do. `faces.OnChange(func(Face))` registers a hook that gets the face after each change that the store wrote, also after a removal, and the package `bossmode` sends it on its stream as the event `face` (section 17.5). A change that changes nothing and a refused SVG give nothing. `faces.Status(cfg)` gives one line for `fw-workbench doctor`, which the line `bossmode` holds. No key of the configuration sets the faces.
 
 ## 17. Bossmode
 
-Bossmode is the operator front of the fleet. It looks like a chat client for a team, and the team is the fleet: an operator opens a bridge, which is one large job with one agent on each subtask, and the agents and the operator talk in one channel. The page is a separate repository, `featherweight-bossmode`, which builds to static files. The workbench serves those files, the settings of the page, and one stream of live events. The package `bossmode` holds these three parts. Other packages hold the bridges, the channel, the pages of the wiki, the faces, and the manager, and they feed the stream through one call (section 17.5). Nothing in the package calls a model, and no key of it names a model.
+Bossmode is the operator front of the fleet. It looks like a chat client for a team, and the team is the fleet: an operator opens a bridge, which is one large job with one agent on each subtask, and the agents and the operator talk in one channel. The page is a separate repository, `featherweight-bossmode`, which builds to static files. The workbench serves those files, the settings of the page, and one stream of live events. The package `bossmode` holds these three parts. Other packages hold the bridges, the channel, the pages of the wiki, the faces, and the manager. The package `bossmode` feeds the stream from the hooks of the bridges, the wiki, and the faces, and any package can put an event on it with one call (section 17.5). Nothing in the package calls a model, and no key of it names a model.
 
 ### 17.1 Configuration
 
@@ -1542,12 +1566,12 @@ Bossmode reads the block `bossmode` under the key `workbench` of `fw.yaml` (sect
 | Key | Variable | Meaning | Default |
 |---|---|---|---|
 | `workbench.bossmode.enabled` | `FW_WORKBENCH_BOSSMODE_ENABLED` | Serves the page at `/bossmode`, the settings at `/v1/bossmode`, and the stream at `/v1/bossmode/stream`. `on` or `off`. | off |
-| `workbench.bossmode.dir` | `FW_WORKBENCH_BOSSMODE_DIR` | The directory of the static files of the page: the `dist` directory of the build of `featherweight-bossmode`. Empty serves the copy in `bossmode/static` that the binary embeds. | empty |
-| `workbench.bossmode.manager` | `FW_WORKBENCH_BOSSMODE_MANAGER` | The profile name of the manager agent. The settings of the page and the doctor line read it. Empty means no manager. | empty |
+| `workbench.bossmode.dir` | `FW_WORKBENCH_BOSSMODE_DIR` | The directory of the static files of the page: the `dist` directory of the build of `featherweight-bossmode`. Empty serves the copy that the binary embeds: the build of the page in `bossmode/static`, else the placeholder in `bossmode/placeholder` (sections 1.2 and 17.2). | empty |
+| `workbench.bossmode.manager` | `FW_WORKBENCH_BOSSMODE_MANAGER` | The profile name of the manager agent. The settings of the page, the bridges, the delegation checks, and the doctor lines read it. Empty means no manager. | empty |
 
-The settings of the page also read two keys of `workbench.bridges`, which the package of the bridges owns: `placement` (`FW_WORKBENCH_BRIDGES_PLACEMENT`), `queue` or `spawn`, `queue` by default, and `maxMembers` (`FW_WORKBENCH_BRIDGES_MAX_MEMBERS`), 16 by default. A value that does not fit gives the default here, and the package of the bridges checks the block.
+Each key has one reader. The package `manager` reads `workbench.bossmode.manager` (`manager.Load`), because it sits below the packages `bridges` and `bossmode`, and both ask it. `bossmode.Load` reads `enabled` and `dir` and takes the manager from `manager.Load`. The settings of the page also name two keys of `workbench.bridges`, `placement` (`FW_WORKBENCH_BRIDGES_PLACEMENT`), `queue` by default, and `maxMembers` (`FW_WORKBENCH_BRIDGES_MAX_MEMBERS`), 16 by default. The package `bridges` reads that block (`bridges.Load`, section 18.13), and the settings ask it, so the settings, the bridges, and the doctor line never disagree.
 
-A configuration that cannot work stops the start: a value of `enabled` that is not a switch, a manager name with a space or a slash, and a `dir` that is not a directory. Without `enabled`, no route of bossmode exists, and each answers 404. The service runs in a process that serves, as the fleet does (section 4.6), so `fw-workbench run` starts no stream.
+A configuration that cannot work stops the start: a value of `enabled` that is not a switch, a manager name with a space or a slash, which also stops the bridges, and a `dir` that is not a directory. A block `workbench.bridges` that does not load stops the bridges, so a process that serves always loads it. Without `enabled`, no route of bossmode exists, and each answers 404. The service runs in a process that serves, as the fleet does (section 4.6), so `fw-workbench run` starts no stream.
 
 ### 17.2 The page
 
@@ -1558,7 +1582,7 @@ A configuration that cannot work stops the start: a value of `enabled` that is n
 - A path with an element that starts with a dot, such as `.env` or `.git/config`, is a 404, also without an extension.
 - A path that holds an element `..`, a backslash, or a control character is a 400. Such a path can reach the route only escaped, such as `%2e%2e`. The files of `dir` open through an `os.Root`, so no name and no symbolic link leads out of the directory.
 - `index.html` gets `Cache-Control: no-store`. A file under `assets/`, where the build puts the files with a hash in their names, gets `public, max-age=3600`. Any other file gets `no-cache`.
-- Without `dir`, the route serves the embedded copy. The repository holds a placeholder `index.html` there, which says that the binary does not hold the page and names `workbench.bossmode.dir`, so the route is never a 404 that confuses. A build that embeds the page copies `dist` into `bossmode/static` before `go build`. A `dir` without `index.html` answers 503 with a sentence that names the key, and the log of the start says so once.
+- Without `dir`, the route serves the copy that the binary embeds. The binary embeds `bossmode/static`, which holds the build of the page after `make page` or the build of an image with the build context `page` (section 1.2), and `bossmode/placeholder`. When `static` holds `index.html`, the route serves `static`. Otherwise it serves the placeholder, an `index.html` that says that the binary does not hold the page and names `workbench.bossmode.dir` and `make page`, so the route is never a 404 that confuses. The file `.gitkeep` of `static` is hidden, so the route answers it with 404. A `dir` without `index.html` answers 503 with a sentence that names the key, and the log of the start says so once.
 
 Every answer of the page carries this content security policy, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`:
 
@@ -1584,7 +1608,10 @@ The build of the page holds no inline script, no inline style element, and no da
 | `member` | `{"kind": "member", "member": "<name>", "state": "live", "time": "..."}`: the state of a member changed, or `"gone": true` | A caller who can see the member, as `GET /v1/fleet` decides |
 | `task` | `{"kind": "task", "member": "<name>", "phase": "Running", "time": "..."}`: the phase of the Task of a member changed, or `"gone": true` | As `member` |
 | `reset` | `null`: the stream cannot resume, and the page reads its lists again | Every caller |
-| `bridge.message`, `bridge.member`, `page`, `face`, and any other kind of `Publish` | The data of the package, unchanged (section 17.5) | Every caller, or the callers that the `Allow` of the event allows |
+| `bridge.message`, `bridge.member`, `page`, and `face` | The data of the hooks of the bridges, the wiki, and the faces (section 17.5) | A caller who can see the bridge, read the wiki, or view the agent, as the routes of each package decide |
+| Any other kind of `Publish` | The data of the package, unchanged | Every caller, or the callers that the `Allow` of the event allows |
+
+The `phrase` of a run event is the words of `fleet.ActivityPhrase` at the change, and the roster of a bridge words the activity of a seat with the same function (section 18.7), so the page shows one phrase for one run in both places. A test checks that the run event, the `bridge.member` event of the seat, and `fleet.ActivityPhrase` agree.
 
 The stream decides for each event and each caller when it sends the event, with the functions of the view (`fleet.Watcher.Visible`) and the current rules, and it keeps no decision across callers or events. A decision point that does not answer leaves the event out, and the log says so once until a decision works again.
 
@@ -1609,7 +1636,7 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
 - `manager` is `null` when `workbench.bossmode.manager` is empty.
 - `manager.member` is the fleet member that runs the manager, for `POST /v1/runs?member=`: a Task of the pool whose `agent` is the profile, the first one whose phase is Running, else the first. Without such a pool, it is the first member by name whose agents hold the profile. The front runs the configuration of its workers, so it holds every profile, and it is the member only when no other member is. The answer names only a pool and a member that the caller can see, and `""` when there is none.
 - `manager.run` is the newest top-level run of the profile that the caller started, from the runs of the fleet that the caller can see, or `""`.
-- `placement` and `maxMembers` come from `workbench.bridges` (section 17.1).
+- `placement` and `maxMembers` come from `workbench.bridges`, as `bridges.Load` reads them (section 17.1).
 
 ### 17.5 The broadcaster
 
@@ -1626,11 +1653,24 @@ bossmode.Publish("page", path, meta, bossmode.Allow(func(ctx context.Context) bo
 - Without an option, every caller of the stream gets the event. With `bossmode.Allow(fn)`, the stream calls `fn` with the context of each stream, which holds the principal of its caller (`fw.PrincipalFrom`), once per event and stream, also for a resume, and sends the event only when `fn` returns true.
 - `Publish` reaches the stream of every agent of the process that runs bossmode, which is one agent in `fw-workbench`, and `PublishTo(a, ...)` reaches the stream of one agent. While bossmode is off, both drop the event and return nil.
 
-The page reads the kinds `bridge.message`, `bridge.member`, `page`, and `face`, which the packages of the bridges, the pages, and the faces publish with this call.
+What feeds the stream. The package `bossmode` registers four hooks in `init` and turns what they get into events:
+
+| Kind | Hook | Data | Who gets it |
+|---|---|---|---|
+| `bridge.message` | `bridges.OnMessage`: each new entry of a channel, and each entry that changes under its seq, a reaction or a card whose decision landed | `{"bridge": "<id>", "message": <entry>}` | A caller who can see the bridge, as `GET /v1/bridges/{id}` decides (`bridges.Store.Visible`) |
+| `bridge.member` | `bridges.OnMember`: a new seat, and each change of a seat, its presence, its activity, its task, muted, or fired | `{"bridge": "<id>", "member": <member>}` | As `bridge.message` |
+| `page` | `pages.OnChange`: each write that creates or changes a page, and each removal | The page without its text, as `GET /v1/pages` lists it, plus `"deleted": true` for a removal, whose `by` and `at` name the remover and the time | A caller who reads the wiki (`pages.Allowed`) |
+| `face` | `faces.OnChange`: each change of an SVG, a display name, or a tagline, and each removal of an SVG | The entry of `GET /v1/faces` for the agent | A caller who can view the agent (`faces.Check` with `agent.view`) |
+
+Each hook puts its event on the stream of each agent of the process that has the store, with `PublishTo` and an `Allow` bound to that agent. The `Allow` asks the store of the agent at the moment the stream sends the event, so each stream decides once per event for its caller with the current rules, and no decision is kept across callers or across events. An event of a bridge costs one read of the record of the bridge and the role checks of the agents of its seats per stream, and an event of the wiki the role checks of the agents of the fleet per stream. At most 64 streams bound both. A write that changes nothing, a refused face, and the index of the wiki, `_index.md`, give no event.
+
+An entry with a large decision can pass 16 KB. Then the event carries the entry without `decision.input` and `decision.schema`, with `"partial": true` beside `bridge` and `message`, and the page reads the whole entry from `GET /v1/bridges/{id}/messages`. An event that is still too large is left out, and the log names the bridge and the seq.
+
+A hook runs on the replica that made the change, so a stream on another replica of the front gets no event of that change. With two replicas behind one address, a page sees the changes of the other replica when it reads its lists again, such as after a `reset`.
 
 ### 17.6 Doctor and metrics
 
-`fw-workbench doctor` has one line for bossmode. It says off, or on with these facts: the page that it serves, from `dir` with or without an `index.html`, or the embedded copy and whether that copy is the placeholder; the manager profile, and whether `fw.agents` or a pool defines a profile of that name; and the streams. A `dir` that is not a directory, a `dir` without `index.html`, and a manager that no profile defines fail the line. The doctor runs in a process of its own, which serves no stream, so it names the gauge of the server for the open streams.
+`fw-workbench doctor` has one line for bossmode, which covers the page, the manager, and the stores. It says off, or on with these facts: the page that it serves, from `dir` with or without an `index.html`, or the embedded copy and whether that copy is the placeholder; the manager profile, and whether `fw.agents` or a pool defines a profile of that name; and the streams. Then, on or off, it adds the lines of the stores, `pages.Status`, `faces.Status`, and `bridges.Status`: where the wiki, the faces, and the bridges live, with their limits and the manager of the bridges. A `dir` that is not a directory, a `dir` without `index.html`, a manager that no profile defines, and a store whose configuration does not load fail the line. The doctor runs in a process of its own, which serves no stream, so it names the gauge of the server for the open streams. The line `manager` says more about the pool of the manager (section 19.6).
 
 | Metric | Type | What it counts |
 |---|---|---|
@@ -1691,7 +1731,7 @@ With the placement `queue`, the default, the front puts one run request per seat
 
 With the placement `spawn`, the bridge needs a manager, the profile that `workbench.bossmode.manager` names, else the open answers 400 with the reason. The member that runs the manager is a Task of the pool whose `agent` is that profile, the first one that runs, else the first one, and without such a pool the first member of the view whose agents hold the profile. Without one, the open answers 409. The front starts one run of the manager on that member with `POST /v1/runs` through the forward of the fleet, with the static token, which names the operator as the person of the run in `principal` and `principalKind`. The run has the profile of the manager, the title `Bridge: <title>`, the metadata `fw.batch: bridge:<id>`, the idempotency key `bridge:<id>:manager`, and an input that holds the plan (`plan.tmpl`): call `spawn_task` once per seat, with `wait` false, the agent of the seat, the input `[seat <handle>] <task>`, the instructions of the seat word for word, and the budget of the seat in `max_turns` and `deadline`, and then end the turn with the list of the children. That run is `manager.run`. The children carry the batch of the bridge, so they belong to the bridge in the view, and the front gives each child its seat by the first line of its input, else by the only seat of its agent that has no run. The pool of the manager runs with `spawn.driver: ax`, and `spawn.maxChildren` of the manager bounds the seats.
 
-A seat that joins later, and a seat whose newest run was canceled or stopped at a limit and gets a new task, get a run in the same way: a request on the queue, or in a spawn bridge one follow-up to the manager run that asks it to seat the member.
+A seat that joins later, and a seat whose newest run failed or was canceled and gets a patch with a task (section 18.9), get a run in the same way: a request on the queue, or in a spawn bridge one follow-up to the manager run that asks it to seat the member.
 
 ### 18.4 The instructions of a seat
 
@@ -1721,7 +1761,7 @@ A change of the caps clears the lines that they posted, so a cap that still hold
 
 ### 18.6 The system lines
 
-The front watches the view of the fleet every two seconds for the runs of each bridge by its batch: the open bridges, and a closed bridge for ten minutes after its close, so the end of the work and the report still reach the channel. It mirrors the seat runs and the manager run of a spawn bridge. A helper that a seat started belongs to the seat and is not mirrored, and neither is the conversation of the manager that opened a queue bridge. Each fact gets one entry, never two: the record keeps a mark of what the channel holds of each run, and the change of the record that moves the mark gives the entry its seq, so of two replicas that see one fact, one posts it.
+The front watches the view of the fleet for the runs of each bridge by its batch, at each change of the fleet that can concern a bridge (section 18.12): the open bridges, and a closed bridge for ten minutes after its close, so the end of the work and the report still reach the channel. It mirrors the seat runs and the manager run of a spawn bridge. A helper that a seat started belongs to the seat and is not mirrored, and neither is the conversation of the manager that opened a queue bridge. Each fact gets one entry, never two: the record keeps a mark of what the channel holds of each run, and the change of the record that moves the mark gives the entry its seq, so of two replicas that see one fact, one posts it.
 
 | Event | When | The entry |
 |---|---|---|
@@ -1753,7 +1793,7 @@ The presence of a member is its status light on the roster. `bridges.Presence(me
 | `working` | The run is queued or running, or the member has no run yet because its job waits in the queue |
 | `idle` | The run finished, and the Task is live |
 
-`activity` is the activity of the newest run (the kernel architecture, section 8.2), with `turn`, `tool`, `callId`, `since`, and `phrase`. The view holds no tool input, so the package words only a run that thinks, such as "Thinking in turn 7", and leaves the phrase of a tool call empty. `bridges.UsePhrase` sets a function that words the activity with the tool input that the fleet keeps.
+`activity` is the activity of the newest run (the kernel architecture, section 8.2), with `turn`, `tool`, `callId`, `since`, and `phrase`. The package words it with `fleet.ActivityPhrase`, which its `init` sets with `bridges.UsePhrase`. The view keeps the input of the latest tool call of each run (section 4.15), so a tool call reads as `Ran "go test ./..."` and a run that thinks as "Thinking in turn 7", the words of the `run` events of the stream (section 17.3). Without a function, the package words only a run that thinks and leaves the phrase of a tool call empty.
 
 ### 18.8 Reactions and hearts
 
@@ -1805,13 +1845,14 @@ Without `bridge`, a tool takes the bridge of the batch `bridge:<id>` of the run,
 
 ### 18.12 The seams
 
-The integration of bossmode connects the package to its live stream and to the manager through these names:
+The package meets the fleet, the stream of bossmode, and the manager through these names, and the workbench wires each one:
 
-- `bridges.OnMessage(func(bridge string, m Message))` gets every new entry and every entry that changes under the same seq: a reaction, and a card whose decision landed. The stream sends each one as the event `bridge.message`.
-- `bridges.OnMember(func(bridge string, m Member))` gets every new seat and every change of a seat: its presence, its activity, its task, muted, or fired. The stream sends each one as the event `bridge.member`. Each replica watches the view on its own, so each replica gives the changes of presence that it sees.
-- `bridges.UsePhrase(func(r *fw.Run) string)` words the activity of a run (section 18.7).
-- `Store.Wake()` makes the watch read the view at once, for a change of the fleet (`fleet.Watch`), so the channel follows a run without the wait of the poll.
-- `Store.Delegates(ctx, batch, action)` reports whether the bridge of a batch `bridge:<id>` delegates an action to the manager: `approve`, `budget` or `run_budget`, `members`, `cancel`, `bridge_add_member`, or `bridge_remove_member`, and `report` or `bridge_close`. A batch of no bridge delegates nothing. The manager reads it through an interface of its own.
+- The watch. The service follows the changes of the view, `fleet.Of(a).(fleet.Watcher).Watch(ctx)` (section 4.15). A change of a run whose batch starts with `bridge:`, and every change of a member or of the phase of a Task, call `Store.Wake`, and a change of another run calls nothing. The watch then reads the view at once, and at most once per 250 milliseconds, so a burst of changes costs one read. Beside the changes, the watch reads the view every ten seconds, for what no change announces: a read of an owner that failed, the report of a closed bridge, and a run of the front itself, which is not in the changes. Without a fleet, or with a view that sends no changes, the watch reads the view every two seconds. The service looks for a fleet that sends its changes every second, so it follows a fleet that starts after the bridges. When the changes end, the poll of two seconds takes over at once. The tests cover both paths, with a fake view and with the fleet of the egress stream.
+- `bridges.OnMessage(func(bridge string, m Message))` gets every new entry and every entry that changes under the same seq: a reaction, and a card whose decision landed. The package `bossmode` registers one in `init` and sends each entry as the event `bridge.message` to the callers who can see the bridge (section 17.5).
+- `bridges.OnMember(func(bridge string, m Member))` gets every new seat and every change of a seat: its presence, its activity, its task, muted, or fired. The package `bossmode` sends each one as the event `bridge.member`. Each replica watches the view on its own, so each replica gives the changes of presence that it sees.
+- `bridges.UsePhrase(func(r *fw.Run) string)` words the activity of a run. The `init` of the package sets `fleet.ActivityPhrase` (section 18.7).
+- `Store.Wake()` makes the watch read the view at once, at most once per 250 milliseconds. The follower of the changes of the fleet calls it, and it never blocks.
+- `Store.Delegates(ctx, batch, action)` reports whether the bridge of a batch `bridge:<id>` delegates an action to the manager: `approve`, `budget` or `run_budget`, `members`, `cancel`, `bridge_add_member`, or `bridge_remove_member`, and `report` or `bridge_close`. A batch of no bridge delegates nothing. The service gives its store to `manager.SetBridges` when it starts and takes it back with `manager.ClearBridges` when it stops, so the delegation checks of the MCP server ask the record of the bridge (section 19.4).
 - `Store.Visible(ctx, id)` reports whether the caller in ctx can see a bridge, by the rule of the routes, so the stream sends the events of a bridge only to the people who can see it.
 - `bridges.Of(a)` returns the `*bridges.Store` of an agent, or nil, and `bridges.Presence` derives a presence (section 18.7).
 
@@ -1819,7 +1860,7 @@ A hook runs on the goroutine that made the change, so it must not block.
 
 ### 18.13 Configuration
 
-The bridges read the block `bridges` under the key `workbench` of `fw.yaml`, and the key `manager` of the block `bossmode`, which belongs to the package of bossmode. Each variable wins over the file. A value out of its bounds stops the start, and the error names the key.
+The bridges read the block `bridges` under the key `workbench` of `fw.yaml`. The package is the one reader of that block: the settings of the page of bossmode ask `bridges.Load` (section 17.1). The profile of the manager comes from `manager.Load`, the one reader of `workbench.bossmode.manager`. Each variable wins over the file. A value out of its bounds stops the start, and the error names the key.
 
 | Key | Variable | Meaning | Default |
 |---|---|---|---|
@@ -1843,7 +1884,7 @@ workbench:
     maxPairMessages: 6
 ```
 
-`bridges.Status(cfg)` returns whether the configuration fits and one line that says where the bridges live, with which defaults, and which manager, or that they are off.
+`bridges.Status(cfg)` returns whether the configuration fits and one line that says where the bridges live, with which defaults, and which manager, or that they are off. The line `bossmode` of `fw-workbench doctor` holds it (section 17.6).
 
 ### 18.14 The stores and the replicas
 
@@ -1944,7 +1985,7 @@ A value of `_meta` cannot add a line to a note. In a text, each field of the act
 
 ### 19.4 Delegation
 
-The profile of the manager is `workbench.bossmode.manager`. The variable `FW_WORKBENCH_BOSSMODE_MANAGER` wins over the file. Empty, the default, means no manager. The package reads this key with a partial type of its own, as each package reads its part of `workbench`. A call whose `_meta` names that profile is a manager run.
+The profile of the manager is `workbench.bossmode.manager`. The variable `FW_WORKBENCH_BOSSMODE_MANAGER` wins over the file. Empty, the default, means no manager. The package is the one reader of this key. `manager.Load` reads it and refuses a value that is no profile name, such as a value with a space or a slash, and the packages `bridges` and `bossmode` ask it (section 17.1). A call whose `_meta` names that profile is a manager run.
 
 A manager run can call `approve`, `run_budget`, or `cancel` on a run of a bridge. Then it needs the delegation of the operator of that bridge. A run of a bridge has a batch that starts with `bridge:`. The server reads the batch from the run of this process or from the view. `manager.Delegated` asks `manager.Bridges` about the batch and the action:
 
@@ -1960,7 +2001,7 @@ The answer refuses the call in three cases:
 
 Outside a bridge, the policy of its profile alone binds a manager run. Any other run of the fleet needs no delegation. A manager run cannot change a budget inside `send`. Its policy asks before `run_budget`, and a budget in a message passes by that question.
 
-`manager.Bridges` is the interface `Delegates(ctx, batch, action) (bool, error)`. The package `bridges` keeps the delegation flags in the record of each bridge. The integration sets its store with `manager.SetBridges`. A nil value delegates nothing, and so does a nil pointer in the interface. It is the one value of the package that changes after `init`.
+`manager.Bridges` is the interface `Delegates(ctx, batch, action) (bool, error)`. The package `bridges` keeps the delegation flags in the record of each bridge. Its service sets its store with `manager.SetBridges` when it starts, and `manager.ClearBridges` takes the store back when the service stops, only when no newer store took its place. A nil value delegates nothing, and so does a nil pointer in the interface. It is the one value of the package that changes after `init`. A test of the package `bridges` checks the delegation through the real store: a bridge that delegates approvals lets a manager run approve, another one refuses it, and after the stop of the service every action is refused.
 
 ### 19.5 The example
 
@@ -1981,7 +2022,7 @@ The person who talks to the manager sends their own credential, and the front fo
 
 ### 19.6 The doctor line
 
-`fw-workbench doctor` has the line `manager`. It names the profile of the manager and the pool that runs it. It names the `tools.mcp` entry through which the profile reaches the front, and the spawn driver of the pool. It says whether the bridges are set. The entry of the front is the entry that sends the static token as its bearer. The front acts for the person of a run only for that token.
+`fw-workbench doctor` has the line `manager`. It names the profile of the manager and the pool that runs it. It names the `tools.mcp` entry through which the profile reaches the front, and the spawn driver of the pool. It says where the delegation of a bridge comes from. The doctor runs in a process of its own, which starts no service, so there the line names the service of the bridges and points to the line `bossmode`, which says where the bridges live. The entry of the front is the entry that sends the static token as its bearer. The front acts for the person of a run only for that token.
 
 The line fails in three cases:
 
