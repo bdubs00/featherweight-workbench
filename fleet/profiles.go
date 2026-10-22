@@ -281,6 +281,32 @@ func CreatedPool(at agents.Place) string {
 	return ""
 }
 
+// PlannedPool returns the state of the runtime pool that the Save of a
+// place of PlaceFor creates, before the Save, for a dry run. It reports
+// false for a place that creates no pool.
+func PlannedPool(at agents.Place) (pools.Status, bool) {
+	pl, ok := at.(*poolPlace)
+	if !ok || pl.create == nil || pl.created {
+		return pools.Status{}, false
+	}
+	return pools.Initial(pl.base, "the save of the agent creates the pool"), true
+}
+
+// PoolNamed returns the pool of the name of the fleet of a as the caller
+// sees it, and false when the caller sees no such pool.
+func PoolNamed(ctx context.Context, a *fw.Agent, name string) (pools.Status, bool, error) {
+	list, _, err := ListPools(ctx, a)
+	if err != nil {
+		return pools.Status{}, false, err
+	}
+	for _, st := range list {
+		if st.Name == name {
+			return st, true, nil
+		}
+	}
+	return pools.Status{}, false, nil
+}
+
 // DroppedPool returns the name of the runtime pool that the Remove of a
 // place deleted with the profile of its agent, else "".
 func DroppedPool(at agents.Place) string {

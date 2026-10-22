@@ -26,6 +26,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/manager"
+	"github.com/bdubs00/featherweight-workbench/pools"
 	"github.com/bdubs00/featherweight-workbench/teams"
 	"github.com/bdubs00/featherweight-workbench/titles"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -177,9 +178,15 @@ func agentPutSchema() json.RawMessage {
 	schema["properties"].(map[string]any)["dryRun"] = map[string]any{"type": "boolean",
 		"description": "true checks the profile and says in plain words what the agent can do, and saves nothing."}
 	schema["properties"].(map[string]any)["pool"] = json.RawMessage(poolArgSchema)
+	schema["properties"].(map[string]any)["workers"] = json.RawMessage(workersArgSchema)
 	b, _ := json.Marshal(schema)
 	return b
 }
+
+// workersArgSchema is the argument workers of agent_put.
+const workersArgSchema = `{"type":"object","description":"With worker templates only: the workers of a new agent that no pool runs. The front creates a runtime pool named after the agent from template, else the default template, with replicas workers, 2 when it is left out, and writes the profile into the overlay of that pool. Without workers, a new agent gets such a pool when a default template exists and pool is left out. templates_list names the templates.","properties":{
+	"template":{"type":"string","minLength":1,"description":"The worker template of the pool; the default template when it is left out."},
+	"replicas":{"type":"integer","minimum":0,"maximum":64,"description":"The number of workers; 2 when it is left out."}}}`
 
 // Arguments of the management tools.
 type (
@@ -189,11 +196,12 @@ type (
 	}
 	agentPutArgs struct {
 		profileArgs
-		Name        string     `json:"name"`
-		Description string     `json:"description,omitempty"`
-		Access      *fw.Access `json:"access,omitempty"`
-		DryRun      bool       `json:"dryRun,omitempty"`
-		Pool        string     `json:"pool,omitempty"`
+		Name        string         `json:"name"`
+		Description string         `json:"description,omitempty"`
+		Access      *fw.Access     `json:"access,omitempty"`
+		DryRun      bool           `json:"dryRun,omitempty"`
+		Pool        string         `json:"pool,omitempty"`
+		Workers     *fleet.Workers `json:"workers,omitempty"`
 	}
 	runsListArgs struct {
 		Agent     string `json:"agent,omitempty"`
@@ -233,14 +241,18 @@ type (
 		View   string            `json:"view"`
 		Agents []fleet.PoolAgent `json:"agents"`
 	}
+	// Pool is the runtime pool that agent_put created for a new agent, or
+	// would create in a dry run.
 	agentResult struct {
 		View    string          `json:"view"`
 		Agent   fleet.PoolAgent `json:"agent"`
 		Created bool            `json:"created,omitempty"`
+		Pool    *pools.Status   `json:"pool,omitempty"`
 	}
 	draftResult struct {
-		View  string       `json:"view"`
-		Draft agents.Draft `json:"draft"`
+		View  string        `json:"view"`
+		Draft agents.Draft  `json:"draft"`
+		Pool  *pools.Status `json:"pool,omitempty"`
 	}
 	deletedResult struct {
 		View    string `json:"view"`
@@ -310,7 +322,7 @@ func (s *server) addManageTools() {
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolAgentPut,
 		Title:       "Create or replace an agent",
-		Description: "Create an agent profile, or replace the one with that name. The arguments mirror the profile: name, description, system, instructions, skills, tools, model, effort, timeZone, policy, budget, and access. Creating needs the creator role, and replacing needs the owner role on the agent. Without access, a new profile gets the caller as its owner, and a replaced profile keeps the access block it has. With pools, the profile goes to the pool whose workers run it, or to the pool that pool names, and every worker of the pool takes it.",
+		Description: "Create an agent profile, or replace the one with that name. The arguments mirror the profile: name, description, system, instructions, skills, tools, model, effort, timeZone, policy, budget, and access. Creating needs the creator role, and replacing needs the owner role on the agent. Without access, a new profile gets the caller as its owner, and a replaced profile keeps the access block it has. With pools, the profile goes to the pool whose workers run it, or to the pool that pool names, and every worker of the pool takes it. With worker templates, a new agent that no pool runs gets workers in one call: with workers, or when a default template exists and pool is left out, the front creates a runtime pool named after the agent from the template, with 2 workers unless workers names replicas, writes the profile into that pool, and returns the pool. Without a default template and without workers, the error names the templates.",
 		InputSchema: agentPutSchema(),
 		Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, s.agentPut)
@@ -582,7 +594,7 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 		return errorResult("Invalid request: " + err.Error() + "."), nil, nil
 	}
 	p.Name, p.Description, p.Access = in.Name, in.Description, in.Access
-	at, err := fleet.PlaceOf(ctx, s.a, p.Name, in.Pool)
+	at, err := fleet.PlaceFor(ctx, s.a, p.Name, in.Pool, in.Workers)
 	if err != nil {
 		return failResult(err), nil, nil
 	}
@@ -600,8 +612,14 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 		if pool != "" {
 			where = " in the pool " + pool
 		}
-		text := fmt.Sprintf("Checked the agent profile %s%s. Saving it would %s the agent. Nothing is saved.\n%s", d.Name, where, verb, agentText(fleet.PoolAgent{AgentView: d.AgentView, Pool: pool}))
-		return result(text, draftResult{View: viewDraft, Draft: d}), nil, nil
+		text := fmt.Sprintf("Checked the agent profile %s%s. Saving it would %s the agent. Nothing is saved.\n", d.Name, where, verb)
+		res := draftResult{View: viewDraft, Draft: d}
+		if planned, ok := fleet.PlannedPool(at); ok {
+			text = fmt.Sprintf("Checked the agent profile %s. Saving it would create the agent and its runtime pool %s from the template %s, with %d %s. Nothing is saved.\n", d.Name, planned.Name, planned.Template, planned.Wanted, workerWord(planned.Wanted))
+			res.Pool = &planned
+		}
+		text += agentText(fleet.PoolAgent{AgentView: d.AgentView, Pool: pool})
+		return result(text, res), nil, nil
 	}
 	saved, created, err := agents.PutIn(ctx, s.a, at, p)
 	if err != nil {
@@ -617,16 +635,38 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 	if created {
 		verb = "Created"
 	}
+	made := fleet.CreatedPool(at)
 	if acting {
-		s.log.Info("mcp profile saved for an actor", "profile", v.Name, "created", created, "pool", pool, "principal", subjectOf(ctx), "actor", act.String())
+		s.log.Info("mcp profile saved for an actor", "profile", v.Name, "created", created, "pool", pool, "createdPool", made, "principal", subjectOf(ctx), "actor", act.String())
 	} else {
-		s.log.Info("mcp profile saved", "profile", v.Name, "created", created, "pool", pool, "principal", subjectOf(ctx))
+		s.log.Info("mcp profile saved", "profile", v.Name, "created", created, "pool", pool, "createdPool", made, "principal", subjectOf(ctx))
 	}
+	res := agentResult{View: viewAgent, Agent: v, Created: created}
 	text := fmt.Sprintf("%s the agent profile %s.\n", verb, v.Name)
-	if pool != "" {
+	switch {
+	case made != "":
+		st, ok, err := fleet.PoolNamed(ctx, s.a, made)
+		if err == nil && ok {
+			res.Pool = &st
+			text = fmt.Sprintf("Created the agent profile %s and its runtime pool %s from the template %s, with %d %s. The front creates the workers at its next pass, and each takes the profile at its start.\n", v.Name, made, st.Template, st.Wanted, workerWord(st.Wanted))
+		} else {
+			text = fmt.Sprintf("Created the agent profile %s and its runtime pool %s. The front creates the workers at its next pass.\n", v.Name, made)
+		}
+	case pool != "":
 		text = fmt.Sprintf("%s the agent profile %s in the pool %s. The front replaces each Task of the pool once it is idle, so each worker takes the profile at its next start.\n", verb, v.Name, pool)
+		if in.Workers != nil {
+			text += fmt.Sprintf("The pool %s runs the agent already, so workers changes nothing; pool_put changes the workers of a runtime pool.\n", pool)
+		}
 	}
-	return result(text+agentText(v), agentResult{View: viewAgent, Agent: v, Created: created}), nil, nil
+	return result(text+agentText(v), res), nil, nil
+}
+
+// workerWord is worker or workers for n.
+func workerWord(n int) string {
+	if n == 1 {
+		return "worker"
+	}
+	return "workers"
 }
 
 func (s *server) agentDelete(ctx context.Context, _ *sdk.CallToolRequest, in agentNameArgs) (*sdk.CallToolResult, any, error) {
@@ -645,7 +685,10 @@ func (s *server) agentDelete(ctx context.Context, _ *sdk.CallToolRequest, in age
 		s.log.Info("mcp profile deleted", "profile", in.Name, "pool", pool, "principal", subjectOf(ctx))
 	}
 	text := fmt.Sprintf("Deleted the agent profile %s. Its runs stay in the ledger.", in.Name)
-	if pool != "" {
+	switch {
+	case fleet.DroppedPool(at) != "":
+		text = fmt.Sprintf("Deleted the agent profile %s and its runtime pool %s. The front deletes each worker of the pool once it is idle, and then the pool. Its runs stay in the ledgers.", in.Name, pool)
+	case pool != "":
 		text = fmt.Sprintf("Removed the agent profile %s from what the front adds to the pool %s. Each worker of the pool runs the configuration of the pool again after the front replaces its Task. Its runs stay in the ledgers.", in.Name, pool)
 	}
 	return result(text, deletedResult{View: viewAgents, Deleted: in.Name}), nil, nil
