@@ -322,9 +322,13 @@ type MemberPatch struct {
 	Task  *string `json:"task,omitempty"`
 }
 
-// patchMember mutes, unmutes, or gives a seat a new task. A new task
-// reaches the newest run of the seat as a follow-up of the person; a seat
-// whose newest run was canceled or stopped at a limit gets a new run.
+// patchMember mutes, unmutes, or gives a seat a task. A task that differs
+// from the task of the record changes the record and posts its line. Any
+// patch with a task then acts on the newest run of the seat (giveTask): a
+// seat whose newest run failed or was canceled gets a new run, also when
+// the text did not change, which is how the page seats a stopped member
+// again; a changed task reaches a run that can go on as a follow-up of the
+// person, and a seat that works gets no new run.
 func (s *Store) patchMember(ctx context.Context, id, handle string, p MemberPatch, by *fw.Principal) (Member, error) {
 	var task string
 	if p.Task != nil {
@@ -370,26 +374,41 @@ func (s *Store) patchMember(ctx context.Context, id, handle string, p MemberPatc
 		return Member{}, err
 	}
 	s.land(ctx, id, lines...)
-	if newTask {
-		s.giveTask(ctx, rec, *rec.member(handle), by)
+	if p.Task != nil {
+		s.giveTask(ctx, rec, *rec.member(handle), by, newTask)
 	}
 	out := s.memberOf(ctx, rec, handle)
 	emitMember(id, out)
 	return out, nil
 }
 
-// giveTask sends a new task to the newest run of a seat, or seats it again
-// when that run cannot take a message. A seat without a run gets nothing:
-// its job waits in the queue, and the channel holds the line of the task.
-func (s *Store) giveTask(ctx context.Context, rec *record, m Member, by *fw.Principal) {
+// giveTask acts on the newest run of a seat after a patch with a task.
+// changed is true when the patch changed the task of the record. A seat
+// whose newest run failed or was canceled is seated again with the next
+// idempotency key, bridge:<id>:<handle>:<n+1>, also when the task did not
+// change; a second patch with the same task while that seating has no run
+// yet seats nothing more, so a double click starts one run. A changed task
+// reaches any other run as a follow-up of the person, and an unchanged
+// one changes nothing. A seat without a run gets nothing: its job waits in
+// the queue, and the channel holds the line of the task.
+func (s *Store) giveTask(ctx context.Context, rec *record, m Member, by *fw.Principal, changed bool) {
 	r := s.runOf(s.asFront(ctx), m.newest())
 	if r == nil {
 		return
 	}
-	if r.State == fw.StateCanceled || limited(r) {
+	if r.State == fw.StateFailed || r.State == fw.StateCanceled {
+		if !changed {
+			if rec.seat(m.Handle).Seatings > len(m.Runs) {
+				return
+			}
+			_ = s.postLines(ctx, rec.ID, system(EventTask, fmt.Sprintf("%s seated %s again on its task: %s", nameOf(by), m.Handle, oneLine(m.Task, 300))))
+		}
 		if err := s.seatAgain(ctx, rec.ID, m.Handle); err != nil {
 			_ = s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The front failed to seat %s again: %s", m.Handle, oneLine(err.Error(), 300))))
 		}
+		return
+	}
+	if !changed {
 		return
 	}
 	snd := sender{subject: orOperator(subjectOfPrincipal(by))}

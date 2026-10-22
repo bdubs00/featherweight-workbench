@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -238,6 +239,102 @@ func TestPatchMember(t *testing.T) {
 	})
 	if r, _, _ := q.get("reviewer"); r.IdempotencyKey != "bridge:"+it.ID+":reviewer:2" {
 		t.Fatalf("key = %s", r.IdempotencyKey)
+	}
+}
+
+// Seat again: a patch with the same task seats a seat whose newest run
+// failed again, with the next key, and a second such patch before the new
+// run shows seats nothing more. A patch with a task on a seat that works
+// starts no run: a new text changes the task of the record and reaches the
+// run as a follow-up, and the same text changes nothing.
+func TestSeatAgainWithTheSameTask(t *testing.T) {
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	v, fm := withFleet(t, a)
+	v.state("default/crew-0", fleet.MemberLive)
+	url := serve(t, a)
+	var mu sync.Mutex
+	keys := map[string]int{}
+	inputs := map[string]string{}
+	for _, queue := range []string{"fw.jobs.migrator", "fw.jobs.reviewer"} {
+		stop, err := a.Bus().Subscribe(context.Background(), queue, func(e fw.Event) error {
+			var req fw.RunRequest
+			if e.Type == fleet.EvRunRequest && e.Decode(&req) == nil {
+				mu.Lock()
+				keys[req.IdempotencyKey]++
+				inputs[req.IdempotencyKey] = req.Input
+				mu.Unlock()
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(stop)
+	}
+	count := func(key string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		return keys[key]
+	}
+	it := open(t, url)
+	failed := workerRun("r-mig", it.ID, "migrator-1", "migrator", fw.StateFailed)
+	failed.Error = "model: the provider answered 500"
+	v.put(failed)
+	v.put(workerRun("r-rev", it.ID, "reviewer", "reviewer", fw.StateRunning))
+	s.poll(context.Background())
+
+	same := `{"task":"Migrate the logrotate module"}`
+	resp, body := do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID+"/members/migrator-1", "alice", same)
+	var m Member
+	decodeJSON(t, body, &m)
+	if resp.StatusCode != http.StatusOK || m.Task != "Migrate the logrotate module" {
+		t.Fatalf("seat again = %d %s", resp.StatusCode, body)
+	}
+	again := "bridge:" + it.ID + ":migrator-1:2"
+	eventually(t, "the seat runs again", func() bool { return count(again) == 1 })
+	mu.Lock()
+	input := inputs[again]
+	mu.Unlock()
+	if input != "Migrate the logrotate module" {
+		t.Fatalf("the new run has the input %q", input)
+	}
+	lines := withEvent(channel(t, s, it.ID), EventTask)
+	if len(lines) != 1 || lines[0].Text != "Alice seated migrator-1 again on its task: Migrate the logrotate module" {
+		t.Fatalf("task lines = %+v", lines)
+	}
+	// A double click: the new run has not shown yet, so nothing more.
+	do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID+"/members/migrator-1", "alice", same)
+	time.Sleep(100 * time.Millisecond)
+	if n := count("bridge:" + it.ID + ":migrator-1:3"); n != 0 || count(again) != 1 {
+		t.Fatalf("a second patch seated %d more runs", n)
+	}
+	// Once the new run is canceled, the same patch seats the seat once more.
+	next := workerRun("r-mig-2", it.ID, "migrator-1", "migrator", fw.StateCanceled)
+	next.CreatedAt = failed.CreatedAt.Add(time.Second)
+	v.put(next)
+	s.poll(context.Background())
+	do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID+"/members/migrator-1", "alice", same)
+	eventually(t, "the canceled seat runs again", func() bool { return count("bridge:"+it.ID+":migrator-1:3") == 1 })
+
+	// The reviewer works: a new text changes the record and reaches the run,
+	// and no run starts.
+	resp, body = do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID+"/members/reviewer", "alice", `{"task":"Review the cron module"}`)
+	decodeJSON(t, body, &m)
+	if resp.StatusCode != http.StatusOK || m.Task != "Review the cron module" {
+		t.Fatalf("a new task of a seat that works = %d %s", resp.StatusCode, body)
+	}
+	eventually(t, "the new task reaches the run", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-rev/messages")) == 1 })
+	do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID+"/members/reviewer", "alice", `{"task":"Review the cron module"}`)
+	time.Sleep(100 * time.Millisecond)
+	if n := count("bridge:" + it.ID + ":reviewer:2"); n != 0 {
+		t.Fatalf("a seat that works was seated again %d times", n)
+	}
+	if n := len(fm.find(http.MethodPost, "/v1/runs/r-rev/messages")); n != 1 {
+		t.Fatalf("the same task reached the run again: %d messages", n)
+	}
+	if lines := withEvent(channel(t, s, it.ID), EventTask); len(lines) != 3 {
+		t.Fatalf("task lines = %+v", lines)
 	}
 }
 
