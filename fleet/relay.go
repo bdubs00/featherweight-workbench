@@ -7,7 +7,8 @@ package fleet
 // exception: the view answers it, because a request through the router of
 // ax wakes the Task (ViewRoutes). POST /v1/runs?member=<name> starts a run
 // on another member. A request that a member forwarded is never forwarded
-// again.
+// again. The relay also answers GET /v1/agents/{name} for a profile that
+// the workers of a pool run (native.AgentRelay).
 
 import (
 	"bytes"
@@ -133,6 +134,51 @@ func (rl *Relay) answerAtRest(w http.ResponseWriter, r *http.Request, run *fw.Ru
 	c.Member = run.Member
 	native.WriteJSON(w, http.StatusOK, c)
 	return true
+}
+
+// The relay answers the read of a profile of a pool.
+var _ native.AgentRelay = (*Relay)(nil)
+
+// TakeAgent implements native.AgentRelay. It answers GET /v1/agents/{name}
+// with the profile that the workers of a pool run, as the MCP tool
+// agent_get reads it (PoolAgentNamed): the profile with pool, the role of
+// the caller, and the policy of the workers, and with no abilities,
+// because the tools of the workers live in their Tasks. The query
+// parameter pool names the pool when several pools run the profile. The
+// kernel calls it after the authentication and checks no right, so the
+// read decides with the rules of the pool for the caller in the context.
+// A profile that a pool runs and the caller cannot view answers 404, as
+// the kernel answers a profile that the caller cannot view. A profile that
+// no pool runs, and every profile of a front without pools, stay with the
+// kernel.
+func (rl *Relay) TakeAgent(w http.ResponseWriter, r *http.Request, name string) bool {
+	if !Pooled(rl.a) {
+		return false
+	}
+	ctx := r.Context()
+	pool := strings.TrimSpace(r.URL.Query().Get("pool"))
+	pa, found, err := PoolAgentNamed(ctx, rl.a, name, pool)
+	switch {
+	case err != nil:
+		fail(w, r, err)
+		return true
+	case found:
+		native.WriteJSON(w, http.StatusOK, pa)
+		return true
+	}
+	// A context without a principal sees every profile of the pools. A
+	// profile that a pool runs stays hidden from a caller who cannot view
+	// it, also when this process holds a profile of the same name.
+	_, held, err := PoolAgentNamed(fw.WithPrincipal(ctx, nil), rl.a, name, pool)
+	if held || pool != "" || errors.Is(err, fw.ErrInvalidRequest) {
+		detail := "no agent profile has the name " + strconv.Quote(name)
+		if pool != "" {
+			detail += " in the pool " + pool
+		}
+		native.WriteProblem(w, r, http.StatusNotFound, detail)
+		return true
+	}
+	return false
 }
 
 // Owner names the member that owns a run when another member owns it, and
@@ -352,6 +398,8 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 		native.WriteProblem(w, r, http.StatusServiceUnavailable, "the authorization service did not answer: "+detail)
 	case errors.Is(err, fw.ErrForbidden):
 		native.WriteProblem(w, r, http.StatusForbidden, detail)
+	case errors.Is(err, fw.ErrInvalidRequest):
+		native.WriteProblem(w, r, http.StatusBadRequest, strings.TrimPrefix(detail, strings.TrimPrefix(fw.ErrInvalidRequest.Error(), "fw: ")+": "))
 	case errors.Is(err, ErrNoRoute):
 		native.WriteProblem(w, r, http.StatusBadGateway, detail)
 	case errors.Is(err, ErrNoCredential):

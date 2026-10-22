@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -163,5 +164,16 @@ func TestAtRest(t *testing.T) {
 	}
 	if c := front.f.AtRest(&fw.Run{ID: "r2", Member: "elsewhere"}); c != nil {
 		t.Fatalf("unknown member = %+v", c)
+	}
+}
+
+// fail answers an invalid request with 400 and the words after the prefix
+// of the kernel, such as the refusal of a profile that several pools run.
+func TestFailInvalidRequest(t *testing.T) {
+	w := httptest.NewRecorder()
+	fail(w, httptest.NewRequest(http.MethodGet, "/v1/agents/migrator", nil),
+		fmt.Errorf("%w: the pools manager, crew run the agent migrator; pass pool to name one", fw.ErrInvalidRequest))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"detail":"the pools manager, crew run the agent migrator; pass pool to name one"`) {
+		t.Fatalf("fail = %d %s", w.Code, w.Body.String())
 	}
 }
