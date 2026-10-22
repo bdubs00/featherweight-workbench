@@ -15,12 +15,12 @@ import (
 
 // DoctorCheck is the line of fw doctor about the fleet (cli.DoctorCheck):
 // off, or on with its sources, the queues, the wake on queue depth, the
-// state of the suspend controller, the pools, the templates, and the count
-// of the runtime pools. A pool or a template that does not fit, one that
-// copies a variable that this process lacks, a runtime pool that names a
-// template that the configuration does not hold, and a store of the
-// runtime pools that does not answer within timeout fail the check.
-// cmd/fw-workbench registers it.
+// place of the index of the runs, the state of the suspend controller, the
+// pools, the templates, and the count of the runtime pools. A pool or a
+// template that does not fit, one that copies a variable that this process
+// lacks, a runtime pool that names a template that the configuration does
+// not hold, and a store of the runtime pools that does not answer within
+// timeout fail the check. cmd/fw-workbench registers it.
 func DoctorCheck(ctx context.Context, cfg *fw.Config, _ fw.Secrets, timeout time.Duration) (bool, string) {
 	c, err := Load(cfg)
 	if err != nil {
@@ -58,6 +58,11 @@ func DoctorCheck(ctx context.Context, cfg *fw.Config, _ fw.Secrets, timeout time
 		} else if len(c.Atespaces) > 0 {
 			parts = append(parts, "wakes the Tasks after its own enqueue only (workbench.fleet.wakeOnQueue is off)")
 		}
+	}
+	if where, on := bucket.Where(cfg, IndexBucket); on {
+		parts = append(parts, "keeps the index of the runs in "+where)
+	} else {
+		parts = append(parts, "keeps no index of the runs, so after a restart it knows no run of a sleeping Task; the index lives "+where)
 	}
 	if d := c.suspendAfter(); d > 0 {
 		parts = append(parts, "suspends a Task that idles for "+d.String())

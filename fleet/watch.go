@@ -353,10 +353,12 @@ func (p *platform) noteTask(m *platformMember, now time.Time) {
 	}
 }
 
-// noteRun sends the change of a run that the view updated. A run without
-// identity is not listed, so it sends nothing until it has one. The
-// caller holds p.mu.
+// noteRun sends the change of a run that the view updated, and queues
+// its entry in the index of the runs when its state changed (index.go). A
+// run without identity is not listed, so it sends nothing until it has
+// one. The caller holds p.mu.
 func (p *platform) noteRun(id string, r *platformRun, now time.Time) {
+	p.noteIndex(id, r, now)
 	if !r.queued || r.run.ID == "" || !p.f.watched() {
 		return
 	}

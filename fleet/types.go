@@ -159,6 +159,20 @@ type BatchView interface {
 	Batch(ctx context.Context, batch string) (BatchRuns, error)
 }
 
+// SettledView is a View that tells whether it holds every run that the
+// fleet holds. Settled is true once the view read the Task list of every
+// atespace whole, with the runs of the live Tasks, and loaded the index of
+// the runs (index.go), which names the runs of the Tasks that sleep. A run
+// that a settled view does not hold is in no Task of the fleet now, so the
+// bridges say that a seat lost its run only on such a view. A view without
+// an index never settles.
+type SettledView interface {
+	Settled() bool
+}
+
+// The fleet tells when it settled.
+var _ SettledView = (*Fleet)(nil)
+
 // PoolView is a View that keeps pools of Tasks (pools.go). Pools returns
 // the state of every pool whose agent the principal in ctx can view, in
 // the order of the configuration, after the last pass of each.

@@ -110,6 +110,14 @@ type platform struct {
 	// quiet (watch.go).
 	shown map[string]string
 	quiet time.Duration
+	// index is the index of the runs in the bucket of the bus, nil
+	// without one, and indexLoaded is true once the view loaded it
+	// (index.go). listedOnce holds each atespace whose Task list the view
+	// read whole once, with the runs of its live Tasks, so the view knows
+	// that a Task outside the list is gone.
+	index       *runIndex
+	indexLoaded bool
+	listedOnce  map[string]bool
 }
 
 // childLink is where a child of a run lives, from the fw.run.child event
@@ -207,6 +215,14 @@ type platformRun struct {
 	// after it (Decisions).
 	decided  []uint64
 	streamed bool
+	// idx is what the index of the runs holds of the run (index.go).
+	// fromIndex is true while the view knows the run from the index alone:
+	// no event and no read of its member confirmed it since the view
+	// loaded the index. partial is true while the run has the facts of the
+	// index and no title or input, until a read of its member gives them.
+	idx       indexMark
+	fromIndex bool
+	partial   bool
 }
 
 // addedUsage is the usage that one event added to a run.
@@ -234,19 +250,23 @@ type forgotRun struct {
 // the Task list, with the values of the variables of the front in vals.
 func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv string, list []*pools.Pool, vals *pools.Values) error {
 	p := &platform{
-		f:         f,
-		atespaces: atespaces,
-		egress:    strings.TrimSpace(egress),
-		server:    strings.TrimSpace(server),
-		prices:    f.a.Prices(),
-		tokenEnv:  tokenEnv,
-		members:   map[string]*platformMember{},
-		runs:      map[string]*platformRun{},
-		children:  map[string]childLink{},
-		gone:      map[string]forgotRun{},
-		ends:      newRunEnds(),
-		shown:     map[string]string{},
-		quiet:     QuietAfter * f.interval,
+		f:          f,
+		atespaces:  atespaces,
+		egress:     strings.TrimSpace(egress),
+		server:     strings.TrimSpace(server),
+		prices:     f.a.Prices(),
+		tokenEnv:   tokenEnv,
+		members:    map[string]*platformMember{},
+		runs:       map[string]*platformRun{},
+		children:   map[string]childLink{},
+		gone:       map[string]forgotRun{},
+		ends:       newRunEnds(),
+		shown:      map[string]string{},
+		quiet:      QuietAfter * f.interval,
+		listedOnce: map[string]bool{},
+	}
+	if f.indexBucket != nil {
+		p.index = newRunIndex(f.indexBucket, f.log)
 	}
 	if len(p.atespaces) > 0 {
 		if p.server == "" {
@@ -273,6 +293,12 @@ func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv strin
 	}
 	p.startPools(list, vals)
 	f.platform = p
+	if p.index != nil {
+		// The view subscribed first, so a run that the stream brings while
+		// the index loads keeps the newer state of the stream.
+		go p.index.writeLoop(f.ctx)
+		go p.loadIndex(f.ctx)
+	}
 	if p.client != nil {
 		go p.loop(f.ctx)
 	}
@@ -403,6 +429,13 @@ func (p *platform) poll(ctx context.Context) {
 			p.backfill(ctx, m)
 		}
 	}
+	p.mu.Lock()
+	for _, atespace := range p.atespaces {
+		if failed[atespace] == nil {
+			p.listedOnce[atespace] = true
+		}
+	}
+	p.mu.Unlock()
 	for _, t := range learn {
 		p.learn(ctx, client, t)
 	}
@@ -549,6 +582,7 @@ func (p *platform) needsFill(m *platformMember, now time.Time) bool {
 // profiles that the Task serves. A read never replaces a newer state of the
 // stream. The poller sets filling under p.mu before the read.
 func (p *platform) backfill(ctx context.Context, m *platformMember) {
+	start := time.Now()
 	var runs struct {
 		Runs []*fw.Run `json:"runs"`
 	}
@@ -593,17 +627,20 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 		cur, ok := p.runs[r.ID]
 		changed := true
 		switch {
-		case !ok || cur.run.Seq < r.Seq || (!cur.queued && cur.run.Seq == r.Seq):
+		case !ok || cur.run.Seq < r.Seq || ((!cur.queued || cur.partial) && cur.run.Seq == r.Seq):
 			// The read is newer than the view, or as new and the view has
-			// no identity for the run: the read is the whole run. The input
-			// of the latest tool call stays, because a read has none.
+			// no identity for the run, or only the facts of the index: the
+			// read is the whole run. The input of the latest tool call
+			// stays, because a read has none, and so does what the index
+			// holds of the run.
 			next := &platformRun{run: r, member: m.name, updated: now, queued: true, stateSeq: r.Seq}
 			if ok {
-				next.callID, next.input = cur.callID, cur.input
+				next.callID, next.input, next.idx = cur.callID, cur.input, cur.idx
 			}
 			p.runs[r.ID] = next
-		case !cur.queued:
+		case !cur.queued || cur.partial:
 			cur.identify(r)
+			cur.fromIndex, cur.partial = false, false
 		case cur.run.Seq == r.Seq:
 			// The read is as new as the view. fw.Run.Blocked is no event, so
 			// only a read brings it: a storage failure stopped the process,
@@ -624,6 +661,24 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 	}
 	for _, ag := range agents.Agents {
 		m.serves(ag.Name)
+	}
+	if runsErr == nil {
+		// A run that only the index names, and that the Task does not hold,
+		// is gone: a new Task of the same name took the place of the one
+		// that held it. A run that the index gained after the read began
+		// can be younger than the read, so it stays.
+		held := make(map[string]bool, len(runs.Runs))
+		for _, r := range runs.Runs {
+			if r != nil {
+				held[r.ID] = true
+			}
+		}
+		for id, r := range p.runs {
+			if r.member == m.name && r.fromIndex && !held[id] && r.updated.Before(start) {
+				delete(p.runs, id)
+				p.forgetIndex(id, r)
+			}
+		}
 	}
 }
 
@@ -770,6 +825,9 @@ func (p *platform) onEvent(e fw.Event) error {
 		r.queued, r.streamed = true, true
 		r.kept = max(r.kept, kept)
 	}
+	// An event of the run confirms a run that the view knew from the index
+	// alone.
+	r.fromIndex = false
 	r.member, r.updated = name, now
 	if m.blocked != "" || m.runsBlocked {
 		p.unblock(m)
@@ -799,10 +857,11 @@ func (p *platform) unblock(m *platformMember) {
 	}
 }
 
-// drop removes a run from the view and counts it for its batch. The caller
-// holds p.mu.
+// drop removes a run from the view and counts it for its batch, and the
+// run leaves the index of the runs. The caller holds p.mu.
 func (p *platform) drop(id string, r *platformRun, now time.Time) {
 	delete(p.runs, id)
+	p.forgetIndex(id, r)
 	if r.queued {
 		p.gone[id] = forgotRun{run: forgetful(r.run), member: r.member, at: now}
 	}

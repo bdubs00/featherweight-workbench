@@ -11,8 +11,10 @@
 // for the jobs that wait (queues.go), suspends the Tasks that idle
 // (suspend.go), keeps the Tasks of the pools of the configuration
 // (pools.go) and of the runtime pools that people create from a template
-// (runtime.go), adds its series to the metrics (metrics.go), and sends its
-// changes to the packages that watch it (watch.go). The
+// (runtime.go), keeps an index of the runs in a bucket of the bus so a
+// restart forgets no run of a sleeping Task (index.go), adds its series to
+// the metrics (metrics.go), and sends its changes to the packages that
+// watch it (watch.go). The
 // kernel knows no fleet, and a worker publishes nothing about itself: it
 // is a bare kernel, and the platforms keep the state.
 package fleet
@@ -129,6 +131,11 @@ type Fleet struct {
 	templates    []*pools.Template
 	runtime      *pools.Store
 	closeRuntime func()
+
+	// The bucket of the index of the runs (index.go), nil on a bus that
+	// keeps no store or when it did not open, and its end.
+	indexBucket bucket.Bucket
+	closeIndex  func()
 }
 
 // Open builds the fleet of an agent from a configuration that Load filled
@@ -214,6 +221,18 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 			f.runtime, f.closeRuntime = rs, closeRS
 		}
 	}
+	// The index of the runs lets a front that starts again know the runs
+	// of the Tasks that sleep. Without it the front still works, and knows
+	// the runs of the stream and of the reads alone.
+	idx, closeIdx, err := OpenIndex(ctx, cfg, f.log)
+	switch {
+	case err != nil:
+		f.log.Warn("fleet: the index of the runs is off; after a restart the front knows no run of a sleeping Task", "error", err)
+	case idx == nil:
+		where, _ := bucket.Where(cfg, IndexBucket)
+		f.log.Warn("fleet: the index of the runs is off; after a restart the front knows no run of a sleeping Task. The index lives "+where, "bus", cfg.Bus.Driver)
+	}
+	f.indexBucket, f.closeIndex = idx, closeIdx
 	if err := f.startPlatform(fc.Atespaces, egress, cfg.AX.Server, tokenEnv, fc.Pools, vals); err != nil {
 		f.cancel()
 		if f.closeOverlays != nil {
@@ -221,6 +240,9 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 		}
 		if f.closeRuntime != nil {
 			f.closeRuntime()
+		}
+		if f.closeIndex != nil {
+			f.closeIndex()
 		}
 		return nil, err
 	}
@@ -272,6 +294,9 @@ func (f *Fleet) Close() error {
 		}
 		if f.closeRuntime != nil {
 			f.closeRuntime()
+		}
+		if f.closeIndex != nil {
+			f.closeIndex()
 		}
 		f.client.CloseIdleConnections()
 	})
