@@ -354,23 +354,15 @@ func (f *Fleet) allow(ctx context.Context, rec *Record, runs []*fw.Run, agents b
 		return runOK, roles, nil
 	}
 	access := map[string]*fw.Access{}
-	known := map[string]bool{}
 	for _, ag := range rec.Agents {
 		access[ag.Name] = ag.Access
-		known[ag.Name] = true
 	}
 	byID := make(map[string]*fw.Run, len(rec.Runs))
 	for _, r := range rec.Runs {
 		byID[r.ID] = r
 	}
 	if rec.Access.Mode == fw.AccessModeRules {
-		rules := fw.NewRulesAuthz(fw.AccessConfig{Default: rec.Access.Default, Admins: rec.Access.Admins},
-			func(name string) (fw.AgentProfile, bool) {
-				if !known[name] {
-					return fw.AgentProfile{}, false
-				}
-				return fw.AgentProfile{Name: name, Access: access[name]}, true
-			})
+		rules := recordRules(rec)
 		for i, r := range runs {
 			runOK[i] = viewRun(ctx, rules, p, r, byID)
 		}

@@ -25,6 +25,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/agents"
+	"github.com/bdubs00/featherweight-workbench/internal/behalf"
 	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
@@ -259,10 +260,12 @@ func (f *Fleet) authorizePoolAll(ctx context.Context, pool *pools.Pool, action s
 	}
 	profiles := pool.Profiles()
 	if f.a.AccessMode() == fw.AccessModeRules {
-		rules := fw.NewRulesAuthz(f.a.Config().Access, func(n string) (fw.AgentProfile, bool) {
+		// A person that the static token acts for gets only the roles that
+		// the token has too (behalf.Guard, section 19).
+		rules := behalf.Guard(fw.NewRulesAuthz(f.a.Config().Access, func(n string) (fw.AgentProfile, bool) {
 			prof, ok := profiles[n]
 			return prof, ok
-		})
+		}))
 		for i, name := range names {
 			out[i] = rules.Allow(ctx, p, action, fw.Target{Agent: name})
 		}
