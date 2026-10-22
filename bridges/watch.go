@@ -664,8 +664,10 @@ func (s *Store) show(rec *record, runs map[string]*fw.Run, states map[string]str
 	}
 }
 
-// reportCheck posts the link to the report of a closed bridge once the
-// page bridges/<id>/report.md appears, up to reportWait after the ask.
+// reportCheck posts the line of the report of a closed bridge once the
+// page bridges/<id>/report.md appears, up to reportWait after the ask. The
+// line names the page in its field page, and its text holds the path
+// without a link.
 func (s *Store) reportCheck(ctx context.Context, rec *record) {
 	r := rec.Report
 	if rec.State != StateClosed || r == nil || r.Posted || s.now().Sub(r.AskedAt) > s.reportWait {
@@ -686,7 +688,8 @@ func (s *Store) reportCheck(ctx context.Context, rec *record) {
 			return errNoChange
 		}
 		rec.Report.Posted = true
-		l := system(EventChanged, fmt.Sprintf("The report is in the wiki: [%s](#page/%s).", reportPath(rec.ID), reportPath(rec.ID)))
+		l := system(EventChanged, fmt.Sprintf("The report is in the wiki: %s.", reportPath(rec.ID)))
+		l.Page = reportPath(rec.ID)
 		line = seqLines(rec, []Message{l}, s.now().UTC())
 		return nil
 	})

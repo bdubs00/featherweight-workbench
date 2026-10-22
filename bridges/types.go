@@ -185,7 +185,9 @@ type Item struct {
 	Usage       *fleet.UsageSum `json:"usage,omitempty"`
 }
 
-// Message is one entry of the channel of a bridge.
+// Message is one entry of the channel of a bridge. Page names the page of
+// the wiki that a system line is about, such as bridges/<id>/report.md, so
+// the page of bossmode links it without a link in the text.
 type Message struct {
 	Seq       uint64              `json:"seq"`
 	At        time.Time           `json:"at"`
@@ -194,6 +196,7 @@ type Message struct {
 	ReplyTo   *uint64             `json:"replyTo"`
 	Text      string              `json:"text"`
 	Event     string              `json:"event,omitempty"`
+	Page      string              `json:"page,omitempty"`
 	Cut       bool                `json:"cut"`
 	Mirrors   *Mirror             `json:"mirrors"`
 	Reactions map[string][]string `json:"reactions"`

@@ -381,14 +381,20 @@ func TestCloseAsksForTheReport(t *testing.T) {
 	}
 	s.poll(context.Background())
 	s.poll(context.Background())
-	links := 0
+	var links []Message
 	for _, m := range channel(t, s, it.ID) {
-		if strings.Contains(m.Text, "The report is in the wiki") && strings.Contains(m.Text, "#page/bridges/"+it.ID+"/report.md") {
-			links++
+		if m.Page != "" {
+			links = append(links, m)
 		}
 	}
-	if links != 1 {
-		t.Fatalf("%d links to the report", links)
+	report := "bridges/" + it.ID + "/report.md"
+	if len(links) != 1 || links[0].Page != report || links[0].Event != EventChanged || links[0].Text != "The report is in the wiki: "+report+"." || strings.Contains(links[0].Text, "#page/") {
+		t.Fatalf("the lines of the report = %+v", links)
+	}
+	// The page field reaches the routes and the hooks with the entry.
+	_, body = do(t, http.MethodGet, url+"/v1/bridges/"+it.ID+"/messages", "alice", "")
+	if !strings.Contains(body, `"page":"`+report+`"`) {
+		t.Fatalf("the channel holds no page field: %s", body)
 	}
 	resp, body = do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID, "alice", `{"state":"open"}`)
 	decodeJSON(t, body, &it)
