@@ -350,6 +350,15 @@ func TestPlaceForCreatesARuntimePool(t *testing.T) {
 	if e, err := store.Get(ctx, "heavy"); err == nil && !e.Deleting {
 		t.Fatalf("the pool of heavy = %+v", e)
 	}
+	// While its pool goes, the agent is gone, and a new agent of that name
+	// waits until the pool is gone.
+	at, err = PlaceFor(alice, front.a, "heavy", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := agents.PutIn(alice, front.a, at, fw.AgentProfile{Name: "heavy"}); !errors.Is(err, ErrPoolConflict) || !strings.Contains(err.Error(), "is being deleted") {
+		t.Fatalf("a new agent of a deleted pool = %v", err)
+	}
 }
 
 // Without a default template, a new agent needs workers, and the error

@@ -100,10 +100,12 @@ func (f *Fleet) fileNames() map[string]bool {
 	return out
 }
 
-// poolsNow returns the pools of the fleet: the pools of the file, then the
-// runtime pools of the store that build, by name, without a runtime pool
-// whose name a pool of the file holds. When the store does not answer, the
-// runtime pools of the last pass stand in, and the log says so.
+// poolsNow returns the pools of the fleet that hold profiles: the pools of
+// the file, then the runtime pools of the store that build, by name,
+// without a runtime pool whose name a pool of the file holds and without a
+// runtime pool that a person deleted, whose agent is gone. When the store
+// does not answer, the runtime pools of the last pass stand in, and the
+// log says so.
 func (f *Fleet) poolsNow(ctx context.Context) []*pools.Pool {
 	out := slices.Clone(f.platform.pools)
 	if f.runtime == nil {
@@ -121,7 +123,7 @@ func (f *Fleet) poolsNow(ctx context.Context) []*pools.Pool {
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			if rt := p.rt[name]; rt.base != nil {
+			if rt := p.rt[name]; rt.base != nil && !rt.stored.Deleting {
 				out = append(out, rt.base)
 			}
 		}
@@ -129,7 +131,7 @@ func (f *Fleet) poolsNow(ctx context.Context) []*pools.Pool {
 	}
 	files := f.fileNames()
 	for _, e := range entries {
-		if files[e.Name] {
+		if files[e.Name] || e.Deleting {
 			continue
 		}
 		if base, err := pools.FromRuntime(e.Runtime, f.templates); err == nil {
