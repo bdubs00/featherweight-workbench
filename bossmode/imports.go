@@ -2,9 +2,9 @@ package bossmode
 
 // This file serves the import of skills by an admin (docs/ARCHITECTURE.md
 // section 20.7): the marketplaces of the configuration, the preview of a
-// source, the install into $FW_HOME/skills/imported, and the removal of an
-// imported skill, as routes and as the MCP tools skill_preview and
-// skill_install. An installed skill is instructions that every agent of a
+// source, the install into the skills directory of the front, and the
+// removal of an imported skill, as routes and as the MCP tools
+// skill_preview and skill_install. An installed skill is instructions that every agent of a
 // profile that allows it reads, so only an admin of the process imports,
 // and the preview shows what the agents will load before an install.
 

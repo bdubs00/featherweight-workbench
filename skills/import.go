@@ -5,8 +5,12 @@ package skills
 // marketplace, a pasted SKILL.md, or an upload of text files. Preview
 // fetches the source and checks it, and installs nothing, so an admin
 // reads what the agents will load first. Install runs the same checks and
-// writes the files under $FW_HOME/skills/imported/<name>, with the record
-// .origin.json beside SKILL.md. Remove removes an imported skill, never a
+// writes the files into the first skills directory of the kernel,
+// $FW_HOME/skills/<name> by default (ImportRoot), with the marker
+// .origin.json beside SKILL.md, which tells an imported skill from a
+// configured one. The kernel reads the directory at each call and skips a
+// hidden file, so a model loads the skill on its own and never sees the
+// marker. Remove removes an imported skill, never a
 // configured one. Nothing here runs a file of a skill.
 
 import (
@@ -127,13 +131,28 @@ type Record struct {
 	Files       []FileInfo `json:"files,omitempty"`
 }
 
-// Existing is the skill of the catalog that holds the name of a preview.
-// Replaceable is true for an imported skill, which an install with
-// replace takes the place of.
+// Existing is the skill of the catalog, or the directory of the skills
+// directory, that holds the name of a preview. Replaceable is true for an
+// imported skill, whose marker sits beside its SKILL.md, which an install
+// with replace takes the place of. Directory is true for a directory of
+// that name that holds no skill of that name, such as a skill of the
+// configuration whose front matter names it otherwise.
 type Existing struct {
 	Origin      string `json:"origin"`
 	Replaceable bool   `json:"replaceable"`
 	Digest      string `json:"digest,omitempty"`
+	Directory   bool   `json:"directory,omitempty"`
+}
+
+// existsText words the skill or the directory that holds a name.
+func existsText(name string, ex *Existing) string {
+	switch {
+	case ex.Replaceable:
+		return "an imported skill has the name " + name + "; an install with replace takes its place"
+	case ex.Directory:
+		return "the skills directory holds a directory " + name + " without the marker of an import, and an import never writes over it"
+	}
+	return "a skill of the configuration has the name " + name + ", and an import never replaces it"
 }
 
 // Preview is what an install will write and what the checks found.
@@ -216,10 +235,10 @@ func (im *Importer) Install(ctx context.Context, src Source, replace bool, diges
 	// The catalog can change between the preview and the lock.
 	p.Exists = im.existing(p.Name)
 	if p.Exists != nil && (!replace || !p.Exists.Replaceable) {
-		if p.Exists.Replaceable {
-			return Entry{}, p, fmt.Errorf("%w: an imported skill has the name %s; install with replace to take its place", ErrExists, p.Name)
-		}
-		return Entry{}, p, fmt.Errorf("%w: a skill of the configuration has the name %s, and an import never replaces it; give the skill another name", ErrExists, p.Name)
+		return Entry{}, p, fmt.Errorf("%w: %s", ErrExists, existsText(p.Name, p.Exists))
+	}
+	if root := ImportRoot(im.a); isRegularFile(filepath.Join(root, fw.SkillFile)) {
+		return Entry{}, p, fmt.Errorf("%w: the first skills directory %s holds a SKILL.md itself, so the kernel reads it as one skill and reads no skill below it; name another directory first in tools.skills", fw.ErrInvalidRequest, root)
 	}
 	var blocking []string
 	for _, pr := range p.Problems {
@@ -253,10 +272,11 @@ func (im *Importer) Remove(name, by string) error {
 	}
 	im.mu.Lock()
 	defer im.mu.Unlock()
-	root := ImportedRoot(im.a)
-	if _, err := os.Stat(filepath.Join(root, name, fw.SkillFile)); err != nil {
-		if _, ok := Named(im.a, name); ok {
-			return fmt.Errorf("%w: the skill %s comes from the configuration, and only an imported skill can be removed here", ErrNotImported, name)
+	root := ImportRoot(im.a)
+	if !isRegularFile(filepath.Join(root, name, OriginFile)) {
+		_, named := Named(im.a, name)
+		if _, err := os.Lstat(filepath.Join(root, name)); named || err == nil {
+			return fmt.Errorf("%w: the skill %s has no marker of an import, so it comes from the configuration, and only an imported skill can be removed here", ErrNotImported, name)
 		}
 		return fmt.Errorf("%w: no imported skill has the name %s", ErrNotFoundSkill, name)
 	}
@@ -279,11 +299,26 @@ func (im *Importer) Remove(name, by string) error {
 // ErrNotFoundSkill is a name that no imported skill holds.
 var ErrNotFoundSkill = errors.New("skills: not found")
 
-// existing returns the skill of the catalog with the name, or nil.
+// existing returns the skill of the catalog with the name, or the
+// directory of that name in ImportRoot, or nil.
 func (im *Importer) existing(name string) *Existing {
+	if name == "" || fw.ValidSkillName(name) != name {
+		return nil
+	}
 	e, ok := Named(im.a, name)
 	if !ok {
-		return nil
+		dir := filepath.Join(ImportRoot(im.a), name)
+		if _, err := os.Lstat(dir); err != nil {
+			return nil
+		}
+		// A directory that the catalog does not name: a skill of the
+		// configuration whose front matter names it otherwise, or files
+		// that no import wrote. Only an import with its marker is ever
+		// replaced.
+		if isRegularFile(filepath.Join(dir, OriginFile)) {
+			return &Existing{Origin: OriginImported, Replaceable: true}
+		}
+		return &Existing{Origin: OriginLocal, Directory: true}
 	}
 	ex := &Existing{Origin: e.Origin, Replaceable: e.Origin == OriginImported}
 	if ex.Replaceable {
@@ -646,11 +681,7 @@ func (im *Importer) check(files map[string][]byte, hint string) Preview {
 	if p.Name != "" {
 		if ex := im.existing(p.Name); ex != nil {
 			p.Exists = ex
-			if ex.Replaceable {
-				add(ProblemNameExists, "", "an imported skill has the name "+p.Name+"; an install with replace takes its place", true)
-			} else {
-				add(ProblemNameExists, "", "a skill of the configuration has the name "+p.Name+", and an import never replaces it", true)
-			}
+			add(ProblemNameExists, "", existsText(p.Name, ex), true)
 		}
 	}
 	p.Installable = true
@@ -739,12 +770,13 @@ func digestOf(files map[string][]byte) string {
 	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
-// write writes the files of a preview into a new directory beside the
-// imported skills, and moves it into place, so the catalog never lists a
-// skill that is half written. A skill that the install replaces moves
-// aside first and is removed after.
+// write writes the files of a preview into a new hidden directory of
+// ImportRoot, which the kernel skips, and moves it into place, so the
+// kernel and the catalog never list a skill that is half written. A skill
+// that the install replaces moves aside first and is removed after; only a
+// directory with the marker of an import is ever replaced.
 func (im *Importer) write(p Preview, rec Record) error {
-	root := ImportedRoot(im.a)
+	root := ImportRoot(im.a)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return fmt.Errorf("skills: create %s: %w", root, err)
 	}
@@ -780,7 +812,10 @@ func (im *Importer) write(p Preview, rec Record) error {
 		return fail(fmt.Errorf("skills: write the record of %s: %w", p.Name, err))
 	}
 	old := ""
-	if _, err := r.Stat(p.Name); err == nil {
+	if _, err := r.Lstat(p.Name); err == nil {
+		if st, err := r.Lstat(p.Name + "/" + OriginFile); err != nil || !st.Mode().IsRegular() {
+			return fail(fmt.Errorf("%w: %s", ErrExists, existsText(p.Name, &Existing{Directory: true})))
+		}
 		old = ".replaced-" + p.Name + "-" + randomSuffix()
 		if err := r.Rename(p.Name, old); err != nil {
 			return fail(fmt.Errorf("skills: move %s aside: %w", p.Name, err))

@@ -19,7 +19,7 @@ import (
 )
 
 // putSkill writes a skill under the skills directory of the home of the
-// front, or under its imported directory.
+// front.
 func putSkill(t *testing.T, a *fw.Agent, dir, text string) {
 	t.Helper()
 	d := filepath.Join(a.Config().Home, "skills", dir)
@@ -93,7 +93,10 @@ func skillsFront(t *testing.T) *front {
 	})
 	putSkill(t, fr.a, "fix", "---\nname: fix\ndescription: Fixes an issue.\nargument-hint: <issue>\narguments: [issue]\ndisable-model-invocation: true\n---\nFix issue $issue.\n")
 	putSkill(t, fr.a, "odd", "---\nname: odd\ndescription: Odd keys.\nuser-invocable: 3\narguments: {a: b}\n---\nBody.\n")
-	putSkill(t, fr.a, "imported/fetched", "---\nname: fetched\ndescription: An import.\nuser-invocable: false\n---\nBody.\n")
+	putSkill(t, fr.a, "fetched", "---\nname: fetched\ndescription: An import.\nuser-invocable: false\n---\nBody.\n")
+	if err := os.WriteFile(filepath.Join(fr.a.Config().Home, "skills", "fetched", skills.OriginFile), []byte(`{"kind":"text"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return fr
 }
 

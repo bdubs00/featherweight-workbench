@@ -1,7 +1,9 @@
 // Package skills is the catalog of the skills of the front
 // (docs/ARCHITECTURE.md section 20). It reads the skills that the kernel
-// knows (fw.Agent.Skills) and the skills that an admin imported under
-// $FW_HOME/skills/imported, and it parses the keys of the front matter of
+// knows (fw.Agent.Skills), among them the skills that an admin imported
+// into the first skills directory of the kernel, $FW_HOME/skills by
+// default, which the marker .origin.json tells apart, and it parses the
+// keys of the front matter of
 // each SKILL.md that a slash command needs: user-invocable,
 // disable-model-invocation, argument-hint, and arguments. It resolves the
 // skills that the allowlist of a profile allows with the matching of the
@@ -17,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -35,10 +38,6 @@ const (
 	// name Server holds (fw.SkillOriginMCP).
 	OriginMCP = fw.SkillOriginMCP
 )
-
-// ImportedDir is the directory under the skills directory of the home
-// that holds the imported skills, one directory per skill.
-const ImportedDir = "imported"
 
 // Front matter keys that a slash command reads.
 const (
@@ -92,47 +91,62 @@ type Ref struct {
 	Server      string `json:"server,omitempty"`
 }
 
-// ImportedRoot returns the directory of the imported skills of the agent:
-// $FW_HOME/skills/imported.
-func ImportedRoot(a *fw.Agent) string {
+// ImportRoot returns the directory that an import writes into: the first
+// skills directory that the kernel reads (fw.Config.SkillDirs), which is
+// $FW_HOME/skills unless tools.skills names other directories. The kernel
+// reads it one level deep at each call, so a model loads an imported
+// skill on its own, as it loads a skill that a person puts there.
+func ImportRoot(a *fw.Agent) string {
+	if dirs := a.Config().SkillDirs(); len(dirs) > 0 && dirs[0] != "" {
+		return dirs[0]
+	}
 	home := a.Config().Home
 	if home == "" {
 		home = fw.DefaultHome()
 	}
-	return filepath.Join(home, "skills", ImportedDir)
+	return filepath.Join(home, "skills")
 }
 
-// Catalog returns every skill that the front knows, sorted by name: the
-// skills of the kernel, and then the imported skills whose names the
-// kernel does not know. A value of the front matter with the wrong type
-// takes its default, and the log says so.
+// Catalog returns every skill that the front knows, the skills of the
+// kernel, sorted by name. A skill in a directory of ImportRoot whose
+// marker OriginFile sits beside its SKILL.md has the origin
+// OriginImported. A value of the front matter with the wrong type takes
+// its default, and the log says so.
 func Catalog(a *fw.Agent) []Entry {
 	return catalog(a, a.Logger())
 }
 
 func catalog(a *fw.Agent, log *slog.Logger) []Entry {
 	kernel := a.Skills()
-	seen := make(map[string]bool, len(kernel))
 	out := make([]Entry, 0, len(kernel))
 	dirs := a.Config().SkillDirs()
+	root := ImportRoot(a)
 	for _, s := range kernel {
-		seen[s.Name] = true
-		out = append(out, entryOf(s, originOf(s), uriOf(s, dirs), log))
-	}
-	root := ImportedRoot(a)
-	imported, err := fw.LoadSkills(root)
-	if err != nil {
-		log.Warn("skills: read the imported skills", "dir", root, "error", err)
-	}
-	for _, s := range imported {
-		if seen[s.Name] {
-			continue
+		origin := originOf(s)
+		if imported(root, s) {
+			origin = OriginImported
 		}
-		seen[s.Name] = true
-		out = append(out, entryOf(s, OriginImported, uriOf(s, []string{root}), log))
+		out = append(out, entryOf(s, origin, uriOf(s, dirs), log))
 	}
 	sortEntries(out)
 	return out
+}
+
+// imported reports whether a skill of the kernel is an imported skill: a
+// directory right under the root of the imports with the marker beside
+// its SKILL.md.
+func imported(root string, s fw.Skill) bool {
+	if s.Dir == "" || filepath.Clean(filepath.Dir(s.Dir)) != filepath.Clean(root) {
+		return false
+	}
+	return isRegularFile(filepath.Join(s.Dir, OriginFile))
+}
+
+// isRegularFile reports whether a path is a regular file and no symbolic
+// link, such as the marker of an imported skill.
+func isRegularFile(p string) bool {
+	st, err := os.Lstat(p)
+	return err == nil && st.Mode().IsRegular()
 }
 
 // Named returns the skill of the catalog with that name.

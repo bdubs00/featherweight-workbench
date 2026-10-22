@@ -427,7 +427,7 @@ func TestInstallNeedsThePreview(t *testing.T) {
 // name needs replace, replace takes the place of the skill, and a removal
 // removes an imported skill and never a configured one.
 func TestInstallReplaceRemove(t *testing.T) {
-	a, root, _ := newAgent(t)
+	a, root, _ := newAgent(t, fw.WithProfile(fw.AgentProfile{Name: "default"}))
 	writeSkill(t, root, "taken", "---\nname: taken\n---\nBody.\n", nil)
 	im := newImporter(t, a, newHost(t), nil)
 	im.now = func() time.Time { return time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC) }
@@ -440,7 +440,25 @@ func TestInstallReplaceRemove(t *testing.T) {
 	if e.Name != "fix" || e.Origin != OriginImported || e.URI != "fix/SKILL.md" || !reflect.DeepEqual(e.Files, []string{"scripts/run.sh"}) || p.Exists != nil {
 		t.Fatalf("entry = %+v", e)
 	}
-	dir := filepath.Join(ImportedRoot(a), "fix")
+	dir := filepath.Join(ImportRoot(a), "fix")
+	if dir != filepath.Join(root, "fix") {
+		t.Fatalf("the import writes into %s, not into the skills directory %s", dir, root)
+	}
+	// The kernel reads the skill at once and hides the marker from the
+	// model.
+	ks, ok := a.SkillNamed("fix")
+	if !ok {
+		t.Fatal("the kernel does not list the imported skill")
+	}
+	if files, _ := ks.Files(); !reflect.DeepEqual(files, []string{"scripts/run.sh"}) {
+		t.Fatalf("the kernel lists %v", files)
+	}
+	if _, err := ks.ReadFile(context.Background(), OriginFile); err == nil {
+		t.Fatal("the kernel reads the marker")
+	}
+	if refs := a.SkillsOfRun(fw.RunInfo{Agent: "default"}); len(refs) < 2 {
+		t.Fatalf("the skills of a run = %+v", refs)
+	}
 	b, err := os.ReadFile(filepath.Join(dir, OriginFile))
 	if err != nil {
 		t.Fatal(err)
@@ -480,13 +498,28 @@ func TestInstallReplaceRemove(t *testing.T) {
 	if _, _, err := im.Install(ctx, Source{Text: "No name.\n"}, false, "", "ada"); !errors.Is(err, ErrRefused) {
 		t.Fatalf("install without a name = %v", err)
 	}
-	entries, _ := os.ReadDir(ImportedRoot(a))
+	entries, _ := os.ReadDir(ImportRoot(a))
 	for _, en := range entries {
 		if strings.HasPrefix(en.Name(), ".") {
 			t.Fatalf("a temporary directory stays: %s", en.Name())
 		}
 	}
 
+	// A directory of the skills directory without the marker is never
+	// written over, also when its skill has another name.
+	writeSkill(t, root, "odd", "---\nname: other\n---\nKeep me.\n", nil)
+	if p, err := im.Preview(ctx, Source{Text: "---\nname: odd\n---\nNew.\n"}); err != nil || p.Installable || p.Exists == nil || !p.Exists.Directory {
+		t.Fatalf("preview over a directory = %+v, %v", p, err)
+	}
+	if _, _, err := im.Install(ctx, Source{Text: "---\nname: odd\n---\nNew.\n"}, true, "", "ada"); !errors.Is(err, ErrExists) {
+		t.Fatalf("install over a directory = %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "odd", fw.SkillFile)); !strings.Contains(string(b), "Keep me.") {
+		t.Fatalf("the configured skill changed: %q", b)
+	}
+	if err := im.Remove("odd", "ada"); !errors.Is(err, ErrNotImported) {
+		t.Fatalf("remove a directory without the marker = %v", err)
+	}
 	if err := im.Remove("taken", "ada"); !errors.Is(err, ErrNotImported) {
 		t.Fatalf("remove a configured skill = %v", err)
 	}
@@ -561,6 +594,31 @@ func TestMarketplaceIndex(t *testing.T) {
 	}
 	if _, err := url.Parse(g.URL); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// With tools.skills, an import writes into the first directory of the
+// list, which the kernel reads first.
+func TestImportRootFollowsTheConfiguration(t *testing.T) {
+	first, second := t.TempDir(), t.TempDir()
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	cfg.Auth.Mode = "none"
+	cfg.Tools.Skills = []string{first, second}
+	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithModel(fw.ModelFunc{}), fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.Close(context.Background()) })
+	if got := ImportRoot(a); got != first {
+		t.Fatalf("ImportRoot = %s, want %s", got, first)
+	}
+	im := newImporter(t, a, newHost(t), nil)
+	if _, _, err := im.Install(context.Background(), Source{Text: fixSkill}, false, "", "ada"); err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := Named(a, "fix"); !ok || e.Origin != OriginImported || filepath.Dir(e.Dir()) != first {
+		t.Fatalf("entry = %+v, %v", e, ok)
 	}
 }
 

@@ -91,8 +91,10 @@ Body.
 `, nil)
 	writeSkill(t, root, "hints", "---\nname: hints\nargument-hint: [issue] [priority]\narguments: issue priority\n---\nFix $issue at $priority.\n", nil)
 	writeSkill(t, root, "list", "---\nname: list\nargument-hint: [issue]\n---\nBody.\n", nil)
-	writeSkill(t, filepath.Join(root, ImportedDir), "fetched", "---\nname: fetched\ndescription: An import.\n---\nBody.\n", nil)
-	writeSkill(t, filepath.Join(root, ImportedDir), "absent", "---\nname: absent\ndescription: Shadowed.\n---\nBody.\n", nil)
+	writeSkill(t, root, "fetched", "---\nname: fetched\ndescription: An import.\n---\nBody.\n", map[string]string{OriginFile: `{"kind":"text"}`})
+	// A marker that is a directory, and a marker in a second skills
+	// directory, make no import.
+	writeSkill(t, root, "fake", "---\nname: fake\n---\nBody.\n", map[string]string{OriginFile + "/x": "x"})
 
 	got := map[string]Entry{}
 	var names []string
@@ -100,7 +102,7 @@ Body.
 		got[e.Name] = e
 		names = append(names, e.Name)
 	}
-	if want := []string{"absent", "fetched", "hints", "list", "present", "wrong"}; !reflect.DeepEqual(names, want) {
+	if want := []string{"absent", "fake", "fetched", "hints", "list", "present", "wrong"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("names = %v, want %v", names, want)
 	}
 	p := got["present"]
@@ -135,8 +137,11 @@ Body.
 		t.Fatalf("list = %+v", l)
 	}
 	f := got["fetched"]
-	if f.Origin != OriginImported || f.URI != "fetched/SKILL.md" {
+	if f.Origin != OriginImported || f.URI != "fetched/SKILL.md" || len(f.Files) != 0 {
 		t.Fatalf("fetched = %+v", f)
+	}
+	if fk := got["fake"]; fk.Origin != OriginLocal {
+		t.Fatalf("fake = %+v", fk)
 	}
 	body, err := p.Body()
 	if err != nil || body != "Read $file in $mode.\n" {
