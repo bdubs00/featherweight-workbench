@@ -1635,7 +1635,7 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
 
 - `manager` is `null` when `workbench.bossmode.manager` is empty.
 - `manager.member` is the fleet member that runs the manager, for `POST /v1/runs?member=`: a Task of the pool whose `agent` is the profile, the first one whose phase is Running, else the first. Without such a pool, it is the first member by name whose agents hold the profile. The front runs the configuration of its workers, so it holds every profile, and it is the member only when no other member is. The answer names only a pool and a member that the caller can see, and `""` when there is none.
-- `manager.run` is the newest top-level run of the profile that the caller started, from the runs of the fleet that the caller can see, or `""`.
+- `manager.run` is the newest top-level run of the profile that the caller started, from the runs of the fleet that the caller can see, or `""`. A run whose batch is the batch of a bridge, such as the manager run of a spawn bridge or the run that writes the report of a bridge, also acts as the operator, but it is no conversation of the page, so the settings skip it.
 - `placement` and `maxMembers` come from `workbench.bridges`, as `bridges.Load` reads them (section 17.1).
 
 ### 17.5 The broadcaster

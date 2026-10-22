@@ -181,6 +181,10 @@ func TestSettings(t *testing.T) {
 	fr := newFront(t, nil)
 	fr.event(t, "ax:team/manager-0", "01MGR1", 1, fw.EvRunQueued, queued("ada", "manager"))
 	fr.event(t, "ax:team/manager-0", "01MGR2", 1, fw.EvRunQueued, queued("bob", "manager"))
+	// A newer manager run of a bridge for ada is no conversation of the page.
+	inBridge := queued("ada", "manager")
+	inBridge.Metadata = map[string]string{fw.MetaBatch: bridges.BatchOf("b1")}
+	fr.event(t, "ax:team/manager-0", "01MGR3", 1, fw.EvRunQueued, inBridge)
 	var got Settings
 	resp, body := get(t, fr.url+"/v1/bossmode", "ada")
 	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &got) != nil {

@@ -8,6 +8,7 @@ import (
 	"context"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
@@ -51,7 +52,7 @@ type Settings struct {
 // the first; without such a pool, the first member, by name, whose agents
 // hold the profile, and this process only when no other member does; ""
 // when the caller sees none. Run is the newest top-level run of the
-// profile that the caller started, or "".
+// profile that the caller started outside a bridge, or "".
 type Manager struct {
 	Agent  string `json:"agent"`
 	Member string `json:"member"`
@@ -99,6 +100,12 @@ func managerOf(ctx context.Context, a *fw.Agent, agent string) (*Manager, error)
 	}
 	p := fw.PrincipalFrom(ctx)
 	for _, r := range runs { // newest first
+		// The manager run of a spawn bridge, and the run that writes the
+		// report of a bridge, act as the operator too, but they belong to
+		// the bridge and are no conversation of the page.
+		if strings.HasPrefix(r.Metadata[fw.MetaBatch], bridges.BatchPrefix) {
+			continue
+		}
 		if r.Agent == agent && r.Parent == "" && (p == nil || r.Principal == p.Subject) {
 			m.Run = r.ID
 			break
