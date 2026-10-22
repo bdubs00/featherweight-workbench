@@ -2070,13 +2070,14 @@ A skill is a directory with a `SKILL.md` file: a set of instructions that an age
 
 ### 20.1 The catalog
 
-The catalog holds every skill that the front knows: the skills of the kernel (`fw.Agent.Skills`, which reads the skills directories at each call), and then the imported skills under `$FW_HOME/skills/imported` whose names the kernel does not know (section 20.7). Each entry has these fields:
+The catalog holds every skill that the front knows: the skills of the kernel (`fw.Agent.Skills`), and then the imported skills under `$FW_HOME/skills/imported` whose names the kernel does not know (section 20.7). The skills of the kernel are the skills of its skills directories, which it reads at each call, and the skills of the MCP servers of its `tools.mcp` entries, each named `<server>/<name>` (the kernel architecture, section 7.3). Each entry has these fields:
 
 | Field | Value |
 |---|---|
 | `name`, `description` | The name and the description, as the kernel reads them from the front matter |
-| `origin` | Empty for a skill of a skills directory, `imported` for an imported skill |
-| `uri` | The path of `SKILL.md` relative to its skills directory, such as `review/SKILL.md` |
+| `origin` | The origin as the kernel gives it: empty for a skill of a skills directory, and `mcp` for a skill of an MCP server. `imported` for an imported skill. |
+| `server` | The name of the `tools.mcp` entry of a skill of an MCP server. Absent for any other skill. |
+| `uri` | The URI of `SKILL.md` that the kernel gives a skill of an MCP server, else the path of `SKILL.md` relative to its skills directory, such as `review/SKILL.md` |
 | `userInvocable` | False when a person cannot hand the skill to a run (section 20.3) |
 | `modelInvocable` | False when the front matter asks that a model never load the skill on its own |
 | `argumentHint` | The words that the page shows after the name of the skill in the composer |
@@ -2092,13 +2093,13 @@ The package reads the front matter of each `SKILL.md` with the YAML decoder. The
 | `argument-hint` | `argumentHint` | empty | A text or a number. A list of words, such as `[issue]`, reads as `[issue]`. |
 | `arguments` | `arguments` | `[]` | A list of names, a list of objects with `name` and an optional `description`, or one text of names with spaces between them. A name holds letters, digits, and underscores, does not start with a digit, and is not `ARGUMENTS`. |
 
-A key that is absent takes its default. A value of the wrong type also takes the default, and the log names the skill and the key, so the skill still shows. The catalog never answers an error for a front matter. A front matter that is no YAML, such as `argument-hint: [issue] [priority]`, is read one `key: value` per line, as the kernel reads it: the hint keeps its text, and `arguments` takes its default.
+A key that is absent takes its default. A value of the wrong type also takes the default, and the log names the skill and the key, so the skill still shows. The catalog never answers an error for a front matter. The kernel reads no file of a skill of an MCP server ahead of need, and neither does the catalog: the entry of such a skill shows the defaults of the four keys. The slash command reads `SKILL.md` at the moment of use through the kernel, which checks it against the listing of the server, and it applies the keys of that read (section 20.3). A front matter that is no YAML, such as `argument-hint: [issue] [priority]`, is read one `key: value` per line, as the kernel reads it: the hint keeps its text, and `arguments` takes its default.
 
 `GET /v1/bossmode/skills` answers `{"skills": [...]}`, sorted by name. The MCP tool `skills_list` gives the same entries in `structuredContent` and a text for a model, one line per skill. The tool is read-only. The route and the tool exist with `workbench.bossmode.enabled`. Both need a caller who can start an agent: the operator role on a profile of this process or of a pool, the static token of the fleet, or the process itself. Any other caller gets 403. A decision point that does not answer gives 503.
 
 ### 20.2 The skills that an agent can load
 
-The view of one agent names the skills that its profile allows, so a person never reads a glob to learn them. The allowlist of the profile, `skills`, stays as it is: `null` allows every skill, `[]` allows none, and each entry is a name or a glob. The front resolves the list with the matching of the kernel, `fw.SkillAllowed`, against the catalog of section 20.1. Each resolved skill has `name`, `description`, and `origin`.
+The view of one agent names the skills that its profile allows, so a person never reads a glob to learn them. The allowlist of the profile, `skills`, stays as it is: `null` allows every skill, `[]` allows none, and each entry is a name or a glob. The front resolves the list with the matching of the kernel, `fw.SkillAllowed`, against the catalog of section 20.1. Each resolved skill has `name`, `description`, `origin`, and `server` for a skill of an MCP server. A glob matches a skill of a server by its qualified name, so `github/*` allows every skill of the entry `github`.
 
 - The MCP tool `agent_get` adds `resolvedSkills` to the agent, beside `skills`, and its text names the skills, such as "It can load these skills of the front: review-go, review-sql." The results of `agent_put`, also with `dryRun`, carry the same text.
 - The kernel serves the view of an agent, `GET /v1/agents/{name}`, and the workbench changes no kernel route. So the route `GET /v1/agents/{name}/skills` of the workbench answers `{"agent", "pool", "allowlist", "skills"}` beside it. `allowlist` is the list of the profile, and `skills` holds the resolved skills. With pools, the profile is the one that the workers of a pool run, and `?pool=` names the pool when several pools run it, as for `PUT /v1/agents/{name}`. The route needs the caller to view the agent, as the view of the agent does, and an agent that the caller cannot view answers 404.
@@ -2108,7 +2109,7 @@ A profile of a pool resolves against the catalog of the front too, because the f
 
 ### 20.3 The slash command
 
-A person hands a skill to a running conversation with a slash command, such as `/fix 42` in the composer of the page. The page sends the name of the skill and the text of the arguments, and the front expands the skill. The front reads the body of `SKILL.md` from the catalog, without the front matter, and fills its placeholders:
+A person hands a skill to a running conversation with a slash command, such as `/fix 42` in the composer of the page. The page sends the name of the skill and the text of the arguments, and the front expands the skill. The front reads `SKILL.md` of the skill at the moment of use, through the kernel for a skill of an MCP server, and takes the keys of section 20.1 from that read. It fills the placeholders of the body, without the front matter:
 
 - `$ARGUMENTS` takes the whole text of the arguments.
 - `$ARGUMENTS[N]` and `$N` take the argument `N`, counted from 0. The arguments split on white space. A placeholder for an argument that the command does not give stays as it is.
@@ -2125,6 +2126,7 @@ The message starts with one line, `Skill: <name>`. A blank line and the expanded
 | The front matter says `user-invocable: false` | 400 with the reason | `Invalid request: ...` |
 | The message passes 64 KB | 413 | `Too large: ...` |
 | The pinned messages of the run would pass their bound (section 20.4) | 413 with the words of the kernel | `Too large: ...` |
+| The front cannot read `SKILL.md` now, such as a skill of an MCP server that does not answer or whose file does not match its listing | 502 | `Unavailable: ...` |
 | A run of the fleet sends it | 400 in a bridge | An error that says that only a person sends a skill |
 
 A run never hands a skill to another run. The tool `bridge_post` takes no skill, and `skill_send` refuses a call that names a run of the fleet in `_meta` (`mcp.CallRun`). Only a person sends a slash command, through the page, the routes, or the tool from a client of the person.

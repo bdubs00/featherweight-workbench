@@ -38,20 +38,20 @@ func writeSkill(t *testing.T, root, dir, text string, files map[string]string) {
 
 // newAgent returns an agent whose home holds the skills directory, and a
 // buffer with its log.
-func newAgent(t *testing.T) (*fw.Agent, string, *bytes.Buffer) {
+func newAgent(t *testing.T, opts ...fw.Option) (*fw.Agent, string, *bytes.Buffer) {
 	t.Helper()
 	cfg := fw.DefaultConfig()
 	cfg.Home = t.TempDir()
 	cfg.Auth.Mode = "none"
 	logs := &bytes.Buffer{}
-	a, err := fw.New(
+	a, err := fw.New(append([]fw.Option{
 		fw.WithConfig(cfg),
 		fw.WithoutDefaults(),
 		fw.WithModel(fw.ModelFunc{}),
 		fw.WithLedger(fw.NewMemLedger()),
 		fw.WithBus(fw.NewMemBus()),
 		fw.WithLogger(slog.New(slog.NewTextHandler(logs, nil))),
-	)
+	}, opts...)...)
 	if err != nil {
 		t.Fatalf("fw.New: %v", err)
 	}

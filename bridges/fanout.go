@@ -425,7 +425,7 @@ func (s *Store) attempt(j *job) {
 // request, and a message over its bound is too large.
 func skillError(err error) error {
 	msg := err.Error()
-	for _, e := range []error{skills.ErrUnknown, skills.ErrNotInvocable, skills.ErrTooLarge} {
+	for _, e := range []error{skills.ErrUnknown, skills.ErrNotInvocable, skills.ErrTooLarge, skills.ErrUnavailable} {
 		msg = strings.TrimPrefix(msg, e.Error()+": ")
 	}
 	switch {
@@ -435,6 +435,8 @@ func skillError(err error) error {
 		return invalid("%s", msg)
 	case errors.Is(err, skills.ErrTooLarge):
 		return fmt.Errorf("%w: %s", ErrTooLarge, msg)
+	case errors.Is(err, skills.ErrUnavailable):
+		return fmt.Errorf("%w: %s", ErrUnavailable, msg)
 	}
 	return err
 }

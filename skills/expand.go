@@ -26,6 +26,10 @@ var (
 	ErrNotInvocable = errors.New("skills: the skill is not for people")
 	// ErrTooLarge is a message over MaxMessageBytes.
 	ErrTooLarge = errors.New("skills: too large")
+	// ErrUnavailable is a skill whose SKILL.md the front cannot read now,
+	// such as a skill of an MCP server that does not answer or whose file
+	// does not match its listing.
+	ErrUnavailable = errors.New("skills: the skill cannot be read")
 )
 
 // Command is a slash command: the skill and its arguments, as a route
@@ -195,10 +199,12 @@ func ident(s string) int {
 }
 
 // Prepare expands the slash command cmd with the catalog of the agent and
-// the text of the person, which can be empty. It returns an error that
-// wraps ErrUnknown for a skill that the catalog does not hold,
+// the text of the person, which can be empty. It reads SKILL.md at the
+// moment of use, and the keys of its front matter with it. It returns an
+// error that wraps ErrUnknown for a skill that the catalog does not hold,
 // ErrNotInvocable for a skill whose front matter says user-invocable:
-// false, and ErrTooLarge for a message over MaxMessageBytes.
+// false, ErrTooLarge for a message over MaxMessageBytes, and
+// ErrUnavailable for a SKILL.md that cannot be read.
 func Prepare(a *fw.Agent, cmd Command, text string) (Expansion, error) {
 	cmd.Name = strings.TrimSpace(cmd.Name)
 	cmd.Args = strings.TrimSpace(cmd.Args)
@@ -209,12 +215,12 @@ func Prepare(a *fw.Agent, cmd Command, text string) (Expansion, error) {
 	if !ok {
 		return Expansion{}, fmt.Errorf("%w: no skill has the name %q", ErrUnknown, cmd.Name)
 	}
-	if !e.UserInvocable {
-		return Expansion{}, fmt.Errorf("%w: the front matter of the skill %s says user-invocable: false, so only an agent loads it", ErrNotInvocable, e.Name)
-	}
-	body, err := e.Body()
+	e, body, err := e.read(a.Logger())
 	if err != nil {
 		return Expansion{}, err
+	}
+	if !e.UserInvocable {
+		return Expansion{}, fmt.Errorf("%w: the front matter of the skill %s says user-invocable: false, so only an agent loads it", ErrNotInvocable, e.Name)
 	}
 	names := make([]string, len(e.Arguments))
 	for i, arg := range e.Arguments {

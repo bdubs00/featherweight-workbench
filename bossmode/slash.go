@@ -102,6 +102,8 @@ func failSkill(k *native.Kit, w http.ResponseWriter, r *http.Request, err error)
 		native.WriteProblem(w, r, http.StatusBadRequest, skillDetail(err))
 	case errors.Is(err, skills.ErrTooLarge), errors.Is(err, ErrPinnedBound):
 		native.WriteProblem(w, r, http.StatusRequestEntityTooLarge, skillDetail(err))
+	case errors.Is(err, skills.ErrUnavailable):
+		native.WriteProblem(w, r, http.StatusBadGateway, skillDetail(err))
 	case errors.As(err, &me):
 		switch {
 		case me.status == http.StatusUnauthorized:
@@ -122,7 +124,7 @@ func failSkill(k *native.Kit, w http.ResponseWriter, r *http.Request, err error)
 // and the kinds of error in front.
 func skillDetail(err error) string {
 	s := err.Error()
-	for _, prefix := range []string{skills.ErrUnknown.Error() + ": ", skills.ErrNotInvocable.Error() + ": ", skills.ErrTooLarge.Error() + ": ", ErrPinnedBound.Error() + ": ", "fw: invalid request: ", "bossmode: ", "fleet: "} {
+	for _, prefix := range []string{skills.ErrUnknown.Error() + ": ", skills.ErrNotInvocable.Error() + ": ", skills.ErrTooLarge.Error() + ": ", skills.ErrUnavailable.Error() + ": ", ErrPinnedBound.Error() + ": ", "fw: invalid request: ", "bossmode: ", "fleet: "} {
 		s = strings.TrimPrefix(s, prefix)
 	}
 	return s
@@ -299,6 +301,8 @@ func sendWords(err error) string {
 		return "Invalid request: " + skillDetail(err) + "."
 	case errors.Is(err, skills.ErrTooLarge), errors.Is(err, ErrPinnedBound):
 		return "Too large: " + skillDetail(err) + "."
+	case errors.Is(err, skills.ErrUnavailable):
+		return "Unavailable: " + skillDetail(err) + ". Try again in a few seconds."
 	case errors.As(err, &me):
 		return fmt.Sprintf("The fleet member %s answered %d: %s.", me.member, me.status, me.detail)
 	case errors.Is(err, fw.ErrRunNotFound), errors.Is(err, fw.ErrForbidden), errors.Is(err, fw.ErrAuthzUnavailable), errors.Is(err, fw.ErrInvalidRequest):
@@ -316,6 +320,8 @@ func bridgeWords(err error) string {
 		return "Conflict: " + bridges.Detail(err) + "."
 	case errors.Is(err, bridges.ErrTooLarge):
 		return "Too large: " + bridges.Detail(err) + "."
+	case errors.Is(err, bridges.ErrUnavailable):
+		return "Unavailable: " + bridges.Detail(err) + ". Try again in a few seconds."
 	case errors.Is(err, fw.ErrInvalidRequest):
 		return "Invalid request: " + bridges.Detail(err) + "."
 	}

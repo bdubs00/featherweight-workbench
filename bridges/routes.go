@@ -64,6 +64,8 @@ func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 		native.WriteProblem(w, r, http.StatusConflict, detail(err))
 	case errors.Is(err, ErrTooLarge):
 		native.WriteProblem(w, r, http.StatusRequestEntityTooLarge, detail(err))
+	case errors.Is(err, ErrUnavailable):
+		native.WriteProblem(w, r, http.StatusBadGateway, detail(err))
 	case errors.Is(err, fw.ErrInvalidRequest):
 		native.WriteProblem(w, r, http.StatusBadRequest, detail(err))
 	case errors.Is(err, fleet.ErrNoRoute):
@@ -79,7 +81,7 @@ func detail(err error) string {
 	s := err.Error()
 	for changed := true; changed; {
 		changed = false
-		for _, prefix := range []string{"bridges: not found: ", "bridges: conflict: ", "bridges: too large: ", "fw: invalid request: ", "skills: ", "bridges: ", "fleet: "} {
+		for _, prefix := range []string{"bridges: not found: ", "bridges: conflict: ", "bridges: too large: ", "bridges: unavailable: ", "fw: invalid request: ", "skills: ", "bridges: ", "fleet: "} {
 			if strings.HasPrefix(s, prefix) {
 				s, changed = strings.TrimPrefix(s, prefix), true
 			}

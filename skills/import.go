@@ -639,26 +639,10 @@ func (im *Importer) check(files map[string][]byte, hint string) Preview {
 }
 
 // kernelMeta reads the name and the description of a front matter as the
-// kernel reads them: each line with a key and a value, quotes trimmed, the
-// last name that holds a character of a name, and the description cut to
-// 300 bytes.
+// kernel reads them (fw.SkillFrontMatter).
 func kernelMeta(fm string) (name, description string) {
-	for _, line := range strings.Split(fm, "\n") {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if !ok {
-			continue
-		}
-		value = strings.Trim(strings.TrimSpace(value), `"'`)
-		switch strings.TrimSpace(key) {
-		case "name":
-			if fw.ValidSkillName(value) != "" {
-				name = value
-			}
-		case "description":
-			description = cut(value, 300)
-		}
-	}
-	return name, description
+	name, description = fw.SkillFrontMatter("---\n" + fm + "\n---\n")
+	return strings.TrimSpace(name), strings.TrimSpace(description)
 }
 
 func bytesContain(b []byte, c byte) bool {

@@ -25,12 +25,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Origins of a skill beside the name of a tools.mcp entry.
+// Origins of a skill.
 const (
 	// OriginLocal is the origin of a skill of a configured directory.
 	OriginLocal = ""
 	// OriginImported is the origin of a skill that an admin imported.
 	OriginImported = "imported"
+	// OriginMCP is the origin of a skill of an MCP server, whose entry
+	// name Server holds (fw.SkillOriginMCP).
+	OriginMCP = fw.SkillOriginMCP
 )
 
 // ImportedDir is the directory under the skills directory of the home
@@ -48,17 +51,23 @@ const (
 	maxArgumentDetail = 300
 )
 
-// Entry is one skill of the catalog. UserInvocable is false when the
+// Entry is one skill of the catalog. Origin is OriginLocal, OriginImported,
+// or OriginMCP, and Server names the tools.mcp entry of a skill of an MCP
+// server, whose name is <server>/<name>. UserInvocable is false when the
 // front matter says user-invocable: false, so no person hands the skill
 // to a run. ModelInvocable is false when it says
 // disable-model-invocation: true. Arguments names the arguments in order,
 // for the placeholders $name. URI names the file of the skill: the URI of
 // a server skill, else the path of SKILL.md relative to its skills
-// directory. Files lists the other files of the skill directory.
+// directory. Files lists the other files of the skill directory. The
+// catalog reads no file of a skill of a server ahead of need, so such an
+// entry shows the defaults of the front matter keys; the slash command
+// reads them when it reads the skill.
 type Entry struct {
 	Name           string     `json:"name"`
 	Description    string     `json:"description"`
 	Origin         string     `json:"origin"`
+	Server         string     `json:"server,omitempty"`
 	URI            string     `json:"uri"`
 	UserInvocable  bool       `json:"userInvocable"`
 	ModelInvocable bool       `json:"modelInvocable"`
@@ -80,6 +89,7 @@ type Ref struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Origin      string `json:"origin"`
+	Server      string `json:"server,omitempty"`
 }
 
 // ImportedRoot returns the directory of the imported skills of the agent:
@@ -142,7 +152,7 @@ func Allowed(a *fw.Agent, globs []string) []Ref {
 	out := []Ref{}
 	for _, e := range Catalog(a) {
 		if fw.SkillAllowed(globs, e.Name) {
-			out = append(out, Ref{Name: e.Name, Description: e.Description, Origin: e.Origin})
+			out = append(out, Ref{Name: e.Name, Description: e.Description, Origin: e.Origin, Server: e.Server})
 		}
 	}
 	return out
@@ -157,6 +167,25 @@ func (e Entry) Body() (string, error) {
 	}
 	_, body := splitFrontMatter(text)
 	return body, nil
+}
+
+// read reads SKILL.md of the skill and returns the entry with the keys of
+// its front matter, and the body. A skill of a server is read at the
+// moment of use, through the kernel, which checks it.
+func (e Entry) read(log *slog.Logger) (Entry, string, error) {
+	text, err := e.skill.Body()
+	if err != nil {
+		return e, "", fmt.Errorf("%w: the skill %s: %v", ErrUnavailable, e.Name, err)
+	}
+	fm, body := splitFrontMatter(text)
+	m := parseMeta(fm)
+	for _, p := range m.problems {
+		log.Warn("skills: a key of the front matter does not fit, so it takes its default", "skill", e.Name, "problem", p)
+	}
+	out := e
+	out.UserInvocable, out.ModelInvocable, out.ArgumentHint, out.Arguments = true, true, "", []Argument{}
+	m.apply(&out)
+	return out, body, nil
 }
 
 // Dir returns the directory of the skill on disk.
@@ -189,14 +218,19 @@ func uriOf(s fw.Skill, dirs []string) string {
 	return fw.SkillFile
 }
 
-// entryOf reads the front matter of a skill for the catalog.
+// entryOf reads the front matter of a skill for the catalog. A skill of a
+// server keeps the defaults, because the catalog reads no file of it ahead
+// of need.
 func entryOf(s fw.Skill, origin, uri string, log *slog.Logger) Entry {
-	e := Entry{Name: s.Name, Description: s.Description, Origin: origin, URI: uri, UserInvocable: true, ModelInvocable: true, Arguments: []Argument{}, Files: []string{}, skill: s}
+	e := Entry{Name: s.Name, Description: s.Description, Origin: origin, Server: s.Server, URI: uri, UserInvocable: true, ModelInvocable: true, Arguments: []Argument{}, Files: []string{}, skill: s}
 	files, err := s.Files()
 	if err != nil {
 		log.Warn("skills: list the files of a skill", "skill", s.Name, "error", err)
 	} else if files != nil {
 		e.Files = files
+	}
+	if fromServer(s) {
+		return e
 	}
 	text, err := s.Body()
 	if err != nil {

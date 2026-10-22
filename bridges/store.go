@@ -31,6 +31,9 @@ var (
 	ErrConflict = errors.New("bridges: conflict")
 	// ErrTooLarge is a slash command whose message passes its bound.
 	ErrTooLarge = errors.New("bridges: too large")
+	// ErrUnavailable is a slash command whose skill the front cannot read
+	// now, such as a skill of an MCP server that does not answer.
+	ErrUnavailable = errors.New("bridges: unavailable")
 )
 
 // casAttempts bounds the tries of a change that other writers race.
