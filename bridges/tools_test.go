@@ -2,6 +2,7 @@ package bridges
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -46,6 +47,10 @@ func TestToolsAreListed(t *testing.T) {
 	}
 	if !tools[ToolRead].Annotations.ReadOnlyHint || tools[ToolPost].Annotations.ReadOnlyHint {
 		t.Fatal("the read-only hints are wrong")
+	}
+	// A run never pins a message: only a person does, on the route.
+	if schema, err := json.Marshal(tools[ToolPost].InputSchema); err != nil || strings.Contains(string(schema), "pinned") {
+		t.Fatalf("bridge_post takes pinned: %s %v", schema, err)
 	}
 }
 

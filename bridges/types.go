@@ -189,7 +189,9 @@ type Item struct {
 
 // Message is one entry of the channel of a bridge. Page names the page of
 // the wiki that a system line is about, such as bridges/<id>/report.md, so
-// the page of bossmode links it without a link in the text.
+// the page of bossmode links it without a link in the text. Pinned is true
+// for a message that a person pinned: each of its deliveries is a pinned
+// follow-up, which survives every compaction of the run that gets it.
 type Message struct {
 	Seq       uint64              `json:"seq"`
 	At        time.Time           `json:"at"`
@@ -200,6 +202,7 @@ type Message struct {
 	Event     string              `json:"event,omitempty"`
 	Page      string              `json:"page,omitempty"`
 	Cut       bool                `json:"cut"`
+	Pinned    bool                `json:"pinned"`
 	Mirrors   *Mirror             `json:"mirrors"`
 	Reactions map[string][]string `json:"reactions"`
 	Decision  *Decision           `json:"decision"`

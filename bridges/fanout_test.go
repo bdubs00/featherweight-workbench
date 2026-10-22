@@ -130,6 +130,48 @@ func TestFanOutSkipsALimit(t *testing.T) {
 	}
 }
 
+// A person pins a message: the entry records it, and each delivery of it
+// goes to the run of each addressed member with pinned, so it survives
+// every compaction of the run. A message without the pin carries none,
+// and an agent pins nothing.
+func TestPinnedMessage(t *testing.T) {
+	s, _, fm, url, id := fanBridge(t, "")
+	resp, body := do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Keep every test green.","pinned":true}`)
+	var m Message
+	decodeJSON(t, body, &m)
+	if resp.StatusCode != http.StatusCreated || !m.Pinned {
+		t.Fatalf("pinned post = %d %s", resp.StatusCode, body)
+	}
+	eventually(t, "both members get the pinned message", func() bool {
+		return len(fm.find(http.MethodPost, pathMig)) == 1 && len(fm.find(http.MethodPost, pathRev)) == 1
+	})
+	for _, path := range []string{pathMig, pathRev} {
+		if d := fm.find(http.MethodPost, path)[0]; d.Body["pinned"] != true {
+			t.Fatalf("delivery to %s = %+v", path, d.Body)
+		}
+	}
+	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Only you, and not pinned.","to":["reviewer"]}`)
+	eventually(t, "the reviewer gets the second message", func() bool { return len(fm.find(http.MethodPost, pathRev)) == 2 })
+	if d := fm.find(http.MethodPost, pathRev)[1]; d.Body["pinned"] != nil {
+		t.Fatalf("a message without the pin = %+v", d.Body)
+	}
+	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Pinned for you.","to":["reviewer"],"pinned":true}`)
+	eventually(t, "the reviewer gets the addressed pin", func() bool { return len(fm.find(http.MethodPost, pathRev)) == 3 })
+	time.Sleep(50 * time.Millisecond)
+	if d := fm.find(http.MethodPost, pathRev)[2]; d.Body["pinned"] != true || len(fm.find(http.MethodPost, pathMig)) != 1 {
+		t.Fatalf("an addressed pin = %+v", d.Body)
+	}
+	if got := channel(t, s, id)[m.Seq-1]; !got.Pinned {
+		t.Fatalf("the channel holds the entry as %+v", got)
+	}
+	if _, body := do(t, http.MethodGet, url+"/v1/bridges/"+id+"/messages", "alice", ""); !strings.Contains(body, `"pinned":true`) || !strings.Contains(body, `"pinned":false`) {
+		t.Fatalf("the page of the channel = %s", body)
+	}
+	if _, err := s.post(context.Background(), id, sender{handle: "migrator-1", run: "r-mig"}, PostSpec{Text: "Mine.", Pinned: true}); !errIs(err, fw.ErrInvalidRequest) {
+		t.Fatalf("an agent pins: %v", err)
+	}
+}
+
 // A seat whose newest run failed for another reason than a limit gets
 // nothing either, and the channel says so once for that run with the
 // reason from the run. A new run of the seat takes messages again.

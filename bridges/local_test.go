@@ -47,8 +47,8 @@ func TestLocalSeat(t *testing.T) {
 		got, _ := a.Get(ctx, r.ID)
 		return got != nil && got.Reactions[fw.ReactionUp] == 1
 	})
-	do(t, http.MethodPost, url+"/v1/bridges/"+it.ID+"/messages", "alice", `{"text":"One more thing.","to":["migrator-1"]}`)
-	var from *fw.MessageFrom
+	do(t, http.MethodPost, url+"/v1/bridges/"+it.ID+"/messages", "alice", `{"text":"One more thing.","to":["migrator-1"],"pinned":true}`)
+	var got fw.MessageReceivedData
 	eventually(t, "the follow-up reaches the run", func() bool {
 		for e, err := range a.Ledger().Read(ctx, r.ID, 0) {
 			if err != nil {
@@ -56,14 +56,18 @@ func TestLocalSeat(t *testing.T) {
 			}
 			var d fw.MessageReceivedData
 			if e.Type == fw.EvMessageReceived && e.Decode(&d) == nil && d.From != nil {
-				from = d.From
+				got = d
 				return true
 			}
 		}
 		return false
 	})
-	if from.Kind != fw.FromPerson || from.Name != "alice" || from.Member != "migrator-1" {
+	if from := got.From; from.Kind != fw.FromPerson || from.Name != "alice" || from.Member != "migrator-1" {
 		t.Fatalf("from = %+v", from)
+	}
+	// A pinned message of a person is a pinned follow-up of the run.
+	if !got.Pinned {
+		t.Fatalf("the follow-up of a pinned message = %+v", got)
 	}
 	var receipt bool
 	for e, err := range a.Ledger().Read(ctx, r.ID, 0) {

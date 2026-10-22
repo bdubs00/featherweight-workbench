@@ -67,14 +67,20 @@ func (x sender) party(member string) fw.MessageFrom {
 }
 
 // PostSpec is a message of a person or an agent: the text, the handles
-// that it addresses, and the entry that it replies to.
+// that it addresses, and the entry that it replies to. Pinned is for a
+// message of a person alone: each delivery of the message is a pinned
+// follow-up (fw.WithMessagePinned), so the instruction stays in the
+// context of the members through every compaction. The tool bridge_post
+// does not take it.
 type PostSpec struct {
 	Text    string   `json:"text"`
 	To      []string `json:"to,omitempty"`
 	ReplyTo *uint64  `json:"replyTo,omitempty"`
+	Pinned  bool     `json:"pinned,omitempty"`
 }
 
 // delivery is one follow-up of a message to the newest run of a member.
+// pinned makes the follow-up survive every compaction of the run.
 type delivery struct {
 	bridge  string
 	seq     uint64
@@ -82,6 +88,7 @@ type delivery struct {
 	run     *fw.Run
 	content string
 	from    fw.MessageFrom
+	pinned  bool
 }
 
 // header is the first line of a follow-up, which names the bridge, so a
@@ -123,6 +130,8 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 		return Message{}, invalid("a message holds at most %d bytes", maxTextBytes)
 	case len(spec.To) > maxTo:
 		return Message{}, invalid("a message addresses at most %d members", maxTo)
+	case spec.Pinned && snd.handle != "":
+		return Message{}, invalid("only a person pins a message")
 	}
 	var to []string
 	seen := map[string]bool{}
@@ -165,7 +174,7 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 		claim(rec, runs)
 		cut, isCut := cutText(text, entryTextBytes)
 		msg = newMessage(snd.from(), cut)
-		msg.Seq, msg.At, msg.Cut, msg.ReplyTo = rec.alloc(), now, isCut, spec.ReplyTo
+		msg.Seq, msg.At, msg.Cut, msg.ReplyTo, msg.Pinned = rec.alloc(), now, isCut, spec.ReplyTo, spec.Pinned
 		if to != nil {
 			msg.To = to
 		}
@@ -286,7 +295,7 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 			}
 			f.Pairs[pair]++
 		}
-		plan = append(plan, delivery{bridge: rec.ID, seq: msg.Seq, handle: m.Handle, run: r, content: head + text, from: snd.party(m.Handle)})
+		plan = append(plan, delivery{bridge: rec.ID, seq: msg.Seq, handle: m.Handle, run: r, content: head + text, from: snd.party(m.Handle), pinned: msg.Pinned})
 	}
 	if len(minuteMissed) > 0 && !f.MinuteCapped.Equal(minute) {
 		f.MinuteCapped = minute
@@ -339,7 +348,7 @@ type job struct {
 func (s *Store) deliveryJob(d delivery) *job {
 	return &job{
 		name: fmt.Sprintf("message %d of %s to %s", d.seq, d.bridge, d.handle),
-		do:   func(ctx context.Context) error { return s.send(ctx, d.run, d.content, d.from) },
+		do:   func(ctx context.Context) error { return s.send(ctx, d.run, d.content, d.from, d.pinned) },
 		fail: func(err error) {
 			s.log.Warn("bridges: a member did not get a message", "bridge", d.bridge, "seq", d.seq, "member", d.handle, "run", d.run.ID, "error", err)
 			_ = s.postLines(s.ctx, d.bridge, system(EventFailed, fmt.Sprintf("%s did not get message %d: %s.", d.handle, d.seq, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))

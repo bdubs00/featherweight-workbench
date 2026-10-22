@@ -205,7 +205,7 @@ func (s *Store) place(ctx context.Context, rec *record, m Member) error {
 	s.submit(&job{
 		name: "the seat " + m.Handle + " of " + rec.ID + " to the manager",
 		do: func(ctx context.Context) error {
-			return s.send(ctx, mgr, content, fw.MessageFrom{Kind: fw.FromPerson, Name: op, Member: HandleManager})
+			return s.send(ctx, mgr, content, fw.MessageFrom{Kind: fw.FromPerson, Name: op, Member: HandleManager}, false)
 		},
 		fail: func(err error) {
 			_ = s.postLines(s.ctx, rec.ID, system(EventFailed, fmt.Sprintf("The manager did not get the seat %s: %s", m.Handle, oneLine(err.Error(), 300))))
@@ -533,7 +533,7 @@ func (s *Store) askReport(ctx context.Context, rec *record) {
 		s.submit(&job{
 			name: "the report of " + rec.ID,
 			do: func(ctx context.Context) error {
-				return s.send(ctx, mgr, content, fw.MessageFrom{Kind: fw.FromPerson, Name: op, Member: HandleManager})
+				return s.send(ctx, mgr, content, fw.MessageFrom{Kind: fw.FromPerson, Name: op, Member: HandleManager}, false)
 			},
 			fail: func(err error) {
 				_ = s.postLines(s.ctx, rec.ID, system(EventFailed, "The manager did not get the ask for the report: "+oneLine(err.Error(), 300)))

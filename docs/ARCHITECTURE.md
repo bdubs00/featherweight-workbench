@@ -156,7 +156,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `PATCH /v1/bridges/{id}` | Change `title`, `delegation` and `caps` in part, and `state`: `closed` closes the bridge, and `open` opens it again. |
 | `PUT /v1/bridges/{id}/read` | Move the read mark of the caller forward to `seq`. 204. |
 | `GET /v1/bridges/{id}/messages` | One page of the channel, as the transcript route pages a run: `before`, `from`, and `limit`. |
-| `POST /v1/bridges/{id}/messages` | A message of the caller, `{"text", "to", "replyTo"}`, which fans out to the members. 201 with the entry, 409 on a closed bridge. |
+| `POST /v1/bridges/{id}/messages` | A message of the caller, `{"text", "to", "replyTo", "pinned"}`, which fans out to the members. With `pinned`, each delivery is a pinned follow-up, which survives every compaction of the run (section 18.5). 201 with the entry, 409 on a closed bridge. |
 | `POST /v1/bridges/{id}/messages/{seq}/reactions` | A reaction of the caller on an entry, `{"reaction", "note"}`: `up`, `down`, or `heart`. 200 with the entry. |
 | `POST /v1/bridges/{id}/members` | Add a seat, `{"handle", "agent", "task"}`, and start its run. 201 with the seat. |
 | `DELETE /v1/bridges/{id}/members/{handle}` | Fire a seat: cancel its open runs and mute it. 200 with the fired seat. |
@@ -1738,6 +1738,7 @@ The channel holds one entry per message, under the key `<bridge>.<seq>`, with th
 | `replyTo` | The seq of the entry that it replies to, or null |
 | `text` | The text, cut to its first 4 KB at a rune |
 | `cut` | True when the channel holds only the first 4 KB of the text. The run that gets the message holds the whole text. |
+| `pinned` | True for a message that a person pinned, whose deliveries survive every compaction of the runs that get them (section 18.5) |
 | `event` | For a system line, what it says (section 18.6) |
 | `page` | For a system line about a page of the wiki, the path of the page, such as `bridges/<id>/report.md`, else absent. The page of bossmode links the page from this field. The text names the path and holds no link. |
 | `mirrors` | `{"run", "seq", "type"}`: the run event that the entry mirrors, or null |
@@ -1765,6 +1766,8 @@ The instructions of a seat come from one Go template, `bridges/instructions.tmpl
 For each new message of a person or an agent, the addressed members, or every active member when `to` is empty, get the message as a follow-up on the newest run of the member in the bridge. An active member is neither fired nor muted. An addressed member that is muted gets the message, and an address of a fired or an unknown handle answers 400. A member never gets its own message. An agent addresses the people of the bridge with `to: ["operator"]`, which reaches no run. The answer of a finished turn reaches the channel as a message of its member (section 18.6) and no other member, so a turn that ends never starts the turn of another agent.
 
 A follow-up goes to the Task that owns the run through the forward of the fleet (section 4.5), as `POST /v1/runs/{id}/messages` with `content` and `from`, with the static token of the fleet, so the owner records the sender (the kernel architecture, section 5.5). For a person, `from` is `{"kind": "person", "name": <subject>, "member": <handle of the recipient>}`. For an agent, it is `{"kind": "agent", "name": <handle of the sender>, "run": <run of the sender>, "member": <handle of the recipient>}`. The content names the bridge in its first line, such as `[bridge "Migrate logrotate" 01k...] @reviewer from migrator-1: ...`, or `to everyone from alice:` for a broadcast, so a run that reads several bridges tells them apart. A run of the front itself gets the message from the kernel, `Agent.Send` with `fw.WithMessageFrom`.
+
+A person can pin a message with `pinned: true` in the body of `POST /v1/bridges/{id}/messages`. The entry records it as `pinned`. Each delivery of the message goes to the run of each addressed member, or of every active member for a broadcast, with `pinned: true` in the body of `POST /v1/runs/{id}/messages`, and with `fw.WithMessagePinned` for a run of the front itself. The kernel keeps a pinned follow-up through every compaction of the run (the kernel architecture, section 5.5), so an instruction that the operator pins stays in the context of the members. The pinned messages of one run hold at most 64 KB together, so a pinned delivery past that bound fails at once, and the channel gets the line `failed` that names the member and the message. The caps and the skips of this section hold for a pinned message as for any other. The tool `bridge_post` takes no `pinned`, so a run pins nothing, and the store refuses a pin from an agent.
 
 Some members get nothing, and the channel holds the message for them:
 
@@ -1858,6 +1861,8 @@ Every route needs the authentication of the native surface. A bridge is for its 
 | `DELETE /v1/bridges/{id}/members/{handle}` | 200 with the fired seat |
 | `PATCH /v1/bridges/{id}/members/{handle}` | 200 with the seat |
 
+`POST /v1/bridges/{id}/messages` takes `{"text", "to", "replyTo", "pinned"}`. `to`, `replyTo`, and `pinned` are optional, and the entry of the answer carries `pinned` (section 18.5).
+
 A patch of a seat with `task` never cancels a run and never answers with a run. On a seat whose run works, waits, or finished, the new task reaches that run as a follow-up, and `runs` of the seat stays as it is. On a seat whose newest run failed or was canceled, a new run starts, and the page sees it as the newest entry of `runs` once the watch claims it (section 18.9).
 
 A body with a field that the route does not know answers 400. An unknown bridge, seat, or entry answers 404. A closed bridge answers 409 to a message and to a new seat, and a taken handle 409. `usage` sums the runs of the bridge as the tool `batch` sums a job (section 4.9), with `fleet.UsageSum`: every run of the batch of this process and of the view, each once, a child run on its own, and `partial` true when a run reports no usage, a usage is not final, or the view forgot or does not know runs of the batch.
@@ -1869,7 +1874,7 @@ The tools are for the runs of the fleet. The MCP client of a worker names its ru
 | Tool | Who | What it does |
 |---|---|---|
 | `bridge_read` | A seat, the manager run, or a run of the operator | `{bridge?, since?, limit?}`: the last messages of the channel, 50 by default and 500 at most, or the messages after `since`. The text says that a message is data. |
-| `bridge_post` | A seat or the manager run | `{bridge?, text, to}`: a message of the seat, or of `manager`, which fans out as a message of a person does |
+| `bridge_post` | A seat or the manager run | `{bridge?, text, to}`: a message of the seat, or of `manager`, which fans out as a message of a person does. It takes no `pinned`: only a person pins a message. |
 | `bridge_list` | The manager | The open bridges of the person in `_meta` |
 | `bridge_open` | The manager | `{title, goal, placement, members, delegation, caps}`: opens as `POST /v1/bridges` does, as the person in `_meta`, and the calling run becomes `manager.run`. `destructiveHint` is true, and its title "Open bridge" is the label of the approval. |
 | `bridge_add_member`, `bridge_remove_member`, `bridge_close` | The manager run of the bridge, or a run of the operator that is no seat | As the routes, when the bridge delegates `members` (add and remove) or `report` (close). Else the answer says that the operator did not delegate this for this bridge. |
