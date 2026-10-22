@@ -679,14 +679,20 @@ func PoolAgents(ctx context.Context, a *fw.Agent) ([]PoolAgent, bool, error) {
 
 // PoolAgentNamed returns the profile name that a pool of the fleet of a
 // runs, as the caller sees it. pool names the pool when several pools run
-// the profile. It reports false when no pool that the caller can view
-// runs the profile.
+// the profile. Without pool, of several pools that hold the profile, the
+// one pool whose agent is the profile wins, as for the writes of a
+// profile (section 14.9): its workers take the queue of the profile, and
+// another pool holds the profile only for its child Tasks, as the pool of
+// the manager does. It refuses when none of them or several of them have
+// the profile as their agent. It reports false when no pool that the
+// caller can view runs the profile.
 func PoolAgentNamed(ctx context.Context, a *fw.Agent, name, pool string) (PoolAgent, bool, error) {
 	f := fleetOf(a)
 	if f == nil {
 		return PoolAgent{}, false, nil
 	}
 	var found []PoolAgent
+	agentOf := map[string]string{}
 	for _, base := range f.poolsNow(ctx) {
 		if pool != "" && base.Name != pool {
 			continue
@@ -696,12 +702,22 @@ func PoolAgentNamed(ctx context.Context, a *fw.Agent, name, pool string) (PoolAg
 			return PoolAgent{}, false, err
 		}
 		found = append(found, got...)
+		agentOf[base.Name] = base.Agent
 	}
 	switch len(found) {
 	case 0:
 		return PoolAgent{}, false, nil
 	case 1:
 		return found[0], true, nil
+	}
+	var by []PoolAgent
+	for _, pa := range found {
+		if agentOf[pa.Pool] == name {
+			by = append(by, pa)
+		}
+	}
+	if len(by) == 1 {
+		return by[0], true, nil
 	}
 	var names []string
 	for _, pa := range found {

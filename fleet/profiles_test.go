@@ -188,6 +188,94 @@ func TestPoolProfileWrites(t *testing.T) {
 	}
 }
 
+// crewBlock is the pools of a manager and of its crew: the pool manager
+// takes the queue of the manager and holds the profile reviewer for its
+// child Tasks, and the pools crew-migrator and crew-reviewer take the
+// queues of their agents.
+const crewBlock = `
+pools:
+  - name: manager
+    replicas: 1
+    image: ghcr.io/example/fw@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    agent: manager
+    egress:
+      rules:
+        - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
+    fw:
+      model: openai/some-model
+      bus: {url: "ws://nats.agents.svc.cluster.local:8080"}
+      agents:
+        manager: {description: Runs the bridges.}
+        reviewer: {description: Reviews a change.}
+        writer: {description: Writes the notes.}
+  - name: crew-migrator
+    replicas: 1
+    image: ghcr.io/example/fw@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    agent: migrator
+    egress:
+      rules:
+        - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
+    fw:
+      model: openai/some-model
+      bus: {url: "ws://nats.agents.svc.cluster.local:8080"}
+      agents:
+        migrator: {description: Migrates a module.}
+        writer: {description: Writes the notes.}
+  - name: crew-reviewer
+    replicas: 1
+    image: ghcr.io/example/fw@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    agent: reviewer
+    egress:
+      rules:
+        - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
+    fw:
+      model: openai/some-model
+      bus: {url: "ws://nats.agents.svc.cluster.local:8080"}
+      agents:
+        reviewer: {description: Reviews a change.}
+`
+
+// A profile that two pools hold resolves to the pool whose agent is the
+// profile, as a seat of a queue bridge needs it: the pool of the manager
+// holds migrator in its overlay and reviewer in its configuration for its
+// child Tasks, and neither is its agent. A profile that no pool or several
+// pools have as their agent still needs pool.
+func TestPoolAgentNamedPrefersTheAgentOfAPool(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "team")
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
+	ax := newPoolAX(t)
+	tasks := newFakeTasks(t)
+	front := newMember(t, fw.NewMemBus(), "front", poolFront(t, ax, strings.TrimPrefix(tasks.srv.URL, "http://"), crewBlock))
+	ctx := context.Background()
+	if err := overlaysOf(t, front.f).PutProfile(ctx, "manager", pools.OverlayProfile{Profile: fw.AgentProfile{Name: "migrator", Description: "Migrates a module."}, By: "alice", At: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the pool manager holds migrator", func() bool {
+		pa, ok, err := PoolAgentNamed(ctx, front.a, "migrator", "manager")
+		return err == nil && ok && pa.Overlay == OverlayAdded
+	})
+
+	for _, c := range []struct{ name, pool string }{{"migrator", "crew-migrator"}, {"reviewer", "crew-reviewer"}, {"manager", "manager"}} {
+		pa, ok, err := PoolAgentNamed(ctx, front.a, c.name, "")
+		if err != nil || !ok || pa.Pool != c.pool || pa.Name != c.name {
+			t.Fatalf("PoolAgentNamed(%s) = %+v, %v, %v", c.name, pa.Pool, ok, err)
+		}
+	}
+	// pool still names the other pool.
+	if pa, ok, err := PoolAgentNamed(ctx, front.a, "migrator", "manager"); err != nil || !ok || pa.Pool != "manager" {
+		t.Fatalf("PoolAgentNamed with the pool manager = %+v, %v, %v", pa.Pool, ok, err)
+	}
+	// No pool has writer as its agent, so the choice stays with the caller.
+	_, ok, err := PoolAgentNamed(ctx, front.a, "writer", "")
+	if ok || !errors.Is(err, fw.ErrInvalidRequest) || !strings.Contains(err.Error(), "the pools manager, crew-migrator run the agent writer; pass pool to name one") {
+		t.Fatalf("PoolAgentNamed(writer) = %v, %v", ok, err)
+	}
+	// The writes of a profile pick the same pool.
+	if at, err := PlaceOf(ctx, front.a, "migrator", ""); err != nil || PoolOf(at) != "crew-migrator" {
+		t.Fatalf("PlaceOf(migrator) = %v, %v", PoolOf(at), err)
+	}
+}
+
 // Without pools, every profile lives in the store of the process, and the
 // tools of the pools say why they do not apply.
 func TestPoolProfilesWithoutPools(t *testing.T) {
