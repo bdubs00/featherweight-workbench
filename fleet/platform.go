@@ -159,6 +159,12 @@ type platformMember struct {
 	// while the Task sleeps still shows it to the people who can use it.
 	agents  map[string]bool
 	learned bool // the Workspaces of the Task were read once
+	// pool is FW_POOL of the Task, the pool whose Workspace and intake it
+	// has. A child Task of spawn_task keeps the variables and the
+	// Workspace of its parent, so it names the pool of its parent. A wake
+	// for a queue reaches a Task of a pool for the intake of its pool alone
+	// (suspend.go).
+	pool string
 	// blocked is the reason from the status of the Task when the suspend
 	// controller found it blocked by a storage failure, and empty
 	// otherwise. statusAt is when the controller last read the status of
@@ -345,6 +351,7 @@ func (p *platform) poll(ctx context.Context) {
 			}
 			was, wasPhase := m.state, m.phase
 			m.phase = t.GetStatus().GetPhase()
+			m.pool = taskVar(t, pools.EnvPool)
 			m.state, m.seen = stateOfPhase(m.phase), now
 			if m.state == MemberLive && was != MemberLive {
 				m.liveSince, m.filled = now, false
@@ -395,6 +402,16 @@ func (p *platform) poll(ctx context.Context) {
 	}
 	p.suspendIdle(ctx, now)
 	p.reconcilePools(ctx, listed, failed, now)
+}
+
+// taskVar returns the value of a variable of a Task, or "".
+func taskVar(t *v1alpha1.Task, name string) string {
+	for _, e := range t.GetSpec().GetEnv() {
+		if e.GetName() == name {
+			return e.GetValue()
+		}
+	}
+	return ""
 }
 
 // learn reads the profiles that a Task serves from the configuration file

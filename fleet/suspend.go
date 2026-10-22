@@ -196,42 +196,45 @@ const (
 	wakeQueue   = "queue"   // jobs wait in the queue (queues.go)
 )
 
-// WakeFor wakes the suspended Tasks that serve a profile, after a job went
-// on the queue of that profile. A Task that sleeps reads no queue, and the
-// router wakes a Task on a request only, so the front sends each one a
-// read of GET /v1/status. The reads run in the background; the caller does
-// not wait for the wakes. When no sleeping Task is known to serve the
-// profile, the front wakes the sleeping Tasks whose profiles it does not
-// know yet, such as the Tasks that slept since before the front started:
-// one of them may serve the profile, and the first wake teaches the front
-// what each one serves.
+// WakeFor wakes the suspended Tasks that take the jobs of the queue of a
+// profile, <intake>.<agent>, after a job went on that queue. A Task that
+// sleeps reads no queue, and the router wakes a Task on a request only, so
+// the front sends each one a read of GET /v1/status. The reads run in the
+// background; the caller does not wait for the wakes. A Task of a pool
+// takes the jobs of the intake of its pool alone, and a Task of no pool
+// takes the jobs of every profile that it serves (servesQueue). When no
+// sleeping Task is known to take the jobs, the front wakes the sleeping
+// Tasks of no pool whose profiles it does not know yet, such as the Tasks
+// that slept since before the front started: one of them can serve the
+// profile, and the first wake teaches the front what each one serves.
 func (f *Fleet) WakeFor(agent string) {
-	f.wakeFor(agent, wakeEnqueue, 0)
+	agent = strings.TrimSpace(agent)
+	f.wakeFor(f.intake+"."+agent, agent, wakeEnqueue, 0)
 }
 
-// wakeFor wakes the sleeping Tasks for a profile as WakeFor says, and
-// returns how many wakes it started. It leaves out a Task whose wake still
-// runs, and, with hold above zero, a Task that a wake reached within hold,
-// so a Task that just woke has time to take a job. The ax API records no
-// reason for a suspend, so the front cannot tell a Task that a person
-// suspended from one that the controller suspended, and wakes both.
-func (f *Fleet) wakeFor(agent, cause string, hold time.Duration) int {
+// wakeFor wakes the sleeping Tasks for the queue of a profile as WakeFor
+// says, and returns how many wakes it started. It leaves out a Task whose
+// wake still runs, and, with hold above zero, a Task that a wake reached
+// within hold, so a Task that just woke has time to take a job. The ax API
+// records no reason for a suspend, so the front cannot tell a Task that a
+// person suspended from one that the controller suspended, and wakes both.
+func (f *Fleet) wakeFor(queue, agent, cause string, hold time.Duration) int {
 	p := f.platform
-	agent = strings.TrimSpace(agent)
 	if p == nil || agent == "" {
 		return 0
 	}
 	now := time.Now()
 	p.mu.Lock()
+	intakes := p.intakes()
 	var sleeping, unknown []*platformMember
 	for _, m := range p.members {
 		if m.atespace == "" || m.state != MemberQuiet {
 			continue
 		}
-		switch {
-		case m.agents[agent]:
+		switch serves, known := m.servesQueue(queue, agent, intakes); {
+		case serves:
 			sleeping = append(sleeping, m)
-		case len(m.agents) == 0:
+		case !known:
 			unknown = append(unknown, m)
 		}
 	}
@@ -251,6 +254,40 @@ func (f *Fleet) wakeFor(agent, cause string, hold time.Duration) int {
 		go p.wake(f.ctx, m, agent, cause)
 	}
 	return len(wake)
+}
+
+// intakes returns the intake of each pool that the front keeps, by the
+// name of the pool: the pools of the file and the runtime pools of the
+// last pass, as the pools render bus.intake. The caller holds p.mu.
+func (p *platform) intakes() map[string]string {
+	out := make(map[string]string, len(p.pools)+len(p.rt))
+	for _, pl := range p.pools {
+		out[pl.Name] = pl.Intake
+	}
+	for name, rt := range p.rt {
+		if _, ok := out[name]; !ok && rt.base != nil {
+			out[name] = rt.base.Intake
+		}
+	}
+	return out
+}
+
+// servesQueue reports whether the member takes the jobs of queue, the
+// queue of the profile agent, and whether the front knows that. A Task of
+// a pool that the front keeps takes the jobs of the intake of its pool
+// alone, whatever profiles its configuration holds: the pool of a manager
+// holds the profiles of its children, and its Tasks read the queue of the
+// manager. A Task of no pool takes the jobs of every profile that it
+// serves. The front does not know about a Task of no pool whose profiles it
+// has not learned yet.
+func (m *platformMember) servesQueue(queue, agent string, intakes map[string]string) (serves, known bool) {
+	if intake, ok := intakes[m.pool]; ok && m.pool != "" {
+		return intake == queue, true
+	}
+	if len(m.agents) == 0 {
+		return false, false
+	}
+	return m.agents[agent], true
 }
 
 // wake reads the status of a sleeping Task through the router, which

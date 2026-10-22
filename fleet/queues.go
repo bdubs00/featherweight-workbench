@@ -8,10 +8,11 @@ package fleet
 // a worker holds and has not acknowledged, from the server of the bus. It
 // also counts the dead letters of each queue, the records that a worker
 // sends to "<queue>.dead" for a job that cannot start or that failed on its
-// last attempt. When jobs wait and no awake Task that serves the profile
-// has room, the front wakes the sleeping Tasks that serve it, as it does
-// after its own enqueue (suspend.go). The metrics of the front show the
-// same numbers (metrics.go).
+// last attempt. When jobs wait and no awake Task that takes the queue has
+// room, the front wakes the sleeping Tasks that take it, as it does after
+// its own enqueue (suspend.go): a Task of a pool takes the intake of its
+// pool alone, and a Task of no pool the queue of each profile that it
+// serves. The metrics of the front show the same numbers (metrics.go).
 
 import (
 	"context"
@@ -36,7 +37,7 @@ const deadIDWindow = 4096
 
 // stallIntervals is how many intervals the jobs of a queue can wait
 // without one of them leaving before the front wakes the sleeping Tasks
-// that serve the profile even though an awake Task seems to have room.
+// that take the queue even though an awake Task seems to have room.
 // holdIntervals is how many intervals a Task that a wake for a queue
 // reached stays out of the next wake for a queue, so it has time to take a
 // job.
@@ -437,9 +438,10 @@ func (f *Fleet) queueStates() (map[string]queueState, time.Time) {
 	return out, q.readAt
 }
 
-// wakeQueued wakes the sleeping Tasks that serve the profile of a queue in
-// which jobs wait, when no awake Task that serves the profile has room, or
-// when no job left the queue for stallIntervals intervals. An awake Task
+// wakeQueued wakes the sleeping Tasks that take the jobs of a queue in
+// which jobs wait (servesQueue), when no awake Task that takes the queue
+// has room, or when no job left the queue for stallIntervals intervals.
+// An awake Task
 // has room when the view holds no run of it that is queued or running: a
 // Task under ax runs one run at a time by default. A wake is idempotent, so
 // every replica of the front runs this; two replicas can wake one Task,
@@ -450,7 +452,7 @@ func (f *Fleet) wakeQueued(states []queueState, now time.Time) {
 		return
 	}
 	q := f.queues
-	room := p.roomFor(now, f.interval)
+	room := p.roomFor(now, f.interval, f.intake)
 	for _, st := range states {
 		if !st.depthKnown || st.pending == 0 {
 			delete(q.waits, st.queue)
@@ -463,20 +465,23 @@ func (f *Fleet) wakeQueued(states []queueState, now time.Time) {
 		w.pending = st.pending
 		q.waits[st.queue] = w
 		stalled := now.Sub(w.since) >= stallIntervals*f.interval
-		if room[st.agent] && !stalled {
+		if room[st.queue] && !stalled {
 			continue
 		}
-		if n := f.wakeFor(st.agent, wakeQueue, holdIntervals*f.interval); n > 0 {
+		if n := f.wakeFor(st.queue, st.agent, wakeQueue, holdIntervals*f.interval); n > 0 {
 			f.log.Info("fleet: jobs wait in a queue; the front wakes the sleeping Tasks that serve it",
 				"queue", st.queue, "agent", st.agent, "pending", st.pending, "tasks", n, "stalled", stalled)
 		}
 	}
 }
 
-// roomFor returns the profiles that an awake member with room serves: a
-// running Task, or a worker that only the stream knows and that spoke
-// within QuietAfter intervals, with no run that is queued or running.
-func (p *platform) roomFor(now time.Time, interval time.Duration) map[string]bool {
+// roomFor returns the queues that an awake member with room takes, by the
+// rule of a wake (servesQueue): the intake of its pool for a Task of a
+// pool, and <prefix>.<agent> for each profile that a member of no pool
+// serves. An awake member is a running Task, or a worker that only the
+// stream knows and that spoke within QuietAfter intervals, and it has room
+// with no run that is queued or running.
+func (p *platform) roomFor(now time.Time, interval time.Duration, prefix string) map[string]bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	busy := map[string]bool{}
@@ -485,14 +490,19 @@ func (p *platform) roomFor(now time.Time, interval time.Duration) map[string]boo
 			busy[r.member] = true
 		}
 	}
+	intakes := p.intakes()
 	out := map[string]bool{}
 	for _, m := range p.members {
 		awake := m.state == MemberLive || (m.state == "" && now.Sub(m.seen) <= QuietAfter*interval)
 		if !awake || busy[m.name] {
 			continue
 		}
+		if intake, ok := intakes[m.pool]; ok && m.pool != "" {
+			out[intake] = true
+			continue
+		}
 		for ag := range m.agents {
-			out[ag] = true
+			out[prefix+"."+ag] = true
 		}
 	}
 	return out
