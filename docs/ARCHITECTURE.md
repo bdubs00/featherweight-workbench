@@ -1438,7 +1438,7 @@ A face is the picture, the display name, and the one-line tagline of an agent. T
 
 ### 16.1 The identicon
 
-The identicon is a pattern of five by five cells, symmetric about its middle column. The SHA-256 of the name of the agent sets the cells of the left three columns, and the right two columns mirror them. The hash also sets the hue of the cells, so two agents differ in pattern and in color. The same name always gives the same identicon. It is an SVG of about 1 KB with a `title` element that names the agent, and it passes the sanitizer as it is (`faces.Identicon`).
+The identicon is a pattern of five by five cells, symmetric about its middle column. The SHA-256 of the name of the agent sets the cells of the left three columns, and the right two columns mirror them. The hash also sets the hue of the cells, so two agents differ in pattern and in color. The same name always gives the same identicon. It is an SVG of less than 1 KB with a `title` element that names the agent, and it passes the sanitizer as it is (`faces.Identicon`).
 
 ### 16.2 The sanitizer
 
