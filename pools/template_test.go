@@ -30,9 +30,9 @@ templates:
       - name: TICKETS_TOKEN
         fromEnv: FRONT_TICKETS_TOKEN
     egress:
-      rules:
-        - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
-        - http: {hostnames: [model-proxy.models.svc.cluster.local], ports: [8080]}
+      hosts:
+        - http://nats.agents.svc.cluster.local:8080
+        - http://model-proxy.models.svc.cluster.local:8080
     resources:
       requests: {cpu: 500m, memory: 1Gi}
       limits: {cpu: "2", memory: 2Gi}
@@ -104,7 +104,7 @@ func TestTemplateInheritance(t *testing.T) {
 		t.Fatalf("default = %v, names %q", d, TemplateNames(templates))
 	}
 	p := list[0]
-	if p.Template != "base" || p.Image != testImage || p.Atespace != "team" || p.Generation != 3 || len(p.Egress.Rules) != 2 {
+	if p.Template != "base" || p.Image != testImage || p.Atespace != "team" || p.Generation != 3 || len(p.Egress.Hosts) != 2 {
 		t.Fatalf("pool = template %q image %q atespace %q generation %d", p.Template, p.Image, p.Atespace, p.Generation)
 	}
 	values := map[string]string{}
@@ -162,7 +162,7 @@ func TestTemplateChecks(t *testing.T) {
 		{"image without digest", "    image: " + testImage + "\n    env:\n      - name: OPENAI", "    image: ghcr.io/example/fw:latest\n    env:\n      - name: OPENAI", "workbench.templates[0] (base): image \"ghcr.io/example/fw:latest\" has no digest"},
 		{"a name that is no name", "  - name: base\n", "  - name: Base_1\n", "name \"Base_1\" is not a lowercase name"},
 		{"negative generation", "    generation: 2\n", "    generation: -1\n", "generation -1 is below 0"},
-		{"no egress", "        - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}\n        - http: {hostnames: [model-proxy.models.svc.cluster.local], ports: [8080]}\n    resources:", "        []\n    resources:", "set egress.rules"},
+		{"no egress", "        - http://nats.agents.svc.cluster.local:8080\n        - http://model-proxy.models.svc.cluster.local:8080\n    resources:", "        []\n    resources:", "set egress.hosts"},
 		{"blind token", "      access: {admins: [\"kind:token\"]}\n", "", "an agent that a person creates from the template"},
 		{"unknown template", "    template: base\n", "    template: nope\n", "workbench.pools[0] (triage): template \"nope\" is not in workbench.templates; the templates are base (the default)"},
 		{"the token in env", "      - name: TICKETS_TOKEN\n        fromEnv: FRONT", "      - name: FW_API_TOKEN\n        fromEnv: FRONT", "workbench.templates[0] (base).env[1]: remove FW_API_TOKEN"},

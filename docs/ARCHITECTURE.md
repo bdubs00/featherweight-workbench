@@ -1280,7 +1280,7 @@ Each entry of `workbench.pools` has these keys. A key that a pool does not know 
 | `revision` | Free text. A new value replaces every Task, for example to start every worker again with a new Workspace. | none |
 | `generation` | A number of 0 or more that orders the configurations of the pool (section 14.5). A new value replaces every Task. With more than one replica of the front, raise it with every change of the pool. | `0`, no order |
 | `env` | The variables of the workers. Each entry has `name` and `value`, or `name` and `fromEnv`, the name of a variable of the front. | none |
-| `egress` | `spec.egress` of each Task: `rules`, each with one of `http`, `https`, and `tls`, which hold `hostnames` and `ports`. ax creates the egress policy of the actor from it before the Task first runs. | required |
+| `egress` | `spec.egress` of each Task: `hosts`, each a DNS name with an optional scheme and port. A name alone is TLS on port 443 that the gateway forwards without decryption, `http://` is cleartext HTTP on port 80, `https://` is HTTPS on port 443 that the gateway intercepts, and a port after the name replaces the default. ax creates the egress policy of the actor from it before the Task first runs. | required |
 | `resources` | `requests` and `limits` of each Task, each with `cpu` and `memory`. | none |
 | `files` | Extra files of the Workspace, each with a `path` relative to `/workspace` and its `content`. | none |
 | `fw` | The `fw.yaml` of each worker: the agents and their profiles, the policy, the model, the providers, and the tools. | required |
@@ -1313,7 +1313,7 @@ The front checks every pool at its start, and a problem stops the start. The err
 The checks also cover these points:
 
 - `fw` decodes as a configuration of the kernel, and the checks of the kernel pass on it.
-- The Task and the Workspace pass the checks of the ax API, such as the names and the egress hostnames.
+- The Task and the Workspace pass the checks of the ax API, such as the names and the egress hosts.
 - `env` sets no variable `FW_*` and no variable `AX_*`, and not the token variable of the worker. A variable `FW_*` changes the configuration of the worker after these checks, so a key of `fw` takes its place.
 - Each egress rule sets exactly one of `http`, `https`, and `tls`.
 - `fw.auth.mode` includes `token`, and `fw.bus.driver` is the bus of the front.
@@ -1337,10 +1337,10 @@ workbench:
         - {name: OPENAI_API_KEY, value: the-proxy-holds-the-key}
         - {name: TICKETS_TOKEN, fromEnv: TICKETS_TOKEN}
       egress:
-        rules:
-          - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
-          - http: {hostnames: [model-proxy.models.svc.cluster.local], ports: [8080]}
-          - https: {hostnames: [tickets-mcp.example.com]}
+        hosts:
+          - http://nats.agents.svc.cluster.local:8080
+          - http://model-proxy.models.svc.cluster.local:8080
+          - https://tickets-mcp.example.com
       fw:
         model: openai/example-model
         bus: {url: "ws://nats.agents.svc.cluster.local:8080"}

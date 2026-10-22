@@ -243,10 +243,10 @@ pools:
       - name: TICKETS_TOKEN
         fromEnv: FRONT_TICKETS_TOKEN
     egress:
-      rules:
-        - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
-        - http: {hostnames: [model-proxy.models.svc.cluster.local], ports: [8080]}
-        - https: {hostnames: [mcp.example.com]}
+      hosts:
+        - http://nats.agents.svc.cluster.local:8080
+        - http://model-proxy.models.svc.cluster.local:8080
+        - https://mcp.example.com
     resources:
       requests: {cpu: 500m, memory: 1Gi}
     files:

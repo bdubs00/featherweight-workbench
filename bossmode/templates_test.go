@@ -25,8 +25,8 @@ templates:
   - name: general
     image: ghcr.io/example/fw@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     egress:
-      rules:
-        - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
+      hosts:
+        - http://nats.agents.svc.cluster.local:8080
     fw:
       bus: {url: "ws://nats.agents.svc.cluster.local:8080"}
       access: {admins: ["kind:token"]}
@@ -34,8 +34,8 @@ templates:
     default: true
     image: ghcr.io/example/fw@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     egress:
-      rules:
-        - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
+      hosts:
+        - http://nats.agents.svc.cluster.local:8080
     fw:
       model: openai/some-model
       bus: {url: "ws://nats.agents.svc.cluster.local:8080"}

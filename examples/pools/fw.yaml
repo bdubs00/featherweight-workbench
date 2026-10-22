@@ -53,9 +53,9 @@ workbench:
         - name: OPENAI_API_KEY
           value: the-proxy-holds-the-key
       egress:
-        rules:
-          - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
-          - http: {hostnames: [model-proxy.models.svc.cluster.local], ports: [8080]}
+        hosts:
+          - http://nats.agents.svc.cluster.local:8080
+          - http://model-proxy.models.svc.cluster.local:8080
       resources:
         requests: {cpu: 500m, memory: 1Gi}
         limits: {cpu: "2", memory: 2Gi}
@@ -98,10 +98,10 @@ workbench:
       # A worker reaches these hosts and no other. ax creates the egress
       # policy of each Task from this list before the Task first runs.
       egress:
-        rules:
-          - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
-          - http: {hostnames: [model-proxy.models.svc.cluster.local], ports: [8080]}
-          - https: {hostnames: [tickets-mcp.example.com]}
+        hosts:
+          - http://nats.agents.svc.cluster.local:8080
+          - http://model-proxy.models.svc.cluster.local:8080
+          - https://tickets-mcp.example.com
       resources:
         requests: {cpu: 500m, memory: 1Gi}
         limits: {cpu: "2", memory: 2Gi}

@@ -436,12 +436,12 @@ func (p *Pool) complete(front Front) []string {
 	case !digest.MatchString(p.Image):
 		add("image %q has no digest: Substrate pulls an actor image only by digest, so write it as <image>@sha256:<64 hex digits>", p.Image)
 	}
-	if p.Egress == nil || len(p.Egress.Rules) == 0 {
-		add("set egress.rules, the hosts that a worker reaches: without a rule a worker reaches neither the bus nor the model")
+	if p.Egress == nil || len(p.Egress.Hosts) == 0 {
+		add("set egress.hosts, the hosts that a worker reaches: without a host a worker reaches neither the bus nor the model")
 	} else {
-		for i, r := range p.Egress.Rules {
-			if n := btoi(r.HTTP != nil) + btoi(r.HTTPS != nil) + btoi(r.TLS != nil); n != 1 {
-				add("egress.rules[%d] sets %d protocols; set exactly one of http, https, and tls in each rule", i, n)
+		for i, h := range p.Egress.Hosts {
+			if _, err := v1alpha1.ParseEgressHost(h); err != nil {
+				add("egress.hosts[%d]: %v", i, err)
 			}
 		}
 	}
@@ -729,13 +729,6 @@ func tokenBlind(c *fw.Config) []string {
 	return out
 }
 
-func btoi(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}
-
 // subject reports whether s is a subject without wildcards.
 func subject(s string) bool {
 	if s == "" {
@@ -889,48 +882,40 @@ func (p *Pool) reach() []string {
 		}
 		n, _ := strconv.Atoi(port)
 		if !allows(p.Egress, proto, strings.ToLower(u.Hostname()), int32(n)) {
-			out = append(out, fmt.Sprintf("%s: egress.rules allows no %s connection to %s:%d, %s; add a rule such as {%s: {hostnames: [%s], ports: [%d]}}",
-				p.key(), proto, u.Hostname(), n, t.what, proto, u.Hostname(), n))
+			// A plain host, TLS forwarded without decryption, serves an
+			// https connection without the trust bundle of the gateway.
+			example := fmt.Sprintf("%s:%d", u.Hostname(), n)
+			if proto == "http" {
+				example = "http://" + example
+			}
+			out = append(out, fmt.Sprintf("%s: egress.hosts allows no %s connection to %s:%d, %s; add a host such as %s",
+				p.key(), proto, u.Hostname(), n, t.what, example))
 		}
 	}
 	return out
 }
 
-// allows reports whether a rule of e allows a connection of the protocol
-// to host and port. A tls rule allows an https connection too.
+// allows reports whether a host of e allows a connection of the protocol
+// to host and port. A plain host, TLS that the gateway forwards without
+// decryption, allows an https connection too.
 func allows(e *ax.EgressSpec, proto, host string, port int32) bool {
-	for _, r := range e.Rules {
-		var h *ax.EgressHosts
-		def := int32(443)
-		switch {
-		case r.HTTP != nil && proto == "http":
-			h, def = r.HTTP, 80
-		case r.HTTPS != nil && proto == "https":
-			h = r.HTTPS
-		case r.TLS != nil && proto == "https":
-			h = r.TLS
-		}
-		if h == nil {
+	for _, entry := range e.Hosts {
+		h, err := v1alpha1.ParseEgressHost(entry)
+		if err != nil || h.Port != port {
 			continue
 		}
-		ports := h.Ports
-		if len(ports) == 0 {
-			ports = []int32{def}
-		}
-		if !slices.Contains(ports, port) {
+		if h.Protocol != proto && !(h.Protocol == v1alpha1.EgressTLS && proto == "https") {
 			continue
 		}
-		for _, pattern := range h.Hostnames {
-			if hostMatches(strings.ToLower(pattern), host) {
-				return true
-			}
+		if hostMatches(h.Host, host) {
+			return true
 		}
 	}
 	return false
 }
 
-// hostMatches reports whether a hostname pattern of an egress rule, a name
-// or "*." and a name, matches host.
+// hostMatches reports whether the name of an egress host, a name or "*."
+// and a name, matches host.
 func hostMatches(pattern, host string) bool {
 	if suffix, ok := strings.CutPrefix(pattern, "*"); ok {
 		return strings.HasSuffix(host, suffix) && len(host) > len(suffix)

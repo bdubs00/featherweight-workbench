@@ -281,23 +281,7 @@ func egressOf(e *ax.EgressSpec) *v1alpha1.EgressSpec {
 	if e == nil {
 		return nil
 	}
-	hosts := func(h *ax.EgressHosts) *v1alpha1.EgressHosts {
-		return &v1alpha1.EgressHosts{Hostnames: append([]string(nil), h.Hostnames...), Ports: append([]int32(nil), h.Ports...)}
-	}
-	out := &v1alpha1.EgressSpec{}
-	for _, r := range e.Rules {
-		rule := &v1alpha1.EgressRule{}
-		switch {
-		case r.HTTP != nil:
-			rule.Http = hosts(r.HTTP)
-		case r.HTTPS != nil:
-			rule.Https = hosts(r.HTTPS)
-		case r.TLS != nil:
-			rule.Tls = hosts(r.TLS)
-		}
-		out.Rules = append(out.Rules, rule)
-	}
-	return out
+	return &v1alpha1.EgressSpec{Hosts: append([]string(nil), e.Hosts...)}
 }
 
 // Write prints the Workspaces and the Tasks of the pools as one stream of
