@@ -100,8 +100,13 @@ func TestConditions(t *testing.T) {
 	if _, err := s.Write(ctx, "a.md", "one", "alice", "", IfExists); !errors.Is(err, ErrConflict) {
 		t.Fatalf("IfExists on a new page = %v", err)
 	}
-	if _, err := s.Write(ctx, "a.md", "one", "alice", "", "0123"); !errors.Is(err, ErrConflict) {
+	if _, err := s.Write(ctx, "a.md", "one", "alice", "", Hash("other")); !errors.Is(err, ErrConflict) {
 		t.Fatalf("a hash on a new page = %v", err)
+	}
+	for _, bad := range []string{"0123", `""`, `W/""`, `"absent"`, `"*"`, "not a hash"} {
+		if _, err := s.Write(ctx, "a.md", "one", "alice", "", bad); !errors.Is(err, ErrInvalid) {
+			t.Errorf("the condition %q = %v", bad, err)
+		}
 	}
 	p := mustWrite(t, s, "a.md", "one", IfAbsent)
 	_, err := s.Write(ctx, "a.md", "two", "alice", "", IfAbsent)
@@ -174,7 +179,7 @@ func TestPathsAndLimits(t *testing.T) {
 	ctx := context.Background()
 	s := memStore(Config{MaxPageBytes: 64, MaxPages: 2})
 	for _, p := range []string{"", "plan", "notes/plan.txt", "/abs.md", "../up.md", "a/./b.md", ".hidden.md", "a/.git/b.md",
-		"a\nb.md", "a.md/b.md", "1/2/3/4/5/6/7/8/9.md", strings.Repeat("x", 600) + ".md", "bad\xffutf8.md", "search", "notes/plan.md/history"} {
+		"a\nb.md", "a.md/b.md", "1/2/3/4/5/6/7/8/9.md", strings.Repeat("x", 600) + ".md", "bad\xffutf8.md", "search", "notes/plan.md/history", "history"} {
 		if _, err := s.Write(ctx, p, "x", "alice", "", IfAny); !errors.Is(err, ErrInvalid) {
 			t.Errorf("Write %q = %v", p, err)
 		}
@@ -257,12 +262,12 @@ func TestListAndIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"The wiki holds 3 pages", "## agents/reviewer/", "- [Learned \\[by\\] reviewer](<agents/reviewer/learned.md>)", "## /", "- [Home](<index.md>)", "- [plan.md](<notes/plan.md>)"} {
+	for _, want := range []string{"The wiki holds 3 pages", "## agents/reviewer/", "- [Learned \\[by\\] reviewer](<./agents/reviewer/learned.md>)", "## /", "- [Home](<./index.md>)", "- [plan.md](<./notes/plan.md>)"} {
 		if !strings.Contains(idx.Text, want) {
 			t.Errorf("the index lacks %q:\n%s", want, idx.Text)
 		}
 	}
-	if idx.By != ByStore || idx.Title != "Index of the wiki" {
+	if idx.By != ByFront || idx.Title != "Index of the wiki" {
 		t.Errorf("the index record = %+v", idx.PageInfo)
 	}
 	// A change of a text alone leaves the index as it is.
@@ -301,11 +306,11 @@ func TestSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(found.Hits) != 2 || found.Hits[0].Path != "notes/ansible.md" || found.Cut || found.Read != 3 {
+	if len(found.Results) != 2 || found.Results[0].Path != "notes/ansible.md" || found.Cut || found.Read != 3 || found.Q != "CRON ansible" {
 		t.Fatalf("Find = %+v", found)
 	}
-	if !strings.Contains(found.Hits[1].Snippet, "cron module moves") {
-		t.Fatalf("the snippet = %q", found.Hits[1].Snippet)
+	if !strings.Contains(found.Results[1].Snippet, "cron module moves") {
+		t.Fatalf("the snippet = %q", found.Results[1].Snippet)
 	}
 	if hits, _ := s.Search(ctx, "reviewer", 10); len(hits) != 1 || hits[0].Path != "agents/reviewer/learned.md" {
 		t.Fatalf("a search by path = %+v", hits)
@@ -317,7 +322,7 @@ func TestSearch(t *testing.T) {
 	// the search did not read still matches by its path.
 	s.searchBytes = 100
 	found, err = s.Find(ctx, "puppet", 10)
-	if err != nil || !found.Cut || found.Unread == 0 || len(found.Hits) != 1 || found.Hits[0].Snippet != "" {
+	if err != nil || !found.Cut || found.Unread == 0 || len(found.Results) != 1 || found.Results[0].Snippet != "" {
 		t.Fatalf("Find with a small budget = %+v, %v", found, err)
 	}
 	found, err = s.Find(ctx, "schedule", 10)
@@ -327,6 +332,14 @@ func TestSearch(t *testing.T) {
 }
 
 func TestSnippet(t *testing.T) {
+	// The lower case of İ takes three bytes, not two, so an offset in the
+	// lower case text does not fit the text; the snippet still finds the
+	// line of the match.
+	text := strings.Repeat("İ", 40) + "\nthe needle line\nlast"
+	lower := strings.ToLower(text)
+	if got := snippetOf(text, lower, strings.Index(lower, "needle")); got != "the needle line" {
+		t.Fatalf("snippetOf = %q", got)
+	}
 	long := strings.Repeat("a", 300) + "needle" + strings.Repeat("b", 300)
 	got := snippet(long, 300)
 	if !strings.HasPrefix(got, "...") || !strings.HasSuffix(got, "...") || !strings.Contains(got, "needle") || len(got) > 260 {
@@ -408,5 +421,49 @@ func TestNATSReplicas(t *testing.T) {
 	}
 	if list, _ := r1.List(ctx); len(list) != 1 {
 		t.Fatalf("r1 lists a removed page: %+v", list)
+	}
+}
+
+// A write or a removal without a hash repairs an entry that does not
+// decode, and a hash never matches it.
+func TestBrokenEntry(t *testing.T) {
+	ctx := context.Background()
+	b := bucket.NewMem(bucketConfig(withDefaults(Config{})))
+	s := New(b, withDefaults(Config{}), quiet())
+	if _, err := b.Create(ctx, keyOf("broken.md"), []byte("no record line")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write(ctx, "broken.md", "fixed", "alice", "", Hash("anything")); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a hash on a broken entry = %v", err)
+	}
+	if p, err := s.Write(ctx, "broken.md", "fixed", "alice", "", IfExists); err != nil || p.Hash != Hash("fixed") {
+		t.Fatalf("a write over a broken entry = %+v, %v", p, err)
+	}
+	if _, err := b.Create(ctx, keyOf("gone.md"), []byte("no record line")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(ctx, "gone.md", "alice", IfAny); err != nil {
+		t.Fatalf("a removal of a broken entry = %v", err)
+	}
+}
+
+// A bucket that is made again starts its revisions anew, and the list of
+// a process reads such a page again instead of its old record.
+func TestListAfterANewBucket(t *testing.T) {
+	ctx := context.Background()
+	c := withDefaults(Config{})
+	s := New(bucket.NewMem(bucketConfig(c)), c, quiet())
+	for i := range 5 {
+		mustWrite(t, s, "a.md", fmt.Sprintf("old %d", i), IfAny)
+	}
+	if list, _ := s.List(ctx); len(list) != 1 || list[0].Hash != Hash("old 4") {
+		t.Fatalf("List = %+v", list)
+	}
+	s.b = bucket.NewMem(bucketConfig(c))
+	// Another replica writes the page into the new bucket.
+	other := New(s.b, c, quiet())
+	mustWrite(t, other, "a.md", "new", IfAny)
+	if list, _ := s.List(ctx); len(list) != 1 || list[0].Hash != Hash("new") {
+		t.Fatalf("List after a new bucket = %+v", list)
 	}
 }

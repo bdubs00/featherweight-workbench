@@ -47,8 +47,12 @@ const (
 // of the wiki. Nobody else writes it. index.md is an ordinary page.
 const IndexPath = "_index.md"
 
-// ByStore is the writer of the index.
-const ByStore = "fw-workbench"
+// ByFront is the writer of a page that the front writes itself: the
+// index, and a page that another package of the front writes through
+// Write, such as the hearts of package bridges in
+// agents/<agent>/learned.md. A route or a tool never writes with it: they
+// name the caller.
+const ByFront = "bossmode"
 
 // Limits of a page and of a search.
 const (
@@ -72,6 +76,8 @@ const (
 	maxSearchWords = 16
 	// writeAttempts bounds the tries of a write that other writers race.
 	writeAttempts = 8
+	// indexTimeout bounds the write of the index after a change.
+	indexTimeout = 30 * time.Second
 )
 
 // Errors of the store. Each error of the store is one of them, with a
@@ -118,8 +124,8 @@ type PageInfo struct {
 	Path string `json:"path"`
 	// Title comes from the front matter, else from the first heading of
 	// level one.
-	Title string   `json:"title,omitempty"`
-	Tags  []string `json:"tags,omitempty"`
+	Title string   `json:"title"`
+	Tags  []string `json:"tags"`
 	// Hash is the SHA-256 of the whole text, in hex.
 	Hash string `json:"hash"`
 	// Version is the revision of the entry in the bucket. It grows with
@@ -132,7 +138,7 @@ type PageInfo struct {
 	By      string    `json:"by"`
 	Run     string    `json:"run,omitempty"`
 	At      time.Time `json:"at"`
-	Summary string    `json:"summary,omitempty"`
+	Summary string    `json:"summary"`
 }
 
 // Page is a page with its text.
@@ -145,13 +151,13 @@ type Page struct {
 // removal, which has no text, no hash, and no writer.
 type Version struct {
 	Version uint64    `json:"version"`
-	Hash    string    `json:"hash,omitempty"`
-	Size    int       `json:"size,omitempty"`
-	Title   string    `json:"title,omitempty"`
-	By      string    `json:"by,omitempty"`
-	Run     string    `json:"run,omitempty"`
+	Hash    string    `json:"hash"`
+	By      string    `json:"by"`
 	At      time.Time `json:"at"`
-	Summary string    `json:"summary,omitempty"`
+	Summary string    `json:"summary"`
+	Size    int       `json:"size"`
+	Title   string    `json:"title,omitempty"`
+	Run     string    `json:"run,omitempty"`
 	Deleted bool      `json:"deleted,omitempty"`
 }
 
@@ -159,22 +165,23 @@ type Version struct {
 // first match.
 type Hit struct {
 	Path    string `json:"path"`
-	Title   string `json:"title,omitempty"`
+	Title   string `json:"title"`
+	Snippet string `json:"snippet"`
 	Version uint64 `json:"version"`
 	Score   int    `json:"score"`
-	Snippet string `json:"snippet,omitempty"`
 }
 
-// Found is the result of a search. Read counts the pages whose text the
-// search read, and Unread the pages whose text it did not read, because
-// the search reads at most MaxSearchBytes of text. A page that the search
-// did not read can still match by its path and its title. Cut is true
-// when Unread is not zero.
+// Found is the result of a search: the query, and the pages that match,
+// best first. Read counts the pages whose text the search read, and Unread
+// the pages whose text it did not read, because the search reads at most
+// MaxSearchBytes of text. A page that the search did not read can still
+// match by its path and its title. Cut is true when Unread is not zero.
 type Found struct {
-	Hits   []Hit `json:"hits"`
-	Read   int   `json:"read"`
-	Unread int   `json:"unread"`
-	Cut    bool  `json:"cut"`
+	Q       string `json:"q"`
+	Results []Hit  `json:"results"`
+	Read    int    `json:"read"`
+	Unread  int    `json:"unread"`
+	Cut     bool   `json:"cut"`
 }
 
 // record is the first line of the value of an entry.
@@ -246,8 +253,10 @@ func pathOf(key string) (string, bool) {
 // CheckPath checks the path of a page: a memory note name of the kernel
 // (memory.CheckName: UTF-8, at most 8 parts, no part that starts with a
 // dot, and no control character), of at most MaxPathBytes, whose last
-// part alone ends with .md. The suffix keeps the routes apart:
-// /v1/pages/search and /v1/pages/<path>/history never name a page, and an
+// part alone ends with .md. The routes stay apart from the pages: the
+// path search, which GET /v1/pages/search takes, and a path whose last
+// part is history, which /v1/pages/<path>/history takes, are refused with
+// a reason of their own, and the suffix .md excludes both again. An
 // export never needs a file and a directory of one name.
 func CheckPath(p string) error {
 	if p == "" {
@@ -258,6 +267,12 @@ func CheckPath(p string) error {
 	}
 	if err := memory.CheckName(p); err != nil {
 		return fail(ErrInvalid, "%s; a page path is a relative path such as notes/plan.md", strings.Replace(err.Error(), "a note name", "a page path", 1))
+	}
+	if p == "search" {
+		return fail(ErrInvalid, "the path search is the route GET /v1/pages/search, so no page has it; a page path ends with .md, such as search.md")
+	}
+	if path.Base(p) == "history" {
+		return fail(ErrInvalid, "the path %q ends with history, and /v1/pages/<path>/history is the route of the history of a page, so no page path ends with it; a page path ends with .md", p)
 	}
 	if !strings.HasSuffix(p, ".md") {
 		return fail(ErrInvalid, "the path %q does not end with .md; a page path ends with .md, such as notes/plan.md", p)
@@ -321,10 +336,14 @@ func pageOf(p string, e bucket.Entry) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
+	tags := rec.Tags
+	if tags == nil {
+		tags = []string{}
+	}
 	return Page{PageInfo: PageInfo{
 		Path:    p,
 		Title:   rec.Title,
-		Tags:    rec.Tags,
+		Tags:    tags,
 		Hash:    rec.Hash,
 		Version: e.Revision,
 		Size:    len(text),
@@ -420,7 +439,7 @@ func (s *Store) recordFor(text, by, run, summary string) (record, error) {
 	}
 	by = oneLine(by, 256)
 	if by == "" {
-		by = ByStore
+		by = ByFront
 	}
 	return record{
 		By:      by,
@@ -435,7 +454,10 @@ func (s *Store) recordFor(text, by, run, summary string) (record, error) {
 // put writes one entry under the condition, and says what it did.
 func (s *Store) put(ctx context.Context, p, text string, rec record, ifHash string) (Page, outcome, error) {
 	key := keyOf(p)
-	ifHash = normHash(ifHash)
+	ifHash, err := normHash(ifHash)
+	if err != nil {
+		return Page{}, unchanged, err
+	}
 	for range writeAttempts {
 		cur, err := s.b.Get(ctx, key)
 		exists := err == nil
@@ -445,7 +467,10 @@ func (s *Store) put(ctx context.Context, p, text string, rec record, ifHash stri
 		var have Page
 		if exists {
 			if have, err = pageOf(p, cur); err != nil {
-				return Page{}, unchanged, err
+				// A write without a hash repairs an entry that does not
+				// decode; a hash never matches it.
+				s.log.Warn("pages: an entry does not decode; a write without a hash replaces it", "path", p, "error", err)
+				have = Page{}
 			}
 		}
 		if err := holds(p, ifHash, exists, have.Hash); err != nil {
@@ -510,15 +535,24 @@ func holds(p, ifHash string, exists bool, have string) error {
 	return nil
 }
 
-// normHash reads a condition: IfExists, IfAbsent, or a hash in any case,
-// also quoted or weak as an ETag.
-func normHash(h string) string {
+// normHash reads a condition: IfAny, IfExists, and IfAbsent as they are,
+// and else a hash of 64 hex digits in any case, also quoted or weak as an
+// ETag. Any other value, such as an empty quoted hash, is ErrInvalid, so a
+// condition never turns into no condition.
+func normHash(h string) (string, error) {
 	h = strings.TrimSpace(h)
 	switch h {
 	case IfAny, IfExists, IfAbsent:
-		return h
+		return h, nil
 	}
-	return strings.ToLower(strings.Trim(strings.TrimPrefix(h, "W/"), `"`))
+	v := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(h, "W/")))
+	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
+		v = v[1 : len(v)-1]
+	}
+	if len(v) != 64 || strings.IndexFunc(v, func(r rune) bool { return !('0' <= r && r <= '9' || 'a' <= r && r <= 'f') }) >= 0 {
+		return "", fail(ErrInvalid, "the condition %q is no hash of a page; pass the hash that a read gave, * for a page that exists, or absent for a new page", h)
+	}
+	return v, nil
 }
 
 // roomForOne refuses a new page when the wiki holds MaxPages pages. Two
@@ -550,7 +584,10 @@ func (s *Store) Delete(ctx context.Context, p, by, ifHash string) error {
 	if err := checkWritable(p); err != nil {
 		return err
 	}
-	ifHash = normHash(ifHash)
+	ifHash, err := normHash(ifHash)
+	if err != nil {
+		return err
+	}
 	if ifHash == IfAbsent {
 		return fail(ErrInvalid, "a removal needs a page that exists; leave out the condition, or pass its hash")
 	}
@@ -565,7 +602,10 @@ func (s *Store) Delete(ctx context.Context, p, by, ifHash string) error {
 		}
 		have, err := pageOf(p, cur)
 		if err != nil {
-			return err
+			// A removal without a hash takes away an entry that does not
+			// decode.
+			s.log.Warn("pages: an entry does not decode", "path", p, "error", err)
+			have = Page{}
 		}
 		if err := holds(p, ifHash, true, have.Hash); err != nil {
 			return err
@@ -631,22 +671,22 @@ func (s *Store) List(ctx context.Context) ([]PageInfo, error) {
 	return out, nil
 }
 
-// cached returns the info of a key when the list holds it at rev or later.
+// cached returns the info of a key when the list holds it at rev.
 func (s *Store) cached(key string, rev uint64) (PageInfo, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	info, ok := s.infos[key]
-	return info, ok && info.Version >= rev
+	// Revisions only grow in one bucket, so a cached version above the
+	// revision of the key means a bucket that was made again: read again.
+	return info, ok && info.Version == rev
 }
 
-// remember keeps the info of a key for the next list, unless the list
-// holds a newer version.
+// remember keeps the info of a key for the next list. A list reads a key
+// again when its revision differs, so an older info that lands last costs
+// one read and no wrong answer.
 func (s *Store) remember(key string, info PageInfo) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if have, ok := s.infos[key]; ok && have.Version > info.Version {
-		return
-	}
 	s.infos[key] = info
 }
 
@@ -691,7 +731,7 @@ func (s *Store) History(ctx context.Context, p string) ([]Version, error) {
 // most MaxSearchBytes of text; Find also says how many texts it read.
 func (s *Store) Search(ctx context.Context, q string, limit int) ([]Hit, error) {
 	f, err := s.Find(ctx, q, limit)
-	return f.Hits, err
+	return f.Results, err
 }
 
 // Find is Search with the counts of the texts that it read and did not
@@ -714,7 +754,7 @@ func (s *Store) Find(ctx context.Context, q string, limit int) (Found, error) {
 	if err != nil {
 		return Found{}, err
 	}
-	out := Found{Hits: []Hit{}}
+	out := Found{Q: q, Results: []Hit{}}
 	budget := s.searchBytes
 	for _, info := range infos {
 		if err := ctx.Err(); err != nil {
@@ -737,18 +777,18 @@ func (s *Store) Find(ctx context.Context, q string, limit int) (Found, error) {
 			out.Unread++
 		}
 		if hit, ok := match(info, text, words); ok {
-			out.Hits = append(out.Hits, hit)
+			out.Results = append(out.Results, hit)
 		}
 	}
 	out.Cut = out.Unread > 0
-	sort.SliceStable(out.Hits, func(i, j int) bool {
-		if out.Hits[i].Score != out.Hits[j].Score {
-			return out.Hits[i].Score > out.Hits[j].Score
+	sort.SliceStable(out.Results, func(i, j int) bool {
+		if out.Results[i].Score != out.Results[j].Score {
+			return out.Results[i].Score > out.Results[j].Score
 		}
-		return out.Hits[i].Path < out.Hits[j].Path
+		return out.Results[i].Path < out.Results[j].Path
 	})
-	if len(out.Hits) > limit {
-		out.Hits = out.Hits[:limit]
+	if len(out.Results) > limit {
+		out.Results = out.Results[:limit]
 	}
 	return out, nil
 }
@@ -794,9 +834,33 @@ func match(info PageInfo, text string, words []string) (Hit, bool) {
 	}
 	hit := Hit{Path: info.Path, Title: info.Title, Version: info.Version, Score: score}
 	if first >= 0 {
-		hit.Snippet = snippet(text, first)
+		hit.Snippet = snippetOf(text, lx, first)
 	}
 	return hit, true
+}
+
+// snippetOf returns the snippet of text around the offset at of lower, the
+// text in lower case. The lower case of a letter can take another number of
+// bytes, so the offset finds the line by its number, which lower case
+// keeps, and the place in the line only roughly.
+func snippetOf(text, lower string, at int) string {
+	n := strings.Count(lower[:at], "\n")
+	inLine := at - (strings.LastIndexByte(lower[:at], '\n') + 1)
+	start := 0
+	for range n {
+		i := strings.IndexByte(text[start:], '\n')
+		if i < 0 {
+			break
+		}
+		start += i + 1
+	}
+	end := strings.IndexByte(text[start:], '\n')
+	if end < 0 {
+		end = len(text)
+	} else {
+		end += start
+	}
+	return snippet(text[start:end], min(inLine, end-start))
 }
 
 // snippet returns the line of text around the byte offset at, cut to about
@@ -1017,6 +1081,10 @@ func cutRunes(s string, n int) string {
 // failure leaves the index as it was until the next change, and the log
 // says so.
 func (s *Store) reindex(ctx context.Context) {
+	// The change landed, so the index follows it also when the caller of
+	// the change went away.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), indexTimeout)
+	defer cancel()
 	key := keyOf(IndexPath)
 	for range writeAttempts {
 		cur, err := s.b.Get(ctx, key)
@@ -1036,7 +1104,7 @@ func (s *Store) reindex(ctx context.Context) {
 				return
 			}
 		}
-		value, err := encode(record{By: ByStore, At: s.now().UTC(), Summary: "the tree of the wiki", Hash: Hash(text), Title: "Index of the wiki"}, text)
+		value, err := encode(record{By: ByFront, At: s.now().UTC(), Summary: "the tree of the wiki", Hash: Hash(text), Title: "Index of the wiki"}, text)
 		if err != nil {
 			s.log.Warn("pages: the index stays as it was", "error", err)
 			return
@@ -1081,7 +1149,9 @@ func (s *Store) renderIndex(infos []PageInfo) string {
 		if title == "" {
 			title = path.Base(info.Path)
 		}
-		fmt.Fprintf(&line, "- [%s](<%s>)\n", escapeMarkdown(title), strings.NewReplacer("<", "%3C", ">", "%3E").Replace(info.Path))
+		// The link starts with ./, so a path such as a:b.md never reads as
+		// a scheme.
+		fmt.Fprintf(&line, "- [%s](<./%s>)\n", escapeMarkdown(title), strings.NewReplacer("<", "%3C", ">", "%3E").Replace(info.Path))
 		if b.Len()+line.Len() > limit {
 			fmt.Fprintf(&b, "\nThe index leaves out %s, because a page holds at most %d KB. GET /v1/pages and pages_list name them all.\n", count(len(infos)-i, "more page", "more pages"), s.cfg.MaxPageBytes>>10)
 			break

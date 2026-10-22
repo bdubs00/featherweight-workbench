@@ -1,6 +1,7 @@
 package pages
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -9,6 +10,12 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 )
+
+// jsonText is the JSON body of a write of the text.
+func jsonText(text string) string {
+	b, _ := json.Marshal(map[string]string{"text": text})
+	return string(b)
+}
 
 func TestRoutes(t *testing.T) {
 	a := newAgent(t, nil)
@@ -21,17 +28,22 @@ func TestRoutes(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated || resp.Header.Get("Location") != "/v1/pages/notes/plan.md" {
 		t.Fatalf("PUT = %d %s", resp.StatusCode, out)
 	}
-	var info PageInfo
+	var info Page
 	decodeJSON(t, out, &info)
-	if info.Hash != Hash(text) || resp.Header.Get("ETag") != strconv.Quote(info.Hash) || info.By != "alice" || info.Title != "Plan" || info.Summary != "first draft" {
+	if info.Hash != Hash(text) || resp.Header.Get("ETag") != strconv.Quote(info.Hash) || info.By != "alice" || info.Title != "Plan" || info.Summary != "first draft" || info.Text != text {
 		t.Fatalf("PUT answered %+v, ETag %s", info, resp.Header.Get("ETag"))
 	}
-	if strings.Contains(out, `"text"`) {
-		t.Errorf("PUT answered the text: %s", out)
-	}
-	// A second create fails with 412 and the hash of the page.
+	// A second create fails with 412 and the hash of the page, in the
+	// problem and in ETag.
 	resp, out = do(t, "PUT", base+"/notes/plan.md", "alice", body, "Content-Type", "application/json", "If-None-Match", "*")
-	if resp.StatusCode != http.StatusPreconditionFailed || resp.Header.Get("ETag") != strconv.Quote(info.Hash) {
+	var problem struct {
+		Status int    `json:"status"`
+		Detail string `json:"detail"`
+		Hash   string `json:"hash"`
+	}
+	decodeJSON(t, out, &problem)
+	if resp.StatusCode != http.StatusPreconditionFailed || resp.Header.Get("ETag") != strconv.Quote(info.Hash) || problem.Hash != info.Hash || problem.Status != 412 ||
+		resp.Header.Get("Content-Type") != "application/problem+json" {
 		t.Fatalf("a second create = %d %s", resp.StatusCode, out)
 	}
 
@@ -51,9 +63,8 @@ func TestRoutes(t *testing.T) {
 		t.Fatalf("GET with the hash = %d", resp.StatusCode)
 	}
 
-	// If-Match makes a compare-and-swap, quoted or weak; a raw body takes
-	// ?summary=.
-	resp, out = do(t, "PUT", base+"/notes/plan.md?summary=second", "alice", "# Plan two\n", "Content-Type", "text/markdown", "If-Match", `W/"`+info.Hash+`"`)
+	// If-Match makes a compare-and-swap, quoted or weak.
+	resp, out = do(t, "PUT", base+"/notes/plan.md", "alice", `{"text": "# Plan two\n", "summary": "second"}`, "Content-Type", "application/json", "If-Match", `W/"`+info.Hash+`"`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("PUT with If-Match = %d %s", resp.StatusCode, out)
 	}
@@ -62,15 +73,29 @@ func TestRoutes(t *testing.T) {
 	if second.Summary != "second" || second.Version <= info.Version {
 		t.Fatalf("the second version = %+v", second)
 	}
-	resp, out = do(t, "PUT", base+"/notes/plan.md", "alice", "# Stale\n", "If-Match", strconv.Quote(info.Hash))
-	if resp.StatusCode != http.StatusPreconditionFailed || !strings.Contains(out, "read it again") || resp.Header.Get("ETag") != strconv.Quote(second.Hash) {
+	resp, out = do(t, "PUT", base+"/notes/plan.md", "alice", jsonText("# Stale\n"), "If-Match", strconv.Quote(info.Hash))
+	if resp.StatusCode != http.StatusPreconditionFailed || !strings.Contains(out, "read it again") || resp.Header.Get("ETag") != strconv.Quote(second.Hash) ||
+		!strings.Contains(out, `"hash":"`+second.Hash+`"`) {
 		t.Fatalf("a stale If-Match = %d %s", resp.StatusCode, out)
 	}
-	if resp, out = do(t, "PUT", base+"/notes/new.md", "alice", "x", "If-Match", "*"); resp.StatusCode != http.StatusPreconditionFailed {
+	if resp, out = do(t, "PUT", base+"/notes/new.md", "alice", jsonText("x"), "If-Match", "*"); resp.StatusCode != http.StatusPreconditionFailed || strings.Contains(out, `"hash"`) {
 		t.Fatalf("If-Match: * on a new page = %d %s", resp.StatusCode, out)
 	}
-	if resp, _ = do(t, "PUT", base+"/notes/new.md", "alice", "x", "If-Match", "*", "If-None-Match", "*"); resp.StatusCode != http.StatusBadRequest {
+	if resp, _ = do(t, "PUT", base+"/notes/new.md", "alice", jsonText("x"), "If-Match", "*", "If-None-Match", "*"); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("both conditions = %d", resp.StatusCode)
+	}
+	// An empty, unquoted, or quoted special tag is no condition of its own.
+	for _, tag := range []string{`""`, `W/""`, `W/`, `"absent"`, `"*"`, second.Hash} {
+		if resp, out = do(t, "PUT", base+"/notes/plan.md", "alice", jsonText("# Over\n"), "If-Match", tag); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("If-Match: %s = %d %s", tag, resp.StatusCode, out)
+		}
+	}
+	// The body is JSON, and a raw text is refused with what to send.
+	if resp, out = do(t, "PUT", base+"/notes/raw.md", "alice", "# Raw\n", "Content-Type", "text/markdown"); resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, `{\"text\"`) {
+		t.Fatalf("a raw body = %d %s", resp.StatusCode, out)
+	}
+	if resp, _ = do(t, "PUT", base+"/notes/raw.md", "alice", `{"summary": "no text"}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("a body without text = %d", resp.StatusCode)
 	}
 
 	// An older version, the history, and the search.
@@ -91,9 +116,18 @@ func TestRoutes(t *testing.T) {
 		t.Fatalf("history = %d %s", resp.StatusCode, out)
 	}
 	resp, out = do(t, "GET", base+"/search?q=plan+two", "bob", "")
-	var found Found
+	var found struct {
+		Q       string `json:"q"`
+		Results []struct {
+			Path    string `json:"path"`
+			Title   string `json:"title"`
+			Snippet string `json:"snippet"`
+		} `json:"results"`
+		Cut *bool `json:"cut"`
+	}
 	decodeJSON(t, out, &found)
-	if resp.StatusCode != http.StatusOK || len(found.Hits) != 1 || found.Hits[0].Path != "notes/plan.md" {
+	if resp.StatusCode != http.StatusOK || found.Q != "plan two" || len(found.Results) != 1 || found.Results[0].Path != "notes/plan.md" ||
+		found.Results[0].Title != "Plan two" || found.Cut == nil || *found.Cut {
 		t.Fatalf("search = %d %s", resp.StatusCode, out)
 	}
 	if resp, _ = do(t, "GET", base+"/search", "bob", ""); resp.StatusCode != http.StatusBadRequest {
@@ -104,29 +138,28 @@ func TestRoutes(t *testing.T) {
 	resp, out = do(t, "GET", base, "bob", "")
 	var tree struct {
 		Pages []PageInfo `json:"pages"`
-		Index string     `json:"index"`
 	}
 	decodeJSON(t, out, &tree)
-	if resp.StatusCode != http.StatusOK || len(tree.Pages) != 1 || tree.Index != IndexPath || tree.Pages[0].Path != "notes/plan.md" {
+	if resp.StatusCode != http.StatusOK || len(tree.Pages) != 1 || tree.Pages[0].Path != "notes/plan.md" || tree.Pages[0].Hash != second.Hash {
 		t.Fatalf("GET /v1/pages = %d %s", resp.StatusCode, out)
 	}
 	if resp, out = do(t, "GET", base+"/_index.md", "bob", "", "Accept", "text/markdown"); resp.StatusCode != http.StatusOK || !strings.Contains(out, "notes/plan.md") {
 		t.Fatalf("GET the index = %d %s", resp.StatusCode, out)
 	}
-	if resp, out = do(t, "PUT", base+"/_index.md", "alice", "mine"); resp.StatusCode != http.StatusBadRequest {
+	if resp, out = do(t, "PUT", base+"/_index.md", "alice", jsonText("mine")); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("PUT the index = %d %s", resp.StatusCode, out)
 	}
 
 	// Paths and sizes that the wiki refuses.
-	if resp, _ = do(t, "PUT", base+"/notes/what%3F.md", "alice", "x"); resp.StatusCode != http.StatusCreated || resp.Header.Get("Location") != "/v1/pages/notes/what%3F.md" {
+	if resp, _ = do(t, "PUT", base+"/notes/what%3F.md", "alice", jsonText("x")); resp.StatusCode != http.StatusCreated || resp.Header.Get("Location") != "/v1/pages/notes/what%3F.md" {
 		t.Fatalf("PUT of a path with a question mark = %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	for _, p := range []string{"notes/plan.txt", ".hidden.md", "a.md/b.md"} {
-		if resp, out = do(t, "PUT", base+"/"+p, "alice", "x"); resp.StatusCode != http.StatusBadRequest {
+	for p, why := range map[string]string{"notes/plan.txt": "ends with .md", ".hidden.md": "hidden", "a.md/b.md": "only the last part", "search": "GET /v1/pages/search", "notes/history": "history of a page"} {
+		if resp, out = do(t, "PUT", base+"/"+p, "alice", jsonText("x")); resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, why) {
 			t.Errorf("PUT %s = %d %s", p, resp.StatusCode, out)
 		}
 	}
-	if resp, _ = do(t, "PUT", base+"/big.md", "alice", strings.Repeat("x", DefaultMaxPageBytes+1)); resp.StatusCode != http.StatusRequestEntityTooLarge {
+	if resp, _ = do(t, "PUT", base+"/big.md", "alice", jsonText(strings.Repeat("x", DefaultMaxPageBytes+1))); resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("PUT of a page above the limit = %d", resp.StatusCode)
 	}
 	if resp, _ = do(t, "GET", base+"/none.md", "bob", ""); resp.StatusCode != http.StatusNotFound {
@@ -171,7 +204,7 @@ func TestRoutesAccess(t *testing.T) {
 		if resp, out := do(t, "GET", base, c.token, ""); resp.StatusCode != c.read {
 			t.Errorf("%s reads: %d %s", c.token, resp.StatusCode, out)
 		}
-		resp, out := do(t, "PUT", base+"/by-"+c.token+".md", c.token, "# By "+c.token+"\n")
+		resp, out := do(t, "PUT", base+"/by-"+c.token+".md", c.token, jsonText("# By "+c.token+"\n"))
 		if resp.StatusCode != c.write {
 			t.Errorf("%s writes: %d %s", c.token, resp.StatusCode, out)
 		}

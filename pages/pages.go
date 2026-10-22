@@ -182,7 +182,7 @@ func Allowed(ctx context.Context, a *fw.Agent, write bool) error {
 
 // writer names the writer of a change from the caller in ctx: agent:<the
 // profile> for a run behind an MCP call (mcp.CallRun), else the subject of
-// the caller, else ByStore. It also returns the run.
+// the caller, else ByFront. It also returns the run.
 func writer(ctx context.Context) (by, run string) {
 	if m, ok := mcp.CallRun(ctx); ok {
 		if m.Agent != "" {
@@ -193,5 +193,5 @@ func writer(ctx context.Context) (by, run string) {
 	if p := fw.PrincipalFrom(ctx); p != nil && p.Subject != "" {
 		return p.Subject, ""
 	}
-	return ByStore, ""
+	return ByFront, ""
 }

@@ -1,17 +1,17 @@
 package pages
 
 // This file serves the wiki on the native surface (docs/ARCHITECTURE.md
-// section 15.3). Every page path ends with .md, so the two routes that are
-// not pages never collide with one: /v1/pages/search is no page, and a
-// path that ends with .md/history names the history of the page before
-// /history.
+// section 15.3). The two routes that are not pages never collide with one:
+// no page has the path search, so /v1/pages/search is the search, and no
+// page path ends with history, so a path that ends with /history names the
+// history of the page before it (CheckPath).
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -59,17 +59,29 @@ func (rt *routes) store(w http.ResponseWriter, r *http.Request, write bool) (*St
 	return s, true
 }
 
-// failStore maps an error of the store to a problem document.
+// failStore maps an error of the store to a problem document. A
+// condition that does not hold answers 412, and when the page exists the
+// problem carries its hash in the member hash and in the header ETag, so a
+// client reads the page again and merges.
 func (rt *routes) failStore(w http.ResponseWriter, r *http.Request, err error) {
 	var e *Error
 	switch {
-	case errors.As(err, &e) && e.Hash != "":
-		w.Header().Set("ETag", strconv.Quote(e.Hash))
-		native.WriteProblem(w, r, http.StatusPreconditionFailed, e.Reason)
+	case errors.Is(err, ErrConflict):
+		hash := ""
+		if errors.As(err, &e) {
+			hash = e.Hash
+		}
+		if hash != "" {
+			w.Header().Set("ETag", strconv.Quote(hash))
+		}
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusPreconditionFailed)
+		_ = json.NewEncoder(w).Encode(conflictProblem{
+			Problem: native.Problem{Type: "about:blank", Title: http.StatusText(http.StatusPreconditionFailed), Status: http.StatusPreconditionFailed, Detail: Reason(err), Instance: r.URL.Path},
+			Hash:    hash,
+		})
 	case errors.Is(err, ErrNotFound):
 		native.WriteProblem(w, r, http.StatusNotFound, Reason(err))
-	case errors.Is(err, ErrConflict):
-		native.WriteProblem(w, r, http.StatusPreconditionFailed, Reason(err))
 	case errors.Is(err, ErrLimit):
 		native.WriteProblem(w, r, http.StatusRequestEntityTooLarge, Reason(err))
 	case errors.Is(err, ErrInvalid):
@@ -77,6 +89,13 @@ func (rt *routes) failStore(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		rt.k.Fail(w, r, err)
 	}
+}
+
+// conflictProblem is the problem document of a 412, with the hash of the
+// page as it is, when it exists.
+type conflictProblem struct {
+	native.Problem
+	Hash string `json:"hash,omitempty"`
 }
 
 // list answers GET /v1/pages with every page without its text, sorted by
@@ -91,7 +110,7 @@ func (rt *routes) list(w http.ResponseWriter, r *http.Request) {
 		rt.failStore(w, r, err)
 		return
 	}
-	native.WriteJSON(w, http.StatusOK, map[string]any{"pages": infos, "index": IndexPath})
+	native.WriteJSON(w, http.StatusOK, map[string]any{"pages": infos})
 }
 
 // search answers GET /v1/pages/search?q=&limit= with the pages that hold
@@ -193,14 +212,14 @@ type putBody struct {
 
 // put answers PUT /v1/pages/{path} by writing the page.
 //
-// A body of application/json holds text and summary. Any other body is the
-// text itself, and ?summary= says what changed. If-Match with the hash of
-// the page, quoted or weak, makes the write a compare-and-swap, If-Match: *
-// writes only a page that exists, and If-None-Match: * only a new page.
-// Each answers 412 when the page differs, with the hash of the page in the
-// header ETag when the page exists. A new page answers 201 with Location,
-// and a changed one 200, each with the page without its text and its new
-// hash in ETag.
+// The body is the JSON object {"text": "...", "summary": "..."}. If-Match
+// with the hash of the page, quoted or weak, makes the write a
+// compare-and-swap, If-Match: * writes only a page that exists, and
+// If-None-Match: * only a new page. Each answers 412 when the page
+// differs, with the hash of the page in the member hash of the problem and
+// in the header ETag when the page exists. A new page answers 201 with
+// Location, and a changed one 200, each with the page and its new hash in
+// ETag.
 func (rt *routes) put(w http.ResponseWriter, r *http.Request) {
 	s, ok := rt.store(w, r, true)
 	if !ok {
@@ -234,17 +253,13 @@ func (rt *routes) put(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", "/v1/pages/"+escapePath(p))
 		status = http.StatusCreated
 	}
-	native.WriteJSON(w, status, page.PageInfo)
+	native.WriteJSON(w, status, page)
 }
 
-// body reads the text and the summary of a write.
+// body reads the text and the summary of a write from the JSON body.
 func (rt *routes) body(w http.ResponseWriter, r *http.Request, s *Store) (string, string, bool) {
-	mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	limit := int64(s.cfg.MaxPageBytes)
-	if mt == "application/json" {
-		// JSON escapes a byte in at most six.
-		limit = 6*limit + 4096
-	}
+	// JSON escapes a byte in at most six.
+	limit := 6*int64(s.cfg.MaxPageBytes) + 4096
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit+1))
 	var tooBig *http.MaxBytesError
 	switch {
@@ -255,18 +270,19 @@ func (rt *routes) body(w http.ResponseWriter, r *http.Request, s *Store) (string
 		native.WriteProblem(w, r, http.StatusBadRequest, "the body cannot be read: "+err.Error())
 		return "", "", false
 	}
-	if mt != "application/json" {
-		return string(data), r.URL.Query().Get("summary"), true
-	}
 	var b putBody
-	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&b); err != nil {
-		native.WriteProblem(w, r, http.StatusBadRequest, "the body is not valid: "+err.Error()+`; send {"text": "...", "summary": "..."}`)
+		native.WriteProblem(w, r, http.StatusBadRequest, "the body is not valid: "+err.Error()+`; send the JSON object {"text": "...", "summary": "..."}`)
+		return "", "", false
+	}
+	if dec.More() {
+		native.WriteProblem(w, r, http.StatusBadRequest, `the body holds data after the JSON object; send {"text": "...", "summary": "..."}`)
 		return "", "", false
 	}
 	if b.Text == nil {
-		native.WriteProblem(w, r, http.StatusBadRequest, `the body has no text; send {"text": "...", "summary": "..."}`)
+		native.WriteProblem(w, r, http.StatusBadRequest, `the body has no text; send the JSON object {"text": "...", "summary": "..."}`)
 		return "", "", false
 	}
 	return *b.Text, b.Summary, true
@@ -294,7 +310,13 @@ func condition(w http.ResponseWriter, r *http.Request) (string, bool) {
 		native.WriteProblem(w, r, http.StatusBadRequest, "If-Match takes one hash")
 		return "", false
 	}
-	return strings.Trim(strings.TrimPrefix(match, "W/"), `"`), true
+	// An entity tag is quoted, also a weak one. The store checks that it
+	// holds a hash, so an empty tag never turns into no condition.
+	if !strings.HasPrefix(strings.TrimPrefix(match, "W/"), `"`) {
+		native.WriteProblem(w, r, http.StatusBadRequest, `If-Match takes the hash of the page in quotes, such as "<hash>", or *`)
+		return "", false
+	}
+	return match, true
 }
 
 // escapePath escapes each part of a page path for a URL.

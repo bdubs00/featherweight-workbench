@@ -297,15 +297,15 @@ func (t *toolSet) search(ctx context.Context, _ *sdk.CallToolRequest, in searchA
 		return storeError(err), nil, nil
 	}
 	var b strings.Builder
-	if len(found.Hits) == 0 {
+	if len(found.Results) == 0 {
 		fmt.Fprintf(&b, "No page holds every word of %q.", in.Query)
 	} else {
 		verb := "hold"
-		if len(found.Hits) == 1 {
+		if len(found.Results) == 1 {
 			verb = "holds"
 		}
-		fmt.Fprintf(&b, "%s %s every word of %q, best first:\n", count(len(found.Hits), "page", "pages"), verb, in.Query)
-		for _, h := range found.Hits {
+		fmt.Fprintf(&b, "%s %s every word of %q, best first:\n", count(len(found.Results), "page", "pages"), verb, in.Query)
+		for _, h := range found.Results {
 			line := "- " + h.Path
 			if h.Title != "" {
 				line += " (" + h.Title + ")"
