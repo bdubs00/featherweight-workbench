@@ -43,6 +43,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/connections"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 )
@@ -101,11 +102,17 @@ type signinState struct {
 }
 
 // newSignin builds the sign-in of an agent, or returns nil when
-// auth.oidc.clientId is empty. It refuses a configuration that cannot work.
-// cookieKey says where the key of the cookie comes from.
+// auth.oidc.clientId is empty or the switch workbench.signin
+// (connections.EnvSignin) is off. It refuses a configuration that cannot
+// work. cookieKey says where the key of the cookie comes from.
 func newSignin(a *fw.Agent, now func() time.Time) (*signin, error) {
 	cfg := a.Config()
 	if cfg == nil || cfg.Auth.OIDC == nil || strings.TrimSpace(cfg.Auth.OIDC.ClientID) == "" {
+		return nil, nil
+	}
+	if on, err := connections.SigninOn(cfg); err != nil {
+		return nil, err
+	} else if !on {
 		return nil, nil
 	}
 	oc := cfg.Auth.OIDC

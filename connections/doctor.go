@@ -61,6 +61,8 @@ func DoctorCheck(ctx context.Context, cfg *fw.Config, secrets fw.Secrets, timeou
 	note := ""
 	if !hasClient {
 		note = "; browser sign-in is off (FW_AUTH_OIDC_CLIENT_ID), so a person who opens a connect link pastes a token first"
+	} else if on, err := SigninOn(cfg); err == nil && !on {
+		note = "; browser sign-in is off (" + EnvSignin + "), so a person who opens a connect link pastes a token first"
 	}
 	return true, "connections: " + who + " " + verb + " for a person; grants: " + store + note
 }

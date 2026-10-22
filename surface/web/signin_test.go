@@ -22,6 +22,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/connections"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
@@ -868,6 +869,37 @@ func TestSigninOff(t *testing.T) {
 	decodeProblem(t, resp, b, http.StatusUnauthorized)
 	if _, ok := keys(t, b)["signin"]; ok {
 		t.Fatalf("problem = %s", b)
+	}
+}
+
+func TestSigninSwitch(t *testing.T) {
+	// With auth.oidc.clientId set and the switch off, the routes do not
+	// exist and a 401 names no sign-in. The client id stays for the
+	// connections of people. A value that is not on or off stops the start.
+	t.Setenv(connections.EnvSignin, "off")
+	e := &signinEnv{issuer: newFakeIssuer(t), clock: &testClock{t: time.Now()}, log: &lockedBuffer{}}
+	a, err := signinAgent(t, e, nil)
+	if err != nil {
+		t.Fatalf("fw.New: %v", err)
+	}
+	srv := serve(t, a)
+	for _, p := range []string{"/ui/signin", "/ui/callback"} {
+		if resp, _ := get(t, srv.URL+p, nil); resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s: status %d", p, resp.StatusCode)
+		}
+	}
+	resp, b := do(t, "GET", srv.URL+"/v1/whoami", "")
+	decodeProblem(t, resp, b, http.StatusUnauthorized)
+	if _, ok := keys(t, b)["signin"]; ok {
+		t.Fatalf("problem = %s", b)
+	}
+
+	t.Setenv(connections.EnvSignin, "maybe")
+	if a, err = signinAgent(t, e, nil); err != nil {
+		t.Fatalf("fw.New: %v", err)
+	}
+	if _, err := a.Handler(); err == nil || !strings.Contains(err.Error(), `FW_WORKBENCH_SIGNIN="maybe" is not on or off`) {
+		t.Errorf("Handler = %v", err)
 	}
 }
 
