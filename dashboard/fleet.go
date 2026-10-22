@@ -72,15 +72,24 @@ func MemberLine(m fleet.Member) string {
 	return b.String()
 }
 
-// PoolsText describes the pools of the front: per pool, the Tasks that it
-// wants, the Tasks that exist and are ready, its queue, and one line per
-// reason for a gap.
+// PoolsText describes the pools of the front: per pool, where it comes
+// from, the Tasks that it wants, the Tasks that exist and are ready, its
+// queue, and one line per reason for a gap.
 func PoolsText(ps []pools.Status) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s of the front:", count(len(ps), "pool", "pools"))
 	for _, p := range ps {
-		fmt.Fprintf(&b, "\n- %s in %s: %d of %d %s ready, %d %s; agent %s on the queue %s",
-			p.Name, p.Atespace, p.Ready, p.Wanted, word(p.Wanted, "Task", "Tasks"), p.Actual, word(p.Actual, "exists", "exist"), p.Agent, p.Intake)
+		from := ""
+		switch {
+		case p.Source == pools.SourceRuntime && p.Deleting:
+			from = fmt.Sprintf(" (a runtime pool of the template %s, being deleted)", p.Template)
+		case p.Source == pools.SourceRuntime:
+			from = fmt.Sprintf(" (a runtime pool of the template %s)", p.Template)
+		case p.Template != "":
+			from = fmt.Sprintf(" (of the file, from the template %s)", p.Template)
+		}
+		fmt.Fprintf(&b, "\n- %s%s in %s: %d of %d %s ready, %d %s; agent %s on the queue %s",
+			p.Name, from, p.Atespace, p.Ready, p.Wanted, word(p.Wanted, "Task", "Tasks"), p.Actual, word(p.Actual, "exists", "exist"), p.Agent, p.Intake)
 		if p.CheckedAt.IsZero() {
 			b.WriteString("; not read yet")
 		} else {

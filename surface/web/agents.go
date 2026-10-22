@@ -7,29 +7,39 @@ import (
 	"strings"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/agents"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
-// putAgent answers PUT /v1/agents/{name}. The body is an fw.AgentProfile.
-// A body that names another profile is refused. A new profile answers 201,
-// and a replaced one 200, both with the saved profile. With ?dryRun=true,
-// it checks the profile, saves nothing, and answers 200 with an
-// agents.Draft. With pools, the profile goes to the pool whose workers run
-// it, and ?pool= names the pool for a profile that several pools run or
-// that no pool runs yet (fleet.PlaceOf).
+// putAgent answers PUT /v1/agents/{name}. The body is an fw.AgentProfile,
+// with the optional key workers. A body that names another profile is
+// refused. A new profile answers 201, and a replaced one 200, both with
+// the saved profile. With ?dryRun=true, it checks the profile, saves
+// nothing, and answers 200 with an agents.Draft. With pools, the profile
+// goes to the pool whose workers run it, and ?pool= names the pool for a
+// profile that several pools run or that no pool runs yet. With worker
+// templates, a profile that no pool runs gets a runtime pool of its own
+// when the body carries workers, {template, replicas}, or when a default
+// template exists and the request names no pool (fleet.PlaceFor); the
+// answer then carries the pool in the key pool.
 func (s *server) putAgent(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	var p fw.AgentProfile
-	if !s.decode(w, r, &p) {
+	var body struct {
+		fw.AgentProfile
+		Workers *fleet.Workers `json:"workers,omitempty"`
+	}
+	if !s.decode(w, r, &body) {
 		return
 	}
+	p := body.AgentProfile
 	if p.Name != "" && p.Name != name {
 		problem(w, r, http.StatusBadRequest, fmt.Sprintf("the body names the profile %q but the path names %q", p.Name, name))
 		return
 	}
 	p.Name = name
-	at, err := fleet.PlaceOf(r.Context(), s.a, name, r.URL.Query().Get("pool"))
+	at, err := fleet.PlaceFor(r.Context(), s.a, name, r.URL.Query().Get("pool"), body.Workers)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -40,6 +50,13 @@ func (s *server) putAgent(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, err)
 			return
 		}
+		if planned, ok := fleet.PlannedPool(at); ok {
+			writeJSON(w, http.StatusOK, struct {
+				agents.Draft
+				Pool *pools.Status `json:"pool"`
+			}{d, &planned})
+			return
+		}
 		writeJSON(w, http.StatusOK, d)
 		return
 	}
@@ -48,12 +65,23 @@ func (s *server) putAgent(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	status := http.StatusOK
 	if created {
 		w.Header().Set("Location", "/v1/agents/"+name)
-		writeJSON(w, http.StatusCreated, v)
+		status = http.StatusCreated
+	}
+	if made := fleet.CreatedPool(at); made != "" {
+		out := struct {
+			view.AgentView
+			Pool *pools.Status `json:"pool,omitempty"`
+		}{AgentView: v}
+		if st, ok, err := fleet.PoolNamed(r.Context(), s.a, made); err == nil && ok {
+			out.Pool = &st
+		}
+		writeJSON(w, status, out)
 		return
 	}
-	writeJSON(w, http.StatusOK, v)
+	writeJSON(w, status, v)
 }
 
 // deleteAgent answers DELETE /v1/agents/{name} with 204. With pools,

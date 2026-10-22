@@ -41,6 +41,7 @@ import (
 	_ "github.com/bdubs00/featherweight-workbench/surface/web"
 	_ "github.com/bdubs00/featherweight-workbench/titles"
 	_ "github.com/bdubs00/featherweight-workbench/tools/builder"
+	_ "github.com/bdubs00/featherweight-workbench/workers"
 
 	// A sandbox image has no zone files, and ax sets no TZ, so the binary
 	// carries the zone database (about 450 KB).

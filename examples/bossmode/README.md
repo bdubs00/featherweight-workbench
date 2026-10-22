@@ -40,6 +40,17 @@ the front keeps, and `workbench.bossmode.manager: manager`.
   model that you did not choose. Set `fw.model` of the pool, or `model` of
   the profile, to a selector of your model proxy.
 
+## The template `agent`
+
+The block `workbench.templates` holds one worker template, `agent`, the
+default. The page of bossmode creates an agent with `PUT /v1/agents/{name}`,
+and the front then makes a runtime pool of two workers for it from the
+template, named after the agent. The operator never sees the image or the
+egress: the template holds them. Like the pool of the manager, the template
+names no model, so each agent sets one in its profile, or you set
+`fw.model` of the template. The settings of the page, `GET /v1/bossmode`,
+name the templates. Section 14.10 of the architecture has the rules.
+
 ## The profile `manager`
 
 - The tools `front.*`, `memory`, `recall`, `clock`, and `files`.

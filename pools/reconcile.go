@@ -100,8 +100,15 @@ type Reconciler struct {
 // run the current configuration and are running or asleep after a first
 // run. Gaps says in words why the pool is not as the configuration wants
 // it, one reason each.
+//
+// Source is SourceFile or SourceRuntime, and Template names the template of
+// the pool, if any. A runtime pool also carries By and At, who created it
+// and when, and Deleting, which is true while the front deletes
+// its Tasks before it removes the entry.
 type Status struct {
 	Name       string       `json:"name"`
+	Source     string       `json:"source"`
+	Template   string       `json:"template,omitempty"`
 	Atespace   string       `json:"atespace"`
 	Agent      string       `json:"agent"`
 	Intake     string       `json:"intake"`
@@ -113,6 +120,9 @@ type Status struct {
 	Tasks      []TaskStatus `json:"tasks"`
 	Gaps       []string     `json:"gaps,omitempty"`
 	CheckedAt  time.Time    `json:"checkedAt"`
+	By         string       `json:"by,omitempty"`
+	At         *time.Time   `json:"at,omitempty"`
+	Deleting   bool         `json:"deleting,omitempty"`
 }
 
 // TaskStatus is one Task of a pool. Current is true when it runs the
@@ -127,8 +137,20 @@ type TaskStatus struct {
 
 // Initial returns the state of a pool before its first pass.
 func Initial(p *Pool, why string) Status {
-	return Status{Name: p.Name, Atespace: p.Atespace, Agent: p.Agent, Intake: p.Intake, Wanted: p.replicas(), Hash: p.hash,
-		Generation: p.Generation, Tasks: []TaskStatus{}, Gaps: []string{why}}
+	st := p.status()
+	st.Gaps = []string{why}
+	return st
+}
+
+// status returns the state of the pool without its Tasks.
+func (p *Pool) status() Status {
+	st := Status{Name: p.Name, Source: p.Source(), Template: p.Template, Atespace: p.Atespace, Agent: p.Agent, Intake: p.Intake,
+		Wanted: p.replicas(), Hash: p.hash, Generation: p.Generation, Tasks: []TaskStatus{}}
+	if r := p.runtime; r != nil {
+		at := r.At
+		st.By, st.At, st.Deleting = r.By, &at, r.Deleting
+	}
+	return st
 }
 
 // member is one Task of the pool in a pass.
@@ -206,8 +228,8 @@ func envOf(t *v1alpha1.Task, name string) string {
 // Reconcile runs one pass for a pool over the Tasks of its atespace, as the
 // ax API listed them, and returns the state of the pool.
 func (r *Reconciler) Reconcile(ctx context.Context, p *Pool, tasks []*v1alpha1.Task, now time.Time) Status {
-	st := Status{Name: p.Name, Atespace: p.Atespace, Agent: p.Agent, Intake: p.Intake, Wanted: p.replicas(), Hash: p.hash,
-		Generation: p.Generation, Tasks: []TaskStatus{}, CheckedAt: now}
+	st := p.status()
+	st.CheckedAt = now
 	gap := func(format string, args ...any) { st.Gaps = append(st.Gaps, fmt.Sprintf(format, args...)) }
 
 	var owned []*member
@@ -633,6 +655,30 @@ func (r *Reconciler) writeMarker(ctx context.Context, p *Pool) error {
 	if _, err := r.AX.UpdateWorkspace(cctx, &v1alpha1.UpdateWorkspaceRequest{Workspace: p.Marker()}); err != nil {
 		return fmt.Errorf("pools: write the Workspace %s: %w", p.MarkerName(), err)
 	}
+	return nil
+}
+
+// Forget deletes the marker of a pool whose Tasks are gone, so that a
+// later pool of that name does not find it. It deletes only a marker that
+// the pool wrote, and a marker that is gone is no error. The front calls
+// it before it removes the entry of a runtime pool.
+func (r *Reconciler) Forget(ctx context.Context, p *Pool) error {
+	cctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	ws, err := r.AX.GetWorkspace(cctx, &v1alpha1.GetWorkspaceRequest{Atespace: p.Atespace, Name: p.MarkerName()})
+	switch {
+	case status.Code(err) == codes.NotFound:
+		return nil
+	case err != nil:
+		return fmt.Errorf("pools: read the Workspace %s: %w", p.MarkerName(), err)
+	}
+	if _, ok := p.markerOf(ws); !ok {
+		return nil
+	}
+	if _, err := r.AX.DeleteWorkspace(cctx, &v1alpha1.DeleteWorkspaceRequest{Atespace: p.Atespace, Name: p.MarkerName()}); err != nil && status.Code(err) != codes.NotFound {
+		return fmt.Errorf("pools: delete the Workspace %s: %w", p.MarkerName(), err)
+	}
+	r.Log.Info("pools: deleted the marker of a pool whose Tasks are gone", "pool", p.Name, "workspace", p.Atespace+"/"+p.MarkerName())
 	return nil
 }
 

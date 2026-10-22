@@ -1,6 +1,6 @@
 package fleet
 
-// This file runs the pools of the front (docs/ARCHITECTURE.md section 13).
+// This file runs the pools of the front (docs/ARCHITECTURE.md section 14).
 // A pool keeps a number of ax Tasks that run one agent profile. At every
 // interval, after the Task list, the front reconciles each pool with the
 // package pools: it creates the missing Tasks, replaces the Tasks of
@@ -30,18 +30,25 @@ import (
 var _ PoolView = (*Fleet)(nil)
 
 // LoadPools reads the pools of the configuration for the fleet fc, which
-// Load filled (pools.Load). The front gives the pools its atespaces, its
-// egress stream, its intake prefix, its bus, its ax API, and the variable
-// of its static token.
+// Load filled (pools.Load).
 func LoadPools(cfg *fw.Config, fc Config) ([]*pools.Pool, error) {
+	list, _, err := LoadAll(cfg, fc)
+	return list, err
+}
+
+// LoadAll reads the pools and the worker templates of the configuration
+// for the fleet fc, which Load filled (pools.LoadAll). The front gives the
+// pools its atespaces, its egress stream, its intake prefix, its bus, its
+// ax API, and the variable of its static token.
+func LoadAll(cfg *fw.Config, fc Config) ([]*pools.Pool, []*pools.Template, error) {
 	if cfg == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	tokenEnv := strings.TrimSpace(cfg.Auth.TokenEnv)
 	if tokenEnv == "" {
 		tokenEnv = pools.DefaultTokenEnv
 	}
-	return pools.Load(cfg, pools.Front{
+	return pools.LoadAll(cfg, pools.Front{
 		Atespaces:   fc.Atespaces,
 		Egress:      fc.Egress,
 		Intake:      fc.Intake,
@@ -50,19 +57,21 @@ func LoadPools(cfg *fw.Config, fc Config) ([]*pools.Pool, error) {
 		Bus:         cfg.Bus,
 		AX:          cfg.AX,
 		TokenEnv:    tokenEnv,
+		SkillDirs:   cfg.SkillDirs(),
 	})
 }
 
 // startPools makes the reconciler of the pools. The caller holds no lock
 // and the loop does not run yet.
 func (p *platform) startPools(list []*pools.Pool, vals *pools.Values) {
-	if len(list) == 0 || p.client == nil {
+	if (len(list) == 0 && len(p.f.templates) == 0) || p.client == nil {
 		return
 	}
 	p.pools = list
 	p.reconciler = &pools.Reconciler{AX: p.client, Check: poolCheck{p}, Values: vals, Log: p.f.log}
 	p.poolState = map[string]pools.Status{}
 	p.merged = map[string]*pools.Pool{}
+	p.rt = map[string]*runtimePool{}
 	var names []string
 	for _, pool := range list {
 		names = append(names, pool.Name)
@@ -71,15 +80,28 @@ func (p *platform) startPools(list []*pools.Pool, vals *pools.Values) {
 			p.f.log.Warn("fleet: a pool may not reach a host", "pool", pool.Name, "warning", w)
 		}
 	}
-	p.f.log.Info("fleet keeps the pools", "pools", strings.Join(names, ","))
+	for _, t := range p.f.templates {
+		for _, w := range pools.Probes([]*pools.Template{t})[0].Warnings() {
+			p.f.log.Warn("fleet: no egress rule of a worker template allows a host", "template", t.Name, "warning", w)
+		}
+	}
+	p.f.log.Info("fleet keeps the pools", "pools", strings.Join(names, ","), "templates", pools.TemplateNames(p.f.templates))
 }
 
 // reconcilePools runs one pass of every pool over the Tasks of its
-// atespace. A pool whose atespace the front could not list keeps its last
-// state, with the reason.
+// atespace: the pools of the file, then the runtime pools of the store
+// (runtime.go). A pool whose atespace the front could not list keeps its
+// last state, with the reason. A runtime pool whose name a pool of the
+// file holds is left alone, and the state of the pool of the file says
+// so: the file wins.
 func (p *platform) reconcilePools(ctx context.Context, listed map[string][]*v1alpha1.Task, failed map[string]error, now time.Time) {
 	if p.reconciler == nil {
 		return
+	}
+	entries, rerr := p.f.runtimeList(ctx)
+	shadow := map[string]pools.Stored{}
+	for _, e := range entries {
+		shadow[e.Name] = e
 	}
 	for _, pool := range p.pools {
 		var st pools.Status
@@ -101,17 +123,48 @@ func (p *platform) reconcilePools(ctx context.Context, listed map[string][]*v1al
 			p.merged[pool.Name] = merged
 			p.mu.Unlock()
 		}
+		if e, ok := shadow[pool.Name]; ok {
+			st.Gaps = append(st.Gaps, fmt.Sprintf("the store of the runtime pools holds a pool of this name too, which %s created; the file wins, so the front runs this pool and leaves that entry alone; remove the entry with pool_delete or DELETE /v1/pools/%s", orWho(e.By), pool.Name))
+		}
 		p.mu.Lock()
 		prev := p.poolState[pool.Name]
 		p.poolState[pool.Name] = st
 		p.mu.Unlock()
 		// The log names each new reason once, not at every interval.
-		for _, g := range st.Gaps {
-			if !slices.Contains(prev.Gaps, g) {
-				p.f.log.Info("fleet: a pool differs from its configuration", "pool", pool.Name, "wanted", st.Wanted, "ready", st.Ready, "reason", g)
-			}
-		}
+		p.logGaps(pool.Name, prev, st)
 	}
+	if p.f.runtime == nil {
+		return
+	}
+	if rerr != nil {
+		// Without the store, a runtime pool keeps its last state and its
+		// Tasks, with the reason.
+		why := p.reconciler.Values.Redact(fmt.Sprintf("the front could not read the runtime pools %s, so the pool waits: %v", p.f.runtime.Describe(), rerr))
+		p.mu.Lock()
+		var changed []string
+		for name := range p.rt {
+			st := p.poolState[name]
+			if !slices.Equal(st.Gaps, []string{why}) {
+				changed = append(changed, name)
+			}
+			st.Gaps = []string{why}
+			p.poolState[name] = st
+		}
+		p.mu.Unlock()
+		if len(changed) > 0 {
+			p.f.log.Warn("fleet: the runtime pools wait", "pools", strings.Join(changed, ","), "error", rerr)
+		}
+		return
+	}
+	p.reconcileRuntime(ctx, entries, listed, failed, now)
+}
+
+// orWho names a person, or says that nobody is known.
+func orWho(by string) string {
+	if strings.TrimSpace(by) == "" {
+		return "an unknown person"
+	}
+	return by
 }
 
 // poolCheck answers the reconciler from the view and the router.
@@ -194,44 +247,80 @@ func (c poolCheck) Busy(ctx context.Context, member, token string, runs []string
 	return max(n, active), nil
 }
 
-// Pools implements PoolView. A caller sees a pool when the caller can view
-// its agent, decided as for the agent of a member (allow), with the access
-// block of the profile of this process, else the one of the configuration
-// of the workers.
+// Pools implements PoolView: the pools of the file in their order, then
+// the runtime pools by name, each with its state. A caller sees a pool
+// when the caller can view its agent, decided as for the agent of a member
+// (allow), with the access block of the profile of this process, else the
+// one of the workers of the pool. The person who created a runtime pool
+// sees it too.
 func (f *Fleet) Pools(ctx context.Context) ([]pools.Status, error) {
 	p := f.platform
-	if p == nil || len(p.pools) == 0 {
+	if p == nil || !f.keepsPools() {
 		return nil, nil
 	}
+	type item struct {
+		st     pools.Status
+		access *fw.Access
+		by     string
+	}
+	var items []item
 	p.mu.Lock()
-	states := make([]pools.Status, len(p.pools))
-	current := make([]*pools.Pool, len(p.pools))
-	for i, pool := range p.pools {
-		states[i] = p.poolState[pool.Name]
-		current[i] = pool
+	for _, pool := range p.pools {
+		cur := pool
 		if m := p.merged[pool.Name]; m != nil {
-			current[i] = m
+			cur = m
 		}
+		items = append(items, item{st: p.poolState[pool.Name], access: cur.AgentAccess()})
 	}
 	p.mu.Unlock()
+	entries, err := f.runtimeList(ctx)
+	if err != nil {
+		f.log.Warn("fleet: the runtime pools come from the last pass", "error", err)
+		entries = nil
+		p.mu.Lock()
+		for _, rt := range p.rt {
+			entries = append(entries, rt.stored)
+		}
+		p.mu.Unlock()
+		sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	}
+	files := f.fileNames()
+	for _, e := range entries {
+		if files[e.Name] {
+			continue
+		}
+		st := f.runtimeState(ctx, e, false)
+		var access *fw.Access
+		p.mu.Lock()
+		if m := p.merged[e.Name]; m != nil {
+			access = m.AgentAccess()
+		}
+		p.mu.Unlock()
+		items = append(items, item{st: st, access: access, by: e.By})
+	}
 	cfg := f.a.Config()
+	caller := fw.PrincipalFrom(ctx)
 	out := []pools.Status{}
-	for i, pool := range p.pools {
-		access := current[i].AgentAccess()
-		if prof, ok := f.a.ProfileNamed(pool.Agent); ok {
+	for _, it := range items {
+		if it.by != "" && caller != nil && caller.Subject == it.by {
+			out = append(out, it.st)
+			continue
+		}
+		access := it.access
+		if prof, ok := f.a.ProfileNamed(it.st.Agent); ok {
 			access = prof.Access
 		}
 		rec := &Record{
-			Name:   pool.Atespace + "/" + pool.Name,
+			Name:   it.st.Atespace + "/" + it.st.Name,
 			Access: Access{Mode: f.a.AccessMode(), Default: cfg.Access.Default, Admins: cfg.Access.Admins},
-			Agents: []RecordAgent{{Name: pool.Agent, Access: access}},
+			Agents: []RecordAgent{{Name: it.st.Agent, Access: access}},
 		}
 		_, roles, err := f.allow(ctx, rec, nil, true)
 		if err != nil {
 			return nil, err
 		}
 		if roles[0] != "" {
-			out = append(out, states[i])
+			out = append(out, it.st)
 		}
 	}
 	return out, nil

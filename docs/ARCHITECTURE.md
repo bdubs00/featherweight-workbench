@@ -343,6 +343,7 @@ The fleet reads the block `fleet` under the key `workbench` of `fw.yaml`, which 
 | `workbench.fleet.suspendAfter` | `FW_WORKBENCH_FLEET_SUSPEND_AFTER` | How long a Task stays idle before the front suspends it, a duration such as `10m`, or `off` (section 4.12) | `10m` with atespaces, else off |
 | `workbench.fleet.wakeOnQueue` | `FW_WORKBENCH_FLEET_WAKE_ON_QUEUE` | Whether the front wakes the sleeping Tasks of a profile when jobs wait in its intake queue, `on` or `off` (section 4.13). It needs `atespaces` and `intake`. | on with atespaces and intake, else off |
 | `workbench.pools` | none | The pools of Tasks that the front keeps, each with its image, the configuration of its workers, and its replica count (section 14) | none |
+| `workbench.templates` | none | The worker templates: what a worker is, without its agent. A pool of the file can name one, and a person creates a runtime pool from one while the front runs (section 14.10). | none |
 
 A worker needs no key of this block: it sets `bus.driver`, `bus.url`, `bus.egress`, `bus.intake`, and `tokens.url` of the kernel. On a NATS bus, the front and the workers must name the same JetStream stream in `bus.options.stream`, `FW` by default, because the front reads the queues from it (section 4.13). The front names its sources:
 
@@ -582,7 +583,7 @@ The MCP server carries these management tools beside the work tools:
 |---|---|
 | `whoami` | The principal of the caller, its role on every agent that it can see, and its teams (section 8). For a run of the fleet with a person, that person (section 19). |
 | `agents_list`, `agent_get` | The agents that the caller can see, and one agent with the words of what it can do. With pools, the profiles that the workers of each pool run, each with `pool` (section 14.9). |
-| `agent_put`, `agent_delete` | Create, change, or remove an agent. `dryRun` checks a profile and changes nothing. With pools, `pool` names the pool (section 14.9). For a run of the fleet with a person, the roles of the person decide, and a new profile gets the person as its owner (section 19). |
+| `agent_put`, `agent_delete` | Create, change, or remove an agent. `dryRun` checks a profile and changes nothing. With pools, `pool` names the pool (section 14.9). With templates, `workers` gives a new agent a runtime pool of its own, and a default template does so without it (section 14.10). For a run of the fleet with a person, the roles of the person decide, and a new profile gets the person as its owner (section 19). |
 | `runs_list` | The runs that the caller can see, with `scope`, `member`, `batch`, and `by` (section 8). For a run of the fleet with a person, the runs of that person. |
 | `enqueue` | Send a job to the fleet: one run per item on the intake queue of a profile, as the caller, under one batch name (section 4.9). For a run of the fleet with a person, as that person, with `fw.via` on each run (section 19.3). |
 | `batch` | How a job goes: the jobs that wait in the queue because no Task took them yet, every run of a batch by state, the members that hold them, the runs that wait, the runs that failed, the runs that the view forgot, and the usage of the runs, with a mark when the sum is partial (section 4.9) |
@@ -598,6 +599,8 @@ The MCP server carries these management tools beside the work tools:
 | `pages_list`, `pages_read`, `pages_search`, `pages_history` | The wiki of the fleet: the pages, one page with its hash, a search by words, and the versions of a page (section 15.4) |
 | `pages_write` | Write a page of the wiki as a new version, with `ifHash` for a compare-and-swap. A run that writes through the token of the fleet is the writer `agent:<profile>` (section 15.4). |
 | `faces_put` | Set the face of an agent from the text of an SVG that passes the sanitizer, for the manager (section 16.4) |
+| `pools_list`, `templates_list` | The pools of the file and the runtime pools that the caller can see, with their state, and the worker templates (section 14.10) |
+| `pool_put`, `pool_delete` | Create a runtime pool from a template, change its replicas, its variables, its resources, or its template, or delete it (section 14.10) |
 | `bridge_read`, `bridge_post` | For a run of a seat of a bridge, or the manager run of a bridge: read the last messages of the channel, and post a message with `to` (section 18.11) |
 | `bridge_list` | The open bridges of the person of the run, for the manager |
 | `bridge_open` | Open a bridge from a plan as the person of the run, for the manager. Its title, "Open bridge", is the label of the approval that the policy of the manager asks for. |
@@ -796,7 +799,9 @@ The kernel reads its agent profiles from the configuration and writes none (the 
 
 A principal that creates a profile without an `access` block becomes its first owner. An individual or a group therefore owns the agents that they make. A replaced profile that names no access block keeps the access block it had, so an edit never drops the owners by accident. A profile that the configuration defines, in `fw.yaml`, in a variable, or through a Go option, cannot change here, because the configuration wins over the file at the next start. The kernel reports such a profile as locked, and the page says so before a person edits it.
 
-The routes `PUT` and `DELETE /v1/agents/{name}`, the MCP tools `agent_put` and `agent_delete`, and the verbs `fw-workbench agents put <file.yaml>` and `fw-workbench agents delete <name>` all go through the package. The package writes to a place, `agents.Place`: the store of the process, or on a front with pools the overlay of the pool that runs the profile (section 14.9). The checks, the access rules, and the roles are the same for both. `PUT /v1/agents/{name}?dryRun=true` and `agent_put` with `dryRun` check a profile as a save does and change nothing. They answer an `agents.Draft`: the view of the profile, what the agent would do, and whether saving it replaces an agent that exists. The agent builder proposes a profile and never saves one; `agent_put` saves it with the rights of the caller (section 6.4).
+The routes `PUT` and `DELETE /v1/agents/{name}`, the MCP tools `agent_put` and `agent_delete`, and the verbs `fw-workbench agents put <file.yaml>` and `fw-workbench agents delete <name>` all go through the package. The package writes to a place, `agents.Place`: the store of the process, or on a front with pools the overlay of the pool that runs the profile (section 14.9). The checks, the access rules, and the roles are the same for both.
+
+On a front with worker templates, an operator creates an agent and its workers in one step (section 14.10). `agent_put`, or `PUT /v1/agents/{name}`, with a profile whose name no pool runs creates a runtime pool for it in two cases: the request carries `workers`, `{"template", "replicas"}`, or a default template exists and the request names no `pool`. The pool takes the name of the agent, in lowercase with a hyphen for each other character, the template of `workers`, else the default template, and the replicas of `workers`, else 2. The front creates the pool first, then writes the profile into the overlay of the pool, and the answer carries the pool in the key `pool`. The first pass then creates the workers. A request that names `pool` keeps the rules of section 14.9. Without a default template and without `workers`, the error names the templates. The checks of a new profile apply, and the caller also needs `agent.create` on the process for the pool. A dry run names the pool that a save creates, and it creates nothing. `agent_delete` of the agent of a runtime pool deletes the pool with the profile. `PUT /v1/agents/{name}?dryRun=true` and `agent_put` with `dryRun` check a profile as a save does and change nothing. They answer an `agents.Draft`: the view of the profile, what the agent would do, and whether saving it replaces an agent that exists. The agent builder proposes a profile and never saves one; `agent_put` saves it with the rights of the caller (section 6.4).
 
 ## 11. Connections
 
@@ -1204,6 +1209,7 @@ Each entry of `workbench.pools` has these keys. A key that a pool does not know 
 | Key | Meaning | Default |
 |---|---|---|
 | `name` | The name of the pool. Its Tasks are `<name>-<index>`, and their Workspaces are `<name>-<index>-ws`. | required |
+| `template` | An entry of `workbench.templates`. The pool takes every key of the template that it does not set (section 14.10). | none |
 | `atespace` | The atespace of the Tasks. It must be one of `workbench.fleet.atespaces`. | the only atespace of the fleet |
 | `replicas` | The number of Tasks. With `0`, the front deletes every Task of the pool once the Task is idle. A Task that failed after it ran waits for a person (section 14.4). | required |
 | `image` | The worker image by digest, `<image>@sha256:<64 hex digits>`. Substrate pulls an actor image only by digest. | required |
@@ -1291,7 +1297,7 @@ workbench:
 
 ### 14.2 The dry run
 
-`fw-workbench pools render [-config file] [file]` prints the Workspaces and the Tasks that the front applies. The output is a stream of YAML documents in the order of the apply. A comment before each pool names its queue, its hash, the variables that the front copies, and its warnings. The command reads the overlay of each pool from the store of the bus and merges it as a pass does (section 14.9), and the comment names each entry. When the store does not answer within five seconds, the command says so and prints the pool without its overlay. Each value that the front copies from its environment is a placeholder, such as `<secret: FW_API_TOKEN of the front>`. So the output holds no secret, and the command needs none of the variables. The hash covers the name of each variable of the front and never its value. When the command reads the configuration with the variables of the front, the hash in the output is the hash that the front writes. A person reviews a change with the output before the front acts.
+`fw-workbench pools render [-config file] [file]` prints the Workspaces and the Tasks that the front applies. The output is a stream of YAML documents in the order of the apply. A comment before each pool names its queue, its hash, the variables that the front copies, and its warnings. The command reads the overlay of each pool from the store of the bus and merges it as a pass does (section 14.9), and the comment names each entry. When the store does not answer within five seconds, the command says so and prints the pool without its overlay. With `workbench.templates`, the command then reads the runtime pools of the store (section 14.10) and prints each after the pools of the file, built from its template and merged with its overlay. Its comment starts with `Runtime pool`, names the template, the generation of the entry, and who created it, and says when the pool waits for the profile of its agent or is being deleted. A runtime pool whose name a pool of the file holds, and one whose template the configuration does not hold, stay out of the output, and standard error names each. Each value that the front copies from its environment is a placeholder, such as `<secret: FW_API_TOKEN of the front>`. So the output holds no secret, and the command needs none of the variables. The hash covers the name of each variable of the front and never its value. When the command reads the configuration with the variables of the front, the hash in the output is the hash that the front writes. A person reviews a change with the output before the front acts.
 
 The output is for review only. Do not apply it: a placeholder is not a value. A Task that holds a placeholder runs an older value of a variable of the front (section 14.4), so the front replaces it.
 
@@ -1311,7 +1317,7 @@ A Workspace has no variables, so the front marks it in its file: the first line 
 
 A pool with a generation above 0 has one more Workspace, its marker `<name>-generation`. Its file `.fw/generation` names the pool in its first line and holds the newest generation of the pool that a front runs (section 14.5). The front writes the marker only when its own generation is higher, and never a Workspace of that name without the line. No Task binds the marker.
 
-A pool that leaves the configuration, or that moves to another atespace, leaves its Tasks as they are. The front cannot tell a removed pool from a pool of another front. To remove a pool, set `replicas: 0`, wait until its Tasks are gone, and then remove the entry. Delete a Task that failed after it ran by hand, and the marker of the pool too (`ax delete workspace <name>-generation`).
+A pool that leaves the configuration, or that moves to another atespace, leaves its Tasks as they are. The front cannot tell a removed pool from a pool of another front. To remove a pool of the file, set `replicas: 0`, wait until its Tasks are gone, and then remove the entry. Delete a Task that failed after it ran by hand, and the marker of the pool too (`ax delete workspace <name>-generation`). A runtime pool does the wait itself: a delete sets its replicas to 0, and the front removes the marker and the entry once the Tasks are gone (section 14.10).
 
 ### 14.4 A pass
 
@@ -1380,16 +1386,18 @@ To rotate the token, change the Secret of the front and restart the front. Every
 
 ### 14.7 Visibility
 
-`GET /v1/fleet` carries `pools`, and the MCP tool `fleet` lists them after the members. Each pool has these fields:
+`GET /v1/fleet` carries `pools`, and the MCP tool `fleet` lists them after the members: the pools of the file in their order, then the runtime pools by name (section 14.10). Each pool has these fields:
 
 - `name`, `atespace`, `agent`, `intake`, `hash`, and `generation`, when it is above 0.
+- `source`, `file` for a pool of `workbench.pools` and `runtime` for a pool of the store, and `template`, the template of the pool, when it has one.
+- For a runtime pool, `by` and `at`, who created it and when, and `deleting`, true while the front deletes its Tasks.
 - `wanted`, the replica count.
 - `actual`, the Tasks of the pool that exist, are not being deleted, and did not fail after a run.
 - `ready`, the Tasks of those that run the current configuration and are up.
 - `tasks`, each Task with its phase and a note.
 - `gaps`, one reason for each difference.
 
-The Agents place of the page shows one line for each pool. A caller who can view the agent of a pool sees the pool. The front decides as for the agent of a member (section 4.4). It uses the access block of its own profile of that name, else the access block in `fw`.
+The Agents place of the page shows one line for each pool. A caller who can view the agent of a pool sees the pool. The front decides as for the agent of a member (section 4.4). It uses the access block of its own profile of that name, else the access block of the profile that the workers of the pool run. The person who created a runtime pool sees that pool too.
 
 ### 14.8 Known limits
 
@@ -1403,7 +1411,9 @@ The Agents place of the page shows one line for each pool. A caller who can view
 - A replica of an older version of fw-workbench knows no generation. Upgrade every replica of the front before the configuration sets one.
 - A pass runs in the loop of the Task list, one call after another. A slow delete waits for Substrate, and it can hold the next read of the Task list back for up to two minutes.
 - A change of the overlay reaches a worker when the pool replaces its Task, so a worker that holds a run keeps the old profiles and rules until the run ends (section 14.9).
-- The page offers no choice of a pool. A new agent of the builder needs `pool` through MCP, or `?pool=` on `PUT /v1/agents/{name}`.
+- Without a template, the page offers no choice of a pool, and a new agent of the builder needs `pool` through MCP, or `?pool=` on `PUT /v1/agents/{name}`. With a default template, a new agent gets a runtime pool of its own (section 14.10).
+- A runtime pool whose template leaves the configuration does not build: it changes nothing, and its Tasks stay until the template comes back. The doctor line names such a pool.
+- A pool of the file that takes the name of a runtime pool finds the Tasks and the marker of that pool. It adopts the Tasks, because they carry its name, but a marker of a higher generation leaves it superseded until a person deletes the marker or raises the generation of the pool.
 
 ### 14.9 Profiles and rules of a pool
 
@@ -1413,11 +1423,88 @@ The store. On a NATS bus, the overlay of a pool lives in the key-value bucket `<
 
 The merge. At each pass, the front reads the overlay of the pool and merges it into `fw` before it renders the Workspace. The hash of the pool covers the merged fw.yaml, so a change of the overlay makes every Task of the pool older, and the pool replaces each Task once it is idle (section 14.4). The front needs no restart. When the store does not answer, the pool waits and says why, because a pass without the overlay takes its profiles and its rules away from every Task. An ask wins over an allow in one policy (the kernel architecture, section 7.5), so an allow rule also removes the entries of `fw.policy.ask` that name the same tool. An ask by a glob, a flag, or a pattern stays. Each text of an overlay profile is escaped, so a profile never reads a variable of the worker. A prompt or an instruction of one line gets a line break at its end, because the worker reads such a text as the path of a file when that file exists.
 
-Profiles. On a front with pools, `agent_put`, `agent_delete`, and `PUT` and `DELETE /v1/agents/{name}`, which the builder uses to save, write to the overlay of the pool that runs the profile: the pool whose `agent` is the profile, else the pool whose profiles hold the name. The optional argument `pool`, or `?pool=` on the routes, names the pool when several pools run the profile. It also adds a new profile to a pool, for `spawn_task` or for a run on a member. A pool takes the jobs of its agent from its own queue, so a new agent needs an entry in `workbench.pools`, and a new name without `pool` is an error that names the pools. A profile that only the front holds stays in the store of the front. The checks of section 10 apply: the owner role to change or remove a profile, the creator role to add one, and the same access rules. The front decides with its own access configuration and the access block of the profile in the pool, as it decides for a member (section 4.4). The dry run checks the merged configuration of the pool as the start of the front does, the models of the workers included. `agent_delete` removes an entry of the overlay. A profile of the configuration of the pool stays.
+Profiles. On a front with pools, `agent_put`, `agent_delete`, and `PUT` and `DELETE /v1/agents/{name}`, which the builder uses to save, write to the overlay of the pool that runs the profile: the pool whose `agent` is the profile, else the pool whose profiles hold the name. The optional argument `pool`, or `?pool=` on the routes, names the pool when several pools run the profile. It also adds a new profile to a pool, for `spawn_task` or for a run on a member. A pool takes the jobs of its agent from its own queue, so a new agent needs a pool of its own: an entry in `workbench.pools`, or a runtime pool from a template, which `agent_put` makes in the same call (section 14.10). Without a template, a new name without `pool` is an error that names the pools. A profile that only the front holds stays in the store of the front. The checks of section 10 apply: the owner role to change or remove a profile, the creator role to add one, and the same access rules. The front decides with its own access configuration and the access block of the profile in the pool, as it decides for a member (section 4.4). The dry run checks the merged configuration of the pool as the start of the front does, the models of the workers included. `agent_delete` removes an entry of the overlay. A profile of the configuration of the pool stays.
 
 `agents_list` and `agent_get` show the profiles that the workers of each pool run. Each has `pool`, `overlay` (`added`, `replaced`, or empty), `by` and `at` for an entry of the overlay, and `workerPolicy`, the policy of the workers with the rules of the overlay. A profile of the front carries `front`. The tools of the workers live in their Tasks, so a profile of a pool carries no abilities. The text of `agent_get` words the policy of the workers instead.
 
 Rules. Always allow on the approval card and `approve` with `rule` turn a pending approval of a worker into an allow rule of its pool. The rule is the name of the tool as the policy names it, such as `github.create_pull_request`, and for `bash` the whole tool, without a pattern. The pool is the pool whose Task runs the run. The caller needs the owner role on the profile of the run in that pool. The entry holds the agent, the run, the subject of the caller, the time, and the note, so a person sees why the rule exists, and the dry run names it. Before it writes anything, the front refuses a rule in these cases: the ask comes from a flag, such as `destructive`; the reason is no rule, such as a rerun after a resume; the policy of the profile asks too, which a rule of the pool cannot loosen; or the workers ask a control plane (`fw.policy.external`). The rule applies to every profile that the workers of the pool run. `POST /v1/runs/{id}/approvals/{approval}/rule` writes the rule for the page and decides nothing; the page allows the approval next. It answers 409 when no pool runs the run.
+
+### 14.10 Templates and runtime pools
+
+A pool of the file changes only when a person edits `fw.yaml` and restarts the front. A template lets the deployer say once what a worker is: the image, the egress, the variables, and the base configuration of the worker. An operator then creates a pool from a template while the front runs, also in the same step as a new agent, and never sees an image digest or an egress rule. Such a pool is a runtime pool. The front keeps it in a store that every replica shares, and each pass runs it as it runs a pool of the file.
+
+The templates. The block `workbench.templates` lists the templates. A key that a template does not know is an error, so a template sets no `replicas`, no `agent`, and no `intake`. Each entry has these keys:
+
+| Key | Meaning | Default |
+|---|---|---|
+| `name` | The name of the template, a lowercase name of letters, digits, and hyphens | required |
+| `default` | `true` makes this template the one that a new agent gets when its request names none. At most one template sets it. | `false` |
+| `atespace` | The atespace of the Tasks, as for a pool | the only atespace of the fleet |
+| `image` | The worker image by digest | required |
+| `generation` | A number of 0 or more that orders the configurations of the template. A pool from the template adds it to its own generation, so a deploy that raises it orders every pool of the template (section 14.5). | `0` |
+| `env`, `egress`, `resources`, `files` | As for a pool (section 14.1) | as for a pool |
+| `fw` | The base configuration of the workers: the model, the providers, the bus, the policy, and the tools. It names no `agents`. | none |
+
+The front checks each template at its start as a pool of one worker, as far as the checks of a pool apply without an agent (section 14.1). The check gives the template a profile with an access block that names an owner, because `agent_put` gives a new profile its creator as its owner (section 10). A problem stops the start, and the error names the key, for example `workbench.templates[0] (python): image "ghcr.io/example/fw:latest" has no digest`. Three rules differ from a pool:
+
+- A template without a model is valid. A pool from it refuses to render until the pool, the profile, or the template sets one, with the error of section 14.1. The front never adds a model.
+- `fw.agents` in a template is an error.
+- The static token must see the runs of an agent that a person creates from the template. Such an agent has an access block, so the template needs `kind:token` in `fw.access.admins`. Else the error says to add it.
+
+The front reads the variables that a template copies with `fromEnv` at its start, as for a pool (section 14.6).
+
+A pool of the file from a template. The key `template` of a pool names a template. The pool then takes every key of the template that it does not set:
+
+- `image`, `atespace`, and `egress` come from the template when the pool sets none.
+- The variables and the files of both go together. A variable of the pool replaces the variable of the template of the same name, and a file of the pool replaces the file of the same path.
+- Each of `requests.cpu`, `requests.memory`, `limits.cpu`, and `limits.memory` that the pool sets replaces the value of the template.
+- `fw` merges key by key, as the defaults of the front do, and the keys of the pool win. The pool names its agents in `fw.agents`.
+- The generation of the pool is its own plus the one of the template.
+
+The runtime pools. On a NATS bus, the runtime pools live in the key-value bucket `<stream>_POOLS`, where `<stream>` is `bus.options.stream`, `FW` by default. Each pool is the entry `pool.<name>`, with the name in base64url, and its value is the entry as JSON. On the bus `mem`, the store lives in the memory of the process, and another bus keeps no runtime pool. The front opens the store only when the configuration names a template. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_POOLS.>`. An entry has these fields:
+
+| Field | Meaning |
+|---|---|
+| `name` | The name of the pool and the prefix of its Tasks, as for a pool of the file |
+| `template` | The template that the pool renders from |
+| `agent` | The profile whose queue the workers take. The profile lives in the overlay of the pool (section 14.9). |
+| `replicas` | The number of Tasks, 0 to 64 |
+| `intake` | The queue of the workers, empty for the default `<workbench.fleet.intake>.<agent>` |
+| `revision` | Free text, as for a pool of the file |
+| `generation` | The order of the configurations of the pool. The store sets 1 at the create and raises it with every change of what the workers run: `template`, `agent`, `intake`, `revision`, `env`, and `resources`. A change of `replicas` or of `deleting` keeps it, so a scale replaces no worker that stays. A write that changes nothing writes nothing. |
+| `env` | The variables that the pool sets over its template, at most 32, each with `name` and a `value` of at most 4,096 bytes. A runtime pool copies no variable of the front, so it has no `fromEnv`. |
+| `resources` | The values of `requests` and `limits` that the pool sets over its template, each a quantity such as `500m`, `2`, or `1Gi` |
+| `by`, `at` | Who created the pool, and when. A change keeps them, and the log of the front names each change and its writer. |
+| `deleting` | True after a person deleted the pool, until its Tasks are gone (below) |
+
+Every write is a compare-and-swap on the revision of the entry: the front reads the entry, changes it, and writes at the revision that it read. When another replica wrote in between, the bucket refuses the write, and the front reads again, up to eight times. So two replicas never lose a pool. The bucket keeps the last ten values of each entry with the delete marker. A pool that a person creates again under an old name starts one generation above the newest value that the bucket keeps of the old one.
+
+How a runtime pool renders. The front builds the pool from its template and its entry, as a pool of the file that names the template (above), with `env` and `resources` of the entry in the place of the keys of a pool. The profile of the agent comes from the overlay of the pool alone, so the pool renders no Task until the overlay holds that profile, and its state says so. The check of the model waits for the overlay too. The generation of the pool is the generation of its entry plus the one of its template. The marks of section 14.3 hold: each Task carries `FW_POOL` and `FW_POOL_SPEC`, the hash covers the rendered configuration with the overlay, and the marker `<name>-generation` holds the generation. `FW_POOL_BASE` is the hash of the template and the entry without the overlay. Every replica reads the entry from one store, so two replicas hold the same generation and the same configuration. A deploy that changes a template raises its `generation`, and the replica with the newer template wins, as section 14.5 says.
+
+The skills of the front. The render of a pool, of the file or of the store, gives each worker the local skills of the front that the profiles of the pool allow. A local skill is a directory with a `SKILL.md` file under the skills directories of the front, `tools.skills`, else `$FW_HOME/skills`, as the kernel reads them (the kernel architecture, section 12.5). A skill goes to the workers when the `skills` list of a profile of the pool matches its name, a profile of the overlay included. A profile without `skills` sees every skill, so such a profile ships every local skill, and an empty list ships none. The front copies `SKILL.md` and the other files of the skill into the Workspace beside the files of the pool, under `.fw/skills/<name>/`, which is `$FW_HOME/skills` of the kernel in a Task. A worker whose `fw` sets `tools.skills`, or a `home` of its own, gets `/workspace/.fw/skills` added to `tools.skills`. The front leaves out a hidden file, a symbolic link, and a file that is not UTF-8 text, and the dry run names each. A pool ships at most 1 MB of skill files and at most 64 files of one skill. Past a bound, the render refuses, and the pool waits with a state that names the bound. The hash of the pool covers the files, so a changed skill replaces the Tasks of the pool once each is idle, as any change does. The skills come from the front, as the overlay does, so `FW_POOL_BASE` leaves them out, and a changed skill needs no new generation. A skill with the name of a skill of a server is fine: the kernel qualifies the skills of a server.
+
+A pass. At each pass, after the pools of the file, the front reads every entry of the store and treats the runtime pools and the pools of the file as one list. Each runtime pool goes through the steps of section 14.4. When the store does not answer, each runtime pool keeps its last state and its Tasks, and its state says why. A name that both a pool of the file and an entry of the store hold is an error: the pool of the file runs, the entry changes nothing, and the state of the pool of the file names the entry and who created it. The front never creates a runtime pool with the name of a pool of the file, so the conflict comes from a deploy that adds such a pool.
+
+The delete. A delete of a runtime pool sets `deleting` and `replicas: 0` in its entry. The pool then needs no profile, so it runs without its overlay, and the front deletes each Task once it is idle, as section 14.4 says. Once the Task list shows no Task of the pool, the front deletes the marker of the pool and removes the entry, at the revision that it read. A Task that failed after it ran keeps the entry until a person deletes the Task. A deleted pool changes no more. While it goes, its agent is gone: `agents_list` leaves the profiles of the pool out, and a new agent of that name gets a conflict until the pool is gone. The overlay of the pool stays in its bucket, so a pool of that name later finds its profiles and its rules again. An entry whose name a pool of the file holds owns no Task, so a delete removes it at once.
+
+The routes and the tools. These routes sit behind the authentication of the native API:
+
+| Method and path | Purpose |
+|---|---|
+| `GET /v1/pools` | The pools that the caller can view, as `{"pools": [...]}`: the pools of the file in their order, then the runtime pools by name. Each pool has the fields of section 14.7, with `source` and `template`. |
+| `GET /v1/pools/{name}` | One pool of that list |
+| `POST /v1/pools` | Creates a runtime pool. The body is `{"name", "template", "agent", "replicas", "env", "resources"}`. `template` defaults to the default template, and `replicas` is required. The answer is 201 with the pool and `Location`. |
+| `PATCH /v1/pools/{name}` | Changes a runtime pool. The body holds `replicas`, `env`, `resources`, and `template`, each optional. `env` replaces the variables of the pool, and `[]` clears them. `resources` replaces its resource values, and `{}` clears them. The answer is 200 with the pool, one generation higher when the change touches what the workers run. |
+| `DELETE /v1/pools/{name}` | Deletes a runtime pool, as the delete above says. The answer is 202 with the pool, which carries `deleting`. |
+| `GET /v1/templates` | The templates, as `{"templates": [...]}`. Each has `name`, `default`, `atespace`, `model` when the template names one, and `generation`. The list holds no image, no variable, and no egress rule. |
+
+A name that a pool of the file or of the store holds answers 409, and so does a change of a deleted pool. A pool that no entry holds answers 404, a change of a pool of the file answers 400 and says to change `fw.yaml`, and a body that does not fit answers 400 with the problem. The MCP tools do the same work: `pools_list`, `templates_list`, `pool_put`, which creates a pool when it gets `agent` and changes the pool of the name without it, and `pool_delete`. The package `workers` holds the routes and the tools, and it registers them through `native.Extend` and `mcp.RegisterTools` on a front whose fleet keeps pools or templates. A runtime pool of `POST /v1/pools` waits for the profile of its agent until `agent_put` with `pool` writes it. `agent_put` with `workers` creates the agent and its pool in one call (below).
+
+Creation in one step. The page creates an agent with its workers in one call: `PUT /v1/agents/{name}` with the profile, and optionally `workers`. The MCP tool `agent_put` takes the same `workers`. For a profile whose name no pool runs, with `workers` or with a default template and no `pool`, the front makes a runtime pool named after the agent, from the template of `workers` or the default one, with the replicas of `workers`, else 2, and writes the profile into the overlay of the pool. The pool and the profile need the checks of section 10, and the answer carries the state of the pool in `pool`. A save of an agent that a pool runs already changes the profile, and `workers` then changes nothing; `pool_put` changes the workers. Section 10 has the rules for a request that names `pool`, for a dry run, and for a delete. The operator therefore never sees an image digest or an egress rule: the deployer set them in the template.
+
+Who can. A create needs `agent.create` on the process, which the creators of `access` have (the kernel architecture, section 13.2). A change and a delete need the owner role on the agent of the pool, decided as for a profile of a pool (section 14.9): with the access configuration of the front and the access block of the profile in the overlay of the pool. Until the overlay holds that profile, the person who created the pool owns it. The admins of the front can do everything. For a run of the fleet with a person, the roles of the person decide, and the token must allow the action too (section 19).
+
+The doctor. The fleet line of `fw-workbench doctor` names the templates, with the default, and counts the runtime pools of the store and those that are being deleted. It reads the store with the timeout of the doctor. A runtime pool that names a template that the configuration does not hold fails the line, and so does a store that does not answer. On the bus `mem`, the store lives in the memory of the front, which the doctor does not reach, and the line says so.
 
 ## 15. Pages
 
@@ -1648,7 +1735,8 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
   "manager": {"agent": "manager", "member": "default/manager-0", "run": "01K..."},
   "placement": "queue",
   "maxMembers": 16,
-  "theme": {"accent": "#FF4D00", "name": "", "logo": ""}
+  "theme": {"accent": "#FF4D00", "name": "", "logo": ""},
+  "templates": [{"name": "general", "default": true}, {"name": "python", "default": false}]
 }
 ```
 
@@ -1657,6 +1745,7 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
 - `manager.run` is the newest top-level run of the profile that the caller started, from the runs of the fleet that the caller can see, or `""`. A run whose batch is the batch of a bridge, such as the manager run of a spawn bridge or the run that writes the report of a bridge, also acts as the operator, but it is no conversation of the page, so the settings skip it.
 - `placement` and `maxMembers` come from `workbench.bridges`, as `bridges.Load` reads them (section 17.1).
 - `theme` is the theme of the deployment (section 17.1). `accent` is the accent of the configuration, else `#FF4D00`. `name` is the name of the organization, else `""`. `logo` is `"/v1/bossmode/logo"` when the configuration names a logo, else `""`.
+- `templates` names the worker templates of the front in the order of the configuration, each with `default`, so the page offers the choice when it creates an agent. It is `[]` without templates. The page creates the agent and its workers with `PUT /v1/agents/{name}` and `workers` (section 14.10).
 
 `GET /v1/bossmode/logo`, behind the authentication of the native API, serves the logo with its content type, `image/svg+xml` or `image/png`, and an `ETag`, the SHA-256 of the body in quotes. `If-None-Match` with the ETag answers 304. An SVG goes out as the sanitizer wrote it, and a PNG goes out as it is. The answer carries `Cache-Control: private, no-cache`, `X-Content-Type-Options: nosniff`, and the content security policy of a face (section 16.3). Without a logo, the route answers 404. An `img` element sends no bearer token, so the page reads the logo with `fetch` and shows it as a blob URL, as it shows a face.
 

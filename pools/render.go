@@ -67,8 +67,19 @@ func (v *Values) Redact(s string) string {
 	return s
 }
 
+// what names the pool for a person: the pool, or the template that a probe
+// checks.
+func (p *Pool) what() string {
+	if p.probe {
+		return "the template " + p.Template
+	}
+	return "the pool " + p.Name
+}
+
 // Resolve reads every variable of the front that the pools copy into their
-// Tasks, once, with getenv, os.LookupEnv by default. A variable that is
+// Tasks, once, with getenv, os.LookupEnv by default. list holds the probes
+// of the templates too (Probes), because a runtime pool copies the
+// variables of its template. A variable that is
 // unset or empty is an error that names it and the pools that need it.
 func Resolve(list []*Pool, getenv func(string) (string, bool)) (*Values, error) {
 	if getenv == nil {
@@ -83,12 +94,12 @@ func Resolve(list []*Pool, getenv func(string) (string, bool)) (*Values, error) 
 			for _, p := range list {
 				for _, e := range p.env {
 					if e.FromEnv == name {
-						users = append(users, p.Name)
+						users = append(users, p.what())
 						break
 					}
 				}
 			}
-			missing = append(missing, fmt.Sprintf("%s (for the pool %s)", name, strings.Join(users, ", ")))
+			missing = append(missing, fmt.Sprintf("%s (for %s)", name, strings.Join(users, ", ")))
 			continue
 		}
 		v.m[name] = val
@@ -293,7 +304,7 @@ func egressOf(e *ax.EgressSpec) *v1alpha1.EgressSpec {
 // YAML documents, in the order in which the front applies them, with a
 // placeholder for every variable of the front. A person reviews a change
 // with it. The comment before each pool names its queue, its hash, and
-// its warnings.
+// its warnings, and it marks a runtime pool and its template.
 func Write(w io.Writer, list []*Pool) error {
 	if len(list) == 0 {
 		_, err := fmt.Fprintln(w, "# The configuration names no pool under workbench.pools.")
@@ -303,7 +314,22 @@ func Write(w io.Writer, list []*Pool) error {
 	docs := 0
 	for _, p := range list {
 		var b strings.Builder
-		fmt.Fprintf(&b, "Pool %s: %d %s of the agent %s in the atespace %s, on the queue %s.\n", p.Name, p.replicas(), plural(p.replicas(), "Task", "Tasks"), p.Agent, p.Atespace, p.Intake)
+		kind := "Pool"
+		if p.runtime != nil {
+			kind = "Runtime pool"
+		}
+		fmt.Fprintf(&b, "%s %s: %d %s of the agent %s in the atespace %s, on the queue %s.\n", kind, p.Name, p.replicas(), plural(p.replicas(), "Task", "Tasks"), p.Agent, p.Atespace, p.Intake)
+		if p.Template != "" {
+			fmt.Fprintf(&b, "The pool takes each key that it does not set from the template %s of workbench.templates.\n", p.Template)
+		}
+		if r := p.runtime; r != nil {
+			fmt.Fprintf(&b, "The store of the front holds this pool, not the configuration file. The entry is generation %d%s.\n", r.Generation, written(r.By, r.At, ""))
+			if r.Deleting {
+				b.WriteString("A person deleted the pool, so the front deletes each Task of it once the Task is idle, and then the entry.\n")
+			} else if _, ok := p.overlay.Profile(p.Agent); !ok {
+				fmt.Fprintf(&b, "The overlay holds no profile %s yet, so the front creates no Task of the pool. The documents below hold only the place of the profile.\n", p.Agent)
+			}
+		}
 		if p.Generation > 0 {
 			fmt.Fprintf(&b, "Each Task carries %s=%s, %s=%s, and %s=%d. A Task of a lower generation runs an older configuration, and the front leaves a Task of a higher generation alone.\n", EnvPool, p.Name, EnvSpec, p.hash, EnvGeneration, p.Generation)
 			fmt.Fprintf(&b, "Before it changes a Task, the front records generation %d in the Workspace %s.\n", p.Generation, p.MarkerName())
@@ -322,6 +348,12 @@ func Write(w io.Writer, list []*Pool) error {
 		}
 		for _, r := range p.overlay.Allow {
 			fmt.Fprintf(&b, "The overlay of the front adds the rule %q to fw.policy.allow%s.\n", r.Rule, written(r.By, r.At, r.Run))
+		}
+		if len(p.skillNames) > 0 {
+			fmt.Fprintf(&b, "The front ships its skills %s, which the profiles of the pool allow, to %s/%s of each worker.\n", strings.Join(p.skillNames, ", "), WorkspacePath, SkillsPath)
+		}
+		if len(p.skillSkipped) > 0 {
+			fmt.Fprintf(&b, "The front leaves out these files of its skills, because they are hidden, links, or not text: %s.\n", strings.Join(p.skillSkipped, ", "))
 		}
 		if p.replicas() == 0 {
 			b.WriteString("The pool wants no Task, so the front deletes each Task of the pool once it is idle.\n")

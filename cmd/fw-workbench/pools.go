@@ -1,10 +1,11 @@
 package main
 
 // This file is the verb pools of fw-workbench, which the kernel does not
-// know (docs/ARCHITECTURE.md section 13). pools render prints the
+// know (docs/ARCHITECTURE.md section 14). pools render prints the
 // Workspaces and the Tasks that the front applies for the pools of a
-// configuration, with a placeholder for every secret, so a person reviews
-// a change before the front acts on it.
+// configuration and for the runtime pools of its store, with a placeholder
+// for every secret, so a person reviews a change before the front acts on
+// it.
 
 import (
 	"context"
@@ -23,7 +24,9 @@ const poolsUsage = `Usage: fw-workbench pools render [-config file] [file]
 render prints the Workspaces and the Tasks that the front applies for the
 pools under workbench.pools, as YAML documents in the order of the apply,
 with the profiles and the rules that the front adds to each pool from the
-key-value store of the bus.
+key-value store of the bus. With workbench.templates, it then prints the
+runtime pools that people created from a template, from the store of the
+front, each marked as a runtime pool.
 Every value that the front copies from its own environment, such as
 FW_API_TOKEN, is a placeholder. The file is the configuration of the front:
 the argument, else -config, else $FW_CONFIG, ./fw.yaml, or $FW_HOME/fw.yaml.
@@ -74,7 +77,7 @@ func runPools(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "fw-workbench: %v\n", err)
 		return 1
 	}
-	list, err := fleet.LoadPools(cfg, fc)
+	list, templates, err := fleet.LoadAll(cfg, fc)
 	if err != nil {
 		fmt.Fprintf(stderr, "fw-workbench: %v\n", err)
 		return 1
@@ -85,7 +88,13 @@ func runPools(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "fw-workbench: %v; the output shows such a pool without its overlay\n", err)
 	}
-	if err := pools.Write(stdout, list); err != nil {
+	// The runtime pools of the store follow the pools of the file, as a
+	// pass runs them.
+	runtime, err := fleet.RuntimePools(context.Background(), cfg, list, templates)
+	if err != nil {
+		fmt.Fprintf(stderr, "fw-workbench: %v; the output leaves out such a pool, or shows it without its overlay\n", err)
+	}
+	if err := pools.Write(stdout, append(list, runtime...)); err != nil {
 		fmt.Fprintf(stderr, "fw-workbench: %v\n", err)
 		return 1
 	}
