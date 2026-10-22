@@ -8,6 +8,7 @@ This repository holds the workbench for people on top of the kernel, featherweig
 - the fleet, one view of many `fw` workers from the ax API and the bus egress stream, with jobs, a token broker, a suspend controller, and pools that keep a number of Tasks of one profile
 - connections, with which an MCP server of the kernel acts for the person who started a run
 - the `propose_agent` tool and the titles that a model writes for runs
+- bossmode, the operator front of the fleet: the page of featherweight-bossmode at `/bossmode`, its settings, and one live stream of events, off by default
 
 `fw-workbench` takes every verb of `fw`, with the same flags and the same configuration. The product thesis is in [docs/PRODUCT_DIRECTION.md](docs/PRODUCT_DIRECTION.md), and the design is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The kernel design is in the architecture of the kernel.
 
@@ -54,6 +55,7 @@ Open `http://localhost:8080/ui` and paste the token. The listener serves the rou
 | `GET /v1/fleet` | the members and the pools of the fleet |
 | `/v1/connections` | the connections of the caller to services |
 | `GET /v1/usage` | the usage of the runs, deprecated |
+| `/bossmode`, `GET /v1/bossmode`, `GET /v1/bossmode/stream` | the page of bossmode, its settings, and its stream of events, with `workbench.bossmode.enabled` |
 
 For a desktop client, run the MCP server over standard input and output:
 
