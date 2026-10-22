@@ -144,7 +144,7 @@ func TestTheExampleIsAPoolOfTheFront(t *testing.T) {
 }
 
 // The doctor line names the pool, the trusted entry of the front, the spawn
-// driver, and whether the bridges are set.
+// driver, and where the delegation of a bridge comes from.
 func TestDoctorLineOfTheExample(t *testing.T) {
 	clearFleetEnv(t)
 	t.Cleanup(func() { SetBridges(nil) })
@@ -155,7 +155,7 @@ func TestDoctorLineOfTheExample(t *testing.T) {
 	SetBridges(nil)
 	ok, line := DoctorCheck(context.Background(), cfg, nil, 0)
 	for _, want := range []string{"manager: the profile manager runs in the pool manager of 1 Task;", "the trusted tools.mcp entry front reaches the front",
-		"child Tasks", "no bridges are set"} {
+		"child Tasks", "the service of the bridges tells the front what the operator of each bridge delegates"} {
 		if !ok || !strings.Contains(line, want) {
 			t.Errorf("doctor = %v %q, want %q", ok, line, want)
 		}

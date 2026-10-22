@@ -7,9 +7,10 @@ package bridges
 // sleep or woke. Each fact gets one entry, never two: the record keeps a
 // mark of what the channel holds of each run, and the change of the record
 // that moves a mark also gives the seq of the entry, so of two replicas
-// that see the same fact one posts it. The watch reads the view every two
-// seconds; the integration of bossmode can drive it from the changes of
-// the fleet instead.
+// that see the same fact one posts it. The watch reads the view at each
+// change of the fleet that can concern a bridge (follow), and every
+// sweepEvery beside them; without a fleet that sends its changes, it reads
+// the view every pollEvery, two seconds.
 
 import (
 	"context"
@@ -38,27 +39,92 @@ const (
 	decisionTries = 30
 )
 
-// watch reads the view at every pollEvery, and at each Wake, until the
-// store closes.
+// watch reads the view until the store closes: at each Wake, at most once
+// per pollGap, and after a pause without one, which is sweepEvery while
+// the service follows the changes of the fleet and pollEvery otherwise.
 func (s *Store) watch() {
 	defer s.wg.Done()
-	t := time.NewTicker(s.pollEvery)
-	defer t.Stop()
 	for {
 		s.poll(s.ctx)
+		last := time.Now()
+		every := s.pollEvery
+		if s.following.Load() {
+			every = s.sweepEvery
+		}
+		t := time.NewTimer(every)
 		select {
 		case <-s.ctx.Done():
+			t.Stop()
 			return
 		case <-t.C:
 		case <-s.wake:
+			t.Stop()
+			// Changes come in bursts: the wait lets the rest of a burst
+			// land, so the burst costs one read.
+			if gap := s.pollGap - time.Since(last); gap > 0 {
+				g := time.NewTimer(gap)
+				select {
+				case <-s.ctx.Done():
+					g.Stop()
+					return
+				case <-g.C:
+				}
+			}
 		}
 	}
+}
+
+// follow wakes the watch for each change of the fleet view that can
+// concern a bridge (concerns), for as long as the store lives. It follows
+// the fleet of the agent when that fleet sends its changes
+// (fleet.Watcher), and it looks for one every followRetry, so it follows a
+// fleet that starts after the bridges, or that takes the place of another.
+// While it follows, the watch reads the view only every sweepEvery beside
+// the changes. When the watch of the fleet ends, the poll of every
+// pollEvery takes over at once.
+func (s *Store) follow() {
+	defer s.wg.Done()
+	for {
+		if w, ok := fleet.Of(s.a).(fleet.Watcher); ok {
+			changes := w.Watch(s.ctx)
+			s.following.Store(true)
+			// The view changed before the watch began, and a read finds it.
+			s.Wake()
+			for c := range changes {
+				if concerns(c) {
+					s.Wake()
+				}
+			}
+			s.following.Store(false)
+			s.Wake()
+		}
+		t := time.NewTimer(s.followRetry)
+		select {
+		case <-s.ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// concerns reports whether a change of the view can concern a bridge: a
+// change of a run whose batch is the batch of a bridge, which the seats,
+// their helpers, and the manager run of a spawn bridge carry, and every
+// change of a member or of the phase of a Task, which moves the presence
+// of a seat and the lines of its sleep.
+func concerns(c fleet.Change) bool {
+	if c.Kind != fleet.ChangeRun || c.Run == nil {
+		return true
+	}
+	return strings.HasPrefix(c.Run.Metadata[fw.MetaBatch], BatchPrefix)
 }
 
 // poll looks at every bridge that the watch follows once: the open ones,
 // and the closed ones for reportWait after the close, so the end of the
 // work and the report still reach the channel.
 func (s *Store) poll(ctx context.Context) {
+	s.polls.Add(1)
 	fctx := s.asFront(ctx)
 	recs, err := s.b.list(fctx)
 	if err != nil {

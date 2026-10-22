@@ -35,10 +35,10 @@ type worker struct {
 // DoctorCheck is the line manager of fw-workbench doctor (cli.DoctorCheck):
 // the profile that workbench.bossmode.manager names, the pool that runs
 // it, whether the tools.mcp entry through which the profile reaches the
-// front is trusted, and whether the bridges are set. The entry for the
-// front is the one that sends the static token of the fleet as its bearer,
-// because the front acts for the person of a run only for that token. The
-// check fails when a manager is named and no pool of the configuration
+// front is trusted, and where the delegation of a bridge comes from. The
+// entry for the front is the one that sends the static token of the fleet
+// as its bearer, because the front acts for the person of a run only for
+// that token. The check fails when a manager is named and no pool of the configuration
 // runs it, when the profile reaches the front through no such entry, and
 // when no such entry is trusted, because then _meta names no person and
 // the front acts as the token. The line reads the configuration alone: a
@@ -107,10 +107,13 @@ func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duratio
 	} else {
 		parts = append(parts, "the pool has no spawn.driver ax, so it seats no member of a spawn bridge")
 	}
+	// The service of the bridges sets them in a process that serves. The
+	// doctor runs in a process of its own, which starts no service, so
+	// there the line names where the delegation comes from.
 	if currentBridges() != nil {
 		parts = append(parts, "the bridges say what the operator of each bridge delegates")
 	} else {
-		parts = append(parts, "no bridges are set, so the manager can approve, change, and cancel no run of a bridge")
+		parts = append(parts, "the service of the bridges tells the front what the operator of each bridge delegates; the line bossmode says where the bridges live, and without them the manager can approve, change, and cancel no run of a bridge")
 	}
 	return true, "manager: " + strings.Join(parts, "; ")
 }

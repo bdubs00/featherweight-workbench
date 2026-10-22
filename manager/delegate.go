@@ -14,8 +14,7 @@ import (
 // the manager. batch is the fw.batch of a run, bridge:<id>, and action is
 // one of DelegateApprove, DelegateBudget, DelegateMembers, and
 // DelegateReport. The package bridges keeps the delegation flags in the
-// record of each bridge, and the integration of the branches sets its
-// store with SetBridges.
+// record of each bridge, and its service sets its store with SetBridges.
 type Bridges interface {
 	Delegates(ctx context.Context, batch, action string) (bool, error)
 }
@@ -34,8 +33,9 @@ const (
 const BridgePrefix = "bridge:"
 
 // delegation holds the Bridges of the process. It is the one value of the
-// package that changes after init: the integration sets it once, when the
-// bridges start, and the doctor line reads it.
+// package that changes after init: the service of the package bridges sets
+// it when it starts and clears it when it stops, and the doctor line reads
+// it.
 var delegation struct {
 	mu sync.RWMutex
 	b  Bridges
@@ -53,6 +53,21 @@ func SetBridges(b Bridges) {
 	delegation.mu.Lock()
 	defer delegation.mu.Unlock()
 	delegation.b = b
+}
+
+// ClearBridges removes b when it is the Bridges that SetBridges set last,
+// so the store of an agent that stops leaves no Bridges behind, and the
+// store of a newer agent stays. The package bridges calls SetBridges when
+// its service starts and ClearBridges when it stops.
+func ClearBridges(b Bridges) {
+	if b == nil || !reflect.TypeOf(b).Comparable() {
+		return
+	}
+	delegation.mu.Lock()
+	defer delegation.mu.Unlock()
+	if delegation.b == b {
+		delegation.b = nil
+	}
 }
 
 // currentBridges returns the Bridges that SetBridges set, or nil.

@@ -20,8 +20,18 @@
 //
 // Two hooks are the seams of the live stream of bossmode: OnMessage gets
 // every new or changed entry of a channel, and OnMember every new or
-// changed seat, with its presence and its activity. UsePhrase lets the
-// stream word the activity of a run with the tool input that it keeps.
+// changed seat, with its presence and its activity. The package bossmode
+// registers both and publishes what they get. UsePhrase sets the words of
+// the activity of a run; init sets fleet.ActivityPhrase, which words a
+// tool call with the input that the view keeps, as the stream of bossmode
+// words it.
+//
+// The service follows the changes of the fleet view (fleet.Watcher) and
+// reads the view at each change of a run of a bridge, a member, or a Task,
+// and only every sweepEvery beside them. Without a fleet that sends its
+// changes, it reads the view every pollEvery. The service also gives its
+// store to the package manager (manager.SetBridges), so a manager run asks
+// the record of a bridge what its operator delegated.
 package bridges
 
 import (
@@ -31,11 +41,14 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
+	"github.com/bdubs00/featherweight-workbench/manager"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 )
 
@@ -43,12 +56,26 @@ func init() {
 	fw.RegisterService(Start)
 	native.Extend(mount)
 	mcp.RegisterTools(tools)
+	// The roster words a tool call as the stream of bossmode words the run.
+	UsePhrase(fleet.ActivityPhrase)
 }
 
 // Times of the service.
 const (
-	// pollEvery is the time between two reads of the view of the fleet.
+	// pollEvery is the time between two reads of the view of the fleet
+	// when the fleet sends no changes.
 	pollEvery = 2 * time.Second
+	// sweepEvery is the time between two reads of the view while the
+	// service follows the changes of the fleet: the reads for what no
+	// change announces, such as a read of an owner that failed, the report
+	// of a closed bridge, and a run of this process.
+	sweepEvery = 10 * time.Second
+	// pollGap is the shortest time between two reads that changes start,
+	// so a burst of changes costs one read.
+	pollGap = 250 * time.Millisecond
+	// followRetry is the time between two looks for a fleet that sends
+	// its changes.
+	followRetry = time.Second
 	// retryFirst is the first pause before a delivery is tried again, and
 	// retryMax the longest; the pause doubles. retryFor bounds the tries
 	// of one delivery.
@@ -79,12 +106,20 @@ type Store struct {
 	wake   chan struct{}
 
 	// The times of the service, which a test shortens.
-	pollEvery  time.Duration
-	retryFirst time.Duration
-	retryMax   time.Duration
-	retryFor   time.Duration
-	reportWait time.Duration
-	now        func() time.Time
+	pollEvery   time.Duration
+	sweepEvery  time.Duration
+	pollGap     time.Duration
+	followRetry time.Duration
+	retryFirst  time.Duration
+	retryMax    time.Duration
+	retryFor    time.Duration
+	reportWait  time.Duration
+	now         func() time.Time
+
+	// following is true while the service follows the changes of the
+	// fleet (follow), and polls counts the reads of the view.
+	following atomic.Bool
+	polls     atomic.Int64
 
 	// What this replica knows of the view, for the watch (watch.go).
 	mu       sync.Mutex
@@ -102,32 +137,37 @@ func New(a *fw.Agent, records, channels bucket.Bucket, cfg Config, log *slog.Log
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Store{
-		a:          a,
-		log:        log,
-		cfg:        cfg,
-		b:          &buckets{records: records, channels: channels},
-		ctx:        ctx,
-		cancel:     cancel,
-		jobs:       make(chan *job, queueSize),
-		wake:       make(chan struct{}, 1),
-		pollEvery:  pollEvery,
-		retryFirst: retryFirst,
-		retryMax:   retryMax,
-		retryFor:   retryFor,
-		reportWait: reportWait,
-		now:        time.Now,
-		checked:    map[string]uint64{},
-		tries:      map[string]int{},
-		shown:      map[string]string{},
-		canceled:   map[string]bool{},
+		a:           a,
+		log:         log,
+		cfg:         cfg,
+		b:           &buckets{records: records, channels: channels},
+		ctx:         ctx,
+		cancel:      cancel,
+		jobs:        make(chan *job, queueSize),
+		wake:        make(chan struct{}, 1),
+		pollEvery:   pollEvery,
+		sweepEvery:  sweepEvery,
+		pollGap:     pollGap,
+		followRetry: followRetry,
+		retryFirst:  retryFirst,
+		retryMax:    retryMax,
+		retryFor:    retryFor,
+		reportWait:  reportWait,
+		now:         time.Now,
+		checked:     map[string]uint64{},
+		tries:       map[string]int{},
+		shown:       map[string]string{},
+		canceled:    map[string]bool{},
 	}
 }
 
-// run starts the workers of the fan-out and the watch of the view.
+// run starts the workers of the fan-out, the watch of the view, and the
+// follower of the changes of the fleet.
 func (s *Store) run() {
 	s.runWorkers()
-	s.wg.Add(1)
+	s.wg.Add(2)
 	go s.watch()
+	go s.follow()
 }
 
 // runWorkers starts the workers of the fan-out.
@@ -145,10 +185,10 @@ func (s *Store) Close() {
 	s.wg.Wait()
 }
 
-// Wake makes the watch read the view now, before its next tick. The live
-// stream of bossmode calls it for each change of the fleet (fleet.Watch),
-// so the channel follows a run without the wait of the poll. It never
-// blocks.
+// Wake makes the watch read the view now, before its next tick, and at
+// most once per pollGap. The follower of the changes of the fleet calls it
+// for each change that can concern a bridge (follow), so the channel
+// follows a run without the wait of the poll. It never blocks.
 func (s *Store) Wake() {
 	select {
 	case s.wake <- struct{}{}:
@@ -216,6 +256,9 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	s := New(a, records, channels, cfg, log)
 	s.run()
 	Attach(a, s)
+	// A manager run asks the record of a bridge what its operator
+	// delegated (manager.Delegated).
+	manager.SetBridges(s)
 	log.Info("bridges: the bridges are on", "store", s.Describe(), "placement", cfg.Placement, "maxMembers", cfg.MaxMembers, "manager", cfg.Manager)
 	return service{a: a, s: s, close: []func(){closeRecords, closeChannels}}, nil
 }
@@ -229,6 +272,7 @@ type service struct {
 
 func (x service) Close() error {
 	Attach(x.a, nil)
+	manager.ClearBridges(x.s)
 	x.s.Close()
 	for _, f := range x.close {
 		if f != nil {
@@ -272,9 +316,10 @@ func OnMember(fn func(bridge string, m Member)) {
 
 // UsePhrase sets the function that words the activity of a run for the
 // activity of a member. The fleet keeps the tool input of the call that a
-// run waits for, so it words the call as a result words a step; without
-// it the package words only a run that thinks, and leaves the phrase of a
-// tool call empty. The last call wins.
+// run waits for, so it words the call as a result words a step; init sets
+// fleet.ActivityPhrase, the words of the run events of the stream of
+// bossmode. Without a function the package words only a run that thinks,
+// and leaves the phrase of a tool call empty. The last call wins.
 func UsePhrase(fn func(r *fw.Run) string) {
 	hooks.mu.Lock()
 	defer hooks.mu.Unlock()
