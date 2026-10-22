@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
@@ -426,7 +425,7 @@ func (n *netFiles) result() []ResultFile {
 	return out
 }
 
-// Inputs of the built-in tools that the plain phrases read.
+// Inputs of the built-in tools that effectOf reads.
 type (
 	bashInput struct {
 		Command string `json:"command"`
@@ -435,47 +434,12 @@ type (
 		Command string `json:"command"`
 		Path    string `json:"path"`
 	}
-	httpInput struct {
-		URL string `json:"url"`
-	}
 )
 
-// stepText names a tool call for a person: the command of bash, the
-// operation and the path of files, the address of http, and else the
-// title or the name of the tool.
+// stepText names a tool call for a person with the step phrase of the
+// kernel (view.StepPhrase), which also words the activity of a run.
 func stepText(tool string, input json.RawMessage, spec fw.ToolSpec) string {
-	switch tool {
-	case "bash":
-		var in bashInput
-		if json.Unmarshal(input, &in) == nil {
-			if line := firstLine(in.Command); line != "" {
-				return `Ran "` + cutRunes(line, 80) + `"`
-			}
-		}
-	case "files":
-		var in filesInput
-		if json.Unmarshal(input, &in) == nil && in.Path != "" {
-			switch in.Command {
-			case "view", "read":
-				return "Read " + in.Path
-			case "create", "write":
-				return "Wrote " + in.Path
-			case "str_replace", "insert", "edit":
-				return "Edited " + in.Path
-			case "delete", "remove":
-				return "Removed " + in.Path
-			}
-		}
-	case "http":
-		var in httpInput
-		if json.Unmarshal(input, &in) == nil && strings.TrimSpace(in.URL) != "" {
-			return "Fetched " + strings.TrimSpace(in.URL)
-		}
-	}
-	if spec.Title != "" {
-		return spec.Title
-	}
-	return tool
+	return view.StepPhrase(tool, input, spec)
 }
 
 // effectOf says in one sentence what allowing a call does, when the input
@@ -501,24 +465,6 @@ func effectOf(tool string, input json.RawMessage) string {
 		}
 	}
 	return ""
-}
-
-// firstLine is the first line of s that has text, trimmed.
-func firstLine(s string) string {
-	for _, l := range strings.Split(s, "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			return l
-		}
-	}
-	return ""
-}
-
-// cutRunes shortens s to n runes, the last of them an ellipsis.
-func cutRunes(s string, n int) string {
-	if utf8.RuneCountInString(s) <= n {
-		return s
-	}
-	return string([]rune(s)[:n-1]) + "…"
 }
 
 // nearShare is the share of a limit from which nearLimits words it.
