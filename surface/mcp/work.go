@@ -19,6 +19,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/manager"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -100,6 +101,7 @@ func (s *server) addWorkViewTools(readOnly func() *sdk.ToolAnnotations) {
 }
 
 func (s *server) runResultTool(ctx context.Context, req *sdk.CallToolRequest, in runIDArgs) (*sdk.CallToolResult, any, error) {
+	ctx, _, _ = manager.OnBehalf(ctx)
 	ctx = withCredential(ctx, req)
 	res, err := dashboard.ResultOf(ctx, s.a, in.RunID)
 	if errors.Is(err, fw.ErrRunNotFound) {
@@ -130,6 +132,7 @@ func (s *server) memberResult(ctx context.Context, member, id string) (dashboard
 }
 
 func (s *server) agentBuilder(ctx context.Context, req *sdk.CallToolRequest, in builderArgs) (*sdk.CallToolResult, any, error) {
+	ctx, _, _ = manager.OnBehalf(ctx)
 	input, from := strings.TrimSpace(in.Input), strings.TrimSpace(in.FromRun)
 	if (input == "") == (from == "") {
 		return errorResult("Invalid request: pass exactly one of input and fromRun."), nil, nil
@@ -187,6 +190,7 @@ func builderResult(r *fw.Run) *sdk.CallToolResult {
 }
 
 func (s *server) capabilities(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
+	ctx, _, _ = manager.OnBehalf(ctx)
 	tools, err := view.Catalog(ctx, s.a)
 	if err != nil {
 		return failResult(err), nil, nil

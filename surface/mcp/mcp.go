@@ -45,6 +45,10 @@
 // which trusts the keys io.featherweight/* of _meta only from the static
 // token of the fleet (register.go).
 //
+// When the static token calls for a run whose _meta names its person, the
+// tools of the server read and act as that person (manager.OnBehalf), and
+// what they do names the run that did it (onbehalf.go).
+//
 // The tasks extension (io.modelcontextprotocol/tasks) is not served,
 // because the SDK has no support for tasks/get or CreateTaskResult.
 //
@@ -69,6 +73,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/connections"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/manager"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -239,6 +244,11 @@ func NewServer(a *fw.Agent) (*sdk.Server, error) {
 		registered: map[string]bool{},
 	}
 	s.key = stateKey(a, s.log)
+	if !manager.Guarded(a) {
+		// cmd/fw-workbench gives every agent the guard; a program that
+		// builds its agent another way acts for a person without it.
+		s.log.Warn("the authorization of this process has no guard of the manager, so a call of the static token for the person of a run decides as that person alone; build the agent with fw.WithAuthzFrom(manager.Guard(...))")
+	}
 	if s.stateTTL <= 0 {
 		s.stateTTL = 24 * time.Hour
 	}

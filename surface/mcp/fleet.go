@@ -21,6 +21,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/manager"
 	"github.com/bdubs00/featherweight-workbench/pools"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -58,6 +59,7 @@ func (s *server) addFleetTool() {
 }
 
 func (s *server) fleetTool(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
+	ctx, _, _ = manager.OnBehalf(ctx)
 	res, err := s.members(ctx)
 	if err != nil {
 		return failResult(err), nil, nil
@@ -364,8 +366,14 @@ func (s *server) remoteEmpty(ctx context.Context, member, id string) (eventsResu
 
 // startOn starts a run on another member through its native API. The call
 // never waits: the client polls run_status, which reaches the member too.
-func (s *server) startOn(ctx context.Context, member string, in runArgs) *sdk.CallToolResult {
+// For an actor with a person, the run is for that person: the member takes
+// principal and principalKind from the static token, which the request
+// carries (the kernel architecture, section 11.9).
+func (s *server) startOn(ctx context.Context, member string, in runArgs, act manager.Actor, acting bool) *sdk.CallToolResult {
 	body := map[string]any{"input": in.Input, "wait": false}
+	if acting && act.ForPerson() {
+		body["principal"], body["principalKind"] = act.Person, act.PersonKind
+	}
 	if in.Agent != "" {
 		body["agent"] = in.Agent
 	}
@@ -392,7 +400,11 @@ func (s *server) startOn(ctx context.Context, member string, in runArgs) *sdk.Ca
 	if err != nil {
 		return failResult(err)
 	}
-	s.log.Info("mcp run started on a fleet member", "run", r.ID, "agent", r.Agent, "member", member)
+	if acting {
+		s.log.Info("mcp run started on a fleet member for an actor", "run", r.ID, "agent", r.Agent, "member", member, "actor", act.String())
+	} else {
+		s.log.Info("mcp run started on a fleet member", "run", r.ID, "agent", r.Agent, "member", member)
+	}
 	res := runResult(r)
 	res.Content = []sdk.Content{&sdk.TextContent{Text: fmt.Sprintf(
 		"Started run %s of the agent %s on the fleet member %s. The run is %s. A run on another member never waits here: poll it with run_status, which reaches the member.",

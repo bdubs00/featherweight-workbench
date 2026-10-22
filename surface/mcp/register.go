@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/internal/behalf"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -127,17 +128,9 @@ const (
 // the run, its profile, the node name of the process that holds it, and
 // the person of the run with the kind of that principal. Principal and
 // PrincipalKind are empty for a run without a person and for a server that
-// the worker does not trust.
-type RunMeta struct {
-	Run           string `json:"run"`
-	Agent         string `json:"agent,omitempty"`
-	Node          string `json:"node,omitempty"`
-	Principal     string `json:"principal,omitempty"`
-	PrincipalKind string `json:"principalKind,omitempty"`
-}
-
-// callMetaKey is the context key of the RunMeta of a tools/call.
-type callMetaKey struct{}
+// the worker does not trust. The package internal/behalf holds the type,
+// so the manager and the fleet read the same keys.
+type RunMeta = behalf.Run
 
 // withCallMeta puts the run keys of the _meta of a tools/call into the
 // context of the call, for CallRun.
@@ -146,7 +139,7 @@ func withCallMeta(next sdk.MethodHandler) sdk.MethodHandler {
 		if method == "tools/call" {
 			if p, ok := req.GetParams().(*sdk.CallToolParamsRaw); ok && len(p.Meta) > 0 {
 				if m := runMetaOf(p.Meta); m.Run != "" {
-					ctx = context.WithValue(ctx, callMetaKey{}, m)
+					ctx = behalf.WithRun(ctx, m)
 				}
 			}
 		}
@@ -175,15 +168,8 @@ func runMetaOf(meta map[string]any) RunMeta {
 // request is the static token of the fleet (principal kind token), because
 // only a worker of the fleet holds that token: for a person, a workload,
 // or a call over stdio, the keys of _meta say nothing that the server can
-// believe. It also reports false when _meta names no run.
-func CallRun(ctx context.Context) (RunMeta, bool) {
-	m, ok := ctx.Value(callMetaKey{}).(RunMeta)
-	if !ok || m.Run == "" {
-		return RunMeta{}, false
-	}
-	p := fw.PrincipalFrom(ctx)
-	if p == nil || p.Kind != fw.KindToken {
-		return RunMeta{}, false
-	}
-	return m, true
-}
+// believe. It also reports false when _meta names no run. A context in
+// which the server acts for the person of the run (section 19 of
+// docs/ARCHITECTURE.md) still names the run, because its caller is the
+// token.
+func CallRun(ctx context.Context) (RunMeta, bool) { return behalf.Trusted(ctx) }

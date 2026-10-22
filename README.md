@@ -100,6 +100,10 @@ On a NATS bus, both live in key-value buckets of the stream of the fleet, `<stre
 
 A bridge is one large job split into seats, with one agent on each seat and one channel where the agents and the operator talk. The operator opens a bridge with `POST /v1/bridges`, and the front puts one run per seat on the queue of the pool of its agent, or lets the manager seat the members as child runs. A message in the channel reaches the runs of the members as a follow-up that names its sender, under caps that stop a ping-pong between two agents. The channel mirrors the life of each run: the start, an approval with its card, the answer of a turn, a failure, and the sleep of a Task. A thumb on an answer is a quality receipt, and a heart writes the result into `agents/<agent>/learned.md` of the wiki, which the next runs of the agent read. The members read and post with the MCP tools `bridge_read` and `bridge_post`, and the manager opens and changes bridges with `bridge_open`, `bridge_list`, `bridge_add_member`, `bridge_remove_member`, and `bridge_close`. The records and the channels live in `<stream>_BRIDGES` and `<stream>_CHANNELS` on a NATS bus, and in memory on the bus `mem`. Section 18 of the architecture has the rules.
 
+## The manager
+
+The manager of bossmode is one more agent that helps an operator run the fleet. A pool runs it on a Task of its own, and its tool server is the MCP server of the front. It calls that server with the static token of the fleet, and each call names the person of its run. The front then reads and acts as that person. A check for the person also needs the token, so the token never reaches more through a person. On a run of a bridge, the manager approves, changes a budget, or cancels only what the operator of the bridge delegated. [examples/bossmode](examples/bossmode/README.md) holds the pool and the profile, and section 19 of the architecture has the rules.
+
 ## How the workbench builds on the kernel
 
 The workbench changes no kernel code. It uses these hooks of the kernel:
@@ -124,9 +128,12 @@ The workbench changes no kernel code. It uses these hooks of the kernel:
 | `faces` | the faces of the agents, the sanitizer, and the identicon |
 | `bridges` | the bridges of bossmode: the records, the channels, the fan-out, and the system lines |
 | `internal/bucket` | the key-value bucket under the stores of the front |
+| `internal/behalf` | the run behind an MCP call, and the guard of a person of the static token |
+| `manager` | the manager of bossmode: the on-behalf-of, the attribution, and the delegation checks |
 | `tools/builder` | the `propose_agent` tool |
 | `examples/agentgateway` | a fleet behind agentgateway |
 | `examples/pools` | a front that keeps a pool of three workers |
+| `examples/bossmode` | a front with the pool and the profile of the manager |
 
 ## License
 

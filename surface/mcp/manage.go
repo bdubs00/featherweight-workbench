@@ -25,6 +25,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/agents"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/manager"
 	"github.com/bdubs00/featherweight-workbench/teams"
 	"github.com/bdubs00/featherweight-workbench/titles"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -439,6 +440,7 @@ func explain(err error) string {
 }
 
 func (s *server) whoami(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
+	ctx, _, _ = manager.OnBehalf(ctx)
 	w, err := dashboard.WhoamiOf(ctx, s.a)
 	if err != nil {
 		return failResult(err), nil, nil
@@ -447,6 +449,7 @@ func (s *server) whoami(ctx context.Context, _ *sdk.CallToolRequest, _ struct{})
 }
 
 func (s *server) agentsList(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
+	ctx, _, _ = manager.OnBehalf(ctx)
 	own, err := view.Agents(ctx, s.a)
 	if err != nil {
 		return failResult(err), nil, nil
@@ -512,6 +515,7 @@ func roleWord(role string) string {
 }
 
 func (s *server) agentGet(ctx context.Context, _ *sdk.CallToolRequest, in agentNameArgs) (*sdk.CallToolResult, any, error) {
+	ctx, _, _ = manager.OnBehalf(ctx)
 	v, err := s.agentNamed(ctx, in.Name, in.Pool)
 	if err != nil {
 		return failResult(err), nil, nil
@@ -572,6 +576,7 @@ func agentText(v fleet.PoolAgent) string {
 }
 
 func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentPutArgs) (*sdk.CallToolResult, any, error) {
+	ctx, act, acting := manager.OnBehalf(ctx)
 	p, err := in.profile("")
 	if err != nil {
 		return errorResult("Invalid request: " + err.Error() + "."), nil, nil
@@ -612,7 +617,11 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 	if created {
 		verb = "Created"
 	}
-	s.log.Info("mcp profile saved", "profile", v.Name, "created", created, "pool", pool, "principal", subjectOf(ctx))
+	if acting {
+		s.log.Info("mcp profile saved for an actor", "profile", v.Name, "created", created, "pool", pool, "principal", subjectOf(ctx), "actor", act.String())
+	} else {
+		s.log.Info("mcp profile saved", "profile", v.Name, "created", created, "pool", pool, "principal", subjectOf(ctx))
+	}
 	text := fmt.Sprintf("%s the agent profile %s.\n", verb, v.Name)
 	if pool != "" {
 		text = fmt.Sprintf("%s the agent profile %s in the pool %s. The front replaces each Task of the pool once it is idle, so each worker takes the profile at its next start.\n", verb, v.Name, pool)
@@ -621,6 +630,7 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 }
 
 func (s *server) agentDelete(ctx context.Context, _ *sdk.CallToolRequest, in agentNameArgs) (*sdk.CallToolResult, any, error) {
+	ctx, act, acting := manager.OnBehalf(ctx)
 	at, err := fleet.PlaceOf(ctx, s.a, in.Name, in.Pool)
 	if err != nil {
 		return failResult(err), nil, nil
@@ -629,7 +639,11 @@ func (s *server) agentDelete(ctx context.Context, _ *sdk.CallToolRequest, in age
 		return failResult(err), nil, nil
 	}
 	pool := fleet.PoolOf(at)
-	s.log.Info("mcp profile deleted", "profile", in.Name, "pool", pool, "principal", subjectOf(ctx))
+	if acting {
+		s.log.Info("mcp profile deleted for an actor", "profile", in.Name, "pool", pool, "principal", subjectOf(ctx), "actor", act.String())
+	} else {
+		s.log.Info("mcp profile deleted", "profile", in.Name, "pool", pool, "principal", subjectOf(ctx))
+	}
 	text := fmt.Sprintf("Deleted the agent profile %s. Its runs stay in the ledger.", in.Name)
 	if pool != "" {
 		text = fmt.Sprintf("Removed the agent profile %s from what the front adds to the pool %s. Each worker of the pool runs the configuration of the pool again after the front replaces its Task. Its runs stay in the ledgers.", in.Name, pool)
@@ -659,6 +673,7 @@ func rulesText(r fw.Rules) string {
 }
 
 func (s *server) runsList(ctx context.Context, req *sdk.CallToolRequest, in runsListArgs) (*sdk.CallToolResult, any, error) {
+	ctx, _, _ = manager.OnBehalf(ctx)
 	var runs runsResult
 	var err error
 	if in.Parent != "" {
@@ -762,6 +777,7 @@ func age(t time.Time) string {
 }
 
 func (s *server) runEvents(ctx context.Context, req *sdk.CallToolRequest, in runEventsArgs) (*sdk.CallToolResult, any, error) {
+	ctx, _, _ = manager.OnBehalf(ctx)
 	if in.From > 0 && in.Before > 0 {
 		return errorResult("Invalid request: pass from to read forward or before to read back, not both."), nil, nil
 	}
@@ -881,6 +897,7 @@ func eventsText(res eventsResult) string {
 }
 
 func (s *server) usage(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
+	ctx, _, _ = manager.OnBehalf(ctx)
 	rep, err := dashboard.Usages(ctx, s.a)
 	if err != nil {
 		return failResult(err), nil, nil
@@ -897,6 +914,7 @@ const usageDeprecated = "The usage view is deprecated. Operators read the Promet
 // text carries the same data for a host without MCP Apps, and it ends with
 // the address of the page when one is known.
 func (s *server) dashboard(ctx context.Context, req *sdk.CallToolRequest, in dashboardArgs) (*sdk.CallToolResult, any, error) {
+	ctx, _, _ = manager.OnBehalf(ctx)
 	ctx = withCredential(ctx, req)
 	which := strings.ToLower(strings.TrimSpace(in.View))
 	switch which {

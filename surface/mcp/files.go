@@ -17,6 +17,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
+	"github.com/bdubs00/featherweight-workbench/manager"
 )
 
 // toolRunFile is the management tool that reads a file that a run changed.
@@ -66,6 +67,7 @@ func (s *server) addFileTool(readOnly func() *sdk.ToolAnnotations) {
 }
 
 func (s *server) runFile(ctx context.Context, req *sdk.CallToolRequest, in runFileArgs) (*sdk.CallToolResult, any, error) {
+	ctx, _, _ = manager.OnBehalf(ctx)
 	ctx = withCredential(ctx, req)
 	if in.Raw {
 		return s.runFileRaw(ctx, in), nil, nil

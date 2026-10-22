@@ -18,6 +18,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/manager"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -268,6 +269,7 @@ func (s *server) addBatchTools() {
 }
 
 func (s *server) enqueue(ctx context.Context, req *sdk.CallToolRequest, in enqueueArgs) (*sdk.CallToolResult, any, error) {
+	ctx, act, acting := manager.OnBehalf(ctx)
 	agent := strings.TrimSpace(in.Agent)
 	if agent == "" {
 		return errorResult("Invalid request: the argument agent is required."), nil, nil
@@ -302,11 +304,18 @@ func (s *server) enqueue(ctx context.Context, req *sdk.CallToolRequest, in enque
 		if strings.TrimSpace(item.Input) == "" {
 			return errorResult(fmt.Sprintf("Invalid request: the input of item %d is empty.", i+1)), nil, nil
 		}
+		if hasVia(item.Metadata) {
+			return errorResult(viaRefusal), nil, nil
+		}
 		md := maps.Clone(item.Metadata)
 		if md == nil {
 			md = map[string]string{}
 		}
 		md[fw.MetaBatch] = batch
+		if acting {
+			// Each run names the actor that sent the job (section 19).
+			md[manager.MetaVia] = act.Via()
+		}
 		if title := strings.TrimSpace(item.Title); title != "" {
 			if utf8.RuneCountInString(title) > maxTitleRunes {
 				return errorResult(fmt.Sprintf("Invalid request: the title of item %d is longer than %d characters.", i+1, maxTitleRunes)), nil, nil
@@ -333,13 +342,18 @@ func (s *server) enqueue(ctx context.Context, req *sdk.CallToolRequest, in enque
 		}
 		return failResult(err), nil, nil
 	}
-	s.log.Info("mcp job enqueued", "batch", batch, "agent", agent, "queue", queue, "count", sent, "subject", p.Subject)
+	if acting {
+		s.log.Info("mcp job enqueued for an actor", "batch", batch, "agent", agent, "queue", queue, "count", sent, "subject", p.Subject, "actor", act.String())
+	} else {
+		s.log.Info("mcp job enqueued", "batch", batch, "agent", agent, "queue", queue, "count", sent, "subject", p.Subject)
+	}
 	out := enqueueResult{View: "batch", Batch: batch, Agent: agent, Queue: queue, Count: sent}
 	text := fmt.Sprintf("Queued %d runs of %s as batch %s on %s. They act as you. Call batch with %q to follow the job, or runs_list with batch %q to see its runs.", sent, agent, batch, queue, batch, batch)
 	return result(text, out), nil, nil
 }
 
 func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchArgs) (*sdk.CallToolResult, any, error) {
+	ctx, _, _ = manager.OnBehalf(ctx)
 	batch := strings.TrimSpace(in.Batch)
 	if batch == "" {
 		return errorResult("Invalid request: the argument batch is required."), nil, nil
