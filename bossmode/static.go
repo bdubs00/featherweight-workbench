@@ -58,6 +58,13 @@ func pageRoute(dir string) http.HandlerFunc {
 			native.WriteProblem(w, r, http.StatusBadRequest, "bossmode: the path of a file of the page holds .., a backslash, or a control character")
 			return
 		}
+		// A hidden file, such as .env or a file under .git, is no file of
+		// the page and no place of it.
+		if hidden(name) {
+			h.Set("Cache-Control", cacheOther)
+			native.WriteProblem(w, r, http.StatusNotFound, "bossmode: the page has no file "+name)
+			return
+		}
 		// A path without a file extension is a place of the page, which
 		// routes on the client, so it gets the page.
 		if name == "" || path.Ext(name) == "" {
@@ -120,6 +127,16 @@ func cleanFile(raw string) (string, bool) {
 	}
 	name := strings.TrimPrefix(path.Clean("/"+raw), "/")
 	return name, fs.ValidPath(name) || name == ""
+}
+
+// hidden reports whether an element of a name starts with a dot.
+func hidden(name string) bool {
+	for _, el := range strings.Split(name, "/") {
+		if strings.HasPrefix(el, ".") {
+			return true
+		}
+	}
+	return false
 }
 
 // pageFS opens the files of the page: the directory under an os.Root, so

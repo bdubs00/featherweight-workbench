@@ -1362,6 +1362,7 @@ A configuration that cannot work stops the start: a value of `enabled` that is n
 
 - `/bossmode`, `/bossmode/`, and every path whose last element has no file extension, such as `/bossmode/bridge/01K`, get `index.html`, because the page routes on the client.
 - A path with an extension gets that file with its content type, such as `text/javascript` or `image/svg+xml`. A missing file is a 404.
+- A path with an element that starts with a dot, such as `.env` or `.git/config`, is a 404, also without an extension.
 - A path that holds an element `..`, a backslash, or a control character is a 400. Such a path can reach the route only escaped, such as `%2e%2e`. The files of `dir` open through an `os.Root`, so no name and no symbolic link leads out of the directory.
 - `index.html` gets `Cache-Control: no-store`. A file under `assets/`, where the build puts the files with a hash in their names, gets `public, max-age=3600`. Any other file gets `no-cache`.
 - Without `dir`, the route serves the embedded copy. The repository holds a placeholder `index.html` there, which says that the binary does not hold the page and names `workbench.bossmode.dir`, so the route is never a 404 that confuses. A build that embeds the page copies `dist` into `bossmode/static` before `go build`. A `dir` without `index.html` answers 503 with a sentence that names the key, and the log of the start says so once.

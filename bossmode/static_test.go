@@ -32,6 +32,8 @@ func pageDir(t *testing.T) string {
 		"assets/index-D259mp1z.css":   "body{}",
 		"feather.svg":                 "<svg xmlns='http://www.w3.org/2000/svg'/>",
 		"assets/fonts/inter.v4.woff2": "font",
+		".env":                        "SECRET=1",
+		".git/config":                 "[core]",
 	} {
 		p := filepath.Join(dir, name)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -66,6 +68,8 @@ func TestStaticFromDir(t *testing.T) {
 		{"/bossmode/missing.js", "", "", "no file missing.js", http.StatusNotFound},
 		{"/bossmode/assets", "text/html; charset=utf-8", cacheIndex, "<title>bossmode</title>", http.StatusOK},
 		{"/bossmode/leak.txt", "", "", "no file", http.StatusNotFound},
+		{"/bossmode/.env", "", "", "no file", http.StatusNotFound},
+		{"/bossmode/.git/config", "", "", "no file", http.StatusNotFound},
 		{"/bossmode/..%2fsecret.txt", "", "", "holds ..", http.StatusBadRequest},
 		{"/bossmode/%2e%2e/secret.txt", "", "", "holds ..", http.StatusBadRequest},
 		{"/bossmode/assets/..%2f..%2f..%2fsecret.txt", "", "", "holds ..", http.StatusBadRequest},

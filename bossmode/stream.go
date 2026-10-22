@@ -59,7 +59,7 @@ func (h *Hub) ServeStream(w http.ResponseWriter, r *http.Request) {
 	hd.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	rc := http.NewResponseController(w)
-	// A server with a write timeout would cut a long stream.
+	// A write timeout of the server cuts a long stream, so the stream has none.
 	_ = rc.SetWriteDeadline(time.Time{})
 	bw := bufio.NewWriter(w)
 	flush := func() bool {
