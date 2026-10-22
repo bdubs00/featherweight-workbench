@@ -31,6 +31,11 @@ import (
 //   - working: the newest run is queued, running, or suspended, or the
 //     member has no run yet because its job waits in the queue.
 //   - idle: the newest run finished, and the Task is live.
+//
+// The routes and the hooks apply one more rule first, from the record of
+// the bridge (decorate): a seat whose newest run no worker of the fleet
+// holds, as the channel said with the line lost, is idle when the channel
+// holds an end of that run, and in error otherwise.
 func Presence(m Member, runs []*fw.Run, taskState string) string {
 	if m.Fired {
 		return PresenceFired
@@ -102,8 +107,29 @@ func decorate(rec *record, runs map[string]*fw.Run, states map[string]string) []
 		if !m.Fired {
 			m.Activity = activityOf(newest)
 		}
+		if p, ok := gonePresence(rec, *m, runs); ok {
+			m.Presence, m.Activity = p, nil
+		}
 	}
 	return out
+}
+
+// gonePresence is the presence of a seat whose newest run no worker of
+// the fleet holds, once the channel said so (goneLines): idle when the
+// channel holds an end of that run, and error otherwise, because the work
+// of the run is lost. It reports false for any other seat.
+func gonePresence(rec *record, m Member, runs map[string]*fw.Run) (string, bool) {
+	id := m.newest()
+	if m.Fired || id == "" || runs[id] != nil {
+		return "", false
+	}
+	if sm := rec.Seats[m.Handle]; sm == nil || sm.Gone != id {
+		return "", false
+	}
+	if mk := rec.Marks[id]; mk != nil && mk.Done > 0 {
+		return PresenceIdle, true
+	}
+	return PresenceError, true
 }
 
 // shownKey is what a hook got of a member: its presence, its activity, and

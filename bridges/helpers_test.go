@@ -217,6 +217,29 @@ type fakeView struct {
 	runs    map[string]*fw.Run
 	members []fleet.Member
 	target  string
+	// settled is what Settled answers: whether the view holds every run of
+	// the fleet (fleet.SettledView).
+	settled bool
+}
+
+func (v *fakeView) Settled() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.settled
+}
+
+// settle states whether the view holds every run of the fleet.
+func (v *fakeView) settle(yes bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.settled = yes
+}
+
+// drop takes a run out of the view, as a fleet that lost it.
+func (v *fakeView) drop(id string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	delete(v.runs, id)
 }
 
 func newView(target string) *fakeView {

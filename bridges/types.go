@@ -70,6 +70,9 @@ const (
 	EventTask     = "task"
 	EventChanged  = "changed"
 	EventCap      = "cap"
+	// EventLost is the line of a seat whose newest run no worker of the
+	// fleet holds (section 18.6).
+	EventLost = "lost"
 )
 
 // Presences of a member (Presence, section 18.7).
@@ -304,6 +307,10 @@ type seatMark struct {
 	// before a new run shows seats nothing more (giveTask).
 	Again   string     `json:"again,omitempty"`
 	AgainAt *time.Time `json:"againAt,omitempty"`
+	// Gone is the newest run of the seat once the channel said that no
+	// worker of the fleet holds it (goneLines). The seat is then idle or
+	// in error, and a patch with its task seats it again.
+	Gone string `json:"gone,omitempty"`
 }
 
 // SeatBudget is the budget of one seat: the turns and the working time of
@@ -326,9 +333,11 @@ type runMark struct {
 	Card    uint64 `json:"card,omitempty"`
 	// AskSeq is the seq of the run when the card was posted, where the
 	// read of the decision starts. Question is true when the card asks a
-	// question, whose decision carries an answer.
+	// question, whose decision carries an answer. Tool names the tool of
+	// the call, for the line of the decision.
 	AskSeq   uint64 `json:"askSeq,omitempty"`
 	Question bool   `json:"question,omitempty"`
+	Tool     string `json:"tool,omitempty"`
 	// Limit is true once the channel says that the run failed and takes no
 	// message: at a limit of its budget, or for another reason.
 	Limit bool `json:"limit,omitempty"`
@@ -341,12 +350,13 @@ type runMark struct {
 
 // lostCard is a card whose decision the front failed to read: the
 // approval, the seq of the card, the seq of the run where the read
-// starts, and whether the card asks a question.
+// starts, whether the card asks a question, and the tool of the call.
 type lostCard struct {
 	Pending  string `json:"pending"`
 	Card     uint64 `json:"card"`
 	AskSeq   uint64 `json:"askSeq,omitempty"`
 	Question bool   `json:"question,omitempty"`
+	Tool     string `json:"tool,omitempty"`
 }
 
 // maxLost bounds the lost cards that the mark of one run keeps. An older

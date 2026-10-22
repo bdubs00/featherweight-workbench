@@ -28,7 +28,7 @@ func TestRecordAndChannel(t *testing.T) {
 		t.Fatalf("members = %+v", it.Members)
 	}
 	opened := channel(t, s, it.ID)
-	if len(opened) != 1 || opened[0].Event != EventOpened || opened[0].From.Kind != KindSystem || opened[0].Text != "Alice opened the bridge with 2 members." {
+	if len(opened) != 1 || opened[0].Event != EventOpened || opened[0].From.Kind != KindSystem || opened[0].Text != "Alice opened the bridge with 2 members" {
 		t.Fatalf("channel = %+v", opened)
 	}
 
@@ -152,7 +152,7 @@ func TestReadMarksAndUnread(t *testing.T) {
 	if err := s.postLines(context.Background(), it.ID, system(EventChanged, "a plain line")); err != nil {
 		t.Fatal(err)
 	}
-	card := system(EventNeedsYou, "migrator-1 wants to run a command.")
+	card := system(EventNeedsYou, "migrator-1 wants to run a command")
 	card.Decision = &Decision{Run: "r1", State: DecisionPending}
 	var seq uint64
 	if _, err := s.b.update(context.Background(), it.ID, func(rec *record) error {

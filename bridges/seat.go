@@ -289,7 +289,7 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 		}
 		rec.Manager = run
 	}
-	opened := system(EventOpened, fmt.Sprintf("%s opened the bridge with %s.", nameOf(by), plural(len(rec.Members), "member", "members")))
+	opened := system(EventOpened, fmt.Sprintf("%s opened the bridge with %s", nameOf(by), plural(len(rec.Members), "member", "members")))
 	opened.Seq, opened.At = rec.alloc(), now
 	if err := s.b.create(ctx, rec); err != nil {
 		return nil, err
@@ -363,7 +363,7 @@ func (s *Store) enqueue(ctx context.Context, rec *record, seats []Member) {
 		}
 		s.log.Warn("bridges: a seat did not reach its queue", "bridge", rec.ID, "agent", agent, "error", err)
 		for _, h := range handles[agent][sent:] {
-			s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The front failed to put the job of %s on its queue: %s. Give the seat a new task to try again.", h, oneLine(strings.TrimPrefix(err.Error(), "fleet: "), 300))))
+			s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The front failed to put the job of %s on its queue: %s", h, oneLine(strings.TrimPrefix(err.Error(), "fleet: "), 300))))
 		}
 	}
 }

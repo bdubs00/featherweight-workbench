@@ -89,7 +89,9 @@ const (
 	lostEvery = time.Minute
 	// sleepHold is how long the Task of a seat stays quiet, with no
 	// replica that sees it in another state, before the channel says that
-	// it went to sleep (sleepLines).
+	// it went to sleep (sleepLines). A settled view also misses the newest
+	// run of a seat this long before the channel says that the seat lost
+	// it (goneSeats).
 	sleepHold = 30 * time.Second
 	// workers is the number of deliveries that run at once, and queueSize
 	// the deliveries that wait.
@@ -137,6 +139,7 @@ type Store struct {
 	lostAt   map[string]time.Time // by run id: the last read for the cards of the run that show unknown
 	shown    map[string]string    // by bridge and handle: the presence and activity that a hook got
 	canceled map[string]bool      // by run id: the runs of fired seats that a cancel went to
+	missing  map[string]missing   // by bridge and handle: the newest run of a seat that a settled view did not hold
 }
 
 // New returns a store on two buckets. The service starts nothing until
@@ -171,6 +174,7 @@ func New(a *fw.Agent, records, channels bucket.Bucket, cfg Config, log *slog.Log
 		lostAt:      map[string]time.Time{},
 		shown:       map[string]string{},
 		canceled:    map[string]bool{},
+		missing:     map[string]missing{},
 	}
 }
 

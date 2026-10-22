@@ -95,7 +95,7 @@ func TestSystemLines(t *testing.T) {
 	mig.Pending = &fw.Approval{ID: "ap1", Tool: "bash", Input: json.RawMessage(`{"command":"git push origin migrate/cron"}`), Reason: "rule: ask bash"}
 	v.put(mig)
 	got = poll()
-	if len(got) != 1 || got[0].Event != EventNeedsYou || got[0].Text != "migrator-1 wants to run a command." || got[0].Decision == nil {
+	if len(got) != 1 || got[0].Event != EventNeedsYou || got[0].Text != "migrator-1 wants to run a command" || got[0].Decision == nil {
 		t.Fatalf("card = %+v", got)
 	}
 	card := got[0]
@@ -114,7 +114,7 @@ func TestSystemLines(t *testing.T) {
 	mig.State, mig.Seq, mig.Pending = fw.StateRunning, 6, nil
 	v.put(mig)
 	got = poll()
-	if len(got) != 1 || got[0].Event != EventDecided || got[0].Text != "bob allowed the call of migrator-1, with the note: go." || got[0].Mirrors.Seq != 6 {
+	if len(got) != 1 || got[0].Event != EventDecided || got[0].Text != "bob allowed migrator-1's command, with the note: go" || got[0].Mirrors.Seq != 6 {
 		t.Fatalf("decided = %+v", got)
 	}
 	msgs := channel(t, s, it.ID)
@@ -141,7 +141,7 @@ func TestSystemLines(t *testing.T) {
 	mig.State, mig.Seq, mig.Pending = fw.StateRunning, 9, nil
 	v.put(mig)
 	got = poll()
-	if len(got) != 1 || got[0].Text != "alice answered the question of migrator-1: ops." {
+	if len(got) != 1 || got[0].Text != "alice answered migrator-1's question: ops" {
 		t.Fatalf("answer = %+v", got)
 	}
 
@@ -181,14 +181,14 @@ func TestSystemLines(t *testing.T) {
 	fm.setEvents("r-rev", ev(fw.EvRunQueued, nil), ev(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeFailed, Error: "the model refused"}), ev(fw.EvMessageReceived, nil), ev(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCanceled}))
 	rev.State, rev.Seq = fw.StateCanceled, 4
 	v.put(rev)
-	if got = poll(); len(got) != 1 || got[0].Event != EventCanceled || got[0].Text != "The run of reviewer was canceled." {
+	if got = poll(); len(got) != 1 || got[0].Event != EventCanceled || got[0].Text != "The run of reviewer was canceled" {
 		t.Fatalf("cancel = %+v", got)
 	}
 
 	// The Task sleeps, then wakes.
 	v.state("default/crew-0", fleet.MemberQuiet)
 	got = poll()
-	if len(got) != 2 || got[0].Event != EventAsleep || got[0].Text != "migrator-1 went to sleep. A message wakes its Task." {
+	if len(got) != 2 || got[0].Event != EventAsleep || got[0].Text != "migrator-1 went to sleep" {
 		t.Fatalf("asleep = %+v", got)
 	}
 	if again := poll(); len(again) != 0 {
@@ -198,7 +198,7 @@ func TestSystemLines(t *testing.T) {
 		t.Fatalf("presence = %s", ms[len(ms)-1].Presence)
 	}
 	v.state("default/crew-0", fleet.MemberLive)
-	if got = poll(); len(got) != 2 || got[0].Event != EventStarted || got[0].Text != "migrator-1 woke up." {
+	if got = poll(); len(got) != 2 || got[0].Event != EventStarted || got[0].Text != "migrator-1 woke up" {
 		t.Fatalf("awake = %+v", got)
 	}
 	// The record of the bridge counts the runs of each seat.
@@ -224,7 +224,7 @@ func TestCardOfAnEndedRun(t *testing.T) {
 	v.put(r)
 	s.poll(context.Background())
 	cards := withEvent(channel(t, s, it.ID), EventNeedsYou)
-	if len(cards) != 1 || cards[0].Decision.Always || cards[0].Decision.Effect != "Changes app.env." || cards[0].Text != "migrator-1 wants to change a file." {
+	if len(cards) != 1 || cards[0].Decision.Always || cards[0].Decision.Effect != "Changes app.env." || cards[0].Text != "migrator-1 wants to change a file" {
 		t.Fatalf("card = %+v", cards)
 	}
 	fm.setEvents("r-mig", ev(fw.EvRunQueued, nil), ev(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCanceled}))
@@ -310,7 +310,7 @@ func TestCardOfAnUnreadableRun(t *testing.T) {
 		}
 	}
 	failed := withEvent(msgs, EventFailed)
-	if len(failed) != 2 || !strings.Contains(failed[0].Text, "failed to read the run") || len(withEvent(msgs, EventDecided)) != 0 {
+	if len(failed) != 2 || !strings.Contains(failed[0].Text, "failed to read its run") || len(withEvent(msgs, EventDecided)) != 0 {
 		t.Fatalf("lines = %+v", failed)
 	}
 	if n := unread(); n != before-2 {
@@ -346,7 +346,7 @@ func TestCardOfAnUnreadableRun(t *testing.T) {
 	if c := msgs[seqOf["r-rev"]-1]; c.Decision.State != DecisionDeny || c.Decision.Note != "The run no longer waits for this decision." {
 		t.Fatalf("the card of the reviewer after the read = %+v", c.Decision)
 	}
-	if d := withEvent(msgs, EventDecided); len(d) != 1 || d[0].Text != "bob allowed the call of migrator-1, with the note: ship it." {
+	if d := withEvent(msgs, EventDecided); len(d) != 1 || d[0].Text != "bob allowed migrator-1's command, with the note: ship it" {
 		t.Fatalf("decided lines = %+v", d)
 	}
 	if hm := h.message(seqOf["r-mig"]); len(hm) != 3 || hm[2].Decision.State != DecisionAllow {
@@ -433,7 +433,7 @@ func (r *replicas) lines(t *testing.T) []string {
 	t.Helper()
 	var out []string
 	for _, m := range channel(t, r.stores[0], r.bridge) {
-		if m.Event == EventAsleep || strings.HasSuffix(m.Text, " woke up.") {
+		if m.Event == EventAsleep || strings.HasSuffix(m.Text, " woke up") {
 			out = append(out, m.Text)
 		}
 	}
@@ -485,7 +485,7 @@ func TestSleepLinesFollowTheSharedRecord(t *testing.T) {
 		}
 	}
 	r.at(151, live, quiet)
-	want := []string{"migrator-1 went to sleep. A message wakes its Task.", "migrator-1 woke up."}
+	want := []string{"migrator-1 went to sleep", "migrator-1 woke up"}
 	if got := r.lines(t); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("lines = %q, want %q", got, want)
 	}

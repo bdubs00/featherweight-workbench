@@ -180,7 +180,7 @@ func TestToolsOfTheManager(t *testing.T) {
 		t.Fatalf("remove = %s", textOf(res))
 	}
 	eventually(t, "the cancel reaches the run", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-rev/cancel")) == 1 })
-	if l := withEvent(channel(t, s, it.ID), EventFired); len(l) != 1 || l[0].Text != "manager for alice fired reviewer. Its Task stays in its pool." {
+	if l := withEvent(channel(t, s, it.ID), EventFired); len(l) != 1 || l[0].Text != "manager for alice fired reviewer" {
 		t.Fatalf("fired = %+v", l)
 	}
 	res = callTool(t, cs, ToolAddMember, map[string]any{"bridge": it.ID, "handle": "reviewer-2", "agent": "reviewer", "task": "Review again"}, metaOf("mgr-conv", "manager", "alice"))

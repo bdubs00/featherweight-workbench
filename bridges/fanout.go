@@ -113,15 +113,16 @@ func limited(r *fw.Run) bool {
 }
 
 // cannotTake is the cap line of a member whose newest run failed, with the
-// reason from the run: at a limit of its budget, the member needs a larger
-// budget; after another failure, its task seats it again on a new run
-// (giveTask).
+// reason from the run: a stop at a limit of its budget, or another
+// failure. The line states the fact and no advice, and the page words it.
+// At a limit the member needs a larger budget, and after another failure
+// its task seats it again on a new run (giveTask).
 func cannotTake(handle string, r *fw.Run) string {
 	reason := oneLine(orWords(r.Error, "no error text"), 300)
 	if limited(r) {
-		return fmt.Sprintf("%s cannot take messages: its run stopped at a limit (%s). It needs a larger budget.", handle, reason)
+		return fmt.Sprintf("%s cannot take messages: its run stopped at a limit (%s)", handle, reason)
 	}
-	return fmt.Sprintf("%s cannot take messages: its run failed (%s). Give it its task again to seat it on a new run.", handle, reason)
+	return fmt.Sprintf("%s cannot take messages: its run failed (%s)", handle, reason)
 }
 
 // post appends a message of a person or an agent to the channel and fans
@@ -244,11 +245,10 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 //     each other until a person writes or the operator raises the cap.
 //
 // A member whose newest run failed gets nothing, and the channel says so
-// once for that run with the reason from the run (cannotTake): at a limit
-// of its budget the member needs a larger budget, and after another
-// failure a new task seats it again. A member without a run, whose job
-// waits in the queue, gets nothing; its instructions tell it to read the
-// channel first.
+// once for that run with the reason from the run (cannotTake). A member
+// without a run, whose job waits in the queue, gets nothing, and its
+// instructions tell it to read the channel first. A seat whose newest run
+// no worker of the fleet holds gets nothing too (goneLines).
 func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]*fw.Run, now time.Time) (lines []Message, plan []delivery) {
 	f := &rec.Fan
 	if snd.handle == "" {
@@ -259,7 +259,7 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 	if f.Messages > rec.Caps.MaxMessages {
 		if !f.Capped {
 			f.Capped = true
-			lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d messages, so the front delivers no more messages to the members. Raise caps.maxMessages to go on; the channel keeps every message.", rec.Caps.MaxMessages)))
+			lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d messages", rec.Caps.MaxMessages)))
 		}
 		return seqLines(rec, lines, now), nil
 	}
@@ -310,7 +310,7 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 						f.PairCapped = map[string]bool{}
 					}
 					f.PairCapped[pair] = true
-					lines = append(lines, system(EventCap, fmt.Sprintf("%s and %s exchanged %d messages without a message of a person, so the front delivers no more between them. Write in the channel to go on, or raise caps.maxPairMessages.", snd.handle, m.Handle, rec.Caps.MaxPairMessages)))
+					lines = append(lines, system(EventCap, fmt.Sprintf("%s and %s exchanged %d messages without a person", snd.handle, m.Handle, rec.Caps.MaxPairMessages)))
 				}
 				continue
 			}
@@ -330,7 +330,7 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 	}
 	if len(minuteMissed) > 0 && !f.MinuteCapped.Equal(minute) {
 		f.MinuteCapped = minute
-		lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d deliveries a minute, so %s did not get message %d. The channel keeps it; the members read it with bridge_read. Raise caps.maxFanoutPerMinute to deliver more.", rec.Caps.MaxFanoutPerMinute, strings.Join(minuteMissed, ", "), msg.Seq)))
+		lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d deliveries a minute, and %s did not get message %d", rec.Caps.MaxFanoutPerMinute, strings.Join(minuteMissed, ", "), msg.Seq)))
 	}
 	return seqLines(rec, lines, now), plan
 }
@@ -382,7 +382,7 @@ func (s *Store) deliveryJob(d delivery) *job {
 		do:   func(ctx context.Context) error { return s.send(ctx, d.run, d.content, d.from, d.pinned) },
 		fail: func(err error) {
 			s.log.Warn("bridges: a member did not get a message", "bridge", d.bridge, "seq", d.seq, "member", d.handle, "run", d.run.ID, "error", err)
-			_ = s.postLines(s.ctx, d.bridge, system(EventFailed, fmt.Sprintf("%s did not get message %d: %s.", d.handle, d.seq, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
+			_ = s.postLines(s.ctx, d.bridge, system(EventFailed, fmt.Sprintf("%s did not get message %d: %s", d.handle, d.seq, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
 		},
 	}
 }

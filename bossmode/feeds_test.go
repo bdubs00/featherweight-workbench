@@ -191,7 +191,7 @@ func TestFeedBridges(t *testing.T) {
 
 	// A card whose decision is larger than an event goes without its input
 	// and its schema, marked partial.
-	big := bridges.Message{Seq: 99, From: bridges.From{Kind: bridges.KindSystem}, Text: "boss-1 wants to change a file.", Event: bridges.EventNeedsYou,
+	big := bridges.Message{Seq: 99, From: bridges.From{Kind: bridges.KindSystem}, Text: "boss-1 wants to change a file", Event: bridges.EventNeedsYou,
 		Decision: &bridges.Decision{Run: "r-big", State: bridges.DecisionPending}}
 	big.Decision.ID, big.Decision.Tool = "ap-1", "files"
 	big.Decision.Input = json.RawMessage(`{"content":"` + strings.Repeat("x", MaxEventBytes) + `"}`)

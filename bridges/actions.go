@@ -260,7 +260,7 @@ func (s *Store) fire(ctx context.Context, id, handle string, by *fw.Principal) (
 		}
 		fired = true
 		m.Fired, m.Muted = true, true
-		line = system(EventFired, fmt.Sprintf("%s fired %s. Its Task stays in its pool.", nameOf(by), handle))
+		line = system(EventFired, fmt.Sprintf("%s fired %s", nameOf(by), handle))
 		line.Seq, line.At = rec.alloc(), now
 		return nil
 	})
@@ -363,7 +363,7 @@ func (s *Store) patchMember(ctx context.Context, id, handle string, p MemberPatc
 			if m.Muted {
 				verb = "muted"
 			}
-			lines = append(lines, system(EventMuted, fmt.Sprintf("%s %s %s.", nameOf(by), verb, handle)))
+			lines = append(lines, system(EventMuted, fmt.Sprintf("%s %s %s", nameOf(by), verb, handle)))
 		}
 		if p.Task != nil && task != m.Task {
 			m.Task, newTask = task, true
@@ -394,16 +394,19 @@ func (s *Store) patchMember(ctx context.Context, id, handle string, p MemberPatc
 // change. A second patch with the same task within seatAgainWait, while
 // the new seating has no run in the view yet, seats nothing more, so a
 // double click starts one run, and a seating whose job never ran can be
-// tried again after the wait. A changed task
-// reaches any other run as a follow-up of the person, and an unchanged
-// one changes nothing. A seat without a run gets nothing: its job waits in
-// the queue, and the channel holds the line of the task.
+// tried again after the wait. A seat whose newest run no worker of the
+// fleet holds, as the channel said with the line lost, is seated again in
+// the same way. A changed task reaches any other run as a follow-up of the
+// person, and an unchanged one changes nothing. A seat without a run gets
+// nothing: its job waits in the queue, and the channel holds the line of
+// the task.
 func (s *Store) giveTask(ctx context.Context, rec *record, m Member, by *fw.Principal, changed bool) {
 	r := s.runOf(s.asFront(ctx), m.newest())
-	if r == nil {
+	gone := r == nil && m.newest() != "" && rec.Seats[m.Handle] != nil && rec.Seats[m.Handle].Gone == m.newest()
+	if r == nil && !gone {
 		return
 	}
-	if r.State == fw.StateFailed || r.State == fw.StateCanceled {
+	if gone || r.State == fw.StateFailed || r.State == fw.StateCanceled {
 		if !changed {
 			sm := rec.seat(m.Handle)
 			if sm.Again != "" && sm.Again == m.newest() && sm.AgainAt != nil && s.now().Sub(*sm.AgainAt) < seatAgainWait {
@@ -495,16 +498,16 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 		switch {
 		case p.State != nil && *p.State == StateClosed && rec.State == StateOpen:
 			rec.State, rec.ClosedAt = StateClosed, &now
-			l = system(EventClosed, fmt.Sprintf("%s closed the bridge. Nothing was canceled.", nameOf(by)))
+			l = system(EventClosed, fmt.Sprintf("%s closed the bridge", nameOf(by)))
 			if rec.Delegation.Report {
 				rec.Report = &reportMark{AskedAt: now}
 				closed = true
 			}
 		case p.State != nil && *p.State == StateOpen && rec.State == StateClosed:
 			rec.State, rec.ClosedAt, rec.Report = StateOpen, nil, nil
-			l = system(EventReopened, fmt.Sprintf("%s opened the bridge again.", nameOf(by)))
+			l = system(EventReopened, fmt.Sprintf("%s opened the bridge again", nameOf(by)))
 		case changed:
-			l = system(EventChanged, fmt.Sprintf("%s changed the settings of the bridge.", nameOf(by)))
+			l = system(EventChanged, fmt.Sprintf("%s changed the settings of the bridge", nameOf(by)))
 		default:
 			return errNoChange
 		}
@@ -542,7 +545,7 @@ func (s *Store) askReport(ctx context.Context, rec *record) {
 		return
 	}
 	if s.cfg.Manager == "" {
-		_ = s.postLines(ctx, rec.ID, system(EventChanged, "Nobody writes a report: the configuration names no manager (workbench.bossmode.manager)."))
+		_ = s.postLines(ctx, rec.ID, system(EventChanged, "Nobody writes a report: the configuration names no manager"))
 		return
 	}
 	input := header(rec, []string{HandleManager}, op) + ask

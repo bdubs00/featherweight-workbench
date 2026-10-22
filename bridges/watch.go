@@ -3,14 +3,16 @@ package bridges
 // This file watches the view of the fleet for the runs of each bridge and
 // mirrors their life into the channel (docs/ARCHITECTURE.md section 18.6):
 // a seat started, finished with an answer, needs a person, asked a
-// question, got a decision, failed, or was canceled, and its Task went to
-// sleep or woke. Each fact gets one entry, never two: the record keeps a
-// mark of what the channel holds of each run, and the change of the record
-// that moves a mark also gives the seq of the entry, so of two replicas
-// that see the same fact one posts it. The watch reads the view at each
-// change of the fleet that can concern a bridge (follow), and every
-// sweepEvery beside them; without a fleet that sends its changes, it reads
-// the view every pollEvery, two seconds.
+// question, got a decision, failed, or was canceled, its Task went to
+// sleep or woke, and the fleet lost its newest run. Each line states the
+// fact in one plain sentence, and the page of bossmode words it from the
+// event. Each fact gets one entry, never two: the record keeps a mark of
+// what the channel holds of each run, and the change of the record that
+// moves a mark also gives the seq of the entry, so of two replicas that
+// see the same fact one posts it. The watch reads the view at each change
+// of the fleet that can concern a bridge (follow), and every sweepEvery
+// beside them. Without a fleet that sends its changes, it reads the view
+// every pollEvery, two seconds.
 
 import (
 	"context"
@@ -134,7 +136,8 @@ func (s *Store) poll(ctx context.Context) {
 		return
 	}
 	states := s.taskStates(fctx)
-	live := map[string]bool{}
+	settled := s.settled()
+	live, watched := map[string]bool{}, map[string]bool{}
 	for _, rec := range recs {
 		if ctx.Err() != nil {
 			return
@@ -142,11 +145,17 @@ func (s *Store) poll(ctx context.Context) {
 		if rec.State != StateOpen && (rec.ClosedAt == nil || s.now().Sub(*rec.ClosedAt) > s.reportWait) {
 			continue
 		}
-		for id := range s.observe(fctx, rec, states) {
+		watched[rec.ID] = true
+		for id := range s.observe(fctx, rec, states, settled) {
 			live[id] = true
 		}
 	}
 	s.mu.Lock()
+	for key := range s.missing {
+		if bridge, _, _ := strings.Cut(key, "/"); !watched[bridge] {
+			delete(s.missing, key)
+		}
+	}
 	for id := range s.checked {
 		if !live[id] {
 			delete(s.checked, id)
@@ -184,9 +193,10 @@ type verdict struct {
 }
 
 // observe mirrors the runs of one bridge into its channel and gives the
-// hooks the members whose presence changed. It returns the ids of the runs
-// of the bridge.
-func (s *Store) observe(ctx context.Context, rec *record, states map[string]string) map[string]*fw.Run {
+// hooks the members whose presence changed. settled is true when the view
+// of the fleet holds every run of the fleet (fleet.SettledView). It
+// returns the ids of the runs of the bridge.
+func (s *Store) observe(ctx context.Context, rec *record, states map[string]string, settled bool) map[string]*fw.Run {
 	runs, err := s.runsOf(ctx, rec.ID)
 	if err != nil {
 		s.log.Warn("bridges: read the runs of a bridge", "bridge", rec.ID, "error", err)
@@ -219,12 +229,16 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 				}
 			}
 		}
-		if r.State.Terminal() && s.unchecked(r) {
+		// A run whose end the channel holds at its seq or later needs no
+		// read, so a run that the view knows from the index of the runs
+		// wakes no sleeping Task (docs/ARCHITECTURE.md section 4.16).
+		if r.State.Terminal() && s.unchecked(r) && (mk == nil || mk.Done < r.Seq) {
 			if e := s.readEnd(ctx, r); e != nil {
 				ends[r.ID] = e
 			}
 		}
 	}
+	gone := s.goneSeats(rec, runs, settled)
 	now := s.now().UTC()
 	var lines []Message
 	var cards []Message // cards whose decision landed, written again
@@ -244,6 +258,9 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 		}
 		slept, marked := sleepLines(rec, runs, states, now, s.sleepHold)
 		for _, l := range slept {
+			add(l)
+		}
+		for _, l := range goneLines(rec, runs, gone) {
 			add(l)
 		}
 		if !changed && !marked && len(lines) == 0 && len(cards) == 0 {
@@ -406,7 +423,7 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 		mk.Started = true
 		text := fmt.Sprintf("%s started: %s", seat, oneLine(task, 300))
 		if seat == HandleManager {
-			text = "The manager started: it seats the members of the bridge."
+			text = "The manager started"
 		}
 		l := system(EventStarted, text)
 		l.Mirrors = &Mirror{Run: r.ID, Seq: 1, Type: fw.EvRunQueued}
@@ -422,7 +439,7 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 				keep = append(keep, lc)
 				continue
 			}
-			card, line := decidedCard(r.ID, seat, lc.Card, lc.Question, lv)
+			card, line := decidedCard(r.ID, seat, lc.Card, lc.Question, lc.Tool, lv)
 			if card != nil {
 				cards = append(cards, *card)
 			}
@@ -435,7 +452,7 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 	// A card whose decision landed, from any surface, or whose run the
 	// front failed to read after decisionTries tries.
 	if mk.Pending != "" && (r.Pending == nil || r.Pending.ID != mk.Pending) && v != nil {
-		card, line := decidedCard(r.ID, seat, mk.Card, mk.Question, v)
+		card, line := decidedCard(r.ID, seat, mk.Card, mk.Question, mk.Tool, v)
 		if card != nil {
 			cards = append(cards, *card)
 		}
@@ -443,13 +460,13 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 			add(*line)
 		}
 		if !v.found && !v.ended && mk.Card != 0 {
-			mk.Lost = append(mk.Lost, lostCard{Pending: mk.Pending, Card: mk.Card, AskSeq: mk.AskSeq, Question: mk.Question})
+			mk.Lost = append(mk.Lost, lostCard{Pending: mk.Pending, Card: mk.Card, AskSeq: mk.AskSeq, Question: mk.Question, Tool: mk.Tool})
 			if len(mk.Lost) > maxLost {
 				mk.Lost = mk.Lost[len(mk.Lost)-maxLost:]
 			}
 		}
 		rec.dropCard(mk.Card)
-		mk.Pending, mk.Card, mk.AskSeq, mk.Question = "", 0, 0, false
+		mk.Pending, mk.Card, mk.AskSeq, mk.Question, mk.Tool = "", 0, 0, false, ""
 		s.mu.Lock()
 		delete(s.tries, r.ID)
 		s.mu.Unlock()
@@ -458,7 +475,7 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 	if r.State == fw.StateInputRequired && r.Pending != nil && mk.Pending == "" {
 		c := s.cardOf(ctx, r, seat)
 		add(c)
-		mk.Pending, mk.AskSeq, mk.Card, mk.Question = r.Pending.ID, r.Seq, rec.LastSeq, c.Decision.Question
+		mk.Pending, mk.AskSeq, mk.Card, mk.Question, mk.Tool = r.Pending.ID, r.Seq, rec.LastSeq, c.Decision.Question, c.Decision.Tool
 		rec.Cards = append(rec.Cards, rec.LastSeq)
 	}
 	// A new end of the run.
@@ -468,7 +485,7 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 		switch end.outcome {
 		case fw.OutcomeCompleted:
 			if strings.TrimSpace(end.output) == "" {
-				l := system(EventFinished, seat+" finished with no answer.")
+				l := system(EventFinished, seat+" finished with no answer")
 				l.Mirrors = mirror
 				add(l)
 				break
@@ -482,7 +499,7 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 			l.Mirrors = mirror
 			add(l)
 		default:
-			l := system(EventCanceled, fmt.Sprintf("The run of %s was canceled.", seat))
+			l := system(EventCanceled, fmt.Sprintf("The run of %s was canceled", seat))
 			l.Mirrors = mirror
 			add(l)
 		}
@@ -512,15 +529,15 @@ func (s *Store) cardOf(ctx context.Context, r *fw.Run, seat string) Message {
 	event, text := EventNeedsYou, ""
 	switch p := d.Decision; {
 	case p.Connect != nil:
-		text = fmt.Sprintf("%s waits for you to connect a service: %s.", seat, strings.TrimPrefix(p.Label, "Connect "))
+		text = fmt.Sprintf("%s waits for a connection to %s", seat, strings.TrimPrefix(p.Label, "Connect "))
 	case p.Question:
 		event = EventAsked
-		text = seat + " asks a question."
+		text = seat + " asks a question"
 		if q := questionOf(p.Input); q != "" {
 			text = fmt.Sprintf("%s asks: %s", seat, oneLine(q, 500))
 		}
 	default:
-		text = fmt.Sprintf("%s wants to %s.", seat, wantOf(p.Tool))
+		text = fmt.Sprintf("%s wants to %s", seat, wantOf(p.Tool))
 	}
 	l := system(event, text)
 	l.Decision = &d
@@ -581,13 +598,13 @@ func alwaysOffered(r *fw.Run, d dashboard.Decision) bool {
 
 // decidedCard returns the card with the seq card written again with its
 // decision, and the line that says who decided. question is true for a
-// card that asks a question. A card whose run no longer waits for it
-// without a decision, because the run ended or asked again, is written
-// again as denied, with no line. A card whose run the front failed to
-// read after decisionTries tries is written again with the state unknown
-// and the note unknownNote, and the channel gets a line with the event
-// failed that says so.
-func decidedCard(run, seat string, card uint64, question bool, v *verdict) (*Message, *Message) {
+// card that asks a question, and tool names the tool of the call. A card
+// whose run no longer waits for it without a decision, because the run
+// ended or asked again, is written again as denied, with no line. A card
+// whose run the front failed to read after decisionTries tries is written
+// again with the state unknown and the note unknownNote, and the channel
+// gets a line with the event failed that says so.
+func decidedCard(run, seat string, card uint64, question bool, tool string, v *verdict) (*Message, *Message) {
 	switch {
 	case v.found:
 		at := v.at.UTC()
@@ -595,7 +612,7 @@ func decidedCard(run, seat string, card uint64, question bool, v *verdict) (*Mes
 		if question {
 			d.Answer = answerOf(v.d)
 		}
-		line := system(EventDecided, decidedText(seat, v.d, question, d.Answer))
+		line := system(EventDecided, decidedText(seat, tool, v.d, question, d.Answer))
 		line.Mirrors = &Mirror{Run: run, Seq: v.seq, Type: fw.EvApprovalDecided}
 		if card == 0 {
 			return nil, &line
@@ -608,7 +625,7 @@ func decidedCard(run, seat string, card uint64, question bool, v *verdict) (*Mes
 		now := time.Now().UTC()
 		return &Message{Seq: card, Decision: &Decision{State: DecisionDeny, DecidedAt: &now, Note: "The run no longer waits for this decision."}}, nil
 	}
-	line := system(EventFailed, fmt.Sprintf("%s no longer waits for its decision, and the front failed to read the run, so it cannot tell who decided. The card shows the decision once the front reads the run again.", seat))
+	line := system(EventFailed, fmt.Sprintf("%s no longer waits for its decision, and the front failed to read its run", seat))
 	if card == 0 {
 		return nil, &line
 	}
@@ -663,14 +680,13 @@ func answerOf(d fw.ApprovalDecidedData) string {
 }
 
 // decidedText is the line of a decision, of a question when question is
-// true.
-func decidedText(seat string, d fw.ApprovalDecidedData, question bool, answer string) string {
+// true: who decided, the verb, and the call or the question of the seat,
+// with the note or the answer. The decider is the subject of the person,
+// or the kind token for the static token of the fleet.
+func decidedText(seat, tool string, d fw.ApprovalDecidedData, question bool, answer string) string {
 	who := d.Decider
-	switch who {
-	case "":
+	if who == "" {
 		who = "somebody"
-	case fw.KindToken:
-		who = "the token of the fleet"
 	}
 	note := ""
 	if strings.TrimSpace(d.Note) != "" {
@@ -678,15 +694,28 @@ func decidedText(seat string, d fw.ApprovalDecidedData, question bool, answer st
 	}
 	if question {
 		if d.Decision == DecisionAllow {
-			return fmt.Sprintf("%s answered the question of %s: %s.", who, seat, oneLine(answer, 300))
+			return fmt.Sprintf("%s answered %s's question: %s", who, seat, oneLine(answer, 300))
 		}
-		return fmt.Sprintf("%s declined the question of %s%s.", who, seat, note)
+		return fmt.Sprintf("%s declined %s's question%s", who, seat, note)
 	}
 	verb := "allowed"
 	if d.Decision != DecisionAllow {
 		verb = "denied"
 	}
-	return fmt.Sprintf("%s %s the call of %s%s.", who, verb, seat, note)
+	return fmt.Sprintf("%s %s %s's %s%s", who, verb, seat, callOf(tool), note)
+}
+
+// callOf names the call of a tool in the line of a decision.
+func callOf(tool string) string {
+	switch tool {
+	case "bash":
+		return "command"
+	case "files":
+		return "file change"
+	case "":
+		return "call"
+	}
+	return "call of " + tool
 }
 
 // rewriteCard writes a card again with its decision, under its seq, and
@@ -761,7 +790,7 @@ func sleepLines(rec *record, runs map[string]*fw.Run, states map[string]string, 
 			if now.Sub(*sm.QuietAt) >= hold {
 				sm.Asleep, sm.QuietAt, sm.QuietOn = true, nil, ""
 				changed = true
-				out = append(out, system(EventAsleep, m.Handle+" went to sleep. A message wakes its Task."))
+				out = append(out, system(EventAsleep, m.Handle+" went to sleep"))
 			}
 		default:
 			if sm.QuietAt != nil {
@@ -771,11 +800,77 @@ func sleepLines(rec *record, runs map[string]*fw.Run, states map[string]string, 
 			if taskOf(r, states) == fleet.MemberLive && sm.Asleep {
 				sm.Asleep = false
 				changed = true
-				out = append(out, system(EventStarted, m.Handle+" woke up."))
+				out = append(out, system(EventStarted, m.Handle+" woke up"))
 			}
 		}
 	}
 	return out, changed
+}
+
+// missing is the newest run of a seat that a settled view did not hold,
+// and the time at which this replica first missed it.
+type missing struct {
+	run string
+	at  time.Time
+}
+
+// settled reports whether the view of the fleet holds every run of the
+// fleet: it read the Task list whole and loaded the index of the runs
+// (fleet.SettledView). A view that cannot tell counts as not settled.
+func (s *Store) settled() bool {
+	v, ok := fleet.Of(s.a).(fleet.SettledView)
+	return ok && v.Settled()
+}
+
+// goneSeats returns the seats of a bridge whose newest run a settled view
+// missed for sleepHold, by handle, with that run. A view that has not
+// settled yet can miss a run of a sleeping Task, and a view can get a new
+// run a moment after another replica claimed it, so the watch waits. A
+// seat whose run the view holds again starts over.
+func (s *Store) goneSeats(rec *record, runs map[string]*fw.Run, settled bool) map[string]string {
+	now := s.now()
+	out := map[string]string{}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range rec.Members {
+		key := rec.ID + "/" + m.Handle
+		id := m.newest()
+		if !settled || m.Fired || id == "" || runs[id] != nil || (rec.Seats[m.Handle] != nil && rec.Seats[m.Handle].Gone == id) {
+			delete(s.missing, key)
+			continue
+		}
+		if ms, ok := s.missing[key]; !ok || ms.run != id {
+			s.missing[key] = missing{run: id, at: now}
+			if s.sleepHold > 0 {
+				continue
+			}
+		}
+		if now.Sub(s.missing[key].at) >= s.sleepHold {
+			out[m.Handle] = id
+		}
+	}
+	return out
+}
+
+// goneLines returns one line for each seat of gone whose newest run is
+// still that run and still missing, and marks the seat in the record, so
+// the channel says it once and every replica shows the seat idle or in
+// error (decorate). It runs inside the change of the record.
+func goneLines(rec *record, runs map[string]*fw.Run, gone map[string]string) []Message {
+	var out []Message
+	for _, m := range rec.Members {
+		id, ok := gone[m.Handle]
+		if !ok || m.Fired || m.newest() != id || runs[id] != nil {
+			continue
+		}
+		sm := rec.seat(m.Handle)
+		if sm.Gone == id {
+			continue
+		}
+		sm.Gone = id
+		out = append(out, system(EventLost, fmt.Sprintf("%s lost its run %s: no worker of the fleet holds it", m.Handle, id)))
+	}
+	return out
 }
 
 // show gives the OnMember hooks every member whose presence, activity, or
@@ -818,7 +913,7 @@ func (s *Store) reportCheck(ctx context.Context, rec *record) {
 			return errNoChange
 		}
 		rec.Report.Posted = true
-		l := system(EventChanged, fmt.Sprintf("The report is in the wiki: %s.", reportPath(rec.ID)))
+		l := system(EventChanged, "The report is in the wiki: "+reportPath(rec.ID))
 		l.Page = reportPath(rec.ID)
 		line = seqLines(rec, []Message{l}, s.now().UTC())
 		return nil

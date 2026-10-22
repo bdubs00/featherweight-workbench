@@ -185,7 +185,7 @@ func TestFire(t *testing.T) {
 		t.Fatalf("a second fire = %d", resp.StatusCode)
 	}
 	fired := withEvent(channel(t, s, it.ID), EventFired)
-	if len(fired) != 1 || fired[0].Text != "Alice fired migrator-1. Its Task stays in its pool." {
+	if len(fired) != 1 || fired[0].Text != "Alice fired migrator-1" {
 		t.Fatalf("fired lines = %+v", fired)
 	}
 	// A broadcast reaches the others only.
@@ -369,7 +369,7 @@ func TestCloseAsksForTheReport(t *testing.T) {
 		t.Fatalf("ask = %+v", ask.Body)
 	}
 	do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID, "alice", `{"state":"closed"}`)
-	if l := withEvent(channel(t, s, it.ID), EventClosed); len(l) != 1 || l[0].Text != "Alice closed the bridge. Nothing was canceled." {
+	if l := withEvent(channel(t, s, it.ID), EventClosed); len(l) != 1 || l[0].Text != "Alice closed the bridge" {
 		t.Fatalf("closed lines = %+v", l)
 	}
 	if len(fm.find(http.MethodPost, "/v1/runs/mgr-run-1/cancel")) != 0 {
@@ -388,7 +388,7 @@ func TestCloseAsksForTheReport(t *testing.T) {
 		}
 	}
 	report := "bridges/" + it.ID + "/report.md"
-	if len(links) != 1 || links[0].Page != report || links[0].Event != EventChanged || links[0].Text != "The report is in the wiki: "+report+"." || strings.Contains(links[0].Text, "#page/") {
+	if len(links) != 1 || links[0].Page != report || links[0].Event != EventChanged || links[0].Text != "The report is in the wiki: "+report || strings.Contains(links[0].Text, "#page/") {
 		t.Fatalf("the lines of the report = %+v", links)
 	}
 	// The page field reaches the routes and the hooks with the entry.

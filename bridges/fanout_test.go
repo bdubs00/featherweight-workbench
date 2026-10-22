@@ -125,7 +125,7 @@ func TestFanOutSkipsALimit(t *testing.T) {
 		t.Fatalf("the stopped reviewer got %d messages", n)
 	}
 	caps := withEvent(channel(t, s, id), EventCap)
-	if len(caps) != 1 || !strings.Contains(caps[0].Text, "reviewer cannot take messages") || !strings.Contains(caps[0].Text, "larger budget") {
+	if len(caps) != 1 || !strings.Contains(caps[0].Text, "reviewer cannot take messages") || !strings.Contains(caps[0].Text, "stopped at a limit (budget exceeded: maxTurns)") {
 		t.Fatalf("cap lines = %+v", caps)
 	}
 }
@@ -189,7 +189,7 @@ func TestFanOutSkipsAFailure(t *testing.T) {
 		t.Fatalf("the failed reviewer got %d messages", n)
 	}
 	caps := withEvent(channel(t, s, id), EventCap)
-	if len(caps) != 1 || caps[0].Text != "reviewer cannot take messages: its run failed (model: the provider answered 500). Give it its task again to seat it on a new run." {
+	if len(caps) != 1 || caps[0].Text != "reviewer cannot take messages: its run failed (model: the provider answered 500)" {
 		t.Fatalf("cap lines = %+v", caps)
 	}
 	// An address reaches no failed run either.

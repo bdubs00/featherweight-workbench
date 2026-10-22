@@ -1960,8 +1960,9 @@ A person can pin a message with `pinned: true` in the body of `POST /v1/bridges/
 Some members get nothing, and the channel holds the message for them:
 
 - A member without a run, because its job waits in the queue. Its instructions tell it to read the channel first.
-- A member whose newest run failed. The channel gets one line with the event `cap` for that run, which says that the member cannot take messages and gives the reason from the run. After a stop at a limit of its budget, a follow-up without a larger budget fails at once, so the line says that the member needs a larger budget. After another failure, the line says that its task seats it again on a new run (section 18.9). A new run of the member takes messages again.
+- A member whose newest run failed. The channel gets one line with the event `cap` for that run. The line says that the member cannot take messages, with the reason from the run: a stop at a limit, or another failure. After a stop at a limit of its budget, a follow-up without a larger budget fails at once. After another failure, its task seats it again on a new run (section 18.9). A new run of the member takes messages again.
 - A member whose newest run was canceled, because a message starts it again.
+- A member whose newest run no worker of the fleet holds (section 18.6). Its task seats it again on a new run.
 
 The caps of a bridge bound the fan-out. Past a cap the front delivers nothing more, posts one line with the event `cap`, and waits. Nothing leaves the channel.
 
@@ -1977,18 +1978,21 @@ A change of the caps clears the lines that they posted, so a cap that still hold
 
 The front watches the view of the fleet for the runs of each bridge by its batch, at each change of the fleet that can concern a bridge (section 18.12): the open bridges, and a closed bridge for ten minutes after its close, so the end of the work and the report still reach the channel. It mirrors the seat runs and the manager run of a spawn bridge. A helper that a seat started belongs to the seat and is not mirrored, and neither is the conversation of the manager that opened a queue bridge. Each fact gets one entry, never two: the record keeps a mark of what the channel holds of each run, and the change of the record that moves the mark gives the entry its seq, so of two replicas that see one fact, one posts it.
 
+A system line states one fact in one plain sentence, with no advice and no period at its end. The page of bossmode words each line from its event and its handle, so the event of a line never changes. The tool `bridge_read` shows the text as it is.
+
 | Event | When | The entry |
 |---|---|---|
-| `started` | A seat has its run | `<handle> started: <task>`, mirroring the `fw.run.queued` of the run |
-| `needs-you` | The run waits for an approval or a connection | A card with `decision`, mirroring the `fw.approval.requested` |
-| `asked` | The run asks a question | A card with `decision` and the schema of the question |
-| `decided` | The decision of a card lands, from any surface | `<decider> allowed the call of <handle>`, or the answer of a question, mirroring the `fw.approval.decided`. The card is written again in place. |
+| `started` | A seat has its run | `<handle> started: <task>`, mirroring the `fw.run.queued` of the run. For the manager run, `The manager started`. |
+| `needs-you` | The run waits for an approval or a connection | A card with `decision`, mirroring the `fw.approval.requested`. The text is `<handle> wants to run a command`, `<handle> wants to change a file`, `<handle> wants to use <tool>`, or `<handle> waits for a connection to <service>`. |
+| `asked` | The run asks a question | A card with `decision` and the schema of the question. The text is `<handle> asks: <question>`, or `<handle> asks a question`. |
+| `decided` | The decision of a card lands, from any surface | `<decider> allowed <handle>'s command`, or `denied`. A note of the decider follows as `, with the note: <note>`. Another tool reads `<handle>'s file change` or `<handle>'s call of <tool>`. A question reads `<decider> answered <handle>'s question: <answer>` or `<decider> declined <handle>'s question`. The line mirrors the `fw.approval.decided`, and the card is written again in place. The decider is the subject of the person, or `token` for the static token. |
 | none | The run completed with an answer | A message of the member with the output, cut at 4 KB, mirroring the `fw.run.finished` |
-| `finished` | The run completed with no answer | A line that says so |
+| `finished` | The run completed with no answer | `<handle> finished with no answer` |
 | `failed` | The run failed | `<handle> failed: <error>` |
-| `canceled` | The run was canceled | A line that says so |
-| `asleep` | The Task of the newest run of a seat stayed quiet for 30 seconds | `<handle> went to sleep. A message wakes its Task.` |
-| `started` | That Task runs again after the line `asleep` | `<handle> woke up.` |
+| `canceled` | The run was canceled | `The run of <handle> was canceled` |
+| `asleep` | The Task of the newest run of a seat stayed quiet for 30 seconds | `<handle> went to sleep` |
+| `started` | That Task runs again after the line `asleep` | `<handle> woke up` |
+| `lost` | No worker of the fleet holds the newest run of a seat | `<handle> lost its run <id>: no worker of the fleet holds it` |
 
 The decision of a card is the pending decision of the run as the result of a run words it (`dashboard.Decision`, section 6.3), with `run`, `state: pending`, and `always`, which is true when the card can offer Always allow by the rule of a pool (section 14.9): a run of a worker, a call of one tool, and an ask of the default or of a rule that names the tool, never a flag such as `destructive` and never a pattern. When the run no longer waits for the card, the front reads the events of the run after the card from its owner, with the static token, and finds the decision with its decider, its note, and the answer of a form. It writes the card again under the same seq with `state`, `decidedBy`, `decidedAt`, `note`, and `answer`, gives it to the hook `OnMessage` again, and posts the line. A card whose run no longer waits for it without a decision, because the run ended or asked again after a resume, is written again as denied with a note and no line.
 
@@ -1998,11 +2002,26 @@ For the end of a run, the front reads the last 20 events of the run from its own
 
 The actions post their lines in the change of the record that makes them: `opened`, `closed`, `reopened`, `joined`, `fired`, `muted` (also for an unmute), `task`, `changed` (a change of the title, the delegation, or the caps, and the line of a report), and `cap`. A job of a fired seat that waited in the queue and starts after the fire stops: the watch cancels it.
 
+| Event | The entry |
+|---|---|
+| `opened` | `<name> opened the bridge with <n> members` |
+| `closed` | `<name> closed the bridge` |
+| `reopened` | `<name> opened the bridge again` |
+| `joined` | `<name> added <handle>: <task>` |
+| `fired` | `<name> fired <handle>` |
+| `muted` | `<name> muted <handle>`, or `unmuted` |
+| `task` | `<handle> has a new task: <task>`, or `<name> seated <handle> again on its task: <task>` |
+| `changed` | `<name> changed the settings of the bridge`, `The report is in the wiki: <path>`, or `Nobody writes a report: the configuration names no manager` |
+| `cap` | `The bridge reached its cap of <n> messages`, `The bridge reached its cap of <n> deliveries a minute, and <handles> did not get message <seq>`, `<a> and <b> exchanged <n> messages without a person`, or `<handle> cannot take messages: its run stopped at a limit (<error>)`, or `its run failed (<error>)` |
+| `failed` | `<handle> did not get message <seq>: <error>`, `The front failed to seat <handle>: <error>`, `The front failed to seat <handle> again: <error>`, `The front failed to put the job of <handle> on its queue: <error>`, `The manager did not get the seat <handle>: <error>`, `The run <id> of <handle> did not stop: <error>`, `The manager did not get the ask for the report: <error>`, `The front failed to ask the manager for the report: <error>`, or `<handle> no longer waits for its decision, and the front failed to read its run` |
+
+A seat can lose its run. A pool that replaces a Task takes the runs of the Task with it, and so does a Task that a person deletes. The seat then names a run that no worker of the fleet holds. The watch says so only on a settled view of the fleet (section 4.16). A view that did not settle yet can miss a run of a sleeping Task. A view can also get a new run a moment after another replica claimed it. So a replica says that a seat lost its run only after its view missed the run for 30 seconds. It posts the line `lost` in the change of the record that marks the seat, so the channel says it once per seat. A pool that replaces the Task of three seats of an open bridge gives three lines. The seat is then idle or in error (section 18.7), and a patch with its task seats it again on a new run (section 18.9). A message reaches no run of such a seat, and the channel holds the message for it.
+
 The lines of a sleep follow the record of the bridge, which every replica shares, and not the view of one replica. Each replica reads the phase of a Task on its own, and two views can disagree for a while, so the lines of one view alone flap. The first replica that sees the Task of the newest run of a seat quiet records the time and the Task in the mark of the seat. A replica that sees that Task live, stopped, or blocked clears the time. A replica that finds the time 30 seconds old and the Task still quiet posts `asleep` in the change of the record that marks the seat asleep, so of two replicas one posts it. The first replica that then sees the Task live posts `woke up` in the same way and clears the mark. A Task that sleeps and wakes within 30 seconds therefore posts nothing, and each sleep gets at most one pair of lines. The watch reads the view at least every ten seconds (section 18.12), so the line `asleep` comes 30 to 40 seconds after the Task went quiet. A replica whose view does not know the Task changes no mark. The presence of the seat on the roster does not wait: it comes from the view of the replica at once (section 18.7).
 
 ### 18.7 Presence
 
-The presence of a member is its status light on the roster. `bridges.Presence(member, runs, taskState)` derives it from the newest run of the member in the bridge and the state of the Task that holds that run, `live`, `quiet`, `stopped`, or `blocked`, and the page of bossmode and the stream use the same function. The first rule that holds wins:
+The presence of a member is its status light on the roster. `bridges.Presence(member, runs, taskState)` derives it from the newest run of the member in the bridge and the state of the Task that holds that run, `live`, `quiet`, `stopped`, or `blocked`, and the page of bossmode and the stream use the same function. The routes and the hooks apply one rule of the record first. The line `lost` marks a seat whose newest run no worker of the fleet holds (section 18.6). If the channel holds an end of that run, the seat is `idle`, else `error`. Then the first rule that holds wins:
 
 | Presence | When |
 |---|---|
@@ -2023,7 +2042,7 @@ A heart also appends an entry to the page `agents/<agent>/learned.md` of the wik
 
 ### 18.9 Fire, mute, a new task, and close
 
-`DELETE /v1/bridges/{id}/members/{handle}` fires a seat. The front cancels the open runs of the seat through the forward, `POST /v1/runs/{id}/cancel` with the static token, marks the seat fired and muted, and posts `<name> fired <handle>. Its Task stays in its pool.` In a spawn bridge the runs of a seat are children of the manager run, and the cancel of a child goes to the Task that holds it in the same way; the child Task stays. A fire of a fired seat answers 200 with the seat and changes nothing, and a fired seat takes no other change.
+`DELETE /v1/bridges/{id}/members/{handle}` fires a seat. The front cancels the open runs of the seat through the forward, `POST /v1/runs/{id}/cancel` with the static token, marks the seat fired and muted, and posts `<name> fired <handle>`. The Task of the seat stays in its pool. In a spawn bridge the runs of a seat are children of the manager run. The cancel of a child goes to the Task that holds it in the same way, and the child Task stays. A fire of a fired seat answers 200 with the seat and changes nothing, and a fired seat takes no other change.
 
 `PATCH /v1/bridges/{id}/members/{handle}` mutes or unmutes a seat, and gives it a task. A task that differs from the task of the record changes the record and posts `<handle> has a new task: ...`.
 
@@ -2031,7 +2050,7 @@ Every patch with `task` then looks at the newest run of the seat. A seat that wo
 
 The new run comes also when the text did not change, because the page seats a stopped member again with the same task; the channel then gets `<name> seated <handle> again on its task: ...`. A second patch with the same text within a minute, before the new run shows in the view, seats nothing more, so a double click starts one run. After that minute, the same patch seats the seat once more, so a seating whose job never ran can be tried again. On a seat that works, the same text changes nothing. A seat without a run gets nothing, because its job still waits.
 
-A close marks the record closed and stops the fan-out. It cancels nothing. With `delegation.report`, it asks the manager for a report in the page `bridges/<id>/report.md` of the wiki, written with `pages_write`: one follow-up to the manager run of the bridge, or a new run of the manager when the bridge has none, which then becomes `manager.run`. A close through `bridge_close` by the manager run of the bridge asks nothing more, because the result of the tool asks that run for the report. The front reads the wiki while the bridge is closed, for up to ten minutes. Once the page appears, it posts one line with the event `changed`, the text `The report is in the wiki: bridges/<id>/report.md.`, and the field `page: "bridges/<id>/report.md"`. The text holds no Markdown link: a link such as `#page/...` names a place of the page at `/ui`, and the page of bossmode routes on its own, so it links the page from the field. An open after a close opens the bridge again and ends the wait.
+A close marks the record closed and stops the fan-out. It cancels nothing. With `delegation.report`, it asks the manager for a report in the page `bridges/<id>/report.md` of the wiki, written with `pages_write`: one follow-up to the manager run of the bridge, or a new run of the manager when the bridge has none, which then becomes `manager.run`. A close through `bridge_close` by the manager run of the bridge asks nothing more, because the result of the tool asks that run for the report. The front reads the wiki while the bridge is closed, for up to ten minutes. Once the page appears, it posts one line with the event `changed`, the text `The report is in the wiki: bridges/<id>/report.md`, and the field `page: "bridges/<id>/report.md"`. The text holds no Markdown link: a link such as `#page/...` names a place of the page at `/ui`, and the page of bossmode routes on its own, so it links the page from the field. An open after a close opens the bridge again and ends the wait.
 
 ### 18.10 The routes
 
@@ -2083,6 +2102,7 @@ The package meets the fleet, the stream of bossmode, and the manager through the
 - `Store.Delegates(ctx, batch, action)` reports whether the bridge of a batch `bridge:<id>` delegates an action to the manager: `approve`, `budget` or `run_budget`, `members`, `cancel`, `bridge_add_member`, or `bridge_remove_member`, and `report` or `bridge_close`. A batch of no bridge delegates nothing. The service gives its store to `manager.SetBridges` when it starts and takes it back with `manager.ClearBridges` when it stops, so the delegation checks of the MCP server ask the record of the bridge (section 19.4).
 - `Store.Visible(ctx, id)` reports whether the caller in ctx can see a bridge, by the rule of the routes, so the stream sends the events of a bridge only to the people who can see it.
 - `bridges.Of(a)` returns the `*bridges.Store` of an agent, or nil, and `bridges.Presence` derives a presence (section 18.7).
+- `fleet.SettledView`. Only a view of the fleet that reports `Settled` lets the watch say that a seat lost its run (section 4.16). A view without the method never lets it.
 
 A hook runs on the goroutine that made the change, so it must not block.
 
