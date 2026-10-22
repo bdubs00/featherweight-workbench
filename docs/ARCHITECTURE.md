@@ -19,6 +19,7 @@ The workbench changes no kernel code. It plugs in through the extension points o
 - `fw.RegisterService` runs work beside the agent for as long as it lives, `Kit.SetRelay` of the native surface answers a request about a run of another process, `metrics.RegisterCollector` adds series to the metrics surface, and `cli.RegisterDoctorCheck` adds a line to `fw doctor`. The package `fleet` uses the service, the relay, the collector, and the doctor check (section 4). Its collector adds the series of the queues, the ends of the runs of the workers, and the approvals that wait (section 4.14). A worker exports the facts of its own runs, and the front shows the fleet as the egress stream and the server of the bus tell it.
 - `fw.Agent.SetPersonTokens` gives the tool sources of the kernel the access tokens of people, and `fw.Agent.Connected` resumes the calls that wait for a connection. The package `connections` uses both (section 11).
 - The package `sources` uses `fw.RegisterService`, `native.Extend`, and `cli.RegisterDoctorCheck` too: its service runs the sources, its route takes the events of webhooks, and its doctor line names the sources (section 13).
+- The package `bossmode` uses `fw.RegisterService`, `native.Extend`, `metrics.RegisterCollector`, and `cli.RegisterDoctorCheck`: its service keeps the stream of the page, its routes serve the page, its settings, and the stream, and its doctor line names the page, the manager, and the streams (section 17).
 
 Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary, the `oidc` authentication mode of the kernel included, because the front verifies the tokens of people.
 
@@ -57,6 +58,8 @@ fleet/                  the fleet: the member record, the view, forwarding, the 
 pools/                  the pools: the configuration, the rendered Tasks, and the reconciler (section 14)
 sources/                the event sources: webhooks and polls that turn the events of
                         outside systems into runs (section 13)
+bossmode/               the page of bossmode at /bossmode, its settings, and its stream of
+                        events (section 17); static/ holds the embedded copy of the page
 tools/builder/          the tool propose_agent (section 6.4)
 examples/agentgateway/  a fleet behind agentgateway on one public URL
 examples/pools/         a front that keeps a pool of three workers (section 14)
@@ -78,6 +81,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `/ui/connect/callback` | The end of a connection (section 2.1) | always |
 | `/.well-known/oauth-protected-resource` | Protected resource metadata (RFC 9728) | when `auth.mode` includes `oidc` |
 | `/v1/sources/{name}` | Webhook sources, POST only, with the credential of each source (section 13) | with a webhook source in `workbench.sources` |
+| `/bossmode`, `/bossmode/{file...}` | The page of bossmode: its static files, GET only, with no credential (section 17.2) | with `workbench.bossmode.enabled` |
 
 | Method and path | Purpose |
 |---|---|
@@ -94,6 +98,8 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `GET /v1/connections` | The services that act for the caller, connected or not, as `{"connections": [...]}` (section 11). |
 | `POST /v1/connections/{server}` | Start a connection. Body field: `next`, a place in the page to return to. The answer holds `url`, the authorization request, and sets the cookie of the callback. |
 | `DELETE /v1/connections/{server}` | Remove the grant of the caller for the service. |
+| `GET /v1/bossmode` | The settings of the page of bossmode: the manager for the caller, the placement, and the size of a roster (section 17.4). With `workbench.bossmode.enabled`. |
+| `GET /v1/bossmode/stream` | The events of bossmode as server-sent events: the changes of the fleet and the events of other packages that the caller can see, with `Last-Event-ID` to resume (section 17.3). With `workbench.bossmode.enabled`. |
 
 ### 2.1 Connections
 
@@ -470,14 +476,14 @@ A configuration that cannot work stops the start. These are the cases:
 
 The flow has these steps:
 
-1. The page sends the person to `GET /ui/signin?next=<fragment>`. `next` is the place in the page to return to. If it does not start with `#`, or if it holds a control character, the page returns to `/ui`.
+1. The page sends the person to `GET /ui/signin?next=<fragment>`. `next` is the place in the page to return to. It is a fragment of `/ui` that starts with `#`, or a path under a page that a package registers with `web.AllowSigninReturn`, such as `/bossmode/#bridge/01K` for the page of bossmode (section 17.2). Such a path starts with the prefix of the page, here `/bossmode/`, so it names no scheme and no host, and it holds no backslash. If `next` is neither, holds a control character, or is longer than 1 KB, the person returns to `/ui`.
 2. The person can open `/ui` on another origin than the redirect URI. Then the route first answers 302 to `/ui/signin` on the host of the redirect URI. A default port counts as the same origin. The new address keeps `next` and adds `hop=1`. The cookie therefore lands on the host that receives the callback. A prefix before `/callback` in the redirect URI stays in the path. With `hop`, the route never moves again, so a proxy that hides the host causes no loop.
 3. The route reads the discovery document of the issuer and keeps it for an hour. It sends the person to the authorization endpoint with the authorization code flow, PKCE with S256, a `state`, and a `nonce`.
 4. The cookie `fw_signin` holds the PKCE verifier, the state, the nonce, `next`, and the redirect URI. It lasts 10 minutes. It is signed with HMAC-SHA256, HttpOnly, SameSite=Lax, and limited to the path `/ui`. Over https, it is also Secure.
 5. The issuer sends the person to `GET /ui/callback`. The route compares the state with the cookie and exchanges the code at the token endpoint. A confidential client authenticates with HTTP Basic. If the issuer lists only `client_secret_post`, the client sends the secret in the form.
 6. If the answer holds an ID token, its nonce must match the cookie.
 7. If the `Authn` of the agent accepts the access token, the route keeps it. If the `Authn` refuses the access token and accepts the ID token, the route keeps the ID token. A token that gives an anonymous principal signs nobody in. To accept ID tokens in `oidc` mode, put the client id in `auth.oidc.audience`.
-8. The answer is a small page with a strict content security policy and one script. The script stores the token in `sessionStorage["fw.token"]` and replaces the location with `/ui` plus `next`. The callback therefore leaves the history of the browser.
+8. The answer is a small page with a strict content security policy and one script. The script stores the token in `sessionStorage["fw.token"]` and replaces the location with `/ui` plus `next`, or with the path of `next` for a registered page. The callback therefore leaves the history of the browser. The page of bossmode reads the same token, because it has the origin of `/ui`.
 
 Every answer of `/ui/callback` deletes the cookie. A failure answers a plain page that says in one sentence what failed. No token, code, verifier, or secret enters a log line or an error message. When browser sign-in is on, every 401 problem document of the native API has the member `"signin": "/ui/signin"`. The content security policy of `GET /ui` allows the move to `/ui/signin` and still blocks forms.
 
@@ -1330,3 +1336,108 @@ Profiles. On a front with pools, `agent_put`, `agent_delete`, and `PUT` and `DEL
 `agents_list` and `agent_get` show the profiles that the workers of each pool run. Each has `pool`, `overlay` (`added`, `replaced`, or empty), `by` and `at` for an entry of the overlay, and `workerPolicy`, the policy of the workers with the rules of the overlay. A profile of the front carries `front`. The tools of the workers live in their Tasks, so a profile of a pool carries no abilities. The text of `agent_get` words the policy of the workers instead.
 
 Rules. Always allow on the approval card and `approve` with `rule` turn a pending approval of a worker into an allow rule of its pool. The rule is the name of the tool as the policy names it, such as `github.create_pull_request`, and for `bash` the whole tool, without a pattern. The pool is the pool whose Task runs the run. The caller needs the owner role on the profile of the run in that pool. The entry holds the agent, the run, the subject of the caller, the time, and the note, so a person sees why the rule exists, and the dry run names it. Before it writes anything, the front refuses a rule in these cases: the ask comes from a flag, such as `destructive`; the reason is no rule, such as a rerun after a resume; the policy of the profile asks too, which a rule of the pool cannot loosen; or the workers ask a control plane (`fw.policy.external`). The rule applies to every profile that the workers of the pool run. `POST /v1/runs/{id}/approvals/{approval}/rule` writes the rule for the page and decides nothing; the page allows the approval next. It answers 409 when no pool runs the run.
+
+## 17. Bossmode
+
+Bossmode is the operator front of the fleet. It looks like a chat client for a team, and the team is the fleet: an operator opens a bridge, which is one large job with one agent on each subtask, and the agents and the operator talk in one channel. The page is a separate repository, `featherweight-bossmode`, which builds to static files. The workbench serves those files, the settings of the page, and one stream of live events. The package `bossmode` holds these three parts. Other packages hold the bridges, the channel, the pages of the wiki, the faces, and the manager, and they feed the stream through one call (section 17.5). Nothing in the package calls a model, and no key of it names a model.
+
+### 17.1 Configuration
+
+Bossmode reads the block `bossmode` under the key `workbench` of `fw.yaml` (section 8). Each variable wins over the file.
+
+| Key | Variable | Meaning | Default |
+|---|---|---|---|
+| `workbench.bossmode.enabled` | `FW_WORKBENCH_BOSSMODE_ENABLED` | Serves the page at `/bossmode`, the settings at `/v1/bossmode`, and the stream at `/v1/bossmode/stream`. `on` or `off`. | off |
+| `workbench.bossmode.dir` | `FW_WORKBENCH_BOSSMODE_DIR` | The directory of the static files of the page: the `dist` directory of the build of `featherweight-bossmode`. Empty serves the copy in `bossmode/static` that the binary embeds. | empty |
+| `workbench.bossmode.manager` | `FW_WORKBENCH_BOSSMODE_MANAGER` | The profile name of the manager agent. The settings of the page and the doctor line read it. Empty means no manager. | empty |
+
+The settings of the page also read two keys of `workbench.bridges`, which the package of the bridges owns: `placement` (`FW_WORKBENCH_BRIDGES_PLACEMENT`), `queue` or `spawn`, `queue` by default, and `maxMembers` (`FW_WORKBENCH_BRIDGES_MAX_MEMBERS`), 16 by default. A value that does not fit gives the default here, and the package of the bridges checks the block.
+
+A configuration that cannot work stops the start: a value of `enabled` that is not a switch, a manager name with a space or a slash, and a `dir` that is not a directory. Without `enabled`, no route of bossmode exists, and each answers 404. The service runs in a process that serves, as the fleet does (section 4.6), so `fw-workbench run` starts no stream.
+
+### 17.2 The page
+
+`GET /bossmode` and `GET /bossmode/{file...}` serve the static files of the page. They are public routes, as `/ui` is: the files hold no data, and the page signs in on its own and calls `/v1` with its token.
+
+- `/bossmode`, `/bossmode/`, and every path whose last element has no file extension, such as `/bossmode/bridge/01K`, get `index.html`, because the page routes on the client.
+- A path with an extension gets that file with its content type, such as `text/javascript` or `image/svg+xml`. A missing file is a 404.
+- A path that holds an element `..`, a backslash, or a control character is a 400. Such a path can reach the route only escaped, such as `%2e%2e`. The files of `dir` open through an `os.Root`, so no name and no symbolic link leads out of the directory.
+- `index.html` gets `Cache-Control: no-store`. A file under `assets/`, where the build puts the files with a hash in their names, gets `public, max-age=3600`. Any other file gets `no-cache`.
+- Without `dir`, the route serves the embedded copy. The repository holds a placeholder `index.html` there, which says that the binary does not hold the page and names `workbench.bossmode.dir`, so the route is never a 404 that confuses. A build that embeds the page copies `dist` into `bossmode/static` before `go build`. A `dir` without `index.html` answers 503 with a sentence that names the key, and the log of the start says so once.
+
+Every answer of the page carries this content security policy, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`:
+
+```
+default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:;
+connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none';
+form-action 'self'; frame-ancestors 'none'
+```
+
+The build of the page holds no inline script, no inline style element, and no data URI, and the faces are blob images. The page keeps its token in `sessionStorage["fw.token"]`, as `/ui` does, and sends it as a bearer token. On a 401 with `signin`, it sends the person to `/ui/signin` with `next` set to its own path and fragment, such as `/bossmode/#bridge/01K`, and the callback returns the person there (section 5).
+
+### 17.3 The stream
+
+`GET /v1/bossmode/stream` answers `text/event-stream`, behind the authentication of the native API. The page reads it with `fetch` and the bearer header, because an EventSource cannot send the header. The route needs no cookie and takes no token in the query. Each event has three fields:
+
+- `id`, a decimal counter that grows for the life of the process. The counter starts at the time of the start in microseconds, so an id of an earlier process, or of a replica that started earlier, is below every id of this process.
+- `event`, the kind.
+- `data`, one line of JSON.
+
+| Kind | Data | Who gets it |
+|---|---|---|
+| `run` | The run object as `GET /v1/fleet/runs` lists it, with `member` and `reactions`. `activity` is the activity of the run with its words in `phrase`, such as `{"turn": 7, "tool": "bash", "callId": "...", "since": "...", "phrase": "Ran \"go test ./...\""}`, and `null` for a run that does not work. One event per update of a run of another member (section 4.15). | A caller who can see the run, as `GET /v1/fleet/runs` decides for that run and that caller |
+| `member` | `{"kind": "member", "member": "<name>", "state": "live", "time": "..."}`: the state of a member changed, or `"gone": true` | A caller who can see the member, as `GET /v1/fleet` decides |
+| `task` | `{"kind": "task", "member": "<name>", "phase": "Running", "time": "..."}`: the phase of the Task of a member changed, or `"gone": true` | As `member` |
+| `reset` | `null`: the stream cannot resume, and the page reads its lists again | Every caller |
+| `bridge.message`, `bridge.member`, `page`, `face`, and any other kind of `Publish` | The data of the package, unchanged (section 17.5) | Every caller, or the callers that the `Allow` of the event allows |
+
+The stream decides for each event and each caller when it sends the event, with the functions of the view (`fleet.Watcher.Visible`) and the current rules, and it keeps no decision across callers or events. A decision point that does not answer leaves the event out, and the log says so once until a decision works again.
+
+The front keeps the newest 4,096 events of every kind in a ring. A stream that opens with `Last-Event-ID` gets every event after that id that the caller can see, in order, and then the new events. An id that the ring no longer holds, an id above the newest one, and a value that is no number each give one event `reset` with the data `null` and the id of the newest event. The stream goes on from there, and the page reads its bridges, its faces, its channel, and its roster again. A stream without `Last-Event-ID` starts with the next event. A stream resumes on the replica that holds its ring. The ids of two replicas start at their start times, so another replica answers with `reset`, unless it sent more events than the microseconds between the two starts.
+
+A comment line, `: keep-alive`, goes out after 15 seconds without an event, so a proxy keeps the stream open. A stream ends after 15 minutes, and the page opens a new one with `Last-Event-ID`, so the front checks the credential again: a token that expired or that the issuer revoked stops the stream within that time, and the new request gets a 401. A process serves at most 64 streams at once, one per tab. The next request gets 429 with `Retry-After`.
+
+The fleet sends its changes through `Watch` (section 4.15), and the service of bossmode reads them at once into the ring. A slow stream reads from the ring and never holds up the fleet: a stream that falls more than 4,096 events behind gets `reset`.
+
+### 17.4 The settings
+
+`GET /v1/bossmode`, behind the authentication of the native API, answers the settings that the page reads:
+
+```json
+{
+  "manager": {"agent": "manager", "member": "default/manager-0", "run": "01K..."},
+  "placement": "queue",
+  "maxMembers": 16
+}
+```
+
+- `manager` is `null` when `workbench.bossmode.manager` is empty.
+- `manager.member` is the fleet member that runs the manager, for `POST /v1/runs?member=`: a Task of the pool whose `agent` is the profile, the first one whose phase is Running, else the first. Without such a pool, it is the first member by name whose agents hold the profile. The front runs the configuration of its workers, so it holds every profile, and it is the member only when no other member is. The answer names only a pool and a member that the caller can see, and `""` when there is none.
+- `manager.run` is the newest top-level run of the profile that the caller started, from the runs of the fleet that the caller can see, or `""`.
+- `placement` and `maxMembers` come from `workbench.bridges` (section 17.1).
+
+### 17.5 The broadcaster
+
+Any package puts an event on the stream with one call:
+
+```go
+bossmode.Publish("bridge.message", bridgeID, map[string]any{"bridge": bridgeID, "message": entry})
+bossmode.Publish("page", path, meta, bossmode.Allow(func(ctx context.Context) bool { return canRead(ctx, path) }))
+```
+
+- `kind` is 1 to 64 lower-case letters, digits, dots, dashes, and underscores. The kinds `run`, `member`, `task`, and `reset` belong to the package, and `Publish` refuses them with `bossmode.ErrKind`.
+- `id` names the object of the event, such as a bridge or the path of a page. The stream sends `data` alone, so the data carries every id that the page needs.
+- `data` goes out as JSON, unchanged, and is at most 16 KB (`bossmode.MaxEventBytes`). A larger event is refused with `bossmode.ErrTooLarge`, so a package cuts its long texts first.
+- Without an option, every caller of the stream gets the event. With `bossmode.Allow(fn)`, the stream calls `fn` with the context of each stream, which holds the principal of its caller (`fw.PrincipalFrom`), once per event and stream, also for a resume, and sends the event only when `fn` returns true.
+- `Publish` reaches the stream of every agent of the process that runs bossmode, which is one agent in `fw-workbench`, and `PublishTo(a, ...)` reaches the stream of one agent. While bossmode is off, both drop the event and return nil.
+
+The page reads the kinds `bridge.message`, `bridge.member`, `page`, and `face`, which the packages of the bridges, the pages, and the faces publish with this call.
+
+### 17.6 Doctor and metrics
+
+`fw-workbench doctor` has one line for bossmode. It says off, or on with these facts: the page that it serves, from `dir` with or without an `index.html`, or the embedded copy and whether that copy is the placeholder; the manager profile, and whether `fw.agents` or a pool defines a profile of that name; and the streams. A `dir` that is not a directory, a `dir` without `index.html`, and a manager that no profile defines fail the line. The doctor runs in a process of its own, which serves no stream, so it names the gauge of the server for the open streams.
+
+| Metric | Type | What it counts |
+|---|---|---|
+| `fw_bossmode_streams_open` | gauge | The streams of the page that are open now |
+| `fw_bossmode_streams_refused_total` | counter | The streams that the front refused with 429, because 64 were open |

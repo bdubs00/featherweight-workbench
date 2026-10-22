@@ -538,6 +538,65 @@ func isHTTPS(r *http.Request) bool {
 	return strings.EqualFold(firstForwarded(r, "X-Forwarded-Proto"), "https")
 }
 
+// signinReturns holds the prefixes of the pages besides /ui that a
+// sign-in can return to (AllowSigninReturn).
+var signinReturns struct {
+	mu       sync.Mutex
+	prefixes []string
+}
+
+// AllowSigninReturn lets the browser sign-in return to a page under
+// prefix, a path that starts and ends with "/", such as "/bossmode/". The
+// route /ui/signin then takes a next that starts with the prefix and holds
+// no backslash and no control character, and the callback page replaces
+// its location with that path. A package that serves such a page calls it
+// in init. A prefix of another shape changes nothing.
+func AllowSigninReturn(prefix string) {
+	if len(prefix) < 2 || !strings.HasPrefix(prefix, "/") || !strings.HasSuffix(prefix, "/") || strings.HasPrefix(prefix, "//") {
+		return
+	}
+	signinReturns.mu.Lock()
+	defer signinReturns.mu.Unlock()
+	if !slices.Contains(signinReturns.prefixes, prefix) {
+		signinReturns.prefixes = append(signinReturns.prefixes, prefix)
+	}
+}
+
+// signinNext returns the place that a sign-in returns to: a fragment of
+// /ui (cleanNext), or a path under a prefix of AllowSigninReturn, with no
+// scheme, no host, no backslash, and no control character, that fits
+// maxNextBytes. Any other value becomes "", which returns to /ui.
+func signinNext(v string) string {
+	if !strings.HasPrefix(v, "/") {
+		return cleanNext(v)
+	}
+	if len(v) > maxNextBytes || !utf8.ValidString(v) || strings.ContainsRune(v, '\\') {
+		return ""
+	}
+	for _, r := range v {
+		if unicode.IsControl(r) {
+			return ""
+		}
+	}
+	signinReturns.mu.Lock()
+	defer signinReturns.mu.Unlock()
+	for _, p := range signinReturns.prefixes {
+		if strings.HasPrefix(v, p) {
+			return v
+		}
+	}
+	return ""
+}
+
+// signinTarget is the address that the callback page goes to: the path of
+// a next under a prefix of AllowSigninReturn, else /ui with the fragment.
+func signinTarget(next string) string {
+	if strings.HasPrefix(next, "/") {
+		return next
+	}
+	return "/ui" + next
+}
+
 // cleanNext returns the fragment that the page returns to after the
 // sign-in: a value that starts with "#", has no control character, and
 // fits maxNextBytes. Any other value becomes "".
@@ -575,7 +634,7 @@ func pkceChallenge(verifier string) string {
 func (s *server) signinStart(w http.ResponseWriter, r *http.Request) {
 	si := s.signin
 	privatePage(w)
-	next := cleanNext(r.URL.Query().Get("next"))
+	next := signinNext(r.URL.Query().Get("next"))
 	redirect := si.redirectURI(r)
 	// The cookie belongs to the host that serves this route, and the
 	// callback reads it on the host of the redirect URI. A sign-in that
@@ -858,11 +917,12 @@ func privatePage(w http.ResponseWriter) {
 
 // signinDone writes the page that ends a sign-in. Its one script carries a
 // nonce of the policy. It stores the token for the page and replaces the
-// location with /ui and the fragment, so the callback leaves the history.
+// location with /ui and the fragment, or with the path of a page of
+// AllowSigninReturn, so the callback leaves the history.
 func signinDone(w http.ResponseWriter, token, next string) {
 	nonce := randomString()
 	tokJS, _ := json.Marshal(token)
-	nextJS, _ := json.Marshal(next)
+	nextJS, _ := json.Marshal(signinTarget(next))
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'nonce-"+nonce+"'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -871,7 +931,7 @@ func signinDone(w http.ResponseWriter, token, next string) {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Signing in</title></head>
 <body><p id="msg">Signing in.</p><noscript><p>The sign-in needs JavaScript. <a href="/ui">Open the dashboard</a>.</p></noscript>
 <script nonce="%s">
-try { sessionStorage.setItem(%q, %s); location.replace("/ui" + %s); }
+try { sessionStorage.setItem(%q, %s); location.replace(%s); }
 catch (e) { document.getElementById("msg").textContent = "This browser does not keep the sign-in. Allow storage for this site and sign in again."; }
 </script></body></html>
 `, nonce, tokenStorage, tokJS, nextJS)
