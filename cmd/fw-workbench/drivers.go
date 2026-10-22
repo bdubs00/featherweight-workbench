@@ -15,6 +15,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/agents"
 	"github.com/bdubs00/featherweight-workbench/connections"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/manager"
 	"github.com/bdubs00/featherweight-workbench/sources"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 
@@ -55,9 +56,13 @@ func init() {
 	cli.RegisterDoctorCheck(connections.DoctorCheck)
 	cli.RegisterDoctorCheck(fleet.DoctorCheck)
 	cli.RegisterDoctorCheck(sources.DoctorCheck)
+	cli.RegisterDoctorCheck(manager.DoctorCheck)
 	// With workbench.access.external, a control plane decides who can do
 	// what; every agent of the binary gets the plug, and the verbs know it.
-	cli.AgentOptions = func() []fw.Option { return []fw.Option{fw.WithAuthzFrom(access.Build)} }
+	// The guard of the manager wraps the plug, or the rules of access
+	// without one, so a person that the static token acts for never gets
+	// more than the token (docs/ARCHITECTURE.md section 19).
+	cli.AgentOptions = func() []fw.Option { return []fw.Option{fw.WithAuthzFrom(manager.Guard(access.Build))} }
 	cli.ExternalAccess = access.Of
 	cli.NewLogger = telemetry.Logger
 	cli.SetBuildInfo = telemetry.SetBuildInfo

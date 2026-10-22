@@ -93,6 +93,10 @@ Each agent has a face: an SVG, a display name, and a tagline. An agent without a
 
 On a NATS bus, both live in key-value buckets of the stream of the fleet, `<stream>_PAGES` and `<stream>_FACES`, so every replica of the front reads the same pages and faces. On the bus `mem`, they live in the memory of the process. Sections 15 and 16 of the architecture have the rules.
 
+## The manager
+
+The manager of bossmode is one more agent that helps an operator run the fleet. A pool runs it on a Task of its own, and its tool server is the MCP server of the front. It calls that server with the static token of the fleet, and each call names the person of its run. The front then reads and acts as that person. A check for the person also needs the token, so the token never reaches more through a person. On a run of a bridge, the manager approves, changes a budget, or cancels only what the operator of the bridge delegated. Section 19 of the architecture has the rules.
+
 ## How the workbench builds on the kernel
 
 The workbench changes no kernel code. It uses these hooks of the kernel:
@@ -116,6 +120,8 @@ The workbench changes no kernel code. It uses these hooks of the kernel:
 | `pages` | the wiki of the fleet |
 | `faces` | the faces of the agents, the sanitizer, and the identicon |
 | `internal/bucket` | the key-value bucket under the stores of the front |
+| `internal/behalf` | the run behind an MCP call, and the guard of a person of the static token |
+| `manager` | the manager of bossmode: the on-behalf-of, the attribution, and the delegation checks |
 | `tools/builder` | the `propose_agent` tool |
 | `examples/agentgateway` | a fleet behind agentgateway |
 | `examples/pools` | a front that keeps a pool of three workers |

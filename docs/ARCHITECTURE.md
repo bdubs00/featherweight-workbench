@@ -20,6 +20,7 @@ The workbench changes no kernel code. It plugs in through the extension points o
 - `fw.Agent.SetPersonTokens` gives the tool sources of the kernel the access tokens of people, and `fw.Agent.Connected` resumes the calls that wait for a connection. The package `connections` uses both (section 11).
 - The package `sources` uses `fw.RegisterService`, `native.Extend`, and `cli.RegisterDoctorCheck` too: its service runs the sources, its route takes the events of webhooks, and its doctor line names the sources (section 13).
 - The packages `pages` and `faces` use `fw.RegisterService` and `native.Extend`, and `mcp.RegisterTools` of the MCP server of the workbench (section 3.1): the service keeps the store, the routes serve it to people, and the tools offer it to MCP clients and agents (sections 15 and 16).
+- The package `manager` holds what makes an agent of the fleet a manager (section 19). `cmd/fw-workbench` wraps the authorization plug of every agent with `manager.Guard` through `fw.WithAuthzFrom`. It also adds the line `manager` to `fw doctor` with `cli.RegisterDoctorCheck`. Each tool of the MCP server that reads or acts calls `manager.OnBehalf` at its start.
 
 Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary, the `oidc` authentication mode of the kernel included, because the front verifies the tokens of people.
 
@@ -65,6 +66,8 @@ internal/bucket/        the key-value bucket under the stores of the front: a bu
                         NATS server of the bus, or the memory of the process
 internal/behalf/        the run behind an MCP call, and the guard that keeps a person of the
                         static token within what the token can do (section 19)
+manager/                the manager of bossmode: the on-behalf-of, the guard of the authorization,
+                        the attribution, the delegation checks, and the doctor line (section 19)
 tools/builder/          the tool propose_agent (section 6.4)
 examples/agentgateway/  a fleet behind agentgateway on one public URL
 examples/pools/         a front that keeps a pool of three workers (section 14)
@@ -164,9 +167,9 @@ Another package of the workbench adds tools to the server with `mcp.RegisterTool
 
 `mcp.CallRun(ctx)` returns the run behind a `tools/call` as an `mcp.RunMeta`: the keys `io.featherweight/run`, `io.featherweight/agent`, `io.featherweight/node`, `io.featherweight/principal`, and `io.featherweight/principalKind` of `_meta`, which the MCP client of the kernel sends (the kernel architecture, section 7.3). The constants `mcp.MetaRun`, `mcp.MetaAgent`, `mcp.MetaNode`, `mcp.MetaPrincipal`, and `mcp.MetaPrincipalKind` name the keys. The server trusts the keys only when the caller is the static token of the fleet, the principal kind `token`, because only a worker of the fleet holds that token. For a person, a workload, or a call over stdio, `CallRun` reports no run, so a person cannot pose as a run. A call whose `_meta` has no string `io.featherweight/run` has no run either. The server reads the keys and acts on none of them by itself: a tool decides what a run behind a call means, such as the writer of a page (section 15.4). The package `internal/behalf` holds the keys of a call, so the server, the fleet, and the manager read the same ones, and `CallRun` names the run also in a context where the server acts for the person of the run (section 19), because the caller is still the token.
 
-The `run` tool takes `input`, `title`, `agent`, `instructions`, `profile`, `wait` (default `true`), `budget`, and `requestId`. `title` names the work, as on the native API (the kernel architecture, section 8.2). `instructions` and `profile` have the shape of the native API fields. An MCP budget accepts `deadline` as a duration string, such as `30m`, or as positive integer nanoseconds, the form that profile reads return. This applies to `agent_put` and to both budget fields of `run`. `requestId` is the idempotency key. A retried `run` with the same `requestId` returns the same run instead of starting a second one. `metadata` labels the run, as it does on the native API, and the run object returns it. `run_status` is marked `readOnlyHint`. `run` and `send` are marked `destructiveHint`, because they start work that acts on the world.
+The `run` tool takes `input`, `title`, `agent`, `instructions`, `profile`, `wait` (default `true`), `budget`, and `requestId`. `title` names the work, as on the native API (the kernel architecture, section 8.2). `instructions` and `profile` have the shape of the native API fields. An MCP budget accepts `deadline` as a duration string, such as `30m`, or as positive integer nanoseconds, the form that profile reads return. This applies to `agent_put` and to both budget fields of `run`. `requestId` is the idempotency key. A retried `run` with the same `requestId` returns the same run instead of starting a second one. `metadata` labels the run, as it does on the native API, and the run object returns it. Only the server sets the key `fw.via`, which names the run of the fleet that started a run (section 19.3). `run_status` is marked `readOnlyHint`. `run` and `send` are marked `destructiveHint`, because they start work that acts on the world.
 
-`send` takes `runId`, `content`, `files`, and `budget`. With `budget`, the kernel changes the budget of the run before the message (the kernel architecture, section 5.2): each limit that is set replaces the same limit for the work that follows, so a person continues a run that failed at a limit with more room. `run_budget` takes `runId` and `budget` and changes the budget of a run without a message, also of a run that is running; the run reads the new budget at its next step. Both budgets have the shape of the `budget` of `run`. Every limit counts the whole run, so the turns, the tool calls, the tokens, the cost, and the working time before the change count against the new limits. A change needs the operator role on the run, as a decision does. The result of `run_budget` is a text with the budget of the run after the change, and `structuredContent` holds `budget` and `run`, as `PATCH /v1/runs/{id}/budget` answers. `run_budget` is marked `destructiveHint`, because a larger budget lets a run spend more.
+`send` takes `runId`, `content`, `files`, and `budget`. For a run of the fleet, the message names that run as its sender (section 19.3). With `budget`, the kernel changes the budget of the run before the message (the kernel architecture, section 5.2): each limit that is set replaces the same limit for the work that follows, so a person continues a run that failed at a limit with more room. `run_budget` takes `runId` and `budget` and changes the budget of a run without a message, also of a run that is running; the run reads the new budget at its next step. Both budgets have the shape of the `budget` of `run`. Every limit counts the whole run, so the turns, the tool calls, the tokens, the cost, and the working time before the change count against the new limits. A change needs the operator role on the run, as a decision does. The result of `run_budget` is a text with the budget of the run after the change, and `structuredContent` holds `budget` and `run`, as `PATCH /v1/runs/{id}/budget` answers. `run_budget` is marked `destructiveHint`, because a larger budget lets a run spend more.
 
 ### 3.2 How a run flows through MCP
 
@@ -232,6 +235,7 @@ The `server/discover` and `tools/list` results carry `ttlMs` and `cacheScope`, s
 - The MCP server uses the same `Authn` plug as the native API. In `token` mode, a missing or wrong token gets a 401 with `WWW-Authenticate: Bearer`.
 - In `oauth` mode, `fw` is an OAuth 2.1 resource server. It serves `/.well-known/oauth-protected-resource` (RFC 9728) with the servers from `mcp.auth.authorizationServers`. It checks the token signature through the JWKS of the issuer, and it checks that the audience equals its own canonical URL.
 - The principal from the token is stored in the `fw.run.queued` metadata and in every approval decision.
+- A call of the static token can name the person of a run of the fleet in `_meta`. The server then reads and acts as that person (section 19). Each check for that person also needs the token, so the token never reaches more through a person. A caller that is not the token gets nothing from `_meta`, so a person cannot pose as another person.
 - Because `Mcp-Method` and `Mcp-Name` mirror the body, a gateway in front of `fw` can rate-limit or route calls to `run` without parsing JSON.
 
 ### 3.8 Gateway
@@ -520,11 +524,11 @@ The MCP server carries these management tools beside the work tools:
 
 | Tool | What it does |
 |---|---|
-| `whoami` | The principal of the caller, its role on every agent that it can see, and its teams (section 8) |
+| `whoami` | The principal of the caller, its role on every agent that it can see, and its teams (section 8). For a run of the fleet with a person, that person (section 19). |
 | `agents_list`, `agent_get` | The agents that the caller can see, and one agent with the words of what it can do. With pools, the profiles that the workers of each pool run, each with `pool` (section 14.9). |
-| `agent_put`, `agent_delete` | Create, change, or remove an agent. `dryRun` checks a profile and changes nothing. With pools, `pool` names the pool (section 14.9). |
-| `runs_list` | The runs that the caller can see, with `scope`, `member`, `batch`, and `by` (section 8) |
-| `enqueue` | Send a job to the fleet: one run per item on the intake queue of a profile, as the caller, under one batch name (section 4.9) |
+| `agent_put`, `agent_delete` | Create, change, or remove an agent. `dryRun` checks a profile and changes nothing. With pools, `pool` names the pool (section 14.9). For a run of the fleet with a person, the roles of the person decide, and a new profile gets the person as its owner (section 19). |
+| `runs_list` | The runs that the caller can see, with `scope`, `member`, `batch`, and `by` (section 8). For a run of the fleet with a person, the runs of that person. |
+| `enqueue` | Send a job to the fleet: one run per item on the intake queue of a profile, as the caller, under one batch name (section 4.9). For a run of the fleet with a person, as that person, with `fw.via` on each run (section 19.3). |
 | `batch` | How a job goes: the jobs that wait in the queue because no Task took them yet, every run of a batch by state, the members that hold them, the runs that wait, the runs that failed, the runs that the view forgot, and the usage of the runs, with a mark when the sum is partial (section 4.9) |
 | `run_events` | One page of the events of a run as chat items. `from` reads forward, `before` reads back, and `compact` cuts each tool output. |
 | `run_result` | What a run produced and what it needs next. The text is the result as a person reads it. For a run of another member, the front builds the result from the run and the events of the owner (section 4.5). |
@@ -538,6 +542,8 @@ The MCP server carries these management tools beside the work tools:
 | `pages_list`, `pages_read`, `pages_search`, `pages_history` | The wiki of the fleet: the pages, one page with its hash, a search by words, and the versions of a page (section 15.4) |
 | `pages_write` | Write a page of the wiki as a new version, with `ifHash` for a compare-and-swap. A run that writes through the token of the fleet is the writer `agent:<profile>` (section 15.4). |
 | `faces_put` | Set the face of an agent from the text of an SVG that passes the sanitizer, for the manager (section 16.4) |
+
+For a call of a run of the fleet that names its person in `_meta`, the tools of this table read and act as that person, except `connections`, `disconnect`, and the tools of the wiki and the faces (section 19.2).
 
 `run_events` refuses `from` and `before` together. Its result has `prev`, the value of `before` for the page in front. If the page starts at the first event, the result has no `prev`. For a run of another member, the server turns `before` into `from` and `limit` on the events route of that member. The sequence numbers of a run have no gaps, so the page is the same. With `compact` true, each tool output of the page keeps its first 200 characters, `size` holds the bytes of the output, and `cut` is true, so a poll of a busy run costs little. The page without `compact` holds the full outputs.
 
@@ -893,6 +899,8 @@ workbench:
 ### 12.2 The checks
 
 Each check names an action of the kernel, `agent.view`, `agent.run`, `agent.edit`, `agent.delete`, `agent.create`, `run.view`, `run.operate`, or `admin`, the agent, its access block, and the run with its state, its principal, and its lineage, the ancestors of a child run with the parent first. A check about an agent or a run of another member of the fleet carries `member`, the name of that member, and its access block and lineage come from the view (section 4.4). A listing of runs or agents sends all of its checks in one request, and so does each view of the dashboard. The control plane decides about a child run by itself, from the lineage in the check; after a refusal the front does not ask again for the ancestors.
+
+A check for a person whom the static token acts for (section 19) goes to the control plane for the person. When the control plane allows it, the guard asks again for the token. Both answers must allow the check.
 
 The answer holds one decision per check, in order, with `allow`, an optional `reason`, and an optional `ttlMs`. `ttlMs` lets the front reuse a decision for that many milliseconds. Zero, the default, means no reuse, so a revocation takes effect at the next request. The cache key holds every fact of the check, so a change to an access block or to a run asks again.
 
@@ -1484,3 +1492,132 @@ The name of the agent holds 1 to 64 letters, digits, `-`, `_`, or `.`, as a prof
 On a NATS bus, the faces live in the key-value bucket `<stream>_FACES`. Each agent with a face, a display name, or a tagline is one entry, `face.<agent>` with the name in base64url. The value is one line of JSON with the display name, the tagline, the hash, the writer, and the time, a line break, and the SVG. The bucket keeps the last ten values of each entry. Each change reads the entry and writes at the revision that it read, so two replicas of the front never lose a change. A stored SVG passes the sanitizer again on each read, so a value that something else wrote into the bucket never reaches a browser: such a face reads as the identicon, and so does an entry that does not decode, until a change replaces it. The log says so. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_FACES.>`. On the bus `mem`, the faces live in the memory of the process, and two processes share nothing. On another bus, the front logs once that the faces are off, mounts no route, and offers no tool.
 
 Other packages of the workbench use the faces through Go. `faces.Of(a)` returns the `*faces.Store` of an agent, or nil. The store has `Get(ctx, agent)`, which gives the identicon for an agent without a face, `Put(ctx, agent, svg, by)`, which sanitizes first, `Meta(ctx, agent, displayName, tagline, by)`, `Patch`, which leaves a nil value as it is, and `Delete(ctx, agent, by)`. Each returns the `faces.Face` after the change, the entry of the routes. `faces.List(ctx, a)` returns the entries of the agents that the caller can view. A refused face is a `*faces.Refusal`, which is `faces.ErrRefused`. `faces.Check(ctx, a, agent, action)` decides an action on an agent as the routes do. `faces.Status(cfg)` gives one line for `fw-workbench doctor`. No key of the configuration sets the faces.
+
+## 19. The manager
+
+The manager of bossmode is one more agent of the fleet. It helps an operator run the fleet. It reads the fleet, opens bridges, writes reports into the wiki, and decides what the operator of a bridge delegates to it. It is a profile that a pool runs on a Task of its own. Its tool server is the MCP server of the front. It reaches that server through a `tools.mcp` entry that sends the static token of the fleet and that the worker marks `trusted`. One run of the manager is one conversation with one operator.
+
+The package `manager` holds no agent. It holds what makes an agent a manager:
+
+- the on-behalf-of in the MCP server of the front (section 19.2),
+- the guard of the authorization (section 19.2),
+- the attribution of what a run of the fleet does (section 19.3),
+- the delegation checks (section 19.4),
+- and the doctor line (section 19.5).
+
+### 19.1 Why a Task and not the front
+
+The front was the other place for the manager. A Task wins on four points:
+
+- A run of the front lives in the ledger of one replica, and a replica of the front has no address in the fleet. With two replicas, a follow-up to a conversation can reach the other replica and fail.
+- The front is a window with no agents of its own. A working agent with a shell in the container of the front breaks that boundary.
+- On the front, the manager needs a model, a provider key, and a durable home for its ledger.
+- On the front, the manager needs a tool source in Go that repeats every tool of the MCP server. A Task gets every tool of the front through the MCP server.
+
+On a Task, the manager sleeps at no cost, keeps its ledger on `/workspace`, and keeps its tools in a sandbox. The first message of a conversation costs one wake of about five seconds. The on-behalf-of path is the other price, and the rest of this section bounds it.
+
+### 19.2 The on-behalf-of
+
+A call of a run of the fleet reaches the MCP server of the front with the static token. The MCP client of the worker names the run in `_meta` (section 3.1). For a trusted server, it also names the person of the run: the subject and the kind of its principal. `manager.OnBehalf(ctx)` turns that into the context of the call. It returns the context, the actor, and whether a run of the fleet makes the call. The actor, `manager.Actor`, holds the run, the profile, the node, and the person.
+
+A run of the fleet makes the call only in one case. The caller of the request is the static token, the principal kind `token`, and `_meta` names a run (`mcp.CallRun`). Only a worker holds the token, and the kernel of the worker fills `_meta` from the ledger of the run. So a person who sends the keys of a run is no run. The server reads and acts as that person, whatever `_meta` says.
+
+The person in the context has the subject and the kind that `_meta` names. It has no name, no groups, and no scopes, as `fw.PrincipalOfRun` gives the principal of a run. A rule that names the person by a group does not match. A rule that names the person by an email that is not the subject does not match either. So the person can only lose rights here. A run without a person keeps the caller as it is. A run whose person is the token keeps the caller too.
+
+The token stays the caller behind the person (`behalf.For`), for two ends:
+
+- A forwarded request carries the credential of the token (`fw.CredentialFrom`). The owner of a run therefore decides about the token, as section 4.5 says.
+- The guard of the authorization decides each check for both. `manager.Guard` wraps the authorization plug of the process. That plug is the control plane of `workbench.access.external` (section 12), or the rules of `access` without it. When a check is for the person, it passes only if the same check passes for the token too. The view of the fleet guards its rules for the records and for the profiles of the pools in the same way (section 4.4).
+
+So the on-behalf-of narrows what the token can do and never widens it. Through the token, a person reaches only what both the person and the token reach. `cmd/fw-workbench` builds every agent with the guard. When an agent has no guard, its MCP server says so in the log at start, and it decides for the person alone.
+
+These tools of the server call `manager.OnBehalf` at their start:
+
+- the reads of runs: `run_status`, `run_events`, `run_file`, `run_result`, `runs_list`, and `batch`,
+- the other reads: `fleet`, `whoami`, `agents_list`, `agent_get`, `capabilities`, `dashboard`, and `usage`,
+- the work: `run`, `send`, `approve`, `cancel`, `fork`, `run_budget`, `enqueue`, and `agent_builder`,
+- the profile writes: `agent_put` and `agent_delete`.
+
+Three kinds of tools keep the caller. `connections` and `disconnect` concern the grants of the caller, and a run never holds a credential of a person. The exposed tools of `mcp.expose` keep the caller too. The tools of other packages, such as the wiki and the faces, read the run behind a call with `mcp.CallRun` themselves.
+
+What changes for a run of the fleet with a person:
+
+| Tool | What changes |
+|---|---|
+| The reads | The view, the lists, and the reads are those of the person. A read of a run of another member still carries the token. |
+| `run` | The run starts as the person. On another member, the body holds `principal` and `principalKind`, which the member takes from the token. |
+| `run` on another member | The front first decides `agent.run` for the person on that member (`fleet.AllowAgent`). So such a run names its `agent`. |
+| `enqueue` | Each request names the person. |
+| `approve` | The front decides `run.operate` for the person. The decider is the token, and the note names the actor. |
+| `send` | The front decides `run.operate` for the person. The message goes as the token, and its sender is the actor. |
+| `cancel`, `run_budget` | The front decides `run.operate` for the person. |
+| `fork` | The front decides `run.operate` and `agent.run` for the person. |
+| `agent_put`, `agent_delete` | The roles of the person decide. A new profile gets the person as its first owner. |
+
+A person cannot name the sender of a message (the kernel architecture, section 5.5). So `send` first decides for the person, and then sends as the token. Before the server forwards an action on a run of another member, it decides that action for the person (`fleet.AllowRun`, section 4.5). A view that cannot decide refuses. No request goes out for a person without a decision.
+
+### 19.3 Attribution
+
+What an actor does carries the name of the actor:
+
+- A decision of `approve` records the token as the decider, here and on another member. Its note is `by <agent> run <id> for <person>: <note>`.
+- An example of such a note is `by manager run 01K... for alice: the plan is fine`.
+- A message of `send` has the sender `{kind: agent, name: <agent>, run: <id>}` (`fw.WithMessageFrom`).
+- The text of that message starts with the line `From the <agent> run <id> for <person>.` So the run that reads it knows for whom the manager asks.
+- A run that `run` or `enqueue` starts carries the metadata key `fw.via` (`manager.MetaVia`). A branch of `fork` carries it too.
+- The value of `fw.via` is `<agent>:<id>`, such as `manager:01K...`.
+- A cancel and a change of a budget take no note. For each, the front logs one line with the actor, the run, and the member.
+
+`fw.CheckMetadata` reserves no key `fw.via`. The server refuses `fw.via` from any caller in `run`, `fork`, and `enqueue`, so only the server sets it.
+
+A value of `_meta` cannot add a line to a note. In a text, each field of the actor has no control character and holds at most 256 bytes. That is the bound of the sender of a message. When Substrate mints actor tokens, the manager gets an identity of its own, and the note stays.
+
+### 19.4 Delegation
+
+The profile of the manager is `workbench.bossmode.manager`. The variable `FW_WORKBENCH_BOSSMODE_MANAGER` wins over the file. Empty, the default, means no manager. The package reads this key with a partial type of its own, as each package reads its part of `workbench`. A call whose `_meta` names that profile is a manager run.
+
+A manager run can call `approve`, `run_budget`, or `cancel` on a run of a bridge. Then it needs the delegation of the operator of that bridge. A run of a bridge has a batch that starts with `bridge:`. The server reads the batch from the run of this process or from the view. `manager.Delegated` asks `manager.Bridges` about the batch and the action:
+
+- `approve` for a decision,
+- `budget` for a change of a budget,
+- `members` for a cancel, because the cancel of a run of a seat changes the members.
+
+The answer refuses the call in three cases:
+
+- The bridges say no. The tool answers that the operator did not delegate the action for this bridge. It tells the manager to tell the operator.
+- No bridges are set. The answer is the same, so a manager decides nothing in a bridge without the bridges.
+- The bridges fail. The tool answers that they did not answer, and it says to try again.
+
+Outside a bridge, the policy of its profile alone binds a manager run. Any other run of the fleet needs no delegation. A manager run cannot change a budget inside `send`. Its policy asks before `run_budget`, and a budget in a message passes by that question.
+
+`manager.Bridges` is the interface `Delegates(ctx, batch, action) (bool, error)`. The package `bridges` keeps the delegation flags in the record of each bridge. The integration sets its store with `manager.SetBridges`. A nil value delegates nothing, and so does a nil pointer in the interface. It is the one value of the package that changes after `init`.
+
+### 19.5 The doctor line
+
+`fw-workbench doctor` has the line `manager`. It names the profile of the manager and the pool that runs it. It names the `tools.mcp` entry through which the profile reaches the front, and the spawn driver of the pool. It says whether the bridges are set. The entry of the front is the entry that sends the static token as its bearer. The front acts for the person of a run only for that token.
+
+The line fails in three cases:
+
+- No pool of the configuration runs the profile.
+- The profile reaches the front through no such entry.
+- No such entry is trusted. Then `_meta` names no person, and the front acts as the token.
+
+Without a manager, the line says off. The line reads the configuration alone, so a profile that the overlay of a pool adds does not count.
+
+### 19.6 Security
+
+These are the rules of section 8 of the plan of bossmode, as the code keeps them:
+
+- Every action of a person goes to the owner of the run with the credential of that person, as before. The owner records the real decider.
+- Every action of the manager goes with the token of the fleet. The owner records the decider `token`.
+- The note, the sender, `fw.via`, or the log names the manager run and the person.
+- The manager is as strong as the token of the fleet on the front. Three things bound it: the policy of its profile, the delegation flags of each bridge, and the on-behalf-of.
+- The on-behalf-of lets the manager see and do only what its operator and the token both can.
+- Only the static token makes a call a call of a run. The kernel of a worker fills `_meta` from the ledger, and the bash tool of a worker never sees the token (section 14.1).
+- A process that holds the token can name any person in `_meta`. The guard keeps it to what the token can do already.
+
+Three limits remain:
+
+- The tools of the wiki and of the faces write with the rights of the token. So every person who can talk to the manager can write a page through it. The access block of the profile names who can talk to it.
+- A conversation that the token starts acts as the token.
+- Through the manager, a person reaches no group rule, because `_meta` carries no groups.
