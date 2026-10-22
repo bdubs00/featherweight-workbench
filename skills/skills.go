@@ -246,14 +246,11 @@ func splitFrontMatter(text string) (string, string) {
 // meta is what the catalog reads from a front matter. problems holds one
 // sentence for each value that does not fit.
 type meta struct {
-	userInvocable  *bool
-	disableModel   *bool
-	argumentHint   *string
-	arguments      []Argument
-	name           string
-	description    string
-	problems       []string
-	frontMatterErr error
+	userInvocable *bool
+	disableModel  *bool
+	argumentHint  *string
+	arguments     []Argument
+	problems      []string
 }
 
 func (m meta) apply(e *Entry) {
@@ -288,15 +285,8 @@ func parseMeta(fm string) meta {
 	}
 	var raw map[string]any
 	if err := yaml.Unmarshal([]byte(fm), &raw); err != nil {
-		m.frontMatterErr = err
 		m.problems = append(m.problems, "the front matter is not YAML ("+oneLine(err.Error())+"), so the keys are read one per line")
 		return lineMeta(fm, m)
-	}
-	if s, ok := raw["name"].(string); ok {
-		m.name = s
-	}
-	if s, ok := raw["description"].(string); ok {
-		m.description = s
 	}
 	if v, ok := raw[KeyUserInvocable]; ok {
 		if b, ok := v.(bool); ok {
@@ -342,10 +332,6 @@ func lineMeta(fm string, m meta) meta {
 		}
 		value = strings.Trim(strings.TrimSpace(value), `"'`)
 		switch strings.TrimSpace(key) {
-		case "name":
-			m.name = value
-		case "description":
-			m.description = value
 		case KeyUserInvocable:
 			if b, ok := boolWord(value); ok {
 				m.userInvocable = &b

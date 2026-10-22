@@ -81,6 +81,7 @@ Open `http://localhost:8080/ui` and paste the token. The listener serves the rou
 | `/v1/bridges` | the bridges of bossmode: one job split into seats, with one channel for the agents and the operator |
 | `GET /v1/usage` | the usage of the runs, deprecated |
 | `/bossmode`, `GET /v1/bossmode`, `GET /v1/bossmode/stream` | the page of bossmode, its settings, and its stream of events, with `workbench.bossmode.enabled` |
+| `/v1/bossmode/skills`, `/v1/bossmode/marketplaces`, `POST /v1/bossmode/runs/{id}/skill` | the skills of the front, the slash command of a person, and the import of a skill by an admin, with `workbench.bossmode.enabled` |
 
 For a desktop client, run the MCP server over standard input and output:
 
@@ -126,6 +127,10 @@ Bossmode is the operator front of the fleet, a chat client in which an operator 
 
 A bridge is one large job split into seats, with one agent on each seat and one channel where the agents and the operator talk. The operator opens a bridge with `POST /v1/bridges`, and the front puts one run per seat on the queue of the pool of its agent, or lets the manager seat the members as child runs. A message in the channel reaches the runs of the members as a follow-up that names its sender, under caps that stop a ping-pong between two agents. The channel mirrors the life of each run: the start, an approval with its card, the answer of a turn, a failure, and the sleep of a Task. A thumb on an answer is a quality receipt, and a heart writes the result into `agents/<agent>/learned.md` of the wiki, which the next runs of the agent read. The members read and post with the MCP tools `bridge_read` and `bridge_post`, and the manager opens and changes bridges with `bridge_open`, `bridge_list`, `bridge_add_member`, `bridge_remove_member`, and `bridge_close`. The records and the channels live in `<stream>_BRIDGES` and `<stream>_CHANNELS` on a NATS bus, and in memory on the bus `mem`. Section 18 of the architecture has the rules.
 
+## Skills
+
+The front keeps a catalog of its skills for the page: each skill with its description, its origin, its arguments, and whether a person can hand it to a run. The view of an agent names the skills that its profile allows, resolved as the kernel matches them, at `GET /v1/agents/{name}/skills` and in `agent_get`. A person hands a skill to a running conversation with a slash command: in a bridge with `skill` on `POST /v1/bridges/{id}/messages`, and elsewhere with `POST /v1/bossmode/runs/{id}/skill` or the MCP tool `skill_send`. The front fills the placeholders of the skill with the arguments and sends the message pinned, so it survives every compaction. An admin imports a skill from a URL, a marketplace of `workbench.bossmode.marketplaces`, a pasted text, or an upload, after a preview, into `$FW_HOME/skills/imported`. Section 20 of the architecture has the rules.
+
 ## The manager
 
 The manager of bossmode is one more agent that helps an operator run the fleet. A pool runs it on a Task of its own, and its tool server is the MCP server of the front. It calls that server with the static token of the fleet, and each call names the person of its run. The front then reads and acts as that person. A check for the person also needs the token, so the token never reaches more through a person. On a run of a bridge, the manager approves, changes a budget, or cancels only what the operator of the bridge delegated. [examples/bossmode](examples/bossmode/README.md) holds the pool and the profile, and section 19 of the architecture has the rules.
@@ -153,7 +158,8 @@ The workbench changes no kernel code. It uses these hooks of the kernel:
 | `pages` | the wiki of the fleet |
 | `faces` | the faces of the agents, the sanitizer, and the identicon |
 | `bridges` | the bridges of bossmode: the records, the channels, the fan-out, and the system lines |
-| `bossmode` | the page of bossmode, its settings, and its stream with the feeds of the bridges, the wiki, and the faces |
+| `bossmode` | the page of bossmode, its settings, and its stream with the feeds of the bridges, the wiki, and the faces, and the routes and the tools of the skills |
+| `skills` | the skills of the front: the catalog, the matching of a profile, the slash command, and the import |
 | `internal/bucket` | the key-value bucket under the stores of the front |
 | `internal/behalf` | the run behind an MCP call, and the guard of a person of the static token |
 | `manager` | the manager of bossmode: the on-behalf-of, the attribution, and the delegation checks |

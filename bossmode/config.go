@@ -14,6 +14,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/manager"
+	"github.com/bdubs00/featherweight-workbench/skills"
 )
 
 // Block is the top-level key of fw.yaml that the workbench claims.
@@ -23,6 +24,8 @@ const Block = "workbench"
 const (
 	EnvEnabled = "FW_WORKBENCH_BOSSMODE_ENABLED"
 	EnvDir     = "FW_WORKBENCH_BOSSMODE_DIR"
+	// EnvMarketplaces sets the marketplaces of skills: name=url,name=url.
+	EnvMarketplaces = "FW_WORKBENCH_BOSSMODE_MARKETPLACES"
 	// EnvManager sets the key manager, which the package manager reads.
 	EnvManager = manager.EnvManager
 )
@@ -37,11 +40,14 @@ const (
 // bossmode/static, else the placeholder in bossmode/placeholder. Manager
 // is the profile name of the manager agent, from manager.Load. Empty means
 // no manager. Bossmode reads it for the settings of the page and for the
-// doctor line, and starts no run of it.
+// doctor line, and starts no run of it. Marketplaces lists the
+// marketplaces of skills that an admin imports from (docs/ARCHITECTURE.md
+// section 20.7).
 type Config struct {
-	Enabled bool   `yaml:"enabled"`
-	Dir     string `yaml:"dir"`
-	Manager string `yaml:"-"`
+	Enabled      bool                 `yaml:"enabled"`
+	Dir          string               `yaml:"dir"`
+	Manager      string               `yaml:"-"`
+	Marketplaces []skills.Marketplace `yaml:"marketplaces"`
 }
 
 // block is the part of the workbench block that this package reads.
@@ -69,6 +75,16 @@ func Load(cfg *fw.Config) (Config, error) {
 		c.Dir = v
 	}
 	c.Dir = strings.TrimSpace(c.Dir)
+	if v, ok := lookup(EnvMarketplaces); ok {
+		list, err := skills.ParseMarketplaces(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("bossmode: %s: %w", EnvMarketplaces, err)
+		}
+		c.Marketplaces = list
+	}
+	if err := skills.CheckMarketplaces(c.Marketplaces); err != nil {
+		return Config{}, fmt.Errorf("bossmode: workbench.bossmode.%w", err)
+	}
 	if c.Manager, err = manager.Load(cfg); err != nil {
 		return Config{}, err
 	}

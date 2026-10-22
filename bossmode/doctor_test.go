@@ -4,11 +4,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/manager"
+	"github.com/bdubs00/featherweight-workbench/skills"
 	"gopkg.in/yaml.v3"
 )
 
@@ -33,9 +35,10 @@ func TestLoad(t *testing.T) {
 	t.Setenv(EnvEnabled, "")
 	t.Setenv(EnvDir, "")
 	t.Setenv(EnvManager, "")
-	cfg := withBlock(t, "bossmode: {enabled: true, dir: /srv/page, manager: manager}\nbridges: {placement: spawn, maxMembers: 4}\n")
+	t.Setenv(EnvMarketplaces, "")
+	cfg := withBlock(t, "bossmode: {enabled: true, dir: /srv/page, manager: manager, marketplaces: [{name: team, url: \"https://skills.example.com/index.json\"}]}\nbridges: {placement: spawn, maxMembers: 4}\n")
 	c, err := Load(cfg)
-	if err != nil || c != (Config{Enabled: true, Dir: "/srv/page", Manager: "manager"}) {
+	if err != nil || !reflect.DeepEqual(c, Config{Enabled: true, Dir: "/srv/page", Manager: "manager", Marketplaces: []skills.Marketplace{{Name: "team", URL: "https://skills.example.com/index.json"}}}) {
 		t.Fatalf("Load = %+v, %v", c, err)
 	}
 	if m := manager.Profile(cfg); m != c.Manager {
@@ -44,10 +47,18 @@ func TestLoad(t *testing.T) {
 	t.Setenv(EnvEnabled, "off")
 	t.Setenv(EnvDir, "/other")
 	t.Setenv(EnvManager, "boss")
+	t.Setenv(EnvMarketplaces, "a=https://a.example.com/x.json, b=https://github.com/o/r")
 	c, err = Load(cfg)
-	if err != nil || c != (Config{Dir: "/other", Manager: "boss"}) {
+	if err != nil || !reflect.DeepEqual(c, Config{Dir: "/other", Manager: "boss", Marketplaces: []skills.Marketplace{{Name: "a", URL: "https://a.example.com/x.json"}, {Name: "b", URL: "https://github.com/o/r"}}}) {
 		t.Errorf("Load with the variables = %+v, %v", c, err)
 	}
+	for _, bad := range []string{"a=ftp://x.example.com", "a", "a=https://x.example.com,a=https://y.example.com", "two words=https://x.example.com", "a=https://user:pass@x.example.com"} {
+		t.Setenv(EnvMarketplaces, bad)
+		if _, err := Load(cfg); err == nil || !strings.Contains(err.Error(), "marketplaces") && !strings.Contains(err.Error(), EnvMarketplaces) {
+			t.Errorf("marketplaces %q: %v", bad, err)
+		}
+	}
+	t.Setenv(EnvMarketplaces, "")
 	t.Setenv(EnvEnabled, "maybe")
 	if _, err := Load(cfg); err == nil || !strings.Contains(err.Error(), EnvEnabled) {
 		t.Errorf("an enabled that is no switch: %v", err)

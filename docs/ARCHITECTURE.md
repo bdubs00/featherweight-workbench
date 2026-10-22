@@ -153,6 +153,10 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `GET /v1/bossmode` | The settings of the page of bossmode: the manager for the caller, the placement, and the size of a roster (section 17.4). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/stream` | The events of bossmode as server-sent events: the changes of the fleet, the entries and the seats of the bridges, the pages of the wiki, the faces, and the events of other packages that the caller can see, with `Last-Event-ID` to resume (section 17.3). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/skills` | The catalog of the skills of the front, each with the keys of a slash command (section 20.1). With `workbench.bossmode.enabled`. |
+| `GET /v1/bossmode/marketplaces` | The marketplaces of the configuration, each with the skills that it offers, for an admin (section 20.7.1). With `workbench.bossmode.enabled`. |
+| `POST /v1/bossmode/skills/preview` | Fetch and check a skill from `{"url"}`, `{"marketplace", "name"}`, `{"text"}`, or `{"files"}`, for an admin. It installs nothing (section 20.7.2). |
+| `POST /v1/bossmode/skills` | Install a skill from the same sources, with `replace`, for an admin. 201 with the entry, 200 for a replace, 409 for a name that exists (section 20.7.3). |
+| `DELETE /v1/bossmode/skills/{name}` | Remove an imported skill, for an admin. 204, and 409 for a skill of the configuration. |
 | `POST /v1/bossmode/runs/{id}/skill` | A slash command of the caller for a conversation that is no bridge, `{"name", "args", "text"}`: the expanded skill reaches the run as a pinned message of the caller. 202 with the run object (section 20.3). With `workbench.bossmode.enabled`. |
 | `GET /v1/bridges` | The bridges of the caller and of the teams of the caller, open first, each with `lastSeq`, `read`, `unread`, `memberCount`, and `needsYou` (section 18.10). |
 | `POST /v1/bridges` | Open a bridge from `{"title", "goal", "placement", "members", "delegation", "caps"}` and seat its members. 201 with the record and its members. |
@@ -605,6 +609,7 @@ The MCP server carries these management tools beside the work tools:
 | `bridge_read`, `bridge_post` | For a run of a seat of a bridge, or the manager run of a bridge: read the last messages of the channel, and post a message with `to` (section 18.11) |
 | `bridge_list` | The open bridges of the person of the run, for the manager |
 | `skills_list` | The catalog of the skills of the front, read-only (section 20.1) |
+| `skill_preview`, `skill_install` | Fetch and check a skill, and install it, for an admin, with the sources of the routes. A call of a run of the fleet gets an error. `skill_install` is marked `destructiveHint` (section 20.7.3). |
 | `skill_send` | A slash command of a person: `{name, args, text}` with `runId`, or with `bridge` and `to`. The expanded skill reaches the run, or the members of the bridge, as a pinned message of the person. `destructiveHint` is true, because it starts work. A call of a run of the fleet gets an error (section 20.3). |
 | `bridge_open` | Open a bridge from a plan as the person of the run, for the manager. Its title, "Open bridge", is the label of the approval that the policy of the manager asks for. |
 | `bridge_add_member`, `bridge_remove_member`, `bridge_close` | Add a seat, fire a seat, or close a bridge, for the manager when the operator delegates it in that bridge |
@@ -1574,6 +1579,7 @@ Bossmode reads the block `bossmode` under the key `workbench` of `fw.yaml` (sect
 |---|---|---|---|
 | `workbench.bossmode.enabled` | `FW_WORKBENCH_BOSSMODE_ENABLED` | Serves the page at `/bossmode`, the settings at `/v1/bossmode`, the stream at `/v1/bossmode/stream`, and the skills under `/v1/bossmode/skills` and `/v1/bossmode/runs/{id}/skill` with the tools of section 20. `on` or `off`. | off |
 | `workbench.bossmode.dir` | `FW_WORKBENCH_BOSSMODE_DIR` | The directory of the static files of the page: the `dist` directory of the build of `featherweight-bossmode`. Empty serves the copy that the binary embeds: the build of the page in `bossmode/static`, else the placeholder in `bossmode/placeholder` (sections 1.2 and 17.2). | empty |
+| `workbench.bossmode.marketplaces` | `FW_WORKBENCH_BOSSMODE_MARKETPLACES` | The marketplaces of skills that an admin imports from, each `{name, url}`, or `name=url,name=url` in the variable (section 20.7.1). | none |
 | `workbench.bossmode.manager` | `FW_WORKBENCH_BOSSMODE_MANAGER` | The profile name of the manager agent. The settings of the page, the bridges, the delegation checks, and the doctor lines read it. Empty means no manager. | empty |
 
 Each key has one reader. The package `manager` reads `workbench.bossmode.manager` (`manager.Load`), because it sits below the packages `bridges` and `bossmode`, and both ask it. `bossmode.Load` reads `enabled` and `dir` and takes the manager from `manager.Load`. The settings of the page also name two keys of `workbench.bridges`, `placement` (`FW_WORKBENCH_BRIDGES_PLACEMENT`), `queue` by default, and `maxMembers` (`FW_WORKBENCH_BRIDGES_MAX_MEMBERS`), 16 by default. The package `bridges` reads that block (`bridges.Load`, section 18.13), and the settings ask it, so the settings, the bridges, and the doctor line never disagree.
@@ -2098,7 +2104,7 @@ The view of one agent names the skills that its profile allows, so a person neve
 - The kernel serves the view of an agent, `GET /v1/agents/{name}`, and the workbench changes no kernel route. So the route `GET /v1/agents/{name}/skills` of the workbench answers `{"agent", "pool", "allowlist", "skills"}` beside it. `allowlist` is the list of the profile, and `skills` holds the resolved skills. With pools, the profile is the one that the workers of a pool run, and `?pool=` names the pool when several pools run it, as for `PUT /v1/agents/{name}`. The route needs the caller to view the agent, as the view of the agent does, and an agent that the caller cannot view answers 404.
 - The page shows the resolved skills on the screen of the agent under Skills, each with its description and its origin, in place of the allowlist.
 
-A profile of a pool resolves against the catalog of the front too, because the front holds no list of the skills of its workers. The workers see the local skills that the pool ships (section 20.7) and the skills of the MCP servers that their own `tools.mcp` entries list. So the list of the front is what an agent of a pool can load from the front, and a worker can hold more.
+A profile of a pool resolves against the catalog of the front too, because the front holds no list of the skills of its workers. The workers see the local skills that the pool ships, in its image or in the files of its Workspace (section 14.1), and the skills of the MCP servers that their own `tools.mcp` entries list (section 20.6). So the list of the front is what an agent of a pool can load from the front, and a worker can hold more.
 
 ### 20.3 The slash command
 
@@ -2143,6 +2149,10 @@ The pinned messages of a run hold at most 64 KB together (`fw.MaxPinnedBytes`). 
 | Method and path | Body | Answer |
 |---|---|---|
 | `GET /v1/bossmode/skills` | none | `{"skills": [...]}`, the catalog (section 20.1) |
+| `GET /v1/bossmode/marketplaces` | none | `{"marketplaces": [...]}` (section 20.7.1) |
+| `POST /v1/bossmode/skills/preview` | a source | The preview (section 20.7.2) |
+| `POST /v1/bossmode/skills` | a source and `replace` | 201 or 200 with `{"skill", "replaced", "preview"}` |
+| `DELETE /v1/bossmode/skills/{name}` | none | 204 |
 | `GET /v1/agents/{name}/skills` | none, `?pool=` | `{"agent", "pool", "allowlist", "skills"}` (section 20.2) |
 | `POST /v1/bridges/{id}/messages` | `{"text", "to", "replyTo", "skill": {"name", "args"}}` | 201 with the entry, which records `skill` |
 | `POST /v1/bossmode/runs/{id}/skill` | `{"name", "args", "text"}` | 202 with the run object |
@@ -2151,5 +2161,118 @@ The pinned messages of a run hold at most 64 KB together (`fw.MaxPinnedBytes`). 
 |---|---|---|
 | `skills_list` | none | `readOnlyHint` |
 | `skill_send` | `name`, `args`, `text`, and `runId`, or `bridge` with `to` | `destructiveHint` |
+| `skill_preview` | `url`, `marketplace` with `name`, `text`, or `files` | `readOnlyHint` |
+| `skill_install` | a source of `skill_preview`, and `replace` | `destructiveHint` |
 
-The routes and the tools under `/v1/bossmode` exist with `workbench.bossmode.enabled`. The tools join the MCP server through `mcp.RegisterTools` (section 3.1). The route of a bridge exists with the bridges (section 18). The page of bossmode reads the catalog once for its composer, shows `argumentHint` after the name of a skill, offers only the skills with `userInvocable`, and sends a slash command of a bridge to the route of the bridge and every other slash command to the route of the run.
+The routes and the tools under `/v1/bossmode` exist with `workbench.bossmode.enabled`. The tools join the MCP server through `mcp.RegisterTools` (section 3.1). The route of a bridge exists with the bridges (section 18). A page reads the catalog once for its composer, shows `argumentHint` after the name of a skill, and offers only the skills with `userInvocable`. It sends a slash command of a bridge to the route of the bridge, and every other slash command to the route of the run.
+
+### 20.6 What the workers see
+
+A worker of a pool runs a kernel of its own, and that kernel reads its own skills: the skills directories of its configuration, `$FW_HOME/skills` of its Workspace by default, and so the skills that the pool ships in its image or in the files of its Workspace (section 14.1). The kernel of a worker also lists the skills of the MCP servers that the `tools.mcp` entries of the worker name. The front holds no list of these skills. So the catalog of the front, and the skills of section 20.2, say what the front knows, and a worker can hold more or fewer.
+
+A slash command carries the whole body of the skill in its message, so a worker that does not hold the skill still gets its instructions, pinned. The other files of the skill, such as scripts and references, do not travel with the message. A skill that needs its files on a worker must ship with the pool.
+
+The front ships no imported skill to the workers. The imported skills live on the disk of one replica of the front (section 20.7), and the Workspace of a pool is part of the hash of the pool (section 14.4). A copy into the files of each pool would replace every Task of every pool at each install, and two replicas of the front with different imported skills would replace the Tasks of each other. A later revision can keep the imported skills in a bucket of the bus, as the wiki keeps its pages, and ship them through the overlay of each pool with a generation (section 14.9).
+
+### 20.7 The import
+
+An admin adds a skill to the front without a restart and without a file on the host. The front writes each imported skill under `$FW_HOME/skills/imported/<name>/`, with the record `.origin.json` beside `SKILL.md`, and the catalog lists it with `origin: "imported"` at once. An installed skill is instructions that every agent of a profile that allows it reads, also a profile with no `skills` list, which allows every skill. So an import needs the admin role of the process, `access.admins` (`fw.ActionAdmin`), and never the role `agent.create`, which reaches one profile only. The process itself can import too. Any other caller gets 403, and the answer names `access.admins`. The admin reads the preview first.
+
+A source is exactly one of these:
+
+| Source | Body | What the front reads |
+|---|---|---|
+| A URL | `{"url"}` | A `SKILL.md` of text, a zip archive, or the directory of a skill in a repository (below) |
+| A marketplace | `{"marketplace", "name"}` | The skill of that name in the index of a marketplace of the configuration |
+| A text | `{"text"}` | A `SKILL.md` that a person pasted |
+| An upload | `{"files": [{"path", "text"}]}` | The text files of a skill, at most 64 files and 1 MB together. An upload of a folder, whose paths share one top directory with `SKILL.md` right below it, loses that directory. |
+
+A zip archive holds one skill: `SKILL.md` at its root, or one directory that holds a `SKILL.md`. An archive of two skills is refused, and the answer names their directories. A web page is refused, because it is no skill.
+
+A repository is read through the routes of its host, never with a git binary. These URLs name a repository and a directory in it:
+
+- `https://github.com/<owner>/<repo>`, with `/tree/<ref>/<dir>` or `/blob/<ref>/<dir>/SKILL.md` for a directory. The front lists the files through the API of the host, `GET /repos/<owner>/<repo>/git/trees/<ref>?recursive=1`, and reads each file from the raw files of the host. The ref is `HEAD` by default.
+- A URL that ends in `.git`, with the ref in the fragment, such as `https://git.example.com/team/skills.git#main`. The front reads the zip archive of the host at `<repo>/archive/<ref>.zip`. The ref is `main` by default.
+- A URL of a directory of the forms `<host>/<owner>/<repo>/src/branch/<ref>/<dir>` and `<host>/<owner>/<repo>/-/tree/<ref>/<dir>`. The front reads the zip archive of the host for that ref, `<repo>/archive/<ref>.zip` or `<repo>/-/archive/<ref>/<repo>-<ref>.zip`, and takes the files of the directory.
+
+The directory of a skill must hold `SKILL.md`, and the import takes the files below it.
+
+#### 20.7.1 The marketplaces
+
+`workbench.bossmode.marketplaces` lists the marketplaces, each `{name, url}`. The variable `FW_WORKBENCH_BOSSMODE_MARKETPLACES` wins over the file, as `name=url,name=url`. A name holds letters, digits, dashes, underscores, and dots, and each name is unique. A URL is http or https without a user name or a password. A list that does not fit stops the start, and the error names the key.
+
+A marketplace is one of two kinds:
+
+- A manifest of JSON at the URL: a list of `{"name", "description", "url"}`, or an object whose key `skills` holds that list. Each `url` is a source of the kinds above. The index leaves out an entry whose name is no name of a skill, a second entry of a name, and an entry whose URL is no http or https URL, and its notes say so. A manifest of a plugin marketplace, with the key `plugins`, lists plugins and not skills. The index then says to name the repository of that marketplace as the URL.
+- A repository, named as above. The index lists each directory `skills/<name>` that holds a `SKILL.md`, at any depth and outside hidden directories, so both a repository of skills, `skills/<name>/SKILL.md`, and a plugin marketplace, `plugins/<plugin>/skills/<name>/SKILL.md`, list their skills. The front reads the name and the description from the front matter of each `SKILL.md`, and the name of the directory stands in for a missing name. A second skill of the same name is left out, and the notes name its directory. The front reads no other part of a plugin, such as its commands, hooks, or servers, and it follows no plugin whose source is another repository.
+
+The front keeps the index of each marketplace for ten minutes (`skills.IndexTTL`), and an index that failed for one minute. An index holds at most 200 skills. `GET /v1/bossmode/marketplaces` answers `{"marketplaces": [{"name", "url", "kind", "skills": [{"name", "description", "url", "path"}], "notes", "error", "fetchedAt"}]}`, in the order of the configuration. A marketplace that fails has `error`, and the others still list.
+
+#### 20.7.2 The preview
+
+`POST /v1/bossmode/skills/preview` takes a source and installs nothing. It answers what an install would write:
+
+| Field | Value |
+|---|---|
+| `name`, `description` | From the front matter, or the name of the directory of the source |
+| `frontMatter` | The front matter as the YAML decoder reads it |
+| `entry` | The entry of the catalog that the install would give (section 20.1) |
+| `body` | The body of `SKILL.md`, without the front matter, which every agent that loads the skill reads |
+| `files` | Each file that the install would write, `{"path", "size"}` |
+| `digest` | `sha256:` and the hex SHA-256 of the files, each path with its length and its bytes, in the order of the paths |
+| `source` | `{"kind", "url", "marketplace", "name", "digest"}` |
+| `exists` | `{"origin", "replaceable", "digest"}` for a skill of the catalog with the name, or null |
+| `problems` | Each finding, `{"code", "path", "text", "blocks"}` |
+| `installable` | True when no problem blocks an install. A name that an imported skill holds counts as installable, because an install with `replace` takes its place. |
+
+| Code | Blocks | When |
+|---|---|---|
+| `no-skill-file` | yes | The skill holds no `SKILL.md` of text at its root |
+| `name-missing` | yes | Neither the front matter nor the source names the skill |
+| `name-invalid` | yes | The name holds more than 64 bytes, or a character other than letters, digits, dashes, underscores, and dots |
+| `name-exists` | yes | The catalog holds the name. An install with `replace` takes the place of an imported skill, and never of a skill of the configuration or of a server. |
+| `path-escapes` | yes | A path is absolute, holds `..`, a backslash, or a control character, or names a file twice |
+| `too-large` | yes | A file, or the files together, pass 1 MB |
+| `too-many-files` | yes | The skill holds more than 64 files |
+| `binary` | no | A file is no UTF-8 text, or holds a zero byte. The import leaves it out. |
+| `hidden` | no | A path has a part that starts with a dot, such as `.git/config`. The import leaves it out, because the kernel hides such a file. |
+| `front-matter` | no | A key of section 20.1 has the wrong type and takes its default |
+
+A source that names no source, or two, answers 400. A fetch that the front refuses answers 400, an answer over the bound 413, and a host that fails 502. An unknown marketplace or skill of a marketplace answers 404.
+
+#### 20.7.3 The install and the removal
+
+`POST /v1/bossmode/skills` takes a source and `replace`, runs the checks of the preview, and installs when no problem blocks it. It answers `{"skill", "replaced", "preview"}`: 201 for a new skill, and 200 when it replaced an imported skill. A name of the catalog answers 409 unless `replace` is true and the skill is an imported one. A blocking problem answers 400, or 413 for a problem of size, with the words of each problem.
+
+The install writes the files into a temporary directory beside the imported skills, whose name starts with a dot, so the kernel and the catalog skip it. It writes `.origin.json` there: the source, the digest, `installedBy`, the subject of the admin, `installedAt`, and the files. Then it moves the directory into place. A skill that it replaces moves aside first and is removed after. So the catalog never lists a skill that is half written. One install or removal of a process runs at a time. Each install and removal goes to the log with the skill, the source, the digest, and the subject, never the text.
+
+`DELETE /v1/bossmode/skills/{name}` removes an imported skill and answers 204. A skill of the configuration answers 409, because the import never removes it, and a name that no skill holds answers 404.
+
+The MCP tools `skill_preview` and `skill_install` take the same sources, and `skill_install` takes `replace`. Both need an admin, and both refuse a call that names a run of the fleet in `_meta`, so a model never installs a skill. `skill_preview` is read-only, and its text holds the body of `SKILL.md`. `skill_install` is marked `destructiveHint`.
+
+#### 20.7.4 The kernel and the imported skills
+
+The kernel reads its skills directories at each call (`fw.Agent.Skills`), so a skill that a person adds there shows in the next system prompt without a restart. It reads each directory one level deep: `$FW_HOME/skills/<name>/SKILL.md`. An imported skill sits one level lower, in `$FW_HOME/skills/imported/<name>`, so the kernel does not list it in the system prompt of a run of the front, its tool `skill` does not serve it, and the resource `fw://skills/<name>` does not hold it. The catalog reads the imported directory itself, so the page, the slash command, and the skills of an agent show it at once, and a run gets an imported skill through a slash command, whose message holds the whole skill. For a model to load an imported skill on its own, the kernel needs one hook: `fw.Config.SkillDirs` adds `$FW_HOME/skills/imported` after the configured directories, or the package registers more skills directories with the kernel.
+
+#### 20.7.5 Security
+
+- Each fetch has a timeout of 30 seconds and a bound of 4 MB, and follows at most three redirects, each to http or https. A URL with a user name or a password is refused, so no credential leaves the front.
+- The front refuses an address that is not on the public internet: loopback, private, link-local, shared, documentation, reserved, multicast, and the NAT64 prefixes, also an IPv4 address inside IPv6. The dialer checks the address of each connection, also after a redirect and after a name that resolves to another address. The front dials the host itself and uses no proxy of the environment.
+- An archive unpacks each file up to 4 MB and 16 MB together.
+- A file that is no UTF-8 text is left out. A path stays inside the skill directory, and the files open through an `os.Root`, so no name and no symbolic link leads out of the imported directory.
+- The front never runs a file of a skill: no script, no hook, and no command of a plugin.
+- The preview shows the body that the agents read. A skill is instructions: an admin reads it before the install, as for any change of a system prompt.
+
+#### 20.7.6 Example
+
+```yaml
+workbench:
+  bossmode:
+    enabled: true
+    marketplaces:
+      - {name: team, url: "https://skills.example.com/index.json"}
+      - {name: public, url: "https://github.com/example/skills"}
+      - {name: lab, url: "https://git.example.com/lab/skills.git#main"}
+```
+
+`FW_WORKBENCH_BOSSMODE_MARKETPLACES=team=https://skills.example.com/index.json,public=https://github.com/example/skills` sets the same first two.

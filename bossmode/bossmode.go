@@ -29,6 +29,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/surface/metrics"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/skills"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 	"github.com/bdubs00/featherweight-workbench/surface/web"
 )
@@ -152,6 +153,9 @@ type Hub struct {
 	keepAlive time.Duration
 	life      time.Duration
 
+	// imp imports the skills of an admin (section 20.7).
+	imp *skills.Importer
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -188,6 +192,8 @@ func newHub(a *fw.Agent, c Config) *Hub {
 		last: uint64(time.Now().UnixMicro()),
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
+	f := skills.NewFetcher()
+	h.imp = skills.NewImporter(a, f, skills.NewMarket(c.Marketplaces, f))
 	return h
 }
 

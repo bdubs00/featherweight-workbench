@@ -95,7 +95,7 @@ func skillTools(s *mcp.Server) []mcp.Tool {
 		return nil
 	}
 	no := false
-	return []mcp.Tool{
+	out := []mcp.Tool{
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolSkillsList,
 			Title:       "Skills",
@@ -112,6 +112,7 @@ func skillTools(s *mcp.Server) []mcp.Tool {
 		}),
 		skillSendTool(a),
 	}
+	return append(out, importTools(a)...)
 }
 
 // catalogText is the catalog as text for a model: one line per skill.
