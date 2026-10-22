@@ -487,7 +487,6 @@ func PatchPool(ctx context.Context, a *fw.Agent, name string, c PoolPatch) (pool
 			}
 			e.Template = t.Name
 		}
-		e.By, e.At = subjectOf(ctx), time.Now().UTC()
 		if _, err := pools.FromRuntime(*e, f.templates); err != nil {
 			return fmt.Errorf("%w: %s", fw.ErrInvalidRequest, strings.TrimPrefix(err.Error(), "pools: "))
 		}
@@ -496,7 +495,7 @@ func PatchPool(ctx context.Context, a *fw.Agent, name string, c PoolPatch) (pool
 	if err != nil {
 		return pools.Status{}, poolStoreError(err)
 	}
-	f.log.Info("fleet: changed a runtime pool", "pool", stored.Name, "template", stored.Template, "replicas", stored.Replicas, "generation", stored.Generation, "principal", stored.By)
+	f.log.Info("fleet: changed a runtime pool", "pool", stored.Name, "template", stored.Template, "replicas", stored.Replicas, "generation", stored.Generation, "principal", subjectOf(ctx))
 	return f.runtimeState(ctx, stored, true), nil
 }
 
@@ -544,13 +543,12 @@ func (f *Fleet) dropRuntime(ctx context.Context, name string) (pools.Stored, err
 	}
 	stored, err := f.runtime.Update(ctx2, name, func(e *pools.Runtime) error {
 		e.Deleting, e.Replicas = true, 0
-		e.By, e.At = subjectOf(ctx), time.Now().UTC()
 		return nil
 	})
 	if err != nil {
 		return pools.Stored{}, poolStoreError(err)
 	}
-	f.log.Info("fleet: deleted a runtime pool; the front deletes its Tasks once they are idle", "pool", name, "generation", stored.Generation, "principal", stored.By)
+	f.log.Info("fleet: deleted a runtime pool; the front deletes its Tasks once they are idle", "pool", name, "generation", stored.Generation, "principal", subjectOf(ctx))
 	return stored, nil
 }
 
@@ -614,8 +612,8 @@ func (f *Fleet) authorizeRuntime(ctx context.Context, e pools.Runtime, action st
 
 // profilesOf returns the profiles of a pool for a decision: the profiles
 // that its workers run, and for a runtime pool whose overlay holds no
-// profile of its agent yet, that agent with the person who wrote the entry
-// last as its owner.
+// profile of its agent yet, that agent with the person who created the
+// pool as its owner.
 func profilesOf(pool *pools.Pool) map[string]fw.AgentProfile {
 	out := pool.Profiles()
 	if r := pool.Runtime(); r != nil && r.By != "" {

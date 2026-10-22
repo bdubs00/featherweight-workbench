@@ -102,8 +102,8 @@ type Reconciler struct {
 // it, one reason each.
 //
 // Source is SourceFile or SourceRuntime, and Template names the template of
-// the pool, if any. A runtime pool also carries By and At, who wrote its
-// entry last and when, and Deleting, which is true while the front deletes
+// the pool, if any. A runtime pool also carries By and At, who created it
+// and when, and Deleting, which is true while the front deletes
 // its Tasks before it removes the entry.
 type Status struct {
 	Name       string       `json:"name"`

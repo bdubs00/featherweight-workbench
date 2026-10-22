@@ -123,7 +123,7 @@ func (p *platform) reconcilePools(ctx context.Context, listed map[string][]*v1al
 			p.mu.Unlock()
 		}
 		if e, ok := shadow[pool.Name]; ok {
-			st.Gaps = append(st.Gaps, fmt.Sprintf("the store of the runtime pools holds a pool of this name too, which %s wrote; the file wins, so the front runs this pool and leaves that entry alone; remove the entry with pool_delete or DELETE /v1/pools/%s", orWho(e.By), pool.Name))
+			st.Gaps = append(st.Gaps, fmt.Sprintf("the store of the runtime pools holds a pool of this name too, which %s created; the file wins, so the front runs this pool and leaves that entry alone; remove the entry with pool_delete or DELETE /v1/pools/%s", orWho(e.By), pool.Name))
 		}
 		p.mu.Lock()
 		prev := p.poolState[pool.Name]
@@ -158,10 +158,10 @@ func (p *platform) reconcilePools(ctx context.Context, listed map[string][]*v1al
 	p.reconcileRuntime(ctx, entries, listed, failed, now)
 }
 
-// orWho names a writer, or says that nobody is known.
+// orWho names a person, or says that nobody is known.
 func orWho(by string) string {
 	if strings.TrimSpace(by) == "" {
-		return "an unknown writer"
+		return "an unknown person"
 	}
 	return by
 }
@@ -250,8 +250,8 @@ func (c poolCheck) Busy(ctx context.Context, member, token string, runs []string
 // the runtime pools by name, each with its state. A caller sees a pool
 // when the caller can view its agent, decided as for the agent of a member
 // (allow), with the access block of the profile of this process, else the
-// one of the workers of the pool. The person who wrote the entry of a
-// runtime pool last sees it too.
+// one of the workers of the pool. The person who created a runtime pool
+// sees it too.
 func (f *Fleet) Pools(ctx context.Context) ([]pools.Status, error) {
 	p := f.platform
 	if p == nil || !f.keepsPools() {

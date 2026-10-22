@@ -220,7 +220,7 @@ func TestRuntimePoolConflictWithTheFile(t *testing.T) {
 	}
 	front := newMember(t, fw.NewMemBus(), "front", runtimeFront(t, ax, strings.TrimPrefix(tasks.srv.URL, "http://"), poolBlock+strings.TrimPrefix(templateBlock, "\n"), nil, nil))
 	eventually(t, "the pool of the file names the conflict", func() bool {
-		return hasGapWith(stateOf(front.f, "triage"), "the store of the runtime pools holds a pool of this name too, which mallory wrote; the file wins")
+		return hasGapWith(stateOf(front.f, "triage"), "the store of the runtime pools holds a pool of this name too, which mallory created; the file wins")
 	})
 	ps, err := front.f.Pools(ctx)
 	if err != nil || len(ps) != 1 || ps[0].Source != pools.SourceFile || ps[0].Agent != "triage" {

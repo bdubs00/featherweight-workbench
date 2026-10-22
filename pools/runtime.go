@@ -41,7 +41,7 @@ const (
 // Env holds the variables that the pool sets over its template, each with
 // a value: a runtime pool copies no variable of the front. Resources holds
 // the values that the pool sets over the resources of its template. By and
-// At say who wrote the entry last, and when. Deleting marks a pool that a
+// At say who created the pool, and when; a change keeps them. Deleting marks a pool that a
 // person deleted: it wants no Task, and the front removes the entry once
 // its Tasks are gone.
 type Runtime struct {

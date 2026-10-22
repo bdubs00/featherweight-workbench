@@ -75,6 +75,7 @@ Open `http://localhost:8080/ui` and paste the token. The listener serves the rou
 | `GET /v1/runs/{id}/transcript` | the conversation of a run as chat items |
 | `POST /v1/builder` | a run of the agent builder |
 | `GET /v1/fleet` | the members and the pools of the fleet |
+| `/v1/pools`, `GET /v1/templates` | the pools of the file and the runtime pools, which a person creates, changes, and deletes, and the worker templates that a runtime pool renders from |
 | `/v1/connections` | the connections of the caller to services |
 | `/v1/pages` | the wiki of the fleet: pages of Markdown with a history |
 | `/v1/faces` | the faces of the agents: an SVG, else an identicon, with a display name and a tagline |
@@ -108,7 +109,7 @@ Each run gets a title that a model writes, such as "Fix checkout retries", the f
 
 A worker is a bare `fw` in an ax Task, and the front is `fw-workbench` outside the sandboxes. The front reads the Tasks from the ax API (`workbench.fleet.atespaces`) and the runs from the egress stream of the workers (`workbench.fleet.egress`), and it serves one view of the whole fleet. A request about a run of a worker goes to its Task through the atenet router with the credential of the caller, a job goes to the intake queue of a profile with `enqueue`, and a Task that idles is suspended until the next request wakes it. [examples/agentgateway](examples/agentgateway/README.md) runs a fleet behind agentgateway on one public URL.
 
-A pool (`workbench.pools`) keeps a number of Tasks that run one profile. The front creates the Tasks with their Workspaces. It replaces a Task of an older configuration once the Task is idle. It deletes the Tasks above the count, but never a Task with an active run. The front owns the profiles of its pools: `agent_put`, `agent_delete`, and the builder write to the overlay of the pool in a NATS key-value bucket, `agents_list` and `agent_get` show what the workers run, and Always allow on the approval card adds an allow rule to the policy of the pool. `fw-workbench pools render` prints the Tasks that the front applies, with a placeholder for each secret and the overlay merged. [examples/pools](examples/pools/fw.yaml) keeps three workers of one profile, and section 14 of the architecture has the rules.
+A pool (`workbench.pools`) keeps a number of Tasks that run one profile. The front creates the Tasks with their Workspaces. It replaces a Task of an older configuration once the Task is idle. It deletes the Tasks above the count, but never a Task with an active run. The front owns the profiles of its pools: `agent_put`, `agent_delete`, and the builder write to the overlay of the pool in a NATS key-value bucket, `agents_list` and `agent_get` show what the workers run, and Always allow on the approval card adds an allow rule to the policy of the pool. `fw-workbench pools render` prints the Tasks that the front applies, with a placeholder for each secret and the overlay merged. A worker template (`workbench.templates`) says once what a worker is, without its agent. A person then creates a runtime pool from a template while the front runs, with `POST /v1/pools` or the MCP tool `pool_put`, or in one step with a new agent: `agent_put` with `workers`, or with a default template, makes a pool of two workers named after the agent. The runtime pools live in `<stream>_POOLS` on a NATS bus, and every pass runs them as it runs the pools of the file. [examples/pools](examples/pools/fw.yaml) keeps three workers of one profile and offers one template, and section 14 of the architecture has the rules.
 
 ## The wiki and the faces
 
@@ -149,7 +150,8 @@ The workbench changes no kernel code. It uses these hooks of the kernel:
 | `surface/web` | the routes for people on the native surface |
 | `surface/mcp` | the MCP server |
 | `fleet` | the fleet driver |
-| `pools` | the pools of Tasks that the fleet keeps |
+| `pools` | the pools of Tasks that the fleet keeps, the worker templates, and the store of the runtime pools |
+| `workers` | the routes and the MCP tools of the pools and the templates |
 | `pages` | the wiki of the fleet |
 | `faces` | the faces of the agents, the sanitizer, and the identicon |
 | `bridges` | the bridges of bossmode: the records, the channels, the fan-out, and the system lines |

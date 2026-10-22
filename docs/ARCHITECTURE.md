@@ -598,6 +598,8 @@ The MCP server carries these management tools beside the work tools:
 | `pages_list`, `pages_read`, `pages_search`, `pages_history` | The wiki of the fleet: the pages, one page with its hash, a search by words, and the versions of a page (section 15.4) |
 | `pages_write` | Write a page of the wiki as a new version, with `ifHash` for a compare-and-swap. A run that writes through the token of the fleet is the writer `agent:<profile>` (section 15.4). |
 | `faces_put` | Set the face of an agent from the text of an SVG that passes the sanitizer, for the manager (section 16.4) |
+| `pools_list`, `templates_list` | The pools of the file and the runtime pools that the caller can see, with their state, and the worker templates (section 14.10) |
+| `pool_put`, `pool_delete` | Create a runtime pool from a template, change its replicas, its variables, its resources, or its template, or delete it (section 14.10) |
 | `bridge_read`, `bridge_post` | For a run of a seat of a bridge, or the manager run of a bridge: read the last messages of the channel, and post a message with `to` (section 18.11) |
 | `bridge_list` | The open bridges of the person of the run, for the manager |
 | `bridge_open` | Open a bridge from a plan as the person of the run, for the manager. Its title, "Open bridge", is the label of the approval that the policy of the manager asks for. |
@@ -1385,14 +1387,14 @@ To rotate the token, change the Secret of the front and restart the front. Every
 
 - `name`, `atespace`, `agent`, `intake`, `hash`, and `generation`, when it is above 0.
 - `source`, `file` for a pool of `workbench.pools` and `runtime` for a pool of the store, and `template`, the template of the pool, when it has one.
-- For a runtime pool, `by` and `at`, who wrote its entry last and when, and `deleting`, true while the front deletes its Tasks.
+- For a runtime pool, `by` and `at`, who created it and when, and `deleting`, true while the front deletes its Tasks.
 - `wanted`, the replica count.
 - `actual`, the Tasks of the pool that exist, are not being deleted, and did not fail after a run.
 - `ready`, the Tasks of those that run the current configuration and are up.
 - `tasks`, each Task with its phase and a note.
 - `gaps`, one reason for each difference.
 
-The Agents place of the page shows one line for each pool. A caller who can view the agent of a pool sees the pool. The front decides as for the agent of a member (section 4.4). It uses the access block of its own profile of that name, else the access block of the profile that the workers of the pool run. The person who wrote the entry of a runtime pool last sees that pool too.
+The Agents place of the page shows one line for each pool. A caller who can view the agent of a pool sees the pool. The front decides as for the agent of a member (section 4.4). It uses the access block of its own profile of that name, else the access block of the profile that the workers of the pool run. The person who created a runtime pool sees that pool too.
 
 ### 14.8 Known limits
 
@@ -1469,18 +1471,31 @@ The runtime pools. On a NATS bus, the runtime pools live in the key-value bucket
 | `generation` | The count of the changes of the entry. The store sets 1 at the create and raises it with every change. |
 | `env` | The variables that the pool sets over its template, at most 32, each with `name` and a `value` of at most 4,096 bytes. A runtime pool copies no variable of the front, so it has no `fromEnv`. |
 | `resources` | The values of `requests` and `limits` that the pool sets over its template, each a quantity such as `500m`, `2`, or `1Gi` |
-| `by`, `at` | Who wrote the entry last, and when |
+| `by`, `at` | Who created the pool, and when. A change keeps them, and the log of the front names each change and its writer. |
 | `deleting` | True after a person deleted the pool, until its Tasks are gone (below) |
 
 Every write is a compare-and-swap on the revision of the entry: the front reads the entry, changes it, and writes at the revision that it read. When another replica wrote in between, the bucket refuses the write, and the front reads again, up to eight times. So two replicas never lose a pool. The bucket keeps the last ten values of each entry with the delete marker. A pool that a person creates again under an old name starts one generation above the newest value that the bucket keeps of the old one.
 
 How a runtime pool renders. The front builds the pool from its template and its entry, as a pool of the file that names the template (above), with `env` and `resources` of the entry in the place of the keys of a pool. The profile of the agent comes from the overlay of the pool alone, so the pool renders no Task until the overlay holds that profile, and its state says so. The check of the model waits for the overlay too. The generation of the pool is the generation of its entry plus the one of its template. The marks of section 14.3 hold: each Task carries `FW_POOL` and `FW_POOL_SPEC`, the hash covers the rendered configuration with the overlay, and the marker `<name>-generation` holds the generation. `FW_POOL_BASE` is the hash of the template and the entry without the overlay. Every replica reads the entry from one store, so two replicas hold the same generation and the same configuration. A deploy that changes a template raises its `generation`, and the replica with the newer template wins, as section 14.5 says.
 
-A pass. At each pass, after the pools of the file, the front reads every entry of the store and treats the runtime pools and the pools of the file as one list. Each runtime pool goes through the steps of section 14.4. When the store does not answer, each runtime pool keeps its last state and its Tasks, and its state says why. A name that both a pool of the file and an entry of the store hold is an error: the pool of the file runs, the entry changes nothing, and the state of the pool of the file names the entry and who wrote it. The front never creates a runtime pool with the name of a pool of the file, so the conflict comes from a deploy that adds such a pool.
+A pass. At each pass, after the pools of the file, the front reads every entry of the store and treats the runtime pools and the pools of the file as one list. Each runtime pool goes through the steps of section 14.4. When the store does not answer, each runtime pool keeps its last state and its Tasks, and its state says why. A name that both a pool of the file and an entry of the store hold is an error: the pool of the file runs, the entry changes nothing, and the state of the pool of the file names the entry and who created it. The front never creates a runtime pool with the name of a pool of the file, so the conflict comes from a deploy that adds such a pool.
 
 The delete. A delete of a runtime pool sets `deleting` and `replicas: 0` in its entry, which raises its generation. The pool then needs no profile, so it runs without its overlay, and the front deletes each Task once it is idle, as section 14.4 says. Once the Task list shows no Task of the pool, the front deletes the marker of the pool and removes the entry, at the revision that it read. A Task that failed after it ran keeps the entry until a person deletes the Task. A deleted pool changes no more. The overlay of the pool stays in its bucket, so a pool of that name later finds its profiles and its rules again. An entry whose name a pool of the file holds owns no Task, so a delete removes it at once.
 
-Who may. A create needs `agent.create` on the process, which the creators of `access` have (the kernel architecture, section 13.2). A change and a delete need the owner role on the agent of the pool, decided as for a profile of a pool (section 14.9): with the access configuration of the front and the access block of the profile in the overlay of the pool. Until the overlay holds that profile, the person who wrote the entry last owns the pool. The admins of the front may do everything. For a run of the fleet with a person, the roles of the person decide, and the token must allow the action too (section 19).
+The routes and the tools. These routes sit behind the authentication of the native API:
+
+| Method and path | Purpose |
+|---|---|
+| `GET /v1/pools` | The pools that the caller can view, as `{"pools": [...]}`: the pools of the file in their order, then the runtime pools by name. Each pool has the fields of section 14.7, with `source` and `template`. |
+| `GET /v1/pools/{name}` | One pool of that list |
+| `POST /v1/pools` | Creates a runtime pool. The body is `{"name", "template", "agent", "replicas", "env", "resources"}`. `template` defaults to the default template, and `replicas` is required. The answer is 201 with the pool and `Location`. |
+| `PATCH /v1/pools/{name}` | Changes a runtime pool. The body holds `replicas`, `env`, `resources`, and `template`, each optional. `env` replaces the variables of the pool, and `[]` clears them. `resources` replaces its resource values, and `{}` clears them. The answer is 200 with the pool, one generation higher. |
+| `DELETE /v1/pools/{name}` | Deletes a runtime pool, as the delete above says. The answer is 202 with the pool, which carries `deleting`. |
+| `GET /v1/templates` | The templates, as `{"templates": [...]}`. Each has `name`, `default`, `atespace`, `model` when the template names one, and `generation`. The list holds no image, no variable, and no egress rule. |
+
+A name that a pool of the file or of the store holds answers 409, and so does a change of a deleted pool. A pool that no entry holds answers 404, a change of a pool of the file answers 400 and says to change `fw.yaml`, and a body that does not fit answers 400 with the problem. The MCP tools do the same work: `pools_list`, `templates_list`, `pool_put`, which creates a pool when it gets `agent` and changes the pool of the name without it, and `pool_delete`. The package `workers` holds the routes and the tools, and it registers them through `native.Extend` and `mcp.RegisterTools` on a front whose fleet keeps pools or templates. A runtime pool of `POST /v1/pools` waits for the profile of its agent until `agent_put` with `pool` writes it. `agent_put` with `workers` creates the agent and its pool in one call (below).
+
+Who may. A create needs `agent.create` on the process, which the creators of `access` have (the kernel architecture, section 13.2). A change and a delete need the owner role on the agent of the pool, decided as for a profile of a pool (section 14.9): with the access configuration of the front and the access block of the profile in the overlay of the pool. Until the overlay holds that profile, the person who created the pool owns it. The admins of the front may do everything. For a run of the fleet with a person, the roles of the person decide, and the token must allow the action too (section 19).
 
 The doctor. The fleet line of `fw-workbench doctor` names the templates, with the default, and counts the runtime pools of the store and those that are being deleted. It reads the store with the timeout of the doctor. A runtime pool that names a template that the configuration does not hold fails the line, and so does a store that does not answer. On the bus `mem`, the store lives in the memory of the front, which the doctor does not reach, and the line says so.
 
