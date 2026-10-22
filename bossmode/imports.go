@@ -29,11 +29,14 @@ const (
 	ToolSkillInstall = "skill_install"
 )
 
-// InstallRequest is the body of POST /v1/bossmode/skills: a source and
-// whether the install takes the place of an imported skill of that name.
+// InstallRequest is the body of POST /v1/bossmode/skills: a source,
+// whether the install takes the place of an imported skill of that name,
+// and the digest of the preview that the admin read, which a URL and a
+// skill of a marketplace need (skills.Importer.Install).
 type InstallRequest struct {
 	skills.Source
-	Replace bool `json:"replace,omitempty"`
+	Replace bool   `json:"replace,omitempty"`
+	Digest  string `json:"digest,omitempty"`
 }
 
 // Marketplaces is the answer of GET /v1/bossmode/marketplaces.
@@ -96,7 +99,7 @@ func mountImports(k *native.Kit) {
 		if !k.DecodeFiles(w, r, &req, func() int { return len(req.Files) }) {
 			return
 		}
-		e, p, err := im.Install(r.Context(), req.Source, req.Replace, subjectOf(r.Context()))
+		e, p, err := im.Install(r.Context(), req.Source, req.Replace, req.Digest, subjectOf(r.Context()))
 		if err != nil {
 			failImport(k, w, r, err, &p)
 			return
@@ -151,7 +154,7 @@ func importStatus(err error, p *skills.Preview) int {
 	switch {
 	case errors.As(err, &fe):
 		return fe.Status
-	case errors.Is(err, skills.ErrExists), errors.Is(err, skills.ErrNotImported):
+	case errors.Is(err, skills.ErrExists), errors.Is(err, skills.ErrNotImported), errors.Is(err, skills.ErrChanged):
 		return http.StatusConflict
 	case errors.Is(err, skills.ErrNotFoundSkill):
 		return http.StatusNotFound
@@ -182,7 +185,7 @@ func failImport(k *native.Kit, w http.ResponseWriter, r *http.Request, err error
 // importDetail is the words of an error of an import.
 func importDetail(err error) string {
 	s := err.Error()
-	for _, prefix := range []string{skills.ErrExists.Error() + ": ", skills.ErrRefused.Error() + ": ", skills.ErrNotImported.Error() + ": ", skills.ErrNotFoundSkill.Error() + ": ", "fw: invalid request: ", "skills: "} {
+	for _, prefix := range []string{skills.ErrExists.Error() + ": ", skills.ErrRefused.Error() + ": ", skills.ErrNotImported.Error() + ": ", skills.ErrNotFoundSkill.Error() + ": ", skills.ErrChanged.Error() + ": ", "fw: invalid request: ", "skills: "} {
 		s = strings.TrimPrefix(s, prefix)
 	}
 	return s
@@ -196,6 +199,7 @@ type importArgs struct {
 	Text        string        `json:"text,omitempty"`
 	Files       []skills.File `json:"files,omitempty"`
 	Replace     bool          `json:"replace,omitempty"`
+	Digest      string        `json:"digest,omitempty"`
 }
 
 func (in importArgs) source() skills.Source {
@@ -244,15 +248,16 @@ func importTools(a *fw.Agent) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolSkillInstall,
 			Title:       "Install a skill",
-			Description: "Install a skill from a url, a marketplace with name, a text, or files into the skills of the front, for an admin, after the checks of skill_preview. Every agent whose profile allows the skill reads it from then on. A name that an imported skill holds needs replace true; a skill of the configuration is never replaced.",
+			Description: "Install a skill from a url, a marketplace with name, a text, or files into the skills of the front, for an admin, after the checks of skill_preview. An installed skill is instructions for every agent whose profile allows it, so read the preview first. A name that an imported skill holds needs replace true; a skill of the configuration is never replaced.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{` + importProps + `,
-	"replace":{"type":"boolean","description":"Take the place of an imported skill of the same name."}}}`),
+	"replace":{"type":"boolean","description":"Take the place of an imported skill of the same name."},
+	"digest":{"type":"string","description":"The digest of the preview that you read, from skill_preview. A url and a marketplace need it, and the install refuses files that differ from the preview."}}}`),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: &yes, IdempotentHint: true, OpenWorldHint: &no},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in importArgs) (*sdk.CallToolResult, any, error) {
 			if res := refuseRun(ctx); res != nil {
 				return res, nil, nil
 			}
-			e, p, err := Of(a).imp.Install(ctx, in.source(), in.Replace, subjectOf(ctx))
+			e, p, err := Of(a).imp.Install(ctx, in.source(), in.Replace, in.Digest, subjectOf(ctx))
 			if err != nil {
 				return mcp.ErrorResult(importWords(err)), nil, nil
 			}
@@ -260,7 +265,7 @@ func importTools(a *fw.Agent) []mcp.Tool {
 			if p.Exists != nil {
 				verb = "Replaced"
 			}
-			text := fmt.Sprintf("%s the skill %s (%s) under the imported skills of the front. Every agent whose profile allows it reads it from now on.", verb, e.Name, p.Digest)
+			text := fmt.Sprintf("%s the skill %s (%s) under the imported skills of the front. A person can hand it to every agent whose profile allows it with a slash command from now on.", verb, e.Name, p.Digest)
 			return mcp.Result(text, Installed{Skill: e, Replaced: p.Exists != nil, Preview: p}), nil, nil
 		}),
 	}

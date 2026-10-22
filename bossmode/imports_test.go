@@ -55,7 +55,13 @@ func TestImportRoutes(t *testing.T) {
 		t.Fatalf("a preview installed the skill: %s", body)
 	}
 
-	resp, body = send(t, http.MethodPost, fr.url+"/v1/bossmode/skills", "ada", `{"marketplace":"team","name":"lint"}`)
+	if resp, body := send(t, http.MethodPost, fr.url+"/v1/bossmode/skills", "ada", `{"marketplace":"team","name":"lint"}`); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "digest") {
+		t.Fatalf("install without the digest = %d %s", resp.StatusCode, body)
+	}
+	if resp, body := send(t, http.MethodPost, fr.url+"/v1/bossmode/skills", "ada", `{"marketplace":"team","name":"lint","digest":"sha256:00"}`); resp.StatusCode != http.StatusConflict || !strings.Contains(body, "preview") {
+		t.Fatalf("install with another digest = %d %s", resp.StatusCode, body)
+	}
+	resp, body = send(t, http.MethodPost, fr.url+"/v1/bossmode/skills", "ada", `{"marketplace":"team","name":"lint","digest":"`+p.Digest+`"}`)
 	var in Installed
 	if resp.StatusCode != http.StatusCreated || json.Unmarshal([]byte(body), &in) != nil || in.Skill.Name != "lint" || in.Skill.Origin != skills.OriginImported || in.Replaced {
 		t.Fatalf("install = %d %s", resp.StatusCode, body)
@@ -80,7 +86,7 @@ func TestImportRoutes(t *testing.T) {
 		{`{"text":"No name.\n"}`, http.StatusBadRequest},
 		{`{"text":"---\nname: taken\n---\nB.\n","replace":true}`, http.StatusConflict},
 		{`{"files":[{"path":"SKILL.md","text":` + jsonText(strings.Repeat("x", skills.MaxImportBytes+1)) + `}]}`, http.StatusRequestEntityTooLarge},
-		{`{"url":"` + fr.url + `/v1/whoami"}`, http.StatusBadGateway},
+		{`{"url":"` + fr.url + `/v1/whoami","digest":"sha256:00"}`, http.StatusBadGateway},
 		{`{}`, http.StatusBadRequest},
 		{`{"text":"x","unknown":1}`, http.StatusBadRequest},
 	} {
@@ -131,7 +137,13 @@ func TestImportTools(t *testing.T) {
 	if res.IsError || !strings.Contains(textOf(res), "Preview of the skill lint: Lints the change.") || !strings.Contains(textOf(res), "Lint $ARGUMENTS.") {
 		t.Fatalf("skill_preview = %s", textOf(res))
 	}
-	res = callTool(t, cs, ToolSkillInstall, map[string]any{"marketplace": "team", "name": "lint"}, nil)
+	if res := callTool(t, cs, ToolSkillInstall, map[string]any{"marketplace": "team", "name": "lint"}, nil); !res.IsError || !strings.Contains(textOf(res), "digest") {
+		t.Fatalf("skill_install without the digest = %s", textOf(res))
+	}
+	var pv skills.Preview
+	b, _ := json.Marshal(callTool(t, cs, ToolSkillPreview, map[string]any{"marketplace": "team", "name": "lint"}, nil).StructuredContent)
+	_ = json.Unmarshal(b, &pv)
+	res = callTool(t, cs, ToolSkillInstall, map[string]any{"marketplace": "team", "name": "lint", "digest": pv.Digest}, nil)
 	if res.IsError || !strings.Contains(textOf(res), "Installed the skill lint") {
 		t.Fatalf("skill_install = %s", textOf(res))
 	}

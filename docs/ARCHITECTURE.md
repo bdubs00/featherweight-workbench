@@ -155,7 +155,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `GET /v1/bossmode/skills` | The catalog of the skills of the front, each with the keys of a slash command (section 20.1). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/marketplaces` | The marketplaces of the configuration, each with the skills that it offers, for an admin (section 20.7.1). With `workbench.bossmode.enabled`. |
 | `POST /v1/bossmode/skills/preview` | Fetch and check a skill from `{"url"}`, `{"marketplace", "name"}`, `{"text"}`, or `{"files"}`, for an admin. It installs nothing (section 20.7.2). |
-| `POST /v1/bossmode/skills` | Install a skill from the same sources, with `replace`, for an admin. 201 with the entry, 200 for a replace, 409 for a name that exists (section 20.7.3). |
+| `POST /v1/bossmode/skills` | Install a skill from the same sources, with `replace` and `digest`, the digest of the preview, for an admin. 201 with the entry, 200 for a replace, 409 for a name that exists or a source that changed since the preview (section 20.7.3). |
 | `DELETE /v1/bossmode/skills/{name}` | Remove an imported skill, for an admin. 204, and 409 for a skill of the configuration. |
 | `POST /v1/bossmode/runs/{id}/skill` | A slash command of the caller for a conversation that is no bridge, `{"name", "args", "text"}`: the expanded skill reaches the run as a pinned message of the caller. 202 with the run object (section 20.3). With `workbench.bossmode.enabled`. |
 | `GET /v1/bridges` | The bridges of the caller and of the teams of the caller, open first, each with `lastSeq`, `read`, `unread`, `memberCount`, and `needsYou` (section 18.10). |
@@ -2116,7 +2116,7 @@ A person hands a skill to a running conversation with a slash command, such as `
 - `$name` takes the argument at the place of `name` in the list `arguments` of the front matter, or an empty text when the command gives no argument at that place. A `$` before any other word stays as it is, such as `$HOME` in a shell line.
 - `\$` before a placeholder keeps the placeholder as it is, without the backslash.
 
-When no placeholder took an argument and the arguments are not empty, the front adds the line `ARGUMENTS: <args>` at the end of the body. So a skill without placeholders still gets its arguments.
+When the body holds no placeholder that the command fills and the arguments are not empty, the front adds the line `ARGUMENTS: <args>` at the end of the body. So a skill without placeholders still gets its arguments. A `$name` counts as filled also when it takes an empty text, and a `$N` or `$ARGUMENTS[N]` that stays as it is does not count.
 
 The message starts with one line, `Skill: <name>`. A blank line and the expanded body follow, and then a blank line and the text of the person, when the person wrote one. The whole message holds at most 64 KB (`skills.MaxMessageBytes`). The front refuses a slash command in these cases:
 
@@ -2133,7 +2133,7 @@ A run never hands a skill to another run. The tool `bridge_post` takes no skill,
 
 In a bridge, `POST /v1/bridges/{id}/messages` takes `skill: {"name", "args"}` beside `to` and `replyTo`, and `text` is optional then. The message fans out as any message of a person does, with the first line of the bridge in front (section 18.5), under the caps. The entry of the channel records `skill`, and its text is the line `Skill: <name>` and one line that sums up the description of the skill, the arguments, and the text of the person, cut as other entries are, with `cut` true. Each run that gets the message holds the whole skill.
 
-A conversation that is no bridge, such as the conversation of the person with the manager, or a direct conversation with an agent outside a bridge, takes the slash command at `POST /v1/bossmode/runs/{id}/skill`, with `{"name", "args", "text"}`. A field that the route does not know answers 400. The route answers 202 with the run object, as `POST /v1/runs/{id}/messages` answers.
+A conversation that is no bridge, such as the conversation of the person with the manager, or a direct conversation with an agent outside a bridge, takes the slash command at `POST /v1/bossmode/runs/{id}/skill`, with `{"name", "args", "text"}`. A field that the route does not know answers 400. The route first finds the run for the caller: a run of this process that the caller can operate, as the kernel decides, or a run of another member that the view shows the caller. Only then does it read the skill, so a caller who cannot act on the run learns nothing about the skills. The tool `skill_send` keeps the same order. The route answers 202 with the run object, as `POST /v1/runs/{id}/messages` answers.
 
 ### 20.4 The pinned delivery
 
@@ -2153,7 +2153,7 @@ The pinned messages of a run hold at most 64 KB together (`fw.MaxPinnedBytes`). 
 | `GET /v1/bossmode/skills` | none | `{"skills": [...]}`, the catalog (section 20.1) |
 | `GET /v1/bossmode/marketplaces` | none | `{"marketplaces": [...]}` (section 20.7.1) |
 | `POST /v1/bossmode/skills/preview` | a source | The preview (section 20.7.2) |
-| `POST /v1/bossmode/skills` | a source and `replace` | 201 or 200 with `{"skill", "replaced", "preview"}` |
+| `POST /v1/bossmode/skills` | a source, `replace`, and `digest` | 201 or 200 with `{"skill", "replaced", "preview"}` |
 | `DELETE /v1/bossmode/skills/{name}` | none | 204 |
 | `GET /v1/agents/{name}/skills` | none, `?pool=` | `{"agent", "pool", "allowlist", "skills"}` (section 20.2) |
 | `POST /v1/bridges/{id}/messages` | `{"text", "to", "replyTo", "skill": {"name", "args"}}` | 201 with the entry, which records `skill` |
@@ -2164,7 +2164,7 @@ The pinned messages of a run hold at most 64 KB together (`fw.MaxPinnedBytes`). 
 | `skills_list` | none | `readOnlyHint` |
 | `skill_send` | `name`, `args`, `text`, and `runId`, or `bridge` with `to` | `destructiveHint` |
 | `skill_preview` | `url`, `marketplace` with `name`, `text`, or `files` | `readOnlyHint` |
-| `skill_install` | a source of `skill_preview`, and `replace` | `destructiveHint` |
+| `skill_install` | a source of `skill_preview`, `replace`, and `digest` | `destructiveHint` |
 
 The routes and the tools under `/v1/bossmode` exist with `workbench.bossmode.enabled`. The tools join the MCP server through `mcp.RegisterTools` (section 3.1). The route of a bridge exists with the bridges (section 18). A page reads the catalog once for its composer, shows `argumentHint` after the name of a skill, and offers only the skills with `userInvocable`. It sends a slash command of a bridge to the route of the bridge, and every other slash command to the route of the run.
 
@@ -2178,7 +2178,7 @@ The front ships no imported skill to the workers. The imported skills live on th
 
 ### 20.7 The import
 
-An admin adds a skill to the front without a restart and without a file on the host. The front writes each imported skill under `$FW_HOME/skills/imported/<name>/`, with the record `.origin.json` beside `SKILL.md`, and the catalog lists it with `origin: "imported"` at once. An installed skill is instructions that every agent of a profile that allows it reads, also a profile with no `skills` list, which allows every skill. So an import needs the admin role of the process, `access.admins` (`fw.ActionAdmin`), and never the role `agent.create`, which reaches one profile only. The process itself can import too. Any other caller gets 403, and the answer names `access.admins`. The admin reads the preview first.
+An admin adds a skill to the front without a restart and without a shell on the host. The front writes each imported skill under `$FW_HOME/skills/imported/<name>/`, with the record `.origin.json` beside `SKILL.md`, and the catalog lists it with `origin: "imported"` at once. An installed skill is instructions that every agent of a profile that allows it reads, also a profile with no `skills` list, which allows every skill: a person hands it to any such run with a slash command, and a model loads it on its own once the kernel reads the imported directory (section 20.7.4). So an import needs the admin role of the process, `access.admins` (`fw.ActionAdmin`), and never the role `agent.create`, which reaches one profile only. The process itself can import too. Any other caller gets 403, and the answer names `access.admins`. The admin reads the preview first.
 
 A source is exactly one of these:
 
@@ -2233,7 +2233,7 @@ The front keeps the index of each marketplace for ten minutes (`skills.IndexTTL`
 | `name-missing` | yes | Neither the front matter nor the source names the skill |
 | `name-invalid` | yes | The name holds more than 64 bytes, or a character other than letters, digits, dashes, underscores, and dots |
 | `name-exists` | yes | The catalog holds the name. An install with `replace` takes the place of an imported skill, and never of a skill of the configuration or of a server. |
-| `path-escapes` | yes | A path is absolute, holds `..`, a backslash, or a control character, or names a file twice |
+| `path-escapes` | yes | A path is absolute, holds `..`, a backslash, or a control character, has a part longer than 255 bytes, names a file twice, or names a file that is also the directory of another file |
 | `too-large` | yes | A file, or the files together, pass 1 MB |
 | `too-many-files` | yes | The skill holds more than 64 files |
 | `binary` | no | A file is no UTF-8 text, or holds a zero byte. The import leaves it out. |
@@ -2244,13 +2244,13 @@ A source that names no source, or two, answers 400. A fetch that the front refus
 
 #### 20.7.3 The install and the removal
 
-`POST /v1/bossmode/skills` takes a source and `replace`, runs the checks of the preview, and installs when no problem blocks it. It answers `{"skill", "replaced", "preview"}`: 201 for a new skill, and 200 when it replaced an imported skill. A name of the catalog answers 409 unless `replace` is true and the skill is an imported one. A blocking problem answers 400, or 413 for a problem of size, with the words of each problem.
+`POST /v1/bossmode/skills` takes a source, `replace`, and `digest`, runs the checks of the preview, and installs when no problem blocks it. `digest` is the digest of the preview that the admin read. A URL and a skill of a marketplace need it, because the front fetches the source again for the install, and a host can serve other files the second time. Without it, the install answers 400, and with a digest that the files no longer give, 409, so the admin reads the preview again. A text and an upload hold their files in the request, so they need no digest, and one that they give must match too. It answers `{"skill", "replaced", "preview"}`: 201 for a new skill, and 200 when it replaced an imported skill. A name of the catalog answers 409 unless `replace` is true and the skill is an imported one. A blocking problem answers 400, or 413 for a problem of size, with the words of each problem.
 
 The install writes the files into a temporary directory beside the imported skills, whose name starts with a dot, so the kernel and the catalog skip it. It writes `.origin.json` there: the source, the digest, `installedBy`, the subject of the admin, `installedAt`, and the files. Then it moves the directory into place. A skill that it replaces moves aside first and is removed after. So the catalog never lists a skill that is half written. One install or removal of a process runs at a time. Each install and removal goes to the log with the skill, the source, the digest, and the subject, never the text.
 
 `DELETE /v1/bossmode/skills/{name}` removes an imported skill and answers 204. A skill of the configuration answers 409, because the import never removes it, and a name that no skill holds answers 404.
 
-The MCP tools `skill_preview` and `skill_install` take the same sources, and `skill_install` takes `replace`. Both need an admin, and both refuse a call that names a run of the fleet in `_meta`, so a model never installs a skill. `skill_preview` is read-only, and its text holds the body of `SKILL.md`. `skill_install` is marked `destructiveHint`.
+The MCP tools `skill_preview` and `skill_install` take the same sources, and `skill_install` takes `replace` and `digest`, the digest of the result of `skill_preview`. Both need an admin, and both refuse a call that names a run of the fleet in `_meta`, so a model never installs a skill. `skill_preview` is read-only, and its text holds the body of `SKILL.md`. `skill_install` is marked `destructiveHint`.
 
 #### 20.7.4 The kernel and the imported skills
 
@@ -2259,8 +2259,8 @@ The kernel reads its skills directories at each call (`fw.Agent.Skills`), so a s
 #### 20.7.5 Security
 
 - Each fetch has a timeout of 30 seconds and a bound of 4 MB, and follows at most three redirects, each to http or https. A URL with a user name or a password is refused, so no credential leaves the front.
-- The front refuses an address that is not on the public internet: loopback, private, link-local, shared, documentation, reserved, multicast, and the NAT64 prefixes, also an IPv4 address inside IPv6. The dialer checks the address of each connection, also after a redirect and after a name that resolves to another address. The front dials the host itself and uses no proxy of the environment.
-- An archive unpacks each file up to 4 MB and 16 MB together.
+- The front refuses an address that is not on the public internet: loopback, private, link-local, site-local, shared, documentation, reserved, and multicast, and the prefixes of IPv6 that hold an IPv4 address (mapped, compatible, NAT64, 6to4, and Teredo). The dialer checks the address of each connection, also after a redirect and after a name that resolves to another address. The front dials the host itself and uses no proxy of the environment.
+- An archive unpacks each file up to 4 MB and 16 MB together. Every byte that it unpacks counts, also the bytes of an entry that fails to read. An archive of more than 20,000 entries, and an archive whose two entries share their data, are refused, and the unpacking stops when the request ends.
 - A file that is no UTF-8 text is left out. A path stays inside the skill directory, and the files open through an `os.Root`, so no name and no symbolic link leads out of the imported directory.
 - The front never runs a file of a skill: no script, no hook, and no command of a plugin.
 - The preview shows the body that the agents read. A skill is instructions: an admin reads it before the install, as for any change of a system prompt.

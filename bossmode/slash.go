@@ -78,12 +78,20 @@ func skillRunRoute(k *native.Kit) http.HandlerFunc {
 		if !k.Decode(w, r, &body) {
 			return
 		}
+		// The caller must reach the run before the front reads a skill for
+		// it, so a slash command tells nothing about the skills to a caller
+		// who cannot act on the run.
+		target, err := runTarget(r.Context(), a, r.PathValue("id"))
+		if err != nil {
+			failSkill(k, w, r, err)
+			return
+		}
 		x, err := skills.Prepare(a, skills.Command{Name: body.Name, Args: body.Args}, body.Text)
 		if err != nil {
 			failSkill(k, w, r, err)
 			return
 		}
-		run, err := sendSkill(r.Context(), a, r.PathValue("id"), x.Message)
+		run, err := sendSkill(r.Context(), a, target, x.Message)
 		if err != nil {
 			failSkill(k, w, r, err)
 			return
@@ -131,17 +139,48 @@ func skillDetail(err error) string {
 	return s
 }
 
-// sendSkill sends the message of a slash command to a run as the caller in
-// ctx, pinned: a run of this process through the kernel, which authorizes
-// the caller, and a run of another member through the forward of the
-// fleet, with the credential of the caller, so the owner authorizes the
-// person and records the person as the sender. It returns the run after
-// the message. A refusal to pin the message wraps ErrPinnedBound.
-func sendSkill(ctx context.Context, a *fw.Agent, id, content string) (*fw.Run, error) {
-	msg := fw.Message{Role: fw.RoleUser, Content: []fw.Block{fw.Text(content)}}
+// runTarget finds the run of a slash command for the caller in ctx: a run
+// of this process that the caller can operate, as the kernel decides, or a
+// run of another member that the view shows the caller, whose owner
+// authorizes the caller again when the message arrives.
+func runTarget(ctx context.Context, a *fw.Agent, id string) (*fw.Run, error) {
 	// A context without a principal asks the kernel whether the run exists
-	// at all; Send authorizes the caller.
+	// at all.
 	if _, err := a.Get(context.Background(), id); !errors.Is(err, fw.ErrRunNotFound) {
+		run, err := a.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if err := a.Authorize(ctx, fw.ActionRunOperate, fw.Target{Agent: run.Agent, Run: run}); err != nil {
+			return nil, err
+		}
+		return run, nil
+	}
+	v := fleet.Of(a)
+	if v == nil {
+		return nil, fmt.Errorf("bossmode: %w: %s", fw.ErrRunNotFound, id)
+	}
+	run, err := v.Run(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if run.Member == "" {
+		return nil, fmt.Errorf("bossmode: %w: %s", fw.ErrRunNotFound, id)
+	}
+	return run, nil
+}
+
+// sendSkill sends the message of a slash command to the run of runTarget
+// as the caller in ctx, pinned: a run of this process through the kernel,
+// which authorizes the caller, and a run of another member through the
+// forward of the fleet, with the credential of the caller, so the owner
+// authorizes the person and records the person as the sender. It returns
+// the run after the message. A refusal to pin the message wraps
+// ErrPinnedBound.
+func sendSkill(ctx context.Context, a *fw.Agent, run *fw.Run, content string) (*fw.Run, error) {
+	id := run.ID
+	msg := fw.Message{Role: fw.RoleUser, Content: []fw.Block{fw.Text(content)}}
+	if run.Member == "" {
 		if err := a.Send(ctx, id, msg, fw.OriginHTTP, fw.WithMessagePinned()); err != nil {
 			if errors.Is(err, fw.ErrInvalidRequest) && pinnedRefusal(err.Error()) {
 				return nil, fmt.Errorf("%w: %s", ErrPinnedBound, skillDetail(err))
@@ -153,10 +192,6 @@ func sendSkill(ctx context.Context, a *fw.Agent, id, content string) (*fw.Run, e
 	v := fleet.Of(a)
 	if v == nil {
 		return nil, fmt.Errorf("bossmode: %w: %s", fw.ErrRunNotFound, id)
-	}
-	run, err := v.Run(ctx, id)
-	if err != nil {
-		return nil, err
 	}
 	b, err := json.Marshal(map[string]any{"content": content, "pinned": true})
 	if err != nil {
@@ -260,11 +295,15 @@ func skillSendTool(a *fw.Agent) mcp.Tool {
 			text := fmt.Sprintf("Posted the skill %s to the bridge %s as entry %d. Each member that the message reaches gets it as your message, pinned.", cmd.Name, in.Bridge, m.Seq)
 			return mcp.Result(text, map[string]any{"bridge": in.Bridge, "message": m}), nil, nil
 		}
+		target, err := runTarget(ctx, a, in.RunID)
+		if err != nil {
+			return mcp.ErrorResult(sendWords(err)), nil, nil
+		}
 		x, err := skills.Prepare(a, cmd, in.Text)
 		if err != nil {
 			return mcp.ErrorResult(sendWords(err)), nil, nil
 		}
-		run, err := sendSkill(withCredential(ctx, req), a, in.RunID, x.Message)
+		run, err := sendSkill(withCredential(ctx, req), a, target, x.Message)
 		if err != nil {
 			return mcp.ErrorResult(sendWords(err)), nil, nil
 		}

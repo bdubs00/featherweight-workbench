@@ -55,6 +55,9 @@ var (
 	ErrRefused = errors.New("skills: the import is refused")
 	// ErrNotImported is a skill that no admin imported.
 	ErrNotImported = errors.New("skills: not an imported skill")
+	// ErrChanged is a source whose files differ from the preview that the
+	// admin read: its digest is not the digest of the install.
+	ErrChanged = errors.New("skills: the source changed since the preview")
 )
 
 // Source names where a skill comes from: exactly one of URL, Marketplace
@@ -186,14 +189,27 @@ func (im *Importer) Preview(ctx context.Context, src Source) (Preview, error) {
 }
 
 // Install previews a source and writes the skill under the imported
-// directory when no problem blocks it. A name that an imported skill holds
+// directory when no problem blocks it. digest is the digest of the preview
+// that the admin read. A source that the front fetches, a URL or a skill
+// of a marketplace, needs it, because the host can serve other files to
+// the install than to the preview; a text and an upload hold their files
+// in the request, and a digest that they give must match too. A digest
+// that differs answers ErrChanged. A name that an imported skill holds
 // answers ErrExists unless replace is true, and a name that a configured
 // skill holds always does. by names the admin. It returns the entry of the
 // catalog and the preview.
-func (im *Importer) Install(ctx context.Context, src Source, replace bool, by string) (Entry, Preview, error) {
+func (im *Importer) Install(ctx context.Context, src Source, replace bool, digest, by string) (Entry, Preview, error) {
+	fetched := src.URL != "" || src.Marketplace != "" || src.Name != ""
+	digest = strings.TrimSpace(digest)
+	if fetched && digest == "" && src.Text == "" && len(src.Files) == 0 {
+		return Entry{}, Preview{}, fmt.Errorf("%w: an install from a URL or a marketplace needs digest, the digest of the preview that you read", fw.ErrInvalidRequest)
+	}
 	p, err := im.Preview(ctx, src)
 	if err != nil {
 		return Entry{}, p, err
+	}
+	if digest != "" && digest != p.Digest {
+		return Entry{}, p, fmt.Errorf("%w: the preview had the digest %s, and the source now gives %s; read the preview again", ErrChanged, digest, p.Digest)
 	}
 	im.mu.Lock()
 	defer im.mu.Unlock()
@@ -396,7 +412,7 @@ func (im *Importer) fetchURL(ctx context.Context, raw string) (map[string][]byte
 		return nil, "", err
 	}
 	if strings.HasPrefix(string(b), "PK\x03\x04") || strings.Contains(ctype, "zip") {
-		t, err := unzipTree(b)
+		t, err := unzipTree(ctx, b)
 		if err != nil {
 			return nil, "", err
 		}
@@ -570,6 +586,14 @@ func (im *Importer) check(files map[string][]byte, hint string) Preview {
 		p.files[clean] = b
 		p.Files = append(p.Files, FileInfo{Path: clean, Size: len(b)})
 	}
+	for _, fi := range p.Files {
+		f := fi.Path
+		for dir := path.Dir(f); dir != "."; dir = path.Dir(dir) {
+			if _, ok := p.files[dir]; ok {
+				add(ProblemPathEscapes, f, "the path "+dir+" is a file and the directory of "+f, true)
+			}
+		}
+	}
 	if len(p.files) > MaxImportFiles {
 		add(ProblemTooManyFiles, "", fmt.Sprintf("the skill holds %d files, and a skill holds at most %d", len(p.files), MaxImportFiles), true)
 	}
@@ -680,12 +704,21 @@ func checkPath(raw string) (string, string, string) {
 		return "", ProblemPathEscapes, fmt.Sprintf("the path %q leaves the skill directory", raw)
 	}
 	for _, part := range strings.Split(clean, "/") {
+		if len(part) > maxPartBytes {
+			return "", ProblemPathEscapes, fmt.Sprintf("a part of the path %q is longer than %d bytes", raw, maxPartBytes)
+		}
+	}
+	for _, part := range strings.Split(clean, "/") {
 		if strings.HasPrefix(part, ".") {
 			return clean, ProblemHidden, "the file " + clean + " is hidden, so the import leaves it out"
 		}
 	}
 	return clean, "", ""
 }
+
+// maxPartBytes bounds one part of the path of a file, as a file system
+// bounds a name.
+const maxPartBytes = 255
 
 // digestOf is the SHA-256 of the files of a skill: each path with its
 // length and its bytes, in the order of the paths.

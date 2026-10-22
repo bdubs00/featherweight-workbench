@@ -182,6 +182,7 @@ func TestExpand(t *testing.T) {
 		{"two digits", "$10", "a b c d e f g h i j k", nil, "k"},
 		{"named", "Fix $issue on $branch.", "42 main", []string{"issue", "branch"}, "Fix 42 on main."},
 		{"named missing", "Fix $issue on $branch.", "42", []string{"issue", "branch"}, "Fix 42 on ."},
+		{"named empty counts", "Do $second", "x", []string{"first", "second"}, "Do "},
 		{"index missing stays", "Use $3 and $ARGUMENTS[5].", "a", nil, "Use $3 and $ARGUMENTS[5].\n\nARGUMENTS: a"},
 		{"no placeholder appends", "Review the change.\n", "the auth module", nil, "Review the change.\n\nARGUMENTS: the auth module"},
 		{"no placeholder no args", "Review the change.", "", nil, "Review the change."},

@@ -62,8 +62,10 @@ type Expansion struct {
 //   - \$ before a placeholder keeps the placeholder as it is, without the
 //     backslash.
 //
-// When no placeholder took an argument and the arguments are not empty,
-// the body gets one more line, "ARGUMENTS: <args>".
+// When the body holds no placeholder that the command fills and the
+// arguments are not empty, the body gets one more line, "ARGUMENTS:
+// <args>". A $name counts as filled also when it takes an empty text, and
+// a $N or $ARGUMENTS[N] that stays as it is does not count.
 func Expand(body, args string, names []string) string {
 	words := strings.Fields(args)
 	index := make(map[string]int, len(names))

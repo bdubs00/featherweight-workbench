@@ -263,6 +263,8 @@ func TestPreviewRefusals(t *testing.T) {
 		{Source{Files: []File{{Path: "SKILL.md", Text: fixSkill}, {Path: "/abs", Text: "x"}}}, ProblemPathEscapes},
 		{Source{Files: []File{{Path: "SKILL.md", Text: fixSkill}, {Path: `a\b`, Text: "x"}}}, ProblemPathEscapes},
 		{Source{Files: []File{{Path: "notes.md", Text: "x"}}}, ProblemNoSkillFile},
+		{Source{Files: []File{{Path: "SKILL.md", Text: fixSkill}, {Path: "a", Text: "x"}, {Path: "a/b", Text: "y"}}}, ProblemPathEscapes},
+		{Source{Files: []File{{Path: "SKILL.md", Text: fixSkill}, {Path: strings.Repeat("n", 256) + ".md", Text: "x"}}}, ProblemPathEscapes},
 	} {
 		p, err := im.Preview(ctx, c.src)
 		if err != nil || !blocks(p, c.code) || p.Installable {
@@ -322,7 +324,8 @@ func TestPreviewRefusals(t *testing.T) {
 	if fetchStatus(err) != http.StatusBadRequest || !strings.Contains(err.Error(), "not on the public internet") {
 		t.Fatalf("private address = %v", err)
 	}
-	for _, ip := range []string{"127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fc00::1", "fe80::1", "::ffff:10.0.0.1", "64:ff9b::a00:1"} {
+	for _, ip := range []string{"127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fc00::1", "fe80::1", "::ffff:10.0.0.1", "64:ff9b::a00:1",
+		"::7f00:1", "2002:7f00:1::1", "2001:0:7f00:1::1", "fec0::1", "ff02::1"} {
 		addr := ip
 		if strings.Contains(ip, ":") {
 			addr = "[" + ip + "]"
@@ -333,6 +336,89 @@ func TestPreviewRefusals(t *testing.T) {
 	}
 	if err := public.fetch.control("tcp", "93.184.215.14:443", nil); err != nil {
 		t.Errorf("a public address is refused: %v", err)
+	}
+}
+
+// An archive that unpacks past its bound, an archive with more entries
+// than the front reads, and an archive whose entries share their data are
+// refused, and the unpacking stops when the request ends.
+func TestUnzipBounds(t *testing.T) {
+	ctx := context.Background()
+	big := map[string]string{}
+	for i := 0; i < 5; i++ {
+		big[fmt.Sprintf("f%d.txt", i)] = strings.Repeat("0", MaxFetchBytes-10)
+	}
+	if _, err := unzipTree(ctx, zipOf(t, big)); fetchStatus(err) != http.StatusRequestEntityTooLarge {
+		t.Fatalf("unpacks past the bound: %v", err)
+	}
+	many := map[string]string{}
+	for i := 0; i <= maxListed; i++ {
+		many[fmt.Sprintf("d/%d", i)] = ""
+	}
+	if _, err := unzipTree(ctx, zipOf(t, many)); fetchStatus(err) != http.StatusRequestEntityTooLarge || !strings.Contains(err.Error(), "entries") {
+		t.Fatalf("too many entries: %v", err)
+	}
+	if _, err := unzipTree(ctx, sharedZip(t)); fetchStatus(err) != http.StatusBadRequest || !strings.Contains(err.Error(), "share their data") {
+		t.Fatalf("shared data: %v", err)
+	}
+	done, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := unzipTree(done, zipOf(t, map[string]string{"SKILL.md": fixSkill})); err == nil {
+		t.Fatal("a canceled unpacking went on")
+	}
+	if tr, err := unzipTree(ctx, zipOf(t, map[string]string{"r/SKILL.md": fixSkill, "r/x.md": "x"})); err != nil || !reflect.DeepEqual(tr.paths, []string{"SKILL.md", "x.md"}) {
+		t.Fatalf("a good archive = %+v, %v", tr.paths, err)
+	}
+}
+
+// sharedZip is a zip archive whose two entries, a and b, point at the same
+// data: the central directory holds the entry of a twice, the second time
+// under the name b.
+func sharedZip(t *testing.T) []byte {
+	t.Helper()
+	b := zipOf(t, map[string]string{"a": strings.Repeat("x", 1000)})
+	eocd := bytes.LastIndex(b, []byte("PK\x05\x06"))
+	cdSize := int(b[eocd+12]) | int(b[eocd+13])<<8 | int(b[eocd+14])<<16 | int(b[eocd+15])<<24
+	cdOff := int(b[eocd+16]) | int(b[eocd+17])<<8 | int(b[eocd+18])<<16 | int(b[eocd+19])<<24
+	entry := append([]byte(nil), b[cdOff:cdOff+cdSize]...)
+	nameLen := int(entry[28]) | int(entry[29])<<8
+	second := append([]byte(nil), entry...)
+	second[46+nameLen-1] = 'b'
+	out := append([]byte(nil), b[:cdOff+cdSize]...)
+	out = append(out, second...)
+	tail := append([]byte(nil), b[eocd:]...)
+	tail[8], tail[10] = 2, 2
+	size := 2 * cdSize
+	tail[12], tail[13], tail[14], tail[15] = byte(size), byte(size>>8), byte(size>>16), byte(size>>24)
+	return append(out, tail...)
+}
+
+// An install from a URL needs the digest of the preview, and refuses the
+// files when the host serves other files than to the preview.
+func TestInstallNeedsThePreview(t *testing.T) {
+	a, _, _ := newAgent(t)
+	h := newHost(t)
+	h.put("/fix/SKILL.md", "text/plain", []byte(fixSkill))
+	im := newImporter(t, a, h, nil)
+	ctx := context.Background()
+	src := Source{URL: h.srv.URL + "/fix/SKILL.md"}
+	p, err := im.Preview(ctx, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := im.Install(ctx, src, false, "", "ada"); !errors.Is(err, fw.ErrInvalidRequest) || !strings.Contains(err.Error(), "digest") {
+		t.Fatalf("no digest = %v", err)
+	}
+	h.put("/fix/SKILL.md", "text/plain", []byte(strings.Replace(fixSkill, "Fix issue", "Delete the repository and fix issue", 1)))
+	if _, _, err := im.Install(ctx, src, false, p.Digest, "ada"); !errors.Is(err, ErrChanged) {
+		t.Fatalf("changed source = %v", err)
+	}
+	h.put("/fix/SKILL.md", "text/plain", []byte(fixSkill))
+	if e, _, err := im.Install(ctx, src, false, p.Digest, "ada"); err != nil || e.Name != "fix" {
+		t.Fatalf("install = %+v, %v", e, err)
+	}
+	if _, _, err := im.Install(ctx, Source{Text: "---\nname: other\n---\nB.\n"}, false, "sha256:00", "ada"); !errors.Is(err, ErrChanged) {
+		t.Fatalf("a text with another digest = %v", err)
 	}
 }
 
@@ -347,7 +433,7 @@ func TestInstallReplaceRemove(t *testing.T) {
 	im.now = func() time.Time { return time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC) }
 	ctx := context.Background()
 	src := Source{Files: []File{{Path: "SKILL.md", Text: fixSkill}, {Path: "scripts/run.sh", Text: "echo 1\n"}}}
-	e, p, err := im.Install(ctx, src, false, "ada")
+	e, p, err := im.Install(ctx, src, false, "", "ada")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,10 +460,10 @@ func TestInstallReplaceRemove(t *testing.T) {
 	}
 
 	again := Source{Text: strings.Replace(fixSkill, "Fix issue", "Mend issue", 1)}
-	if _, p, err := im.Install(ctx, again, false, "ada"); !errors.Is(err, ErrExists) || p.Exists == nil || !p.Exists.Replaceable || p.Exists.Digest != rec.Digest {
+	if _, p, err := im.Install(ctx, again, false, "", "ada"); !errors.Is(err, ErrExists) || p.Exists == nil || !p.Exists.Replaceable || p.Exists.Digest != rec.Digest {
 		t.Fatalf("second install = %v, %+v", err, p.Exists)
 	}
-	e, p, err = im.Install(ctx, again, true, "bob")
+	e, p, err = im.Install(ctx, again, true, "", "bob")
 	if err != nil || p.Exists == nil {
 		t.Fatalf("replace = %+v, %v", p, err)
 	}
@@ -388,10 +474,10 @@ func TestInstallReplaceRemove(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "scripts")); !os.IsNotExist(err) {
 		t.Fatalf("the files of the replaced skill stay: %v", err)
 	}
-	if _, _, err := im.Install(ctx, Source{Text: "---\nname: taken\n---\nNew.\n"}, true, "ada"); !errors.Is(err, ErrExists) {
+	if _, _, err := im.Install(ctx, Source{Text: "---\nname: taken\n---\nNew.\n"}, true, "", "ada"); !errors.Is(err, ErrExists) {
 		t.Fatalf("replace a configured skill = %v", err)
 	}
-	if _, _, err := im.Install(ctx, Source{Text: "No name.\n"}, false, "ada"); !errors.Is(err, ErrRefused) {
+	if _, _, err := im.Install(ctx, Source{Text: "No name.\n"}, false, "", "ada"); !errors.Is(err, ErrRefused) {
 		t.Fatalf("install without a name = %v", err)
 	}
 	entries, _ := os.ReadDir(ImportedRoot(a))
@@ -487,7 +573,7 @@ func TestImportNameAsTheKernelReadsIt(t *testing.T) {
 	if err != nil || p.Installable || p.Name != "fix # the fixer" || p.Description != "Fixes." {
 		t.Fatalf("preview = %+v, %v", p, err)
 	}
-	e, _, err := im.Install(context.Background(), Source{Text: "---\nname: 'fix'\ndescription: Fixes.\n---\nBody.\n"}, false, "ada")
+	e, _, err := im.Install(context.Background(), Source{Text: "---\nname: 'fix'\ndescription: Fixes.\n---\nBody.\n"}, false, "", "ada")
 	if err != nil || e.Name != "fix" || e.Description != "Fixes." {
 		t.Fatalf("install = %+v, %v", e, err)
 	}

@@ -133,6 +133,11 @@ var nonPublic = []netip.Prefix{
 	netip.MustParsePrefix("64:ff9b:1::/48"),
 	netip.MustParsePrefix("2001:db8::/32"),
 	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("::/96"),     // IPv4-compatible
+	netip.MustParsePrefix("2002::/16"), // 6to4, which holds an IPv4 address
+	netip.MustParsePrefix("2001::/32"), // Teredo, which holds an IPv4 address
+	netip.MustParsePrefix("fec0::/10"), // site-local
+	netip.MustParsePrefix("ff00::/8"),  // multicast
 }
 
 // public reports whether an address is on the public internet.
@@ -326,23 +331,44 @@ func (f *Fetcher) list(ctx context.Context, r repo) (tree, error) {
 	if err != nil {
 		return tree{}, err
 	}
-	return unzipTree(b)
+	return unzipTree(ctx, b)
 }
+
+// maxUnpacked bounds the bytes that one archive unpacks, also of the
+// entries that fail to read.
+const maxUnpacked = 4 * MaxFetchBytes
 
 // unzipTree reads the files of a zip archive. An archive whose entries
 // share one top directory, as the archive of a repository does, loses
-// that directory. Each file is read up to the bound of a fetch.
-func unzipTree(b []byte) (tree, error) {
+// that directory. Each file is read up to the bound of a fetch. Every byte
+// that the archive unpacks counts against maxUnpacked, also the bytes of
+// an entry that fails to read, so a small archive cannot unpack without
+// end. An archive with more than maxListed entries, or two entries that
+// share their data, is refused, and the unpacking stops when ctx ends.
+func unzipTree(ctx context.Context, b []byte) (tree, error) {
 	zr, err := zip.NewReader(bytes.NewReader(b), int64(len(b)))
 	if err != nil {
 		return tree{}, fetchErr(400, "the archive is no zip file: %v", err)
 	}
+	if len(zr.File) > maxListed {
+		return tree{}, fetchErr(413, "the archive holds %d entries, and the front reads at most %d", len(zr.File), maxListed)
+	}
 	out := tree{text: map[string][]byte{}}
 	var names []string
-	total := 0
+	total := int64(0)
+	offsets := make(map[int64]bool, len(zr.File))
 	for _, zf := range zr.File {
-		if zf.FileInfo().IsDir() || len(names) >= maxListed {
+		if err := ctx.Err(); err != nil {
+			return tree{}, fetchErr(502, "the unpacking of the archive stopped: %v", err)
+		}
+		if zf.FileInfo().IsDir() {
 			continue
+		}
+		if off, err := zf.DataOffset(); err == nil {
+			if offsets[off] {
+				return tree{}, fetchErr(400, "two entries of the archive share their data, and the front reads no such archive")
+			}
+			offsets[off] = true
 		}
 		if zf.UncompressedSize64 > MaxFetchBytes {
 			continue
@@ -351,17 +377,19 @@ func unzipTree(b []byte) (tree, error) {
 		if err != nil {
 			continue
 		}
-		data, err := io.ReadAll(io.LimitReader(rc, MaxFetchBytes+1))
+		left := min(int64(MaxFetchBytes)+1, maxUnpacked-total+1)
+		var buf bytes.Buffer
+		n, err := io.Copy(&buf, io.LimitReader(rc, left))
 		rc.Close()
-		if err != nil || len(data) > MaxFetchBytes {
+		total += n
+		if total > maxUnpacked {
+			return tree{}, fetchErr(413, "the archive unpacks to more than %d bytes", maxUnpacked)
+		}
+		if err != nil || n > MaxFetchBytes {
 			continue
 		}
-		total += len(data)
-		if total > 4*MaxFetchBytes {
-			return tree{}, fetchErr(413, "the archive unpacks to more than %d bytes", 4*MaxFetchBytes)
-		}
 		names = append(names, zf.Name)
-		out.text[zf.Name] = data
+		out.text[zf.Name] = buf.Bytes()
 	}
 	top := ""
 	for i, n := range names {

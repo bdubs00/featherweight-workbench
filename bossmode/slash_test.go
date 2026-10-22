@@ -121,9 +121,14 @@ func TestSkillToARunOfTheFront(t *testing.T) {
 	if resp.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(body, "the bound is") {
 		t.Fatalf("big again = %d %s", resp.StatusCode, body)
 	}
-	// A person who cannot operate the run gets the refusal of the kernel.
-	if resp, body := send(t, http.MethodPost, fr.url+"/v1/bossmode/runs/"+id+"/skill", "bob", `{"name":"fix"}`); resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("bob = %d %s", resp.StatusCode, body)
+	// A person who cannot operate the run gets the refusal of the kernel,
+	// before the front reads any skill: an unknown skill answers as a known
+	// one does.
+	for _, name := range []string{"fix", "nope", "huge"} {
+		resp, body := send(t, http.MethodPost, fr.url+"/v1/bossmode/runs/"+id+"/skill", "bob", `{"name":"`+name+`"}`)
+		if (resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound) || strings.Contains(body, "no skill has the name") || strings.Contains(body, "65536") {
+			t.Fatalf("bob with %s = %d %s", name, resp.StatusCode, body)
+		}
 	}
 	if resp, body := send(t, http.MethodPost, fr.url+"/v1/bossmode/runs/nope/skill", "ada", `{"name":"fix"}`); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown run = %d %s", resp.StatusCode, body)
