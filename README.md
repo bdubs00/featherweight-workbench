@@ -54,7 +54,7 @@ Open `http://localhost:8080/ui` and paste the token. The listener serves the rou
 | `GET /v1/fleet` | the members and the pools of the fleet |
 | `/v1/connections` | the connections of the caller to services |
 | `/v1/pages` | the wiki of the fleet: pages of Markdown with a history |
-| `/v1/faces/{agent}` | the face of an agent as SVG, else its identicon |
+| `/v1/faces` | the faces of the agents: an SVG, else an identicon, with a display name and a tagline |
 | `GET /v1/usage` | the usage of the runs, deprecated |
 
 For a desktop client, run the MCP server over standard input and output:
