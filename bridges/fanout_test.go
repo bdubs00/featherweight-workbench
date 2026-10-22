@@ -1,0 +1,234 @@
+package bridges
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/fleet"
+)
+
+// fanBridge opens a bridge whose two seats have a finished run each on the
+// member default/crew-0, which is live.
+func fanBridge(t *testing.T, caps string) (*Store, *fakeView, *fakeMember, string, string) {
+	t.Helper()
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	v, fm := withFleet(t, a)
+	v.state("default/crew-0", fleet.MemberLive, "migrator", "reviewer")
+	url := serve(t, a)
+	body := `{"title":"Migrate logrotate","members":[
+		{"handle":"migrator-1","agent":"migrator","task":"Migrate"},
+		{"handle":"reviewer","agent":"reviewer","task":"Review"}]` + caps + `}`
+	resp, out := do(t, http.MethodPost, url+"/v1/bridges", "alice", body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("open = %d %s", resp.StatusCode, out)
+	}
+	var it Item
+	decodeJSON(t, out, &it)
+	v.put(workerRun("r-mig", it.ID, "migrator-1", "migrator", fw.StateCompleted))
+	v.put(workerRun("r-rev", it.ID, "reviewer", "reviewer", fw.StateCompleted))
+	s.poll(context.Background())
+	return s, v, fm, url, it.ID
+}
+
+const (
+	pathMig = "/v1/runs/r-mig/messages"
+	pathRev = "/v1/runs/r-rev/messages"
+)
+
+// A message of a person reaches every active member, an addressed message
+// reaches the addressed members alone, and a message of an agent names the
+// agent and never reaches the agent itself. Each delivery carries the
+// static token of the fleet and the sender in from.
+func TestFanOut(t *testing.T) {
+	s, v, fm, url, id := fanBridge(t, "")
+	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Status, please."}`)
+	eventually(t, "both members get the broadcast", func() bool {
+		return len(fm.find(http.MethodPost, pathMig)) == 1 && len(fm.find(http.MethodPost, pathRev)) == 1
+	})
+	got := fm.find(http.MethodPost, pathMig)[0]
+	from, _ := got.Body["from"].(map[string]any)
+	content, _ := got.Body["content"].(string)
+	if got.Auth != "Bearer "+fleetToken || got.Member != "default/crew-0" || from["kind"] != fw.FromPerson || from["name"] != "alice" || from["member"] != "migrator-1" {
+		t.Fatalf("delivery = %+v", got)
+	}
+	if !strings.HasPrefix(content, `[bridge "Migrate logrotate" `+id+`] to everyone from alice: Status, please.`) {
+		t.Fatalf("content = %q", content)
+	}
+
+	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Only you.","to":["reviewer"]}`)
+	eventually(t, "the reviewer gets the addressed message", func() bool { return len(fm.find(http.MethodPost, pathRev)) == 2 })
+	if c, _ := fm.find(http.MethodPost, pathRev)[1].Body["content"].(string); !strings.Contains(c, "] @reviewer from alice: Only you.") {
+		t.Fatalf("addressed content = %q", c)
+	}
+
+	// An agent addresses a teammate, and its broadcast skips itself.
+	if _, err := s.post(context.Background(), id, sender{handle: "migrator-1", run: "r-mig"}, PostSpec{Text: "The cron playbook is ready.", To: []string{"reviewer"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.post(context.Background(), id, sender{handle: "migrator-1", run: "r-mig"}, PostSpec{Text: "Done for today."}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the reviewer gets both messages of the migrator", func() bool { return len(fm.find(http.MethodPost, pathRev)) == 4 })
+	d := fm.find(http.MethodPost, pathRev)[2]
+	from, _ = d.Body["from"].(map[string]any)
+	if from["kind"] != fw.FromAgent || from["name"] != "migrator-1" || from["run"] != "r-mig" || from["member"] != "reviewer" {
+		t.Fatalf("agent delivery = %+v", d.Body)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := len(fm.find(http.MethodPost, pathMig)); n != 1 {
+		t.Fatalf("the migrator got %d messages, its own included", n)
+	}
+	// An agent addresses the people: nobody gets a follow-up.
+	if _, err := s.post(context.Background(), id, sender{handle: "reviewer", run: "r-rev"}, PostSpec{Text: "Need a decision.", To: []string{"operator"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A seat without a run gets nothing, a muted seat no broadcast, and a
+	// fired seat nothing and no address.
+	resp, body := do(t, http.MethodPost, url+"/v1/bridges/"+id+"/members", "alice", `{"handle":"tester","agent":"reviewer","task":"Test it"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("add = %d %s", resp.StatusCode, body)
+	}
+	do(t, http.MethodPatch, url+"/v1/bridges/"+id+"/members/reviewer", "alice", `{"muted":true}`)
+	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Everyone?"}`)
+	eventually(t, "the migrator gets the broadcast", func() bool { return len(fm.find(http.MethodPost, pathMig)) == 2 })
+	time.Sleep(50 * time.Millisecond)
+	if n := len(fm.find(http.MethodPost, pathRev)); n != 4 {
+		t.Fatalf("the muted reviewer got %d messages", n)
+	}
+	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"You, muted.","to":["reviewer"]}`)
+	eventually(t, "an address reaches a muted seat", func() bool { return len(fm.find(http.MethodPost, pathRev)) == 5 })
+	do(t, http.MethodDelete, url+"/v1/bridges/"+id+"/members/reviewer", "alice", "")
+	if resp, body := do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"x","to":["reviewer"]}`); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "fired") {
+		t.Fatalf("to a fired seat = %d %s", resp.StatusCode, body)
+	}
+	_ = v
+}
+
+// A seat whose newest run stopped at a limit gets nothing, and the channel
+// says so once for that run.
+func TestFanOutSkipsALimit(t *testing.T) {
+	s, v, fm, url, id := fanBridge(t, "")
+	r := workerRun("r-rev", id, "reviewer", "reviewer", fw.StateFailed)
+	r.Error = "budget exceeded: maxTurns"
+	v.put(r)
+	for i := 0; i < 2; i++ {
+		do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Go on."}`)
+	}
+	eventually(t, "the migrator gets both", func() bool { return len(fm.find(http.MethodPost, pathMig)) == 2 })
+	if n := len(fm.find(http.MethodPost, pathRev)); n != 0 {
+		t.Fatalf("the stopped reviewer got %d messages", n)
+	}
+	caps := withEvent(channel(t, s, id), EventCap)
+	if len(caps) != 1 || !strings.Contains(caps[0].Text, "reviewer cannot take messages") || !strings.Contains(caps[0].Text, "larger budget") {
+		t.Fatalf("cap lines = %+v", caps)
+	}
+}
+
+// The caps: maxMessages stops the fan-out until the operator raises it,
+// maxFanoutPerMinute stops the rest of a minute, and maxPairMessages stops
+// two agents until a person writes. Each cap posts one line, and the
+// channel keeps every message.
+func TestCaps(t *testing.T) {
+	t.Run("messages", func(t *testing.T) {
+		s, _, fm, url, id := fanBridge(t, `,"caps":{"maxMessages":2}`)
+		for i := 0; i < 4; i++ {
+			do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"m","to":["migrator-1"]}`)
+		}
+		eventually(t, "two deliveries", func() bool { return len(fm.find(http.MethodPost, pathMig)) == 2 })
+		time.Sleep(50 * time.Millisecond)
+		msgs := channel(t, s, id)
+		if n := len(fm.find(http.MethodPost, pathMig)); n != 2 || len(withEvent(msgs, EventCap)) != 1 {
+			t.Fatalf("%d deliveries, cap lines %+v", n, withEvent(msgs, EventCap))
+		}
+		people := 0
+		for _, m := range msgs {
+			if m.From.Kind == KindPerson {
+				people++
+			}
+		}
+		if people != 4 {
+			t.Fatalf("the channel keeps %d of 4 messages", people)
+		}
+		// A raised cap delivers again.
+		do(t, http.MethodPatch, url+"/v1/bridges/"+id, "alice", `{"caps":{"maxMessages":10}}`)
+		do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"m","to":["migrator-1"]}`)
+		eventually(t, "a delivery after the raise", func() bool { return len(fm.find(http.MethodPost, pathMig)) == 3 })
+	})
+	t.Run("minute", func(t *testing.T) {
+		s, _, fm, url, id := fanBridge(t, `,"caps":{"maxFanoutPerMinute":1}`)
+		fixed := time.Date(2026, 10, 21, 12, 0, 10, 0, time.UTC)
+		s.now = func() time.Time { return fixed }
+		do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"both"}`)
+		do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"again"}`)
+		time.Sleep(80 * time.Millisecond)
+		total := len(fm.find(http.MethodPost, pathMig)) + len(fm.find(http.MethodPost, pathRev))
+		caps := withEvent(channel(t, s, id), EventCap)
+		if total != 1 || len(caps) != 1 || !strings.Contains(caps[0].Text, "1 deliveries a minute") {
+			t.Fatalf("%d deliveries, cap lines %+v", total, caps)
+		}
+		// The next minute delivers again.
+		fixed = fixed.Add(time.Minute)
+		do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"later","to":["reviewer"]}`)
+		eventually(t, "a delivery in the next minute", func() bool {
+			return len(fm.find(http.MethodPost, pathMig))+len(fm.find(http.MethodPost, pathRev)) == 2
+		})
+	})
+	t.Run("pair", func(t *testing.T) {
+		s, _, fm, url, id := fanBridge(t, `,"caps":{"maxPairMessages":2}`)
+		ping := func(from, run, to string) {
+			if _, err := s.post(context.Background(), id, sender{handle: from, run: run}, PostSpec{Text: "ping", To: []string{to}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ping("migrator-1", "r-mig", "reviewer")
+		ping("reviewer", "r-rev", "migrator-1")
+		ping("migrator-1", "r-mig", "reviewer")
+		ping("reviewer", "r-rev", "migrator-1")
+		eventually(t, "two deliveries between the pair", func() bool {
+			return len(fm.find(http.MethodPost, pathMig))+len(fm.find(http.MethodPost, pathRev)) == 2
+		})
+		time.Sleep(50 * time.Millisecond)
+		caps := withEvent(channel(t, s, id), EventCap)
+		if n := len(fm.find(http.MethodPost, pathMig)) + len(fm.find(http.MethodPost, pathRev)); n != 2 || len(caps) != 1 || !strings.Contains(caps[0].Text, "exchanged 2 messages") {
+			t.Fatalf("%d deliveries, cap lines %+v", n, caps)
+		}
+		// A message of a person ends the exchange; the pair talks again.
+		do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"go on","to":["migrator-1"]}`)
+		ping("migrator-1", "r-mig", "reviewer")
+		eventually(t, "a delivery after the person", func() bool { return len(fm.find(http.MethodPost, pathRev)) == 2 })
+	})
+}
+
+// A delivery that fails is tried again with a pause that doubles, and one
+// that keeps failing gives one line.
+func TestDeliveryRetries(t *testing.T) {
+	s, _, fm, url, id := fanBridge(t, "")
+	fm.mu.Lock()
+	fm.fail[pathMig] = 2
+	fm.status[pathRev] = http.StatusConflict
+	fm.mu.Unlock()
+	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Wake up."}`)
+	eventually(t, "the third try reaches the migrator", func() bool { return len(fm.find(http.MethodPost, pathMig)) == 3 })
+	eventually(t, "a line for the reviewer", func() bool {
+		return len(withEvent(channel(t, s, id), EventFailed)) == 1
+	})
+	failed := withEvent(channel(t, s, id), EventFailed)
+	if !strings.Contains(failed[0].Text, "reviewer did not get message 4") || len(fm.find(http.MethodPost, pathRev)) != 1 {
+		t.Fatalf("failed = %+v, tries %d", failed, len(fm.find(http.MethodPost, pathRev)))
+	}
+}
+
+// A closed bridge takes no message.
+func TestClosedBridgeTakesNoMessage(t *testing.T) {
+	_, _, _, url, id := fanBridge(t, "")
+	do(t, http.MethodPatch, url+"/v1/bridges/"+id, "alice", `{"state":"closed","delegation":{"report":false}}`)
+	if resp, body := do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"x"}`); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("post to a closed bridge = %d %s", resp.StatusCode, body)
+	}
+}

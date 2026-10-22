@@ -1,0 +1,637 @@
+package bridges
+
+// This file opens a bridge and seats its members (docs/ARCHITECTURE.md
+// section 18.3). With the placement queue, the front puts one run request
+// per seat on the intake queue of the agent of the seat, as the operator,
+// through the publish that the MCP tool enqueue uses (fleet.Enqueue). With
+// the placement spawn, the front starts one run of the manager on the Task
+// of the manager, and the manager seats each member with spawn_task, so the
+// seats are child runs of the manager run and carry its batch.
+
+import (
+	"bytes"
+	"context"
+	"embed"
+	"errors"
+	"fmt"
+	"net/http"
+	"regexp"
+	"strings"
+	"text/template"
+	"time"
+	"unicode/utf8"
+
+	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/pages"
+	"github.com/bdubs00/featherweight-workbench/teams"
+)
+
+//go:embed instructions.tmpl plan.tmpl
+var templateFiles embed.FS
+
+// templates holds the instructions of a seat and the plan of a spawn
+// bridge for the manager.
+var templates = template.Must(template.New("bridges").ParseFS(templateFiles, "instructions.tmpl", "plan.tmpl"))
+
+// Bounds of the plan of a bridge.
+const (
+	maxTitleRunes = 200
+	maxGoalBytes  = 16 << 10
+	maxTaskBytes  = 4 << 10
+	// learnedHead bounds the part of agents/<agent>/learned.md that the
+	// instructions of a seat carry.
+	learnedHead = 4 << 10
+)
+
+// handlePattern is the shape of a handle: lower-case letters, digits,
+// dots, dashes, and underscores, at most 32.
+var handlePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,31}$`)
+
+// agentPattern is the shape of the name of a profile.
+var agentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// OpenSpec is the plan of a new bridge, as POST /v1/bridges and the tool
+// bridge_open take it. Delegation and Caps are partial: a missing key
+// takes the default.
+type OpenSpec struct {
+	Title      string           `json:"title"`
+	Goal       string           `json:"goal"`
+	Placement  string           `json:"placement,omitempty"`
+	Members    []SeatSpec       `json:"members"`
+	Delegation *DelegationPatch `json:"delegation,omitempty"`
+	Caps       *CapsPatch       `json:"caps,omitempty"`
+}
+
+// SeatSpec is one seat of the plan: the handle, the agent behind it, its
+// task, and optionally the pool that runs the agent, when several pools
+// run it, and the budget of its runs.
+type SeatSpec struct {
+	Handle string      `json:"handle"`
+	Agent  string      `json:"agent"`
+	Task   string      `json:"task"`
+	Pool   string      `json:"pool,omitempty"`
+	Budget *SeatBudget `json:"budget,omitempty"`
+}
+
+// DelegationPatch changes the delegation of a bridge: a nil field stays.
+type DelegationPatch struct {
+	Approve *bool `json:"approve,omitempty"`
+	Budget  *bool `json:"budget,omitempty"`
+	Members *bool `json:"members,omitempty"`
+	Report  *bool `json:"report,omitempty"`
+}
+
+// CapsPatch changes the caps of a bridge: a nil field stays.
+type CapsPatch struct {
+	MaxMessages        *int `json:"maxMessages,omitempty"`
+	MaxFanoutPerMinute *int `json:"maxFanoutPerMinute,omitempty"`
+	MaxPairMessages    *int `json:"maxPairMessages,omitempty"`
+}
+
+// apply changes the delegation d.
+func (p *DelegationPatch) apply(d *Delegation) {
+	if p == nil {
+		return
+	}
+	set := func(dst *bool, v *bool) {
+		if v != nil {
+			*dst = *v
+		}
+	}
+	set(&d.Approve, p.Approve)
+	set(&d.Budget, p.Budget)
+	set(&d.Members, p.Members)
+	set(&d.Report, p.Report)
+}
+
+// apply changes the caps c.
+func (p *CapsPatch) apply(c *Caps) {
+	if p == nil {
+		return
+	}
+	set := func(dst *int, v *int) {
+		if v != nil {
+			*dst = *v
+		}
+	}
+	set(&c.MaxMessages, p.MaxMessages)
+	set(&c.MaxFanoutPerMinute, p.MaxFanoutPerMinute)
+	set(&c.MaxPairMessages, p.MaxPairMessages)
+}
+
+// invalid is an error of a request that a route answers with 400.
+func invalid(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", fw.ErrInvalidRequest, fmt.Sprintf(format, args...))
+}
+
+// checkSeat checks one seat of a plan.
+func checkSeat(m SeatSpec) error {
+	switch {
+	case !handlePattern.MatchString(m.Handle):
+		return invalid("the handle %q must be lower-case letters, digits, dots, dashes, or underscores, at most 32, and start with a letter or a digit", m.Handle)
+	case m.Handle == HandleOperator || m.Handle == HandleManager:
+		return invalid("the handle %s is reserved: %s addresses the people of a bridge, and %s names its manager", m.Handle, HandleOperator, HandleManager)
+	case !agentPattern.MatchString(m.Agent):
+		return invalid("the seat %s needs an agent, the name of a profile, not %q", m.Handle, m.Agent)
+	case strings.TrimSpace(m.Task) == "":
+		return invalid("the seat %s needs a task", m.Handle)
+	case len(m.Task) > maxTaskBytes:
+		return invalid("the task of the seat %s holds more than %d bytes", m.Handle, maxTaskBytes)
+	}
+	if b := m.Budget; b != nil {
+		if b.MaxTurns < 0 {
+			return invalid("the budget of the seat %s has a negative maxTurns", m.Handle)
+		}
+		if b.Deadline != "" {
+			if d, err := time.ParseDuration(b.Deadline); err != nil || d <= 0 {
+				return invalid("the deadline of the seat %s must be a duration such as 30m, not %q", m.Handle, b.Deadline)
+			}
+		}
+	}
+	return nil
+}
+
+// operates reports whether the caller in ctx has the operator role on an
+// agent: on the profile in the pool that runs it, else on the profile of
+// this process, else on an agent that a member of the view serves. The
+// process itself operates every agent. An error means that the decision
+// point did not answer.
+func (s *Store) operates(ctx context.Context, agent, pool string) (bool, error) {
+	if fw.PrincipalFrom(ctx) == nil {
+		return true, nil
+	}
+	pa, ok, err := fleet.PoolAgentNamed(ctx, s.a, agent, pool)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		return pa.Role == fw.AccessOwner.String() || pa.Role == fw.AccessOperator.String(), nil
+	}
+	if _, ok := s.a.ProfileNamed(agent); ok {
+		err := s.a.Authorize(ctx, fw.ActionAgentRun, fw.Target{Agent: agent})
+		if errors.Is(err, fw.ErrAuthzUnavailable) {
+			return false, err
+		}
+		return err == nil, nil
+	}
+	if v := fleet.Of(s.a); v != nil {
+		members, err := v.Members(ctx)
+		if err != nil {
+			return false, err
+		}
+		for _, m := range members {
+			for _, ag := range m.Agents {
+				if ag.Name == agent && (ag.Role == fw.AccessOwner.String() || ag.Role == fw.AccessOperator.String()) {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+// poolOf returns the pool that runs an agent, or "".
+func (s *Store) poolOf(ctx context.Context, agent, pool string) string {
+	pa, ok, err := fleet.PoolAgentNamed(s.asFront(ctx), s.a, agent, pool)
+	if err != nil || !ok {
+		return pool
+	}
+	return pa.Pool
+}
+
+// open opens a bridge from a plan for the person by, and seats its
+// members. mgr names the manager run when the manager opens the bridge
+// through bridge_open.
+func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *Manager) (*record, error) {
+	title := strings.TrimSpace(spec.Title)
+	switch {
+	case title == "":
+		return nil, invalid("a bridge needs a title")
+	case utf8.RuneCountInString(title) > maxTitleRunes:
+		return nil, invalid("the title of a bridge holds at most %d characters", maxTitleRunes)
+	case len(spec.Goal) > maxGoalBytes:
+		return nil, invalid("the goal of a bridge holds at most %d bytes", maxGoalBytes)
+	case len(spec.Members) == 0:
+		return nil, invalid("a bridge needs at least one member")
+	case len(spec.Members) > s.cfg.MaxMembers:
+		return nil, invalid("a bridge holds at most %d members (workbench.bridges.maxMembers)", s.cfg.MaxMembers)
+	}
+	placement := strings.ToLower(strings.TrimSpace(spec.Placement))
+	if placement == "" {
+		placement = s.cfg.Placement
+	}
+	if placement != PlacementQueue && placement != PlacementSpawn {
+		return nil, invalid("the placement of a bridge is queue or spawn, not %q", spec.Placement)
+	}
+	seen := map[string]bool{}
+	for i := range spec.Members {
+		m := &spec.Members[i]
+		m.Handle, m.Agent, m.Task, m.Pool = strings.TrimSpace(m.Handle), strings.TrimSpace(m.Agent), strings.TrimSpace(m.Task), strings.TrimSpace(m.Pool)
+		if err := checkSeat(*m); err != nil {
+			return nil, err
+		}
+		if seen[m.Handle] {
+			return nil, invalid("the handle %s is taken twice", m.Handle)
+		}
+		seen[m.Handle] = true
+	}
+	for _, m := range spec.Members {
+		ok, err := s.operates(ctx, m.Agent, m.Pool)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("%w: opening the bridge needs the operator role on the agent %s of the seat %s", fw.ErrForbidden, m.Agent, m.Handle)
+		}
+	}
+	caps := s.cfg.caps()
+	spec.Caps.apply(&caps)
+	if problem := checkCaps(caps); problem != "" {
+		return nil, invalid("the caps of the bridge: %s", problem)
+	}
+	delegation := Delegation{Report: true}
+	spec.Delegation.apply(&delegation)
+
+	now := s.now().UTC()
+	rec := &record{Bridge: Bridge{
+		ID:         strings.ToLower(fw.NewID()),
+		Title:      title,
+		Goal:       strings.TrimSpace(spec.Goal),
+		State:      StateOpen,
+		Placement:  placement,
+		CreatedAt:  now,
+		Manager:    mgr,
+		Delegation: delegation,
+		Caps:       caps,
+	}}
+	if by != nil {
+		rec.Operator, rec.OperatorKind = by.Subject, by.Kind
+		rec.Teams = teams.Of(teams.Patterns(s.a.Config()), by)
+	}
+	for _, m := range spec.Members {
+		rec.Members = append(rec.Members, Member{Handle: m.Handle, Agent: m.Agent, Pool: s.poolOf(ctx, m.Agent, m.Pool), Task: m.Task, Runs: []string{}})
+		seat := rec.seat(m.Handle)
+		seat.Budget = m.Budget
+		seat.Seatings = 1
+	}
+	switch placement {
+	case PlacementQueue:
+		for _, m := range rec.Members {
+			if _, err := fleet.Queue(s.a.Config(), m.Agent); err != nil {
+				return nil, fmt.Errorf("%w: the seat %s cannot reach a queue: %s", fw.ErrInvalidRequest, m.Handle, strings.TrimPrefix(err.Error(), "fleet: "))
+			}
+		}
+	case PlacementSpawn:
+		run, err := s.startManager(ctx, rec, s.planOf(ctx, rec), "bridge:"+rec.ID+":manager")
+		if err != nil {
+			return nil, err
+		}
+		rec.Manager = run
+	}
+	opened := system(EventOpened, fmt.Sprintf("%s opened the bridge with %s.", nameOf(by), plural(len(rec.Members), "member", "members")))
+	opened.Seq, opened.At = rec.alloc(), now
+	if err := s.b.create(ctx, rec); err != nil {
+		return nil, err
+	}
+	s.land(ctx, rec.ID, opened)
+	for _, m := range rec.Members {
+		emitMember(rec.ID, Member{Handle: m.Handle, Agent: m.Agent, Pool: m.Pool, Task: m.Task, Runs: []string{}, Presence: PresenceWorking})
+	}
+	if placement == PlacementQueue {
+		s.enqueue(ctx, rec, rec.Members)
+	}
+	s.log.Info("bridges: a bridge is open", "bridge", rec.ID, "placement", placement, "members", len(rec.Members), "operator", rec.Operator)
+	return rec, nil
+}
+
+// nameOf is the name of a person in a system line.
+func nameOf(p *fw.Principal) string {
+	switch {
+	case p == nil:
+		return "the front"
+	case strings.TrimSpace(p.Name) != "":
+		return p.Name
+	case p.Subject != "":
+		return p.Subject
+	}
+	return "somebody"
+}
+
+// plural writes a number with the singular or the plural noun.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+// land writes new entries of the channel, whose seqs a change of the
+// record gave, and calls the hook for each. A write that fails leaves a
+// gap in the channel, which a page reads past, and the log names it.
+func (s *Store) land(ctx context.Context, id string, msgs ...Message) {
+	for _, m := range msgs {
+		if err := s.b.putEntry(s.asFront(ctx), id, m); err != nil {
+			s.log.Error("bridges: an entry of the channel is lost", "bridge", id, "seq", m.Seq, "error", err)
+			continue
+		}
+		emitMessage(id, m)
+	}
+}
+
+// enqueue puts one run request per seat on the queue of its agent, as the
+// operator, with the batch of the bridge, the seat in the metadata, and
+// the instructions of the bridge. A seat whose request does not reach the
+// queue gets a line in the channel.
+func (s *Store) enqueue(ctx context.Context, rec *record, seats []Member) {
+	byAgent := map[string][]fw.RunRequest{}
+	var order []string
+	handles := map[string][]string{}
+	for _, m := range seats {
+		req := s.requestOf(ctx, rec, m)
+		if _, ok := byAgent[m.Agent]; !ok {
+			order = append(order, m.Agent)
+		}
+		byAgent[m.Agent] = append(byAgent[m.Agent], req)
+		handles[m.Agent] = append(handles[m.Agent], m.Handle)
+	}
+	for _, agent := range order {
+		reqs := byAgent[agent]
+		_, sent, err := fleet.Enqueue(s.asFront(ctx), s.a, agent, reqs)
+		if err == nil {
+			continue
+		}
+		s.log.Warn("bridges: a seat did not reach its queue", "bridge", rec.ID, "agent", agent, "error", err)
+		for _, h := range handles[agent][sent:] {
+			s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The front failed to put the job of %s on its queue: %s. Give the seat a new task to try again.", h, oneLine(strings.TrimPrefix(err.Error(), "fleet: "), 300))))
+		}
+	}
+}
+
+// requestOf is the run request of a seat on the queue of its agent.
+func (s *Store) requestOf(ctx context.Context, rec *record, m Member) fw.RunRequest {
+	seat := rec.seat(m.Handle)
+	title := oneLine(m.Handle+": "+m.Task, maxTitleRunes)
+	req := fw.RunRequest{
+		Input:          m.Task,
+		Instructions:   s.instructionsOf(ctx, rec, m),
+		Metadata:       map[string]string{fw.MetaBatch: BatchOf(rec.ID), MetaMember: m.Handle, fw.MetaTitle: title},
+		Principal:      rec.Operator,
+		PrincipalKind:  rec.OperatorKind,
+		IdempotencyKey: fmt.Sprintf("bridge:%s:%s:%d", rec.ID, m.Handle, max(seat.Seatings, 1)),
+		Profile:        s.frontTools(ctx, m),
+	}
+	if b := budgetOf(seat.Budget); b != nil {
+		req.Budget = b
+	}
+	return req
+}
+
+// budgetOf turns the budget of a seat into a budget of the kernel, or nil.
+func budgetOf(b *SeatBudget) *fw.Budget {
+	if b == nil || (b.MaxTurns == 0 && b.Deadline == "") {
+		return nil
+	}
+	out := fw.Budget{MaxTurns: b.MaxTurns}
+	if d, err := time.ParseDuration(b.Deadline); err == nil {
+		out.Deadline = d
+	}
+	return &out
+}
+
+// bridgeTools are the tools of the front that a seat needs, as the policy
+// names them through the tools.mcp entry front of a pool.
+var bridgeTools = []string{"front.bridge_read", "front.bridge_post", "front.pages_read", "front.pages_write", "front.pages_search"}
+
+// frontTools returns an inline profile that adds the tools of the front
+// to a seat, when the pool needs it: the profile of the pool lists its
+// tools, names a tool of the front, so its workers reach the front, and
+// leaves out the tools of a bridge. Otherwise it returns nil, and the run
+// keeps the tools of its profile. The front configures no pool: a pool
+// that reaches the front carries the entry front in tools.mcp.
+func (s *Store) frontTools(ctx context.Context, m Member) *fw.AgentProfile {
+	pa, ok, err := fleet.PoolAgentNamed(s.asFront(ctx), s.a, m.Agent, m.Pool)
+	if err != nil || !ok || len(pa.Tools) == 0 {
+		return nil
+	}
+	reaches, covered := false, map[string]bool{}
+	for _, t := range pa.Tools {
+		switch {
+		case t == "*" || t == "front.*":
+			return nil
+		case strings.HasPrefix(t, "front."):
+			reaches = true
+			covered[t] = true
+		}
+	}
+	if !reaches {
+		return nil
+	}
+	tools := append([]string(nil), pa.Tools...)
+	for _, t := range bridgeTools {
+		if !covered[t] {
+			tools = append(tools, t)
+		}
+	}
+	if len(tools) == len(pa.Tools) {
+		return nil
+	}
+	return &fw.AgentProfile{Tools: tools}
+}
+
+// rosterLine is one seat in the instructions of a bridge.
+type rosterLine struct {
+	Handle, Agent, Task string
+	You                 bool
+}
+
+// instructionsData is the data of the template of the instructions.
+type instructionsData struct {
+	ID, Title, Goal, Operator string
+	Handle, Agent, Task       string
+	Roster                    []rosterLine
+	Learned                   string
+}
+
+// instructionsOf renders the instructions of a seat: the bridge, the
+// goal, the roster with the task of each seat, the rules of the channel
+// and of the wiki, and the head of the page agents/<agent>/learned.md.
+func (s *Store) instructionsOf(ctx context.Context, rec *record, m Member) string {
+	d := instructionsData{ID: rec.ID, Title: rec.Title, Goal: rec.Goal, Operator: rec.Operator, Handle: m.Handle, Agent: m.Agent, Task: m.Task}
+	if d.Operator == "" {
+		d.Operator = "The operator"
+	}
+	if d.Goal == "" {
+		d.Goal = rec.Title
+	}
+	for _, o := range rec.Members {
+		if o.Fired {
+			continue
+		}
+		d.Roster = append(d.Roster, rosterLine{Handle: o.Handle, Agent: o.Agent, Task: oneLine(o.Task, 300), You: o.Handle == m.Handle})
+	}
+	d.Learned = s.learnedOf(ctx, m.Agent)
+	var b bytes.Buffer
+	if err := templates.ExecuteTemplate(&b, "instructions.tmpl", d); err != nil {
+		s.log.Error("bridges: the template of the instructions failed", "error", err)
+	}
+	return b.String()
+}
+
+// learnedOf returns the head of the page agents/<agent>/learned.md, up to
+// learnedHead bytes and cut at a line, or "" without the page.
+func (s *Store) learnedOf(ctx context.Context, agent string) string {
+	w := pages.Of(s.a)
+	if w == nil {
+		return ""
+	}
+	p, err := w.Read(s.asFront(ctx), learnedPath(agent), 0)
+	if err != nil {
+		return ""
+	}
+	text := strings.TrimSpace(p.Text)
+	if head, cut := cutText(text, learnedHead); cut {
+		if i := strings.LastIndexByte(head, '\n'); i > 0 {
+			head = head[:i]
+		}
+		text = strings.TrimSpace(head)
+	}
+	return text
+}
+
+// learnedPath is the page of the hearts of an agent.
+func learnedPath(agent string) string { return "agents/" + agent + "/learned.md" }
+
+// planSeat is one seat in the plan of a spawn bridge.
+type planSeat struct {
+	Handle, Agent, Task string
+	MaxTurns            int
+	Deadline            string
+	Instructions        string
+}
+
+// planOf renders the plan of a spawn bridge for the manager.
+func (s *Store) planOf(ctx context.Context, rec *record) string {
+	d := struct {
+		ID, Title, Goal, Operator string
+		Seats                     []planSeat
+	}{ID: rec.ID, Title: rec.Title, Goal: rec.Goal, Operator: rec.Operator}
+	if d.Operator == "" {
+		d.Operator = "the operator"
+	}
+	if d.Goal == "" {
+		d.Goal = rec.Title
+	}
+	for _, m := range rec.Members {
+		if m.Fired {
+			continue
+		}
+		ps := planSeat{Handle: m.Handle, Agent: m.Agent, Task: oneLine(m.Task, maxTaskBytes), Instructions: s.instructionsOf(ctx, rec, m)}
+		if b := rec.seat(m.Handle).Budget; b != nil {
+			ps.MaxTurns, ps.Deadline = b.MaxTurns, b.Deadline
+		}
+		d.Seats = append(d.Seats, ps)
+	}
+	var b bytes.Buffer
+	if err := templates.ExecuteTemplate(&b, "plan.tmpl", d); err != nil {
+		s.log.Error("bridges: the template of the plan failed", "error", err)
+	}
+	return b.String()
+}
+
+// managerMember returns the fleet member that runs the manager: a Task of
+// the pool whose agent is the profile of the manager, the first live one,
+// else the first; without such a pool, the first member of the view whose
+// agents hold the profile.
+func (s *Store) managerMember(ctx context.Context) (string, error) {
+	if s.cfg.Manager == "" {
+		return "", invalid("a spawn bridge needs a manager, and the configuration names none; set workbench.bossmode.manager (%s), or open a queue bridge", EnvManager)
+	}
+	v := fleet.Of(s.a)
+	if v == nil {
+		return "", invalid("a spawn bridge needs the fleet, because the manager runs on a Task of it")
+	}
+	ctx = s.asFront(ctx)
+	if pv, ok := v.(fleet.PoolView); ok {
+		list, err := pv.Pools(ctx)
+		if err != nil {
+			return "", err
+		}
+		for _, p := range list {
+			if p.Agent != s.cfg.Manager || len(p.Tasks) == 0 {
+				continue
+			}
+			pick := p.Tasks[0].Name
+			for _, t := range p.Tasks {
+				if t.Phase == "Running" {
+					pick = t.Name
+					break
+				}
+			}
+			return p.Atespace + "/" + pick, nil
+		}
+	}
+	members, err := v.Members(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, m := range members {
+		if m.Self {
+			continue
+		}
+		for _, ag := range m.Agents {
+			if ag.Name == s.cfg.Manager {
+				return m.Name, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("%w: no Task of the fleet runs the manager profile %s, so the manager cannot seat a spawn bridge", ErrConflict, s.cfg.Manager)
+}
+
+// startManager starts a run of the manager on its Task with the input,
+// as the operator, with the batch of the bridge, through the forward of
+// the fleet with the static token, which names the operator as the person
+// of the run. It returns the manager of the bridge.
+func (s *Store) startManager(ctx context.Context, rec *record, input, idem string) (*Manager, error) {
+	member, err := s.managerMember(ctx)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{
+		"agent":    s.cfg.Manager,
+		"input":    input,
+		"title":    oneLine("Bridge: "+rec.Title, maxTitleRunes),
+		"metadata": map[string]string{fw.MetaBatch: BatchOf(rec.ID)},
+		"wait":     false,
+	}
+	if rec.Operator != "" {
+		body["principal"] = rec.Operator
+		if rec.OperatorKind != "" {
+			body["principalKind"] = rec.OperatorKind
+		}
+	}
+	var run fw.Run
+	if err := s.call(ctx, member, http.MethodPost, "/v1/runs", body, idem, &run); err != nil {
+		return nil, fmt.Errorf("bridges: start the manager on %s: %w", member, err)
+	}
+	if run.ID == "" {
+		return nil, fmt.Errorf("bridges: the manager on %s answered no run", member)
+	}
+	return &Manager{Member: member, Run: run.ID}, nil
+}
+
+// managerRun is the manager run of a record, or "".
+func managerRun(rec *record) string {
+	if rec.Manager == nil {
+		return ""
+	}
+	return rec.Manager.Run
+}
+
+// orOperator names the operator, or "operator" when the bridge has none.
+func orOperator(s string) string {
+	if s == "" {
+		return HandleOperator
+	}
+	return s
+}

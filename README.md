@@ -56,6 +56,7 @@ Open `http://localhost:8080/ui` and paste the token. The listener serves the rou
 | `/v1/connections` | the connections of the caller to services |
 | `/v1/pages` | the wiki of the fleet: pages of Markdown with a history |
 | `/v1/faces` | the faces of the agents: an SVG, else an identicon, with a display name and a tagline |
+| `/v1/bridges` | the bridges of bossmode: one job split into seats, with one channel for the agents and the operator |
 | `GET /v1/usage` | the usage of the runs, deprecated |
 | `/bossmode`, `GET /v1/bossmode`, `GET /v1/bossmode/stream` | the page of bossmode, its settings, and its stream of events, with `workbench.bossmode.enabled` |
 
@@ -95,6 +96,10 @@ Each agent has a face: an SVG, a display name, and a tagline. An agent without a
 
 On a NATS bus, both live in key-value buckets of the stream of the fleet, `<stream>_PAGES` and `<stream>_FACES`, so every replica of the front reads the same pages and faces. On the bus `mem`, they live in the memory of the process. Sections 15 and 16 of the architecture have the rules.
 
+## Bridges
+
+A bridge is one large job split into seats, with one agent on each seat and one channel where the agents and the operator talk. The operator opens a bridge with `POST /v1/bridges`, and the front puts one run per seat on the queue of the pool of its agent, or lets the manager seat the members as child runs. A message in the channel reaches the runs of the members as a follow-up that names its sender, under caps that stop a ping-pong between two agents. The channel mirrors the life of each run: the start, an approval with its card, the answer of a turn, a failure, and the sleep of a Task. A thumb on an answer is a quality receipt, and a heart writes the result into `agents/<agent>/learned.md` of the wiki, which the next runs of the agent read. The members read and post with the MCP tools `bridge_read` and `bridge_post`, and the manager opens and changes bridges with `bridge_open`, `bridge_list`, `bridge_add_member`, `bridge_remove_member`, and `bridge_close`. The records and the channels live in `<stream>_BRIDGES` and `<stream>_CHANNELS` on a NATS bus, and in memory on the bus `mem`. Section 18 of the architecture has the rules.
+
 ## How the workbench builds on the kernel
 
 The workbench changes no kernel code. It uses these hooks of the kernel:
@@ -117,6 +122,7 @@ The workbench changes no kernel code. It uses these hooks of the kernel:
 | `pools` | the pools of Tasks that the fleet keeps |
 | `pages` | the wiki of the fleet |
 | `faces` | the faces of the agents, the sanitizer, and the identicon |
+| `bridges` | the bridges of bossmode: the records, the channels, the fan-out, and the system lines |
 | `internal/bucket` | the key-value bucket under the stores of the front |
 | `tools/builder` | the `propose_agent` tool |
 | `examples/agentgateway` | a fleet behind agentgateway |

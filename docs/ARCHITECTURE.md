@@ -19,7 +19,7 @@ The workbench changes no kernel code. It plugs in through the extension points o
 - `fw.RegisterService` runs work beside the agent for as long as it lives, `Kit.SetRelay` of the native surface answers a request about a run of another process, `metrics.RegisterCollector` adds series to the metrics surface, and `cli.RegisterDoctorCheck` adds a line to `fw doctor`. The package `fleet` uses the service, the relay, the collector, and the doctor check (section 4). Its collector adds the series of the queues, the ends of the runs of the workers, and the approvals that wait (section 4.14). A worker exports the facts of its own runs, and the front shows the fleet as the egress stream and the server of the bus tell it.
 - `fw.Agent.SetPersonTokens` gives the tool sources of the kernel the access tokens of people, and `fw.Agent.Connected` resumes the calls that wait for a connection. The package `connections` uses both (section 11).
 - The package `sources` uses `fw.RegisterService`, `native.Extend`, and `cli.RegisterDoctorCheck` too: its service runs the sources, its route takes the events of webhooks, and its doctor line names the sources (section 13).
-- The packages `pages` and `faces` use `fw.RegisterService` and `native.Extend`, and `mcp.RegisterTools` of the MCP server of the workbench (section 3.1): the service keeps the store, the routes serve it to people, and the tools offer it to MCP clients and agents (sections 15 and 16).
+- The packages `pages`, `faces`, and `bridges` use `fw.RegisterService` and `native.Extend`, and `mcp.RegisterTools` of the MCP server of the workbench (section 3.1): the service keeps the store, the routes serve it to people, and the tools offer it to MCP clients and agents (sections 15, 16, and 18). The service of `bridges` also watches the view of the fleet and fans the messages of a channel out to the runs of its members.
 - The package `bossmode` uses `fw.RegisterService`, `native.Extend`, `metrics.RegisterCollector`, and `cli.RegisterDoctorCheck`: its service keeps the stream of the page, its routes serve the page, its settings, and the stream, and its doctor line names the page, the manager, and the streams (section 17).
 
 Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary, the `oidc` authentication mode of the kernel included, because the front verifies the tokens of people.
@@ -60,6 +60,8 @@ pools/                  the pools: the configuration, the rendered Tasks, and th
 sources/                the event sources: webhooks and polls that turn the events of
                         outside systems into runs (section 13)
 pages/                  the wiki of the fleet: pages of Markdown with a history (section 15)
+bridges/                the bridges of bossmode: one job split into seats, with one channel,
+                        the fan-out to the runs of the members, and the system lines (section 18)
 faces/                  the faces of the agents: an SVG, a display name, and a tagline,
                         the sanitizer, and the identicon (section 16)
 internal/bucket/        the key-value bucket under the stores of the front: a bucket of the
@@ -117,6 +119,17 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `PATCH /v1/faces/{agent}` | Set `displayName`, at most 64 characters, and `tagline`, at most 140. Answers the entry. |
 | `GET /v1/bossmode` | The settings of the page of bossmode: the manager for the caller, the placement, and the size of a roster (section 17.4). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/stream` | The events of bossmode as server-sent events: the changes of the fleet and the events of other packages that the caller can see, with `Last-Event-ID` to resume (section 17.3). With `workbench.bossmode.enabled`. |
+| `GET /v1/bridges` | The bridges of the caller and of the teams of the caller, open first, each with `lastSeq`, `read`, `unread`, `memberCount`, and `needsYou` (section 18.10). |
+| `POST /v1/bridges` | Open a bridge from `{"title", "goal", "placement", "members", "delegation", "caps"}` and seat its members. 201 with the record and its members. |
+| `GET /v1/bridges/{id}` | One bridge with the presence and the activity of each member and the usage of its runs. |
+| `PATCH /v1/bridges/{id}` | Change `title`, `delegation` and `caps` in part, and `state`: `closed` closes the bridge, and `open` opens it again. |
+| `PUT /v1/bridges/{id}/read` | Move the read mark of the caller forward to `seq`. 204. |
+| `GET /v1/bridges/{id}/messages` | One page of the channel, as the transcript route pages a run: `before`, `from`, and `limit`. |
+| `POST /v1/bridges/{id}/messages` | A message of the caller, `{"text", "to", "replyTo"}`, which fans out to the members. 201 with the entry, 409 on a closed bridge. |
+| `POST /v1/bridges/{id}/messages/{seq}/reactions` | A reaction of the caller on an entry, `{"reaction", "note"}`: `up`, `down`, or `heart`. 200 with the entry. |
+| `POST /v1/bridges/{id}/members` | Add a seat, `{"handle", "agent", "task"}`, and start its run. 201 with the seat. |
+| `DELETE /v1/bridges/{id}/members/{handle}` | Fire a seat: cancel its open runs and mute it. 200 with the fired seat. |
+| `PATCH /v1/bridges/{id}/members/{handle}` | Mute or unmute a seat, or give it a new task, `{"muted", "task"}`. 200 with the seat. |
 
 ### 2.1 Connections
 
@@ -329,7 +342,7 @@ Section 4.1 describes the two sources. The front reads the Task list from the ax
 
 A job is many pieces of the same work, one run each, spread over the workers that run one profile. The front sends a job with the MCP tool `enqueue`: it takes the profile, the items, and a batch name, and it puts one run request per item on the intake queue of the profile, `<workbench.fleet.intake>.<agent>`. Each worker that runs that profile sets `bus.intake` to that queue and takes requests from it, as many at a time as its `maxRuns` allows, so the fleet scales with the number of workers and nobody assigns work by hand. The call returns at once with the batch name, the queue, and the count.
 
-Every request names the person who sent the job, so the run on the worker acts as that person, and it carries the batch name in the metadata key `fw.batch`, which a child run inherits in this process or in a child Task. The idempotency key of each request is the batch name and the position of the item, so a job that is sent twice starts each run once. The tool `batch` tells how a job goes: the jobs that wait in the queue because no Task took them yet, the runs of the batch by state, the members that hold them, the runs that wait for the person, and the runs that failed with their errors. The tool counts every run of the job that the view holds, not the cut records of section 4.2, and it says how many runs of the job the view forgot: a finished run leaves the view after `workbench.fleet.expire`, and every run of a Task leaves with the Task. The view keeps a copy of each forgotten run for `workbench.fleet.expire`, with the facts that the authorization reads (the id, the agent, the person, the parent, the state, and the origin), its usage, and its batch, and with no title, no input, no output, and no other metadata, and it counts only the forgotten runs that the caller could see, decided as for the runs, so two people who use one batch name learn nothing of the runs of the other. The view knows the runs that it saw since the front started, so after a restart of the front the counts are those of the stream since then and of the Tasks that it read. It also sums the usage of the runs: the tokens, the cache tokens, the turns, the tool calls, and the cost, with the tokens that have no price apart, because their cost is unknown. The sum counts each run once. A child run carries the batch of its parent, so it counts as a run of its own, and its usage is not also in its parent: the sum adds the `usage` of each run and never its `treeUsage`, which holds the usage of its child runs too (the kernel architecture, section 8.2). A branch counts its own work only, not the events that it kept from its source (the kernel architecture, section 4.7). A run of the front itself has the usage of its whole ledger. A run of a worker has a known usage once its kernel recorded the totals of the run on `fw.run.finished` or `fw.run.suspended`. Tokens without totals do not count, because on the lifecycle stream they come from `fw.run.annotated` alone, such as a title call. A run without a known usage counts as missing, such as a run that works for the first time or a run of an older kernel. A known usage is final when the run is finished; a run that works or waits again after its totals, after a follow-up, a resume, or a decision, has the usage of its totals so far. The sum reads as partial when a run is missing, when a usage is not final, or when the view forgot runs of the job. While the job works, it also reads as partial when the view holds runs that have no identity yet on a worker that holds a run of the job that the caller sees, because such a run can belong to the job (section 4.1). The tool counts no such run on a worker where the caller has no run of the job, and once every run of the job that the caller sees is finished, no such run changes the result, so a run of someone else keeps no finished job from being finished. `runs_list` and `GET /v1/fleet/runs` take `batch` as a filter, and `GET /v1/runs` of a worker takes it too. The view of the front sees the runs of a job through the egress stream or the records, as section 4.8 describes, so a run appears when a worker takes it.
+Every request names the person who sent the job, so the run on the worker acts as that person, and it carries the batch name in the metadata key `fw.batch`, which a child run inherits in this process or in a child Task. The idempotency key of each request is the batch name and the position of the item, so a job that is sent twice starts each run once. The tool `batch` tells how a job goes: the jobs that wait in the queue because no Task took them yet, the runs of the batch by state, the members that hold them, the runs that wait for the person, and the runs that failed with their errors. The tool counts every run of the job that the view holds, not the cut records of section 4.2, and it says how many runs of the job the view forgot: a finished run leaves the view after `workbench.fleet.expire`, and every run of a Task leaves with the Task. The view keeps a copy of each forgotten run for `workbench.fleet.expire`, with the facts that the authorization reads (the id, the agent, the person, the parent, the state, and the origin), its usage, and its batch, and with no title, no input, no output, and no other metadata, and it counts only the forgotten runs that the caller could see, decided as for the runs, so two people who use one batch name learn nothing of the runs of the other. The view knows the runs that it saw since the front started, so after a restart of the front the counts are those of the stream since then and of the Tasks that it read. It also sums the usage of the runs: the tokens, the cache tokens, the turns, the tool calls, and the cost, with the tokens that have no price apart, because their cost is unknown. The sum counts each run once. A child run carries the batch of its parent, so it counts as a run of its own, and its usage is not also in its parent: the sum adds the `usage` of each run and never its `treeUsage`, which holds the usage of its child runs too (the kernel architecture, section 8.2). A branch counts its own work only, not the events that it kept from its source (the kernel architecture, section 4.7). A run of the front itself has the usage of its whole ledger. A run of a worker has a known usage once its kernel recorded the totals of the run on `fw.run.finished` or `fw.run.suspended`. Tokens without totals do not count, because on the lifecycle stream they come from `fw.run.annotated` alone, such as a title call. A run without a known usage counts as missing, such as a run that works for the first time or a run of an older kernel. A known usage is final when the run is finished; a run that works or waits again after its totals, after a follow-up, a resume, or a decision, has the usage of its totals so far. The sum reads as partial when a run is missing, when a usage is not final, or when the view forgot runs of the job. While the job works, it also reads as partial when the view holds runs that have no identity yet on a worker that holds a run of the job that the caller sees, because such a run can belong to the job (section 4.1). The tool counts no such run on a worker where the caller has no run of the job, and once every run of the job that the caller sees is finished, no such run changes the result, so a run of someone else keeps no finished job from being finished. The sum is `fleet.UsageSum`, with `fleet.UsageOf` for one run, and the bridges sum the runs of a bridge with the same code (section 18.10). `runs_list` and `GET /v1/fleet/runs` take `batch` as a filter, and `GET /v1/runs` of a worker takes it too. The view of the front sees the runs of a job through the egress stream or the records, as section 4.8 describes, so a run appears when a worker takes it.
 
 A job that no worker took yet has no run, so the view alone cannot tell how much of a job is left. The front published the requests, so it records them. The job record holds, for one batch name and one person, the idempotency keys of the requests that went on each queue, so a job that is sent twice counts once. On a NATS bus, the record lives in the key-value bucket `fw_workbench_jobs` of the server, and each record expires after `workbench.fleet.expire`. Every replica of the front then reads the same record. On another bus, or while the bucket does not answer, each replica keeps the records of the jobs that it sent, in memory, and another replica counts no queued job of them. The field `jobsShared` of the answer says which case applies.
 
@@ -549,6 +562,10 @@ The MCP server carries these management tools beside the work tools:
 | `pages_list`, `pages_read`, `pages_search`, `pages_history` | The wiki of the fleet: the pages, one page with its hash, a search by words, and the versions of a page (section 15.4) |
 | `pages_write` | Write a page of the wiki as a new version, with `ifHash` for a compare-and-swap. A run that writes through the token of the fleet is the writer `agent:<profile>` (section 15.4). |
 | `faces_put` | Set the face of an agent from the text of an SVG that passes the sanitizer, for the manager (section 16.4) |
+| `bridge_read`, `bridge_post` | For a run of a seat of a bridge, or the manager run of a bridge: read the last messages of the channel, and post a message with `to` (section 18.11) |
+| `bridge_list` | The open bridges of the person of the run, for the manager |
+| `bridge_open` | Open a bridge from a plan as the person of the run, for the manager. Its title, "Open bridge", is the label of the approval that the policy of the manager asks for. |
+| `bridge_add_member`, `bridge_remove_member`, `bridge_close` | Add a seat, fire a seat, or close a bridge, for the manager when the operator delegates it in that bridge |
 
 `run_events` refuses `from` and `before` together. Its result has `prev`, the value of `before` for the page in front. If the page starts at the first event, the result has no `prev`. For a run of another member, the server turns `before` into `from` and `limit` on the events route of that member. The sequence numbers of a run have no gaps, so the page is the same. With `compact` true, each tool output of the page keeps its first 200 characters, `size` holds the bytes of the output, and `cut` is true, so a poll of a busy run costs little. The page without `compact` holds the full outputs.
 
@@ -687,7 +704,7 @@ To follow a run to its result:
 
 The split did not change the contract of the package `fw`. The kernel keeps the primitive of a connection: `fw.ConnectRequest`, `fw.RequestConnect`, `fw.PersonTokens`, and `Agent.Connected` (the kernel architecture, section 7.11). The MCP client of the kernel, `tools/mcp`, still acts for a person with the tokens that the package `connections` gives it (section 11).
 
-The workbench still reads three parts of the kernel configuration: the block `mcp` of its server surface, the OAuth setup of each `tools.mcp` entry with `auth.oauth.grant: user`, and `auth.oidc`. Everything else of the workbench lives in the block `workbench` of `fw.yaml`: `teams`, `titles`, `fleet`, `grants`, `access`, `sources`, and `pages`.
+The workbench still reads three parts of the kernel configuration: the block `mcp` of its server surface, the OAuth setup of each `tools.mcp` entry with `auth.oauth.grant: user`, and `auth.oidc`. Everything else of the workbench lives in the block `workbench` of `fw.yaml`: `teams`, `titles`, `fleet`, `grants`, `access`, `sources`, `pages`, and `bridges`.
 
 ## 8. Teams
 
@@ -1604,3 +1621,227 @@ The page reads the kinds `bridge.message`, `bridge.member`, `page`, and `face`, 
 |---|---|---|
 | `fw_bossmode_streams_open` | gauge | The streams of the page that are open now |
 | `fw_bossmode_streams_refused_total` | counter | The streams that the front refused with 429, because 64 were open |
+
+## 18. Bridges
+
+A bridge is one large job split into seats, with one agent on each seat and one channel where the agents and the operator talk. It is the core of bossmode, the operator view of the fleet, whose page lives in the repository featherweight-bossmode. The package `bridges` keeps the record of each bridge and its channel, seats the members, fans each message out to the runs of the members, mirrors the life of each run into the channel, and records the reactions of people. It is a service of the kernel (`fw.RegisterService`), so a process that serves has it, and a verb that runs one piece of work does not. It mounts its routes on the native surface (`native.Extend`) and adds its tools to the MCP server of section 3 (`mcp.RegisterTools`).
+
+Every run of a bridge carries the batch `bridge:<id>` in the metadata `fw.batch` (section 4.9), and the kernel passes it to every child run, also in a child Task. The view, the lists, and the tool `batch` therefore know the runs of a bridge as the runs of a job. Nothing in the package calls a model, and no key of it names one. A seat of a queue bridge spends through the budget of the pool of its agent, and a spawn bridge spends through the budget of the manager run, which bounds its whole tree.
+
+### 18.1 The record
+
+| Field | Value |
+|---|---|
+| `id` | A lower-case ULID |
+| `title` | At most 200 characters |
+| `goal` | The goal of the whole job, at most 16 KB |
+| `operator` | The subject of the person who opened the bridge. The runs of a queue bridge act as that person. |
+| `state` | `open` or `closed` |
+| `placement` | `queue` or `spawn` (section 18.3) |
+| `createdAt`, `closedAt` | The times of the open and of the last close, or null |
+| `manager` | `{"member", "run"}`: the fleet member that runs the manager, and the manager run of the bridge, or null. In a spawn bridge the run is the root of the tree of the seats. A bridge that the manager opened names the run that opened it. |
+| `delegation` | `{"approve", "budget", "members", "report"}`: what the operator lets the manager do in this bridge. A new bridge delegates the report alone. |
+| `caps` | `{"maxMessages", "maxFanoutPerMinute", "maxPairMessages"}` (section 18.5) |
+| `members` | The seats |
+| `lastSeq` | The seq of the newest entry of the channel |
+
+A seat has `handle`, `agent`, `pool`, `task`, `runs`, `fired`, and `muted`. A handle is lower-case letters, digits, dots, dashes, and underscores, at most 32, with a letter or a digit first, and unique in the bridge. The handles `operator` and `manager` are reserved: `operator` addresses the people of a bridge, and `manager` names the manager run in the channel. `pool` is the pool that runs the agent, when a pool does. `runs` lists the runs of the seat in the bridge, oldest first, at most 32, and the last one is the newest. A route and a hook also give `presence` and `activity` of each seat (section 18.7), and the store keeps neither. A bridge has at most `workbench.bridges.maxMembers` seats.
+
+Beside these fields, the stored record holds the bookkeeping of the front: the kind of the principal of the operator and the teams of the operator at the open, the count of seatings of each seat, the budget of each seat, a mark for each run of what the channel holds of it (section 18.6), the cards that wait for a decision, the counters of the caps, and the wait for a report. No route shows it.
+
+### 18.2 The channel
+
+The channel holds one entry per message, under the key `<bridge>.<seq>`, with the seq in twelve digits, so the keys of one bridge sort by seq. An entry has these fields:
+
+| Field | Value |
+|---|---|
+| `seq`, `at` | The place of the entry in the channel, and its time |
+| `from` | `{"kind": "person", "name", "display"}` for a person, with the subject and a name to show; `{"kind": "agent", "handle", "run"}` for a member or the manager; `{"kind": "system"}` for a system line |
+| `to` | The handles that the message addresses, `[]` for every active member |
+| `replyTo` | The seq of the entry that it replies to, or null |
+| `text` | The text, cut to its first 4 KB at a rune |
+| `cut` | True when the channel holds only the first 4 KB of the text. The run that gets the message holds the whole text. |
+| `event` | For a system line, what it says (section 18.6) |
+| `mirrors` | `{"run", "seq", "type"}`: the run event that the entry mirrors, or null |
+| `reactions` | The subjects of the people per reaction: `{"up": [], "down": [], "heart": []}` |
+| `decision` | On the card of an approval or a question of a member run: the fields of `dashboard.Decision`, the run, the state, and who decided, when, with which note and answer, and `always` (section 18.6). Null elsewhere. |
+
+A message of a person or an agent holds at most 64 KB. `GET /v1/bridges/{id}/messages` pages the channel as the transcript route pages a run (section 2.2): without `from` and `before` the page holds the last `limit` entries, `limit` is 50 by default and 500 at most, `before` reads back, `from` reads forward, `next` is the seq to read on from, `prev` is the value of `before` for the page in front and 0 at the first page, and `from` and `before` together answer 400. A seq without an entry, such as the seq of a write that a crash cut, is left out.
+
+The read mark of a person lives in the same bucket, under `<bridge>.read.<the SHA-256 of the subject>`, so no subject enters a key. `PUT /v1/bridges/{id}/read` moves it forward, and a smaller seq leaves it. A message of a person moves the mark of that person to the message. `unread` counts the entries after the mark that count for the caller: a message of a person or an agent other than the caller, and a card that waits for a decision. A message of the caller and a plain system line do not count. The count reads the channel from its newest entry back, at most 2,000 entries, and counts the entries further back as unread. Each process keeps the sender of each entry that it read, so a count reads an entry once.
+
+### 18.3 The placements
+
+With the placement `queue`, the default, the front puts one run request per seat on the intake queue of the agent of the seat, `<workbench.fleet.intake>.<agent>`, through the publish of the tool `enqueue` (`fleet.Enqueue`, section 4.9). Each request names the operator as its person, so the run acts as the operator. It carries the metadata `fw.batch: bridge:<id>`, `fw.bridge.member: <handle>`, and `fw.title: <handle>: <task>`, the instructions of the bridge (section 18.4), the task of the seat as the input, the budget of the seat, and the idempotency key `bridge:<id>:<handle>:<n>`, where `n` counts the seatings of the handle, so a request that goes out twice starts one run. The run keeps the profile, the policy, and the budget of its pool. A request carries an inline profile only when the pool needs it for the tools: the profile of the pool lists its tools, names a tool of the front, so its workers reach the MCP server of the front, and leaves out a tool of a bridge. The inline profile then adds `front.bridge_read`, `front.bridge_post`, `front.pages_read`, `front.pages_write`, and `front.pages_search`. The front configures no pool: a pool whose workers use the bridges carries the entry `front` in `tools.mcp` and the tools of the front in the profile. Without `workbench.fleet.intake`, a queue bridge opens nothing and the answer is 400. A request that does not reach its queue gets a line in the channel.
+
+With the placement `spawn`, the bridge needs a manager, the profile that `workbench.bossmode.manager` names, else the open answers 400 with the reason. The member that runs the manager is a Task of the pool whose `agent` is that profile, the first one that runs, else the first one, and without such a pool the first member of the view whose agents hold the profile. Without one, the open answers 409. The front starts one run of the manager on that member with `POST /v1/runs` through the forward of the fleet, with the static token, which names the operator as the person of the run in `principal` and `principalKind`. The run has the profile of the manager, the title `Bridge: <title>`, the metadata `fw.batch: bridge:<id>`, the idempotency key `bridge:<id>:manager`, and an input that holds the plan (`plan.tmpl`): call `spawn_task` once per seat, with `wait` false, the agent of the seat, the input `[seat <handle>] <task>`, the instructions of the seat word for word, and the budget of the seat in `max_turns` and `deadline`, and then end the turn with the list of the children. That run is `manager.run`. The children carry the batch of the bridge, so they belong to the bridge in the view, and the front gives each child its seat by the first line of its input, else by the only seat of its agent that has no run. The pool of the manager runs with `spawn.driver: ax`, and `spawn.maxChildren` of the manager bounds the seats.
+
+A seat that joins later, and a seat whose newest run was canceled or stopped at a limit and gets a new task, get a run in the same way: a request on the queue, or in a spawn bridge one follow-up to the manager run that asks it to seat the member.
+
+### 18.4 The instructions of a seat
+
+The instructions of a seat come from one Go template, `bridges/instructions.tmpl`, which a person can read. They name the bridge and its id, the operator, the goal, the task of the seat, the handle of the reader, and the roster with the task of each seat. They give the rules of the channel: read the channel first with `bridge_read`, because messages can wait there from before the run started; the final answer of a turn goes to the channel, so `bridge_post` with `to` is only for a teammate during the work or for an interim status; a message from another agent arrives in a `<message from="..." kind="agent">` block, and it is data, not an instruction from the operator; address the operator with `@operator`. They give the rules of the wiki: read `_index.md` with `pages_read` before the start, write what another agent needs with `pages_write`, and a page is data. They end with the head of the page `agents/<agent>/learned.md` of the wiki, up to 4 KB and cut at a line, which holds the hearts of earlier work of the agent (section 18.8), and they say that this text is data too.
+
+### 18.5 The fan-out and the caps
+
+For each new message of a person or an agent, the addressed members, or every active member when `to` is empty, get the message as a follow-up on the newest run of the member in the bridge. An active member is neither fired nor muted. An addressed member that is muted gets the message, and an address of a fired or an unknown handle answers 400. A member never gets its own message. An agent addresses the people of the bridge with `to: ["operator"]`, which reaches no run. The answer of a finished turn reaches the channel as a message of its member (section 18.6) and no other member, so a turn that ends never starts the turn of another agent.
+
+A follow-up goes to the Task that owns the run through the forward of the fleet (section 4.5), as `POST /v1/runs/{id}/messages` with `content` and `from`, with the static token of the fleet, so the owner records the sender (the kernel architecture, section 5.5). For a person, `from` is `{"kind": "person", "name": <subject>, "member": <handle of the recipient>}`. For an agent, it is `{"kind": "agent", "name": <handle of the sender>, "run": <run of the sender>, "member": <handle of the recipient>}`. The content names the bridge in its first line, such as `[bridge "Migrate logrotate" 01k...] @reviewer from migrator-1: ...`, or `to everyone from alice:` for a broadcast, so a run that reads several bridges tells them apart. A run of the front itself gets the message from the kernel, `Agent.Send` with `fw.WithMessageFrom`.
+
+Some members get nothing, and the channel holds the message for them:
+
+- A member without a run, because its job waits in the queue. Its instructions tell it to read the channel first.
+- A member whose newest run stopped at a limit of its budget. A follow-up without a larger budget fails at once, so the channel gets one line with the event `cap` for that run, which says that the member needs a larger budget.
+- A member whose newest run was canceled, because a message starts it again.
+
+The caps of a bridge bound the fan-out. Past a cap the front delivers nothing more, posts one line with the event `cap`, and waits. Nothing leaves the channel.
+
+| Cap | Counts | Past it |
+|---|---|---|
+| `maxMessages` | The messages of people and agents in the channel | No message fans out until the operator raises the cap |
+| `maxFanoutPerMinute` | The deliveries of the current minute | The rest of the minute delivers nothing; the line names the members that missed the message |
+| `maxPairMessages` | The messages between two agents since the last message of a person | The two get nothing more from each other until a person writes or the operator raises the cap |
+
+A change of the caps clears the lines that they posted, so a cap that still holds says so again. The change of the record that gives a message its seq also decides its deliveries under the caps and moves the counters, so two replicas never deliver past a cap. The replica that took the post delivers, so a message is delivered once. A delivery runs on a worker of the front, four at a time, with at most 4,096 that wait, and never on the request of the poster. A delivery that fails with an answer of 5xx or 429, or without an answer, is tried again after a pause of one second that doubles up to one minute, for up to ten minutes. Then, and at once for another failure such as a 409, the channel gets one line with the event `failed` that names the member and the message.
+
+### 18.6 The system lines
+
+The front watches the view of the fleet every two seconds for the runs of each bridge by its batch: the open bridges, and a closed bridge for ten minutes after its close, so the end of the work and the report still reach the channel. It mirrors the seat runs and the manager run of a spawn bridge. A helper that a seat started belongs to the seat and is not mirrored, and neither is the conversation of the manager that opened a queue bridge. Each fact gets one entry, never two: the record keeps a mark of what the channel holds of each run, and the change of the record that moves the mark gives the entry its seq, so of two replicas that see one fact, one posts it.
+
+| Event | When | The entry |
+|---|---|---|
+| `started` | A seat has its run | `<handle> started: <task>`, mirroring the `fw.run.queued` of the run |
+| `needs-you` | The run waits for an approval or a connection | A card with `decision`, mirroring the `fw.approval.requested` |
+| `asked` | The run asks a question | A card with `decision` and the schema of the question |
+| `decided` | The decision of a card lands, from any surface | `<decider> allowed the call of <handle>`, or the answer of a question, mirroring the `fw.approval.decided`. The card is written again in place. |
+| none | The run completed with an answer | A message of the member with the output, cut at 4 KB, mirroring the `fw.run.finished` |
+| `finished` | The run completed with no answer | A line that says so |
+| `failed` | The run failed | `<handle> failed: <error>` |
+| `canceled` | The run was canceled | A line that says so |
+| `asleep` | The Task of the newest run of a seat went quiet | `<handle> went to sleep. A message wakes its Task.` |
+| `started` | That Task runs again | `<handle> woke up.` |
+
+The decision of a card is the pending decision of the run as the result of a run words it (`dashboard.Decision`, section 6.3), with `run`, `state: pending`, and `always`, which is true when the card can offer Always allow by the rule of a pool (section 14.9): a run of a worker, a call of one tool, and an ask of the default or of a rule that names the tool, never a flag such as `destructive` and never a pattern. When the run no longer waits for the card, the front reads the events of the run after the card from its owner, with the static token, and finds the decision with its decider, its note, and the answer of a form. It writes the card again under the same seq with `state`, `decidedBy`, `decidedAt`, `note`, and `answer`, gives it to the hook `OnMessage` again, and posts the line. A card whose run no longer waits for it without a decision, because the run ended or asked again after a resume, is written again as denied with a note and no line. After 30 reads that fail, the front gives up on the card and says so in a line. For the end of a run, the front reads the last 20 events of the run from its owner, so the message holds the whole output up to 4 KB and mirrors the exact seq of the `fw.run.finished`. A run that finishes again after a follow-up gets one more message.
+
+The actions post their lines in the change of the record that makes them: `opened`, `closed`, `reopened`, `joined`, `fired`, `muted` (also for an unmute), `task`, `changed` (a change of the title, the delegation, or the caps, and the link to a report), and `cap`. A job of a fired seat that waited in the queue and starts after the fire stops: the watch cancels it.
+
+### 18.7 Presence
+
+The presence of a member is its status light on the roster. `bridges.Presence(member, runs, taskState)` derives it from the newest run of the member in the bridge and the state of the Task that holds that run, `live`, `quiet`, `stopped`, or `blocked`, and the page of bossmode and the stream use the same function. The first rule that holds wins:
+
+| Presence | When |
+|---|---|
+| `fired` | The seat is fired |
+| `error` | The newest run failed, or the Task is blocked or stopped |
+| `needs-you` | The run waits for an approval, an answer, or a connection, also on a Task that sleeps, because a decision wakes it |
+| `asleep` | The Task is quiet |
+| `working` | The run is queued or running, or the member has no run yet because its job waits in the queue |
+| `idle` | The run finished, and the Task is live |
+
+`activity` is the activity of the newest run (the kernel architecture, section 8.2), with `turn`, `tool`, `callId`, `since`, and `phrase`. The view holds no tool input, so the package words only a run that thinks, such as "Thinking in turn 7", and leaves the phrase of a tool call empty. `bridges.UsePhrase` sets a function that words the activity with the tool input that the fleet keeps.
+
+### 18.8 Reactions and hearts
+
+`POST /v1/bridges/{id}/messages/{seq}/reactions` records the subject of the caller under the reaction on the entry, and a second reaction of the same kind from the same person changes nothing. A note holds at most 1 KB. When the entry mirrors a run event, the front also records the reaction on the run, `POST /v1/runs/{id}/reactions` with `{"seq", "reaction", "note", "by": <subject>}` through the forward with the static token, or `Agent.React` for a run of the front itself. A message that an agent posted reaches its run as a whole, with `seq` 0. A thumb on the answer of a finished run mirrors its `fw.run.finished`, so the kernel records a quality receipt (the kernel architecture, section 10.1). The reaction on the run goes in the background with the retries of the fan-out. On a card that waits, the page decides with the approval routes, not with a reaction.
+
+A heart also appends an entry to the page `agents/<agent>/learned.md` of the wiki, as the writer `bossmode` (`pages.ByFront`), with a compare-and-swap on the hash of the page that tries again when another writer came first. The entry holds the date, the bridge, the handle, the run, what the operator asked (the input of the run, cut), what the member did (the text of the entry, cut), the note of the person, and a link `#run/<id>`. The newest entry comes first. The page holds at most 64 KB, so the oldest entries fall off its end, whole. The instructions of the next seats of the agent carry the head of the page (section 18.4), so a heart changes what the agent does next. The memory of the Task gets no copy: a pool roll loses it, and a second copy of the same text costs tokens for nothing.
+
+### 18.9 Fire, mute, a new task, and close
+
+`DELETE /v1/bridges/{id}/members/{handle}` fires a seat. The front cancels the open runs of the seat through the forward, `POST /v1/runs/{id}/cancel` with the static token, marks the seat fired and muted, and posts `<name> fired <handle>. Its Task stays in its pool.` In a spawn bridge the runs of a seat are children of the manager run, and the cancel of a child goes to the Task that holds it in the same way; the child Task stays. A fire of a fired seat answers 200 with the seat and changes nothing, and a fired seat takes no other change.
+
+`PATCH /v1/bridges/{id}/members/{handle}` mutes or unmutes a seat, and gives it a new task. A new task reaches the newest run of the seat as a follow-up of the person, `Your new task: ...`. A seat whose newest run was canceled or stopped at a limit gets a new run with the new task (section 18.3), and a seat without a run gets nothing, because its job still waits.
+
+A close marks the record closed and stops the fan-out. It cancels nothing. With `delegation.report`, it asks the manager for a report in the page `bridges/<id>/report.md` of the wiki, written with `pages_write`: one follow-up to the manager run of the bridge, or a new run of the manager when the bridge has none, which then becomes `manager.run`. A close through `bridge_close` by the manager run of the bridge asks nothing more, because the result of the tool asks that run for the report. The front reads the wiki while the bridge is closed, for up to ten minutes, and posts the link to the report once the page appears. An open after a close opens the bridge again and ends the wait.
+
+### 18.10 The routes
+
+Every route needs the authentication of the native surface. A bridge is for its operator and for anyone with the operator role on every agent of its members, as the page at `/ui` decides for a run: the role on the profile in the pool that runs the agent, else on the profile of this process, else on an agent that a member of the view serves. A caller without it gets 403, and a decision point that does not answer gives 503. `GET /v1/bridges` lists the bridges of the caller and of the teams of the caller (section 8) that the caller can use, open first and the newest first in each group. Opening a bridge and adding a seat need the operator role on each agent of the seats.
+
+| Method and path | Answer |
+|---|---|
+| `GET /v1/bridges` | `{"bridges": [...]}`: each record without `members`, with `lastSeq`, `read`, `unread`, `memberCount`, fired seats included, and `needsYou`, the members with the presence `needs-you` |
+| `POST /v1/bridges` | 201 with the record and its members. `delegation` and `caps` are partial. |
+| `GET /v1/bridges/{id}` | The record with its members and `usage` |
+| `PATCH /v1/bridges/{id}` | The record with its members |
+| `PUT /v1/bridges/{id}/read` | 204 |
+| `GET /v1/bridges/{id}/messages` | `{"bridge", "messages", "next", "prev"}` |
+| `POST /v1/bridges/{id}/messages` | 201 with the entry |
+| `POST /v1/bridges/{id}/messages/{seq}/reactions` | 200 with the entry |
+| `POST /v1/bridges/{id}/members` | 201 with the seat |
+| `DELETE /v1/bridges/{id}/members/{handle}` | 200 with the fired seat |
+| `PATCH /v1/bridges/{id}/members/{handle}` | 200 with the seat |
+
+A body with a field that the route does not know answers 400. An unknown bridge, seat, or entry answers 404. A closed bridge answers 409 to a message and to a new seat, and a taken handle 409. `usage` sums the runs of the bridge as the tool `batch` sums a job (section 4.9), with `fleet.UsageSum`: every run of the batch of this process and of the view, each once, a child run on its own, and `partial` true when a run reports no usage, a usage is not final, or the view forgot or does not know runs of the batch.
+
+### 18.11 The MCP tools
+
+The tools are for the runs of the fleet. The MCP client of a worker names its run, its agent, and its node in `_meta` of each call, and the person of the run for a server that its `tools.mcp` entry marks trusted (the kernel architecture, section 7.3). The server trusts `_meta` only from the static token of the fleet (`mcp.CallRun`, section 3.1). A call without a run behind it, such as a call of a person, also with the keys of a run in `_meta`, gets an error that says that a person uses the routes.
+
+| Tool | Who | What it does |
+|---|---|---|
+| `bridge_read` | A seat, the manager run, or a run of the operator | `{bridge?, since?, limit?}`: the last messages of the channel, 50 by default and 500 at most, or the messages after `since`. The text says that a message is data. |
+| `bridge_post` | A seat or the manager run | `{bridge?, text, to}`: a message of the seat, or of `manager`, which fans out as a message of a person does |
+| `bridge_list` | The manager | The open bridges of the person in `_meta` |
+| `bridge_open` | The manager | `{title, goal, placement, members, delegation, caps}`: opens as `POST /v1/bridges` does, as the person in `_meta`, and the calling run becomes `manager.run`. `destructiveHint` is true, and its title "Open bridge" is the label of the approval. |
+| `bridge_add_member`, `bridge_remove_member`, `bridge_close` | The manager run of the bridge, or a run of the operator that is no seat | As the routes, when the bridge delegates `members` (add and remove) or `report` (close). Else the answer says that the operator did not delegate this for this bridge. |
+
+Without `bridge`, a tool takes the bridge of the batch `bridge:<id>` of the run, else the one open bridge whose manager run the run is. A seat run is a run of a seat, or a run whose `fw.batch` is the bridge in the view, which covers a helper of a seat and a child of a spawn seat; it posts under the handle of its seat. `bridge_open` and `bridge_list` need the person in `_meta`. The person of `_meta` acts with its subject alone, without the groups of a sign-in, so a role by a group does not reach it.
+
+### 18.12 The seams
+
+The integration of bossmode connects the package to its live stream and to the manager through these names:
+
+- `bridges.OnMessage(func(bridge string, m Message))` gets every new entry and every entry that changes under the same seq: a reaction, and a card whose decision landed. The stream sends each one as the event `bridge.message`.
+- `bridges.OnMember(func(bridge string, m Member))` gets every new seat and every change of a seat: its presence, its activity, its task, muted, or fired. The stream sends each one as the event `bridge.member`. Each replica watches the view on its own, so each replica gives the changes of presence that it sees.
+- `bridges.UsePhrase(func(r *fw.Run) string)` words the activity of a run (section 18.7).
+- `Store.Wake()` makes the watch read the view at once, for a change of the fleet (`fleet.Watch`), so the channel follows a run without the wait of the poll.
+- `Store.Delegates(ctx, batch, action)` reports whether the bridge of a batch `bridge:<id>` delegates an action to the manager: `approve`, `budget` or `run_budget`, `members`, `cancel`, `bridge_add_member`, or `bridge_remove_member`, and `report` or `bridge_close`. A batch of no bridge delegates nothing. The manager reads it through an interface of its own.
+- `Store.Visible(ctx, id)` reports whether the caller in ctx can see a bridge, by the rule of the routes, so the stream sends the events of a bridge only to the people who can see it.
+- `bridges.Of(a)` returns the `*bridges.Store` of an agent, or nil, and `bridges.Presence` derives a presence (section 18.7).
+
+A hook runs on the goroutine that made the change, so it must not block.
+
+### 18.13 Configuration
+
+The bridges read the block `bridges` under the key `workbench` of `fw.yaml`, and the key `manager` of the block `bossmode`, which belongs to the package of bossmode. Each variable wins over the file. A value out of its bounds stops the start, and the error names the key.
+
+| Key | Variable | Meaning | Default |
+|---|---|---|---|
+| `workbench.bridges.placement` | `FW_WORKBENCH_BRIDGES_PLACEMENT` | The placement of a new bridge, `queue` or `spawn` | `queue` |
+| `workbench.bridges.maxMembers` | `FW_WORKBENCH_BRIDGES_MAX_MEMBERS` | The most seats of a bridge, 1 to 64 | `16` |
+| `workbench.bridges.maxMessages` | `FW_WORKBENCH_BRIDGES_MAX_MESSAGES` | The default of `caps.maxMessages`, 1 to 100000 | `2000` |
+| `workbench.bridges.maxFanoutPerMinute` | `FW_WORKBENCH_BRIDGES_MAX_FANOUT_PER_MINUTE` | The default of `caps.maxFanoutPerMinute`, 1 to 1000 | `30` |
+| `workbench.bridges.maxPairMessages` | `FW_WORKBENCH_BRIDGES_MAX_PAIR_MESSAGES` | The default of `caps.maxPairMessages`, 1 to 1000 | `6` |
+| `workbench.bossmode.manager` | `FW_WORKBENCH_BOSSMODE_MANAGER` | The profile of the manager. Empty means no manager: a spawn bridge opens nothing, and a close asks nobody for a report. | empty |
+
+```yaml
+workbench:
+  fleet: {atespaces: [default], egress: fw.events, intake: fw.jobs}
+  bossmode:
+    manager: manager
+  bridges:
+    placement: queue
+    maxMembers: 16
+    maxMessages: 2000
+    maxFanoutPerMinute: 30
+    maxPairMessages: 6
+```
+
+`bridges.Status(cfg)` returns whether the configuration fits and one line that says where the bridges live, with which defaults, and which manager, or that they are off.
+
+### 18.14 The stores and the replicas
+
+On a NATS bus, the records live in the key-value bucket `<stream>_BRIDGES`, one entry per bridge under its id, and the channels in `<stream>_CHANNELS`, where `<stream>` is `bus.options.stream`, `FW` by default. A record holds at most 512 KB and an entry at most 64 KB. The front opens its own connection with `bus.url` and the options `credentials` and `token` of the bus. With NATS accounts, allow the front `$JS.API.>`, `$KV.<stream>_BRIDGES.>`, and `$KV.<stream>_CHANNELS.>`.
+
+Every write is a compare-and-swap on the revision that the writer read, and the loser reads again and decides again, up to 16 times. Two replicas of the front therefore never lose a message, a mark, or a reaction. A new entry takes its seq from a change of the record, which moves `lastSeq`, and then lands under its own key, so two replicas never give two entries one seq. Each replica watches the view and tries to post each fact, and the mark in the record lets one of them post it. The replica that took a post fans it out, so a message reaches each member once. A replica that stops loses the deliveries that wait for a retry; the channel keeps their message, and the members read it with `bridge_read`.
+
+On the bus `mem`, the bridges live in the memory of the process, with the same rules. Two processes on the bus `mem` share nothing: each has bridges of its own, and a restart loses them. On another bus, such as `redis`, the front logs once that the bridges are off, mounts no route, and offers no tool.
+
+### 18.15 Security
+
+- The front acts on a run of a worker with the static token of the fleet, so the owner records the token as the caller, and the person in `from` of a message and in `by` of a reaction. Only a trusted caller, the static token or a workload, can name another party there (the kernel architecture, sections 5.5 and 8.2). The front authorizes the person first: the routes check the role of the caller on every agent of the bridge before an action.
+- `_meta` counts only from the static token, so a person cannot pose as a run, a seat, or the manager. A run of the fleet holds the token, so a worker can name any run in `_meta`; the front checks that the run is a seat or the manager of the bridge in the view before a tool acts, and the delegation flags of the bridge bound what the manager changes.
+- A message from an agent reaches another agent as data, in a block with the authority of a tool result (the kernel architecture, section 5.5), and the instructions of every seat say so. The text of a page of the wiki is data, and the instructions say so too.
+- The caps stop a ping-pong between two agents and a storm from one, and the answer of a turn never starts another agent. Nothing spends past a cap.
+- The channel holds the texts of runs, as the egress stream does, cut to 4 KB per entry. No text of a message enters a log line: a log names the bridge, the seq, the sender, the member, and the run. No token enters a ledger event or a log line.

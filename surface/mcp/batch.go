@@ -115,68 +115,16 @@ type batchResult struct {
 }
 
 // batchUsage is the usage of a job: the sum of the usage of its runs that
-// report one, field by field. The sum counts each run once. A child run
-// carries the batch of its parent, so it is a run of the job of its own,
-// and its usage is not also in the usage of its parent; a branch counts
-// only its own work, not the events that it kept from its source. The sum
-// adds Run.Usage and never Run.TreeUsage, which holds the child runs too.
-//
-// Reported counts the runs in the sum, and Missing the runs whose usage
-// the view does not know (usageOf). Final counts the reported runs whose
-// usage is final. Partial is true when Missing is above zero, when a
-// reported run is not final, or when the view forgot runs of the job.
-// CostUSD is the cost at the prices of the workers, and it leaves out
-// UnpricedTokens, whose cost is unknown.
-type batchUsage struct {
-	fw.RunUsage
-	Reported int  `json:"reported"`
-	Final    int  `json:"final"`
-	Missing  int  `json:"missing"`
-	Partial  bool `json:"partial"`
-}
-
-// add counts one run of the job: its usage, or one more missing run.
-func (u *batchUsage) add(r *fw.Run) {
-	known, final := usageOf(r)
-	if !known {
-		u.Missing++
-		return
-	}
-	u.Reported++
-	if final {
-		u.Final++
-	}
-	u.Usage = u.Usage.Add(r.Usage.Usage)
-	u.Turns += r.Usage.Turns
-	u.ToolCalls += r.Usage.ToolCalls
-	u.CostUSD += r.Usage.CostUSD
-	u.UnpricedTokens += r.Usage.UnpricedTokens
-}
+// report one, as fleet.UsageSum sums it. The package bridges sums the runs
+// of a bridge with the same code.
+type batchUsage = fleet.UsageSum
 
 // usageOf reports whether the view knows the usage of a run, and whether
-// that usage is final.
-//
-// A run of this process, without Member, has the usage of its whole
-// ledger, so the view knows it, and it is final once the run is finished.
-// A run of another member has a known usage when its kernel recorded the
-// totals of the run on fw.run.finished or fw.run.suspended
-// (fw.Run.UsageSeq), and the usage is final when the run is finished: the
-// totals of its end and the annotations that the stream carried after
-// them. Tokens without totals do not count, because on a stream of
-// lifecycle events they come from fw.run.annotated alone, such as a title
-// call, and not from the model calls of the run. A run that works or waits
-// again after its totals, after a follow-up, a resume, or a decision, is
-// known up to its totals, so its usage is not final.
-func usageOf(r *fw.Run) (known, final bool) {
-	if r.Member == "" {
-		return true, r.State.Terminal()
-	}
-	known = r.UsageSeq > 0
-	return known, known && r.State.Terminal()
-}
+// that usage is final (fleet.UsageOf).
+func usageOf(r *fw.Run) (known, final bool) { return fleet.UsageOf(r) }
 
-// text words the usage of a job on one line.
-func (u batchUsage) text() string {
+// usageText words the usage of a job on one line.
+func usageText(u batchUsage) string {
 	if u.Reported == 0 {
 		return "No run reports usage yet."
 	}
@@ -412,7 +360,7 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 	members := map[string]bool{}
 	for _, r := range runs {
 		out.States[string(r.State)]++
-		out.Usage.add(r)
+		out.Usage.Add(r)
 		if !r.State.Terminal() {
 			out.Finished = false
 		}
@@ -475,7 +423,7 @@ func (s *server) batch(ctx context.Context, req *sdk.CallToolRequest, in batchAr
 		fmt.Fprintf(&b, " The view forgot %s of the job, because a finished run leaves the view after workbench.fleet.expire and a run leaves with its Task; the counts and the usage leave them out.", plural(forgotten, "run", "runs"))
 	}
 	b.WriteString(unknownText(found.Unknown))
-	b.WriteString("\n" + out.Usage.text())
+	b.WriteString("\n" + usageText(out.Usage))
 	for _, w := range out.Waiting {
 		fmt.Fprintf(&b, "\n- %s waits for you", w.RunID)
 		if w.Member != "" {
