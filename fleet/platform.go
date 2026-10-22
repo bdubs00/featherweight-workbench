@@ -100,8 +100,10 @@ type platform struct {
 	reconciler *pools.Reconciler
 	poolState  map[string]pools.Status
 	// merged holds each pool with the overlay that its last pass merged
-	// (profiles.go), by name.
+	// (profiles.go), by name, and rt each runtime pool as the last pass
+	// read it (runtime.go).
 	merged map[string]*pools.Pool
+	rt     map[string]*runtimePool
 	// shown holds the state of each member that the last member change
 	// named, by name, so a change goes out once, and quiet is the time
 	// without an event after which a member that only the stream knows is

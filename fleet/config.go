@@ -74,9 +74,11 @@ type Config struct {
 	SuspendAfter *time.Duration `yaml:"suspendAfter"`
 	WakeOnQueue  *bool          `yaml:"wakeOnQueue"`
 
-	// Pools are the pools of workbench.pools, which LoadPools reads and
-	// Start fills (pools.go).
-	Pools []*pools.Pool `yaml:"-"`
+	// Pools are the pools of workbench.pools, and Templates the worker
+	// templates of workbench.templates, which LoadAll reads and Start
+	// fills (pools.go).
+	Pools     []*pools.Pool     `yaml:"-"`
+	Templates []*pools.Template `yaml:"-"`
 }
 
 // On reports whether the configuration names a source of members.

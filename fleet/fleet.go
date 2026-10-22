@@ -10,7 +10,8 @@
 // workers (enqueue.go), reads the depth of those queues and wakes the Tasks
 // for the jobs that wait (queues.go), suspends the Tasks that idle
 // (suspend.go), keeps the Tasks of the pools of the configuration
-// (pools.go), adds its series to the metrics (metrics.go), and sends its
+// (pools.go) and of the runtime pools that people create from a template
+// (runtime.go), adds its series to the metrics (metrics.go), and sends its
 // changes to the packages that watch it (watch.go). The
 // kernel knows no fleet, and a worker publishes nothing about itself: it
 // is a bare kernel, and the platforms keep the state.
@@ -24,6 +25,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +33,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/internal/bucket"
 	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
@@ -52,7 +55,7 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.Pools, err = LoadPools(a.Config(), c); err != nil {
+	if c.Pools, c.Templates, err = LoadAll(a.Config(), c); err != nil {
 		return nil, fmt.Errorf("fleet: %w", err)
 	}
 	if !c.On() {
@@ -119,6 +122,13 @@ type Fleet struct {
 	// pools run their configuration alone, and its end.
 	overlays      pools.OverlayStore
 	closeOverlays func()
+
+	// The worker templates, and the store of the runtime pools
+	// (runtime.go), nil without templates or on a bus that keeps no store,
+	// and its end.
+	templates    []*pools.Template
+	runtime      *pools.Store
+	closeRuntime func()
 }
 
 // Open builds the fleet of an agent from a configuration that Load filled
@@ -163,14 +173,15 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 		tokenEnv = "FW_API_TOKEN"
 	}
 	var vals *pools.Values
-	if len(fc.Pools) > 0 {
+	if len(fc.Pools) > 0 || len(fc.Templates) > 0 {
 		if len(fc.Atespaces) == 0 {
 			f.cancel()
-			return nil, errors.New("fleet: the pools need workbench.fleet.atespaces, the atespaces whose Tasks the front lists")
+			return nil, errors.New("fleet: the pools and the templates need workbench.fleet.atespaces, the atespaces whose Tasks the front lists")
 		}
-		// The front reads the variables that the Tasks of the pools copy
-		// once, and a missing one stops the start, not the first create.
-		v, err := pools.Resolve(fc.Pools, nil)
+		// The front reads the variables that the Tasks of the pools and of
+		// the templates copy once, and a missing one stops the start, not
+		// the first create.
+		v, err := pools.Resolve(append(slices.Clone(fc.Pools), pools.Probes(fc.Templates)...), nil)
 		if err != nil {
 			f.cancel()
 			return nil, fmt.Errorf("fleet: %w", err)
@@ -184,11 +195,32 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 			return nil, fmt.Errorf("fleet: the store of the overlays of the pools: %w", err)
 		}
 		f.overlays, f.closeOverlays = store, closeStore
+		f.templates = fc.Templates
+		if len(fc.Templates) > 0 {
+			// A runtime pool renders from a template, so the store of the
+			// runtime pools opens with the templates only.
+			rs, closeRS, err := OpenRuntime(ctx, cfg, f.log, false)
+			if err != nil {
+				f.cancel()
+				if f.closeOverlays != nil {
+					f.closeOverlays()
+				}
+				return nil, err
+			}
+			if rs == nil {
+				where, _ := bucket.Where(cfg, pools.StoreBucket)
+				f.log.Warn("fleet: the runtime pools are off; they live "+where, "bus", cfg.Bus.Driver)
+			}
+			f.runtime, f.closeRuntime = rs, closeRS
+		}
 	}
 	if err := f.startPlatform(fc.Atespaces, egress, cfg.AX.Server, tokenEnv, fc.Pools, vals); err != nil {
 		f.cancel()
 		if f.closeOverlays != nil {
 			f.closeOverlays()
+		}
+		if f.closeRuntime != nil {
+			f.closeRuntime()
 		}
 		return nil, err
 	}
@@ -237,6 +269,9 @@ func (f *Fleet) Close() error {
 		}
 		if f.closeOverlays != nil {
 			f.closeOverlays()
+		}
+		if f.closeRuntime != nil {
+			f.closeRuntime()
 		}
 		f.client.CloseIdleConnections()
 	})

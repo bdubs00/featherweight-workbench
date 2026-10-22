@@ -27,6 +27,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/agents"
 	"github.com/bdubs00/featherweight-workbench/internal/behalf"
 	"github.com/bdubs00/featherweight-workbench/pools"
+	v1alpha1 "github.com/google/ax/pkg/apis/v1alpha1"
 )
 
 // overlayTimeout bounds one request to the store of the overlays.
@@ -120,10 +121,11 @@ func (p *platform) current(base *pools.Pool) *pools.Pool {
 	return base
 }
 
-// fleetOf returns the fleet of an agent when it keeps pools.
+// fleetOf returns the fleet of an agent when it keeps pools: pools of the
+// file, or templates from which people create runtime pools.
 func fleetOf(a *fw.Agent) *Fleet {
 	f, _ := Of(a).(*Fleet)
-	if f == nil || f.platform == nil || len(f.platform.pools) == 0 {
+	if f == nil || !f.keepsPools() {
 		return nil
 	}
 	return f
@@ -137,10 +139,11 @@ func Pooled(a *fw.Agent) bool { return fleetOf(a) != nil }
 // profile, else this process (agents.Local). pool names the pool, for a
 // profile that several pools run or that no pool runs yet. A pool runs the
 // profile that its key agent names, or a profile of its fw.agents and its
-// overlay. Without pools, the place is this process, and pool must be
-// empty. With pools, a name that no pool runs and that this process does
-// not hold is an error that names the pools: a new agent needs a pool of
-// its own, or pool.
+// overlay. The pools are the pools of the file and the runtime pools.
+// Without pools, the place is this process, and pool must be empty. With
+// pools, a name that no pool runs and that this process does not hold is
+// an error that names the pools and the templates. PlaceFor makes a
+// runtime pool for such a name instead.
 func PlaceOf(ctx context.Context, a *fw.Agent, name, pool string) (agents.Place, error) {
 	name, pool = strings.TrimSpace(name), strings.TrimSpace(pool)
 	f := fleetOf(a)
@@ -150,13 +153,155 @@ func PlaceOf(ctx context.Context, a *fw.Agent, name, pool string) (agents.Place,
 		}
 		return agents.Local(a), nil
 	}
-	base, err := f.poolFor(name, pool)
+	list := f.poolsNow(ctx)
+	base, err := f.poolFor(list, name, pool)
 	if err != nil {
 		return nil, err
 	}
 	if base == nil {
+		if _, ok := f.a.ProfileNamed(name); ok {
+			return agents.Local(a), nil
+		}
+		return nil, f.noPool(name, list)
+	}
+	return f.placeIn(ctx, base)
+}
+
+// Workers asks for workers for a new agent, in agent_put and PUT
+// /v1/agents/{name}: Template names the template of the runtime pool, the
+// default template when it is empty, and Replicas the number of workers,
+// DefaultWorkers when it is nil.
+type Workers struct {
+	Template string `json:"template,omitempty"`
+	Replicas *int   `json:"replicas,omitempty"`
+}
+
+// PlaceFor is PlaceOf for agent_put and PUT /v1/agents/{name}, which can
+// create an agent in one step. For a profile that no pool runs, when the
+// request asks for workers, or when the configuration has a default
+// template and the request names no pool, the place is a new runtime pool
+// named after the agent: from the template of workers, else the default
+// one, with the replicas of workers, else DefaultWorkers. Its Save creates
+// the pool first and then writes the profile into the overlay of the pool
+// (CreatedPool). A request that names pool keeps the place of PlaceOf. A
+// profile that this process holds stays there, unless the request asks for
+// workers. Without a default template and without workers, the error names
+// the templates.
+func PlaceFor(ctx context.Context, a *fw.Agent, name, pool string, w *Workers) (agents.Place, error) {
+	name, pool = strings.TrimSpace(name), strings.TrimSpace(pool)
+	f := fleetOf(a)
+	switch {
+	case w != nil && (f == nil || len(f.templates) == 0):
+		return nil, fmt.Errorf("%w: this process keeps no worker template (workbench.templates), so leave out workers", fw.ErrInvalidRequest)
+	case w != nil && pool != "":
+		return nil, fmt.Errorf("%w: pass pool to add the profile to a pool that exists, or workers to make a pool for a new agent, not both", fw.ErrInvalidRequest)
+	case f == nil || pool != "":
+		return PlaceOf(ctx, a, name, pool)
+	}
+	list := f.poolsNow(ctx)
+	base, err := f.poolFor(list, name, "")
+	if err != nil {
+		return nil, err
+	}
+	if base != nil {
+		return f.placeIn(ctx, base)
+	}
+	if _, ok := f.a.ProfileNamed(name); ok && w == nil {
 		return agents.Local(a), nil
 	}
+	if w == nil && pools.DefaultTemplate(f.templates) == nil {
+		if len(f.templates) == 0 {
+			return nil, f.noPool(name, list)
+		}
+		return nil, fmt.Errorf("%w: no pool runs the agent %s, and no template is the default, so pass workers with a template to make a runtime pool for it, or pool to add the profile to a pool. The templates are %s. The pools are %s", fw.ErrInvalidRequest, name, pools.TemplateNames(f.templates), poolNames(list))
+	}
+	if _, err := runtimeFleet(a); err != nil {
+		return nil, err
+	}
+	var want Workers
+	if w != nil {
+		want = *w
+	}
+	t, err := f.templateFor(want.Template)
+	if err != nil {
+		return nil, err
+	}
+	replicas := DefaultWorkers
+	if want.Replicas != nil {
+		replicas = *want.Replicas
+	}
+	poolName, ok := runtimeName(name)
+	if !ok {
+		return nil, fmt.Errorf("%w: the name %s cannot name a pool, which takes lowercase letters, digits, and hyphens; choose another name, or pass pool to add the profile to a pool", fw.ErrInvalidRequest, name)
+	}
+	for _, p := range list {
+		if p.Name == poolName {
+			return nil, fmt.Errorf("%w: the pool %s exists and runs the agent %s; choose another name, or pass pool %s to add the profile to it", fw.ErrInvalidRequest, poolName, p.Agent, poolName)
+		}
+	}
+	e := pools.Runtime{Name: poolName, Template: t.Name, Agent: name, Replicas: replicas, Generation: 1, By: subjectOf(ctx), At: time.Now().UTC()}
+	base, err = pools.FromRuntime(e, f.templates)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", fw.ErrInvalidRequest, strings.TrimPrefix(err.Error(), "pools: "))
+	}
+	// The overlay of a pool of that name can hold the profiles of an older
+	// pool, which the new pool takes over.
+	octx, cancel := context.WithTimeout(ctx, overlayTimeout)
+	o, err := f.overlays.Read(octx, poolName)
+	cancel()
+	if err != nil {
+		return nil, fmt.Errorf("fleet: read the overlay of the pool %s %s: %w", poolName, f.overlays.Describe(), err)
+	}
+	return &poolPlace{f: f, base: base, pool: base.WithRawOverlay(o), create: &e}, nil
+}
+
+// runtimeName returns the name of the runtime pool of an agent: the name
+// in lowercase, with a hyphen for each character that a pool name does not
+// take. It reports false when no such name fits.
+func runtimeName(agent string) (string, bool) {
+	b := []byte(strings.ToLower(agent))
+	for i, c := range b {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9') {
+			b[i] = '-'
+		}
+	}
+	name := strings.Trim(string(b), "-")
+	if name == "" || v1alpha1.ValidateName(name) != nil {
+		return "", false
+	}
+	return name, true
+}
+
+// CreatedPool returns the name of the runtime pool that the Save of a place
+// of PlaceFor created, else "".
+func CreatedPool(at agents.Place) string {
+	if pl, ok := at.(*poolPlace); ok && pl.created {
+		return pl.base.Name
+	}
+	return ""
+}
+
+// DroppedPool returns the name of the runtime pool that the Remove of a
+// place deleted with the profile of its agent, else "".
+func DroppedPool(at agents.Place) string {
+	if pl, ok := at.(*poolPlace); ok && pl.dropped {
+		return pl.base.Name
+	}
+	return ""
+}
+
+// noPool is the error for a profile that no pool runs and this process
+// does not hold.
+func (f *Fleet) noPool(name string, list []*pools.Pool) error {
+	if len(f.templates) > 0 {
+		return fmt.Errorf("%w: no pool runs the agent %s. A pool takes the jobs of its agent from its own queue, so a new agent needs a pool of its own: agent_put with workers makes a runtime pool for it from a template. To add the profile to the workers of a pool, for spawn_task or a run on a member, pass pool. The templates are %s. The pools are %s", fw.ErrInvalidRequest, name, pools.TemplateNames(f.templates), poolNames(list))
+	}
+	return fmt.Errorf("%w: no pool runs the agent %s. A pool takes the jobs of its agent from its own queue, so a new agent needs an entry in workbench.pools of fw.yaml with agent %s; to add the profile to the workers of a pool, for spawn_task or a run on a member, pass pool. The pools are %s", fw.ErrInvalidRequest, name, name, poolNames(list))
+}
+
+// placeIn returns the place of the profiles of the pool base, with the
+// overlay that the store holds now.
+func (f *Fleet) placeIn(ctx context.Context, base *pools.Pool) (agents.Place, error) {
 	if f.overlays == nil {
 		return nil, fmt.Errorf("%w: the pool %s runs its configuration alone, because the profiles of a pool live in the key-value store of a NATS bus; change the pool in workbench.pools of fw.yaml", fw.ErrInvalidRequest, base.Name)
 	}
@@ -167,10 +312,13 @@ func PlaceOf(ctx context.Context, a *fw.Agent, name, pool string) (agents.Place,
 			return nil, err
 		}
 		// The overlay does not fit the pool any more, for example a
-		// profile names a model that left fw.models. The place keeps
-		// the raw overlay, so a person can remove the entry; the pool
-		// itself waits (section 14.4).
-		f.log.Warn("fleet: the overlay of a pool does not fit; its place keeps the raw overlay so an entry can be removed", "pool", base.Name, "error", fit.Error())
+		// profile names a model that left fw.models, or a runtime pool
+		// waits for its profile. The place keeps the raw overlay, so a
+		// person can write or remove the entry; the pool itself waits
+		// (section 14.4).
+		if !errors.Is(err, pools.ErrNoProfile) {
+			f.log.Warn("fleet: the overlay of a pool does not fit; its place keeps the raw overlay so an entry can be removed", "pool", base.Name, "error", fit.Error())
+		}
 		merged = base.WithRawOverlay(fit.overlay)
 	}
 	return &poolPlace{f: f, base: base, pool: merged}, nil
@@ -194,10 +342,9 @@ func PoolOf(at agents.Place) string {
 	return ""
 }
 
-// poolFor picks the pool of a profile, as PlaceOf says. It returns nil for
-// a profile of this process.
-func (f *Fleet) poolFor(name, pool string) (*pools.Pool, error) {
-	list := f.platform.pools
+// poolFor picks the pool of a profile from list, as PlaceOf says. It
+// returns nil for a profile that no pool runs.
+func (f *Fleet) poolFor(list []*pools.Pool, name, pool string) (*pools.Pool, error) {
 	if pool != "" {
 		for _, p := range list {
 			if p.Name == pool {
@@ -220,19 +367,19 @@ func (f *Fleet) poolFor(name, pool string) (*pools.Pool, error) {
 		}
 	}
 	switch len(by) {
+	case 0:
+		return nil, nil
 	case 1:
 		return by[0], nil
-	case 0:
-		if _, ok := f.a.ProfileNamed(name); ok {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("%w: no pool runs the agent %s. A pool takes the jobs of its agent from its own queue, so a new agent needs an entry in workbench.pools of fw.yaml with agent %s; to add the profile to the workers of a pool, for spawn_task or a run on a member, pass pool. The pools are %s", fw.ErrInvalidRequest, name, name, poolNames(list))
 	}
 	return nil, fmt.Errorf("%w: the pools %s run the agent %s; pass pool to name one", fw.ErrInvalidRequest, poolNames(by), name)
 }
 
 // poolNames names the pools and their agents.
 func poolNames(list []*pools.Pool) string {
+	if len(list) == 0 {
+		return "none"
+	}
 	var out []string
 	for _, p := range list {
 		out = append(out, p.Name+" (agent "+p.Agent+")")
@@ -253,12 +400,17 @@ func (f *Fleet) authorizePool(ctx context.Context, pool *pools.Pool, action, nam
 // authorizePoolAll is authorizePool for several profiles of one pool, in
 // one request to a decision point.
 func (f *Fleet) authorizePoolAll(ctx context.Context, pool *pools.Pool, action string, names []string) []error {
+	return f.authorizeProfiles(ctx, profilesOf(pool), pool.Atespace+"/"+pool.Name, action, names)
+}
+
+// authorizeProfiles decides an action on several profiles of one member,
+// as authorizePool says, with the profiles of the member by name.
+func (f *Fleet) authorizeProfiles(ctx context.Context, profiles map[string]fw.AgentProfile, member, action string, names []string) []error {
 	out := make([]error, len(names))
 	p := fw.PrincipalFrom(ctx)
 	if p == nil {
 		return out
 	}
-	profiles := pool.Profiles()
 	if f.a.AccessMode() == fw.AccessModeRules {
 		// A person that the static token acts for gets only the roles that
 		// the token has too (behalf.Guard, section 19).
@@ -273,7 +425,7 @@ func (f *Fleet) authorizePoolAll(ctx context.Context, pool *pools.Pool, action s
 	}
 	checks := make([]fw.AuthzCheck, len(names))
 	for i, name := range names {
-		checks[i] = fw.AuthzCheck{Action: action, Target: fw.Target{Agent: name, Member: pool.Atespace + "/" + pool.Name, Access: profiles[name].Access}}
+		checks[i] = fw.AuthzCheck{Action: action, Target: fw.Target{Agent: name, Member: member, Access: profiles[name].Access}}
 	}
 	return f.a.AuthorizeAll(ctx, checks)
 }
@@ -300,11 +452,17 @@ func (f *Fleet) poolRoles(ctx context.Context, pool *pools.Pool, names []string)
 
 // poolPlace is a pool as the place of its profiles (agents.Place). base is
 // the pool of the configuration, and pool the pool with the overlay that
-// the place read.
+// the place read. create holds the runtime pool that Save creates before
+// it writes the profile, for a new agent (PlaceFor); created says that it
+// did. dropped says that Remove deleted the runtime pool with the profile
+// of its agent.
 type poolPlace struct {
-	f    *Fleet
-	base *pools.Pool
-	pool *pools.Pool
+	f       *Fleet
+	base    *pools.Pool
+	pool    *pools.Pool
+	create  *pools.Runtime
+	created bool
+	dropped bool
 }
 
 func (pl *poolPlace) Profile(name string) (fw.AgentProfile, bool) {
@@ -334,7 +492,15 @@ func (pl *poolPlace) Check(p fw.AgentProfile) error {
 	return nil
 }
 
+// Authorize decides an action on a profile of the pool. A new agent of a
+// runtime pool that Save creates also needs agent.create on this process,
+// because the pool is new too.
 func (pl *poolPlace) Authorize(ctx context.Context, action, name string) error {
+	if pl.create != nil && action == fw.ActionAgentCreate {
+		if err := pl.f.a.Authorize(ctx, fw.ActionAgentCreate, fw.Target{Agent: name}); err != nil {
+			return err
+		}
+	}
 	return pl.f.authorizePool(ctx, pl.pool, action, name)
 }
 
@@ -343,6 +509,12 @@ func (pl *poolPlace) Authorize(ctx context.Context, action, name string) error {
 func (pl *poolPlace) Locked(string) bool { return false }
 
 func (pl *poolPlace) Save(ctx context.Context, p fw.AgentProfile) error {
+	if pl.create != nil && !pl.created {
+		if _, err := pl.f.createRuntime(ctx, *pl.create, true); err != nil {
+			return err
+		}
+		pl.created = true
+	}
 	ctx, cancel := context.WithTimeout(ctx, overlayTimeout)
 	defer cancel()
 	if err := pl.f.overlays.PutProfile(ctx, pl.base.Name, pools.OverlayProfile{Profile: p, By: subjectOf(ctx), At: time.Now().UTC()}); err != nil {
@@ -352,9 +524,18 @@ func (pl *poolPlace) Save(ctx context.Context, p fw.AgentProfile) error {
 	return nil
 }
 
+// Remove removes a profile from the overlay of the pool. The profile of
+// the agent of a runtime pool is all that the pool runs, so its removal
+// deletes the pool first: the front deletes its Tasks once they are idle.
 func (pl *poolPlace) Remove(ctx context.Context, name string) error {
 	if _, ok := pl.pool.Overlay().Profile(name); !ok {
 		return fmt.Errorf("%w: the configuration of the pool %s defines the agent %s, so change it in workbench.pools of fw.yaml", fw.ErrInvalidRequest, pl.base.Name, name)
+	}
+	if r := pl.base.Runtime(); r != nil && name == pl.base.Agent && pl.f.runtime != nil {
+		if _, err := pl.f.dropRuntime(ctx, pl.base.Name); err != nil {
+			return err
+		}
+		pl.dropped = true
 	}
 	ctx, cancel := context.WithTimeout(ctx, overlayTimeout)
 	defer cancel()
@@ -438,7 +619,7 @@ func PoolAgents(ctx context.Context, a *fw.Agent) ([]PoolAgent, bool, error) {
 		return nil, false, nil
 	}
 	out := []PoolAgent{}
-	for _, base := range f.platform.pools {
+	for _, base := range f.poolsNow(ctx) {
 		got, err := f.poolAgents(ctx, base, "")
 		if err != nil {
 			return nil, true, err
@@ -458,7 +639,7 @@ func PoolAgentNamed(ctx context.Context, a *fw.Agent, name, pool string) (PoolAg
 		return PoolAgent{}, false, nil
 	}
 	var found []PoolAgent
-	for _, base := range f.platform.pools {
+	for _, base := range f.poolsNow(ctx) {
 		if pool != "" && base.Name != pool {
 			continue
 		}
@@ -485,7 +666,11 @@ func PoolAgentNamed(ctx context.Context, a *fw.Agent, name, pool string) (PoolAg
 // or only the profile only when it is set.
 func (f *Fleet) poolAgents(ctx context.Context, base *pools.Pool, only string) ([]PoolAgent, error) {
 	merged, err := f.mergedPool(ctx, base)
-	if err != nil {
+	switch {
+	case errors.Is(err, pools.ErrNoProfile):
+		// A runtime pool that waits for its profile runs none yet.
+		merged = base
+	case err != nil:
 		f.log.Warn("fleet: the profiles of a pool come from the last pass", "pool", base.Name, "error", err)
 		merged = f.platform.current(base)
 	}
@@ -544,7 +729,7 @@ func AllowRule(ctx context.Context, a *fw.Agent, runID, approvalID, note string)
 	if err != nil {
 		return "", "", err
 	}
-	base := f.poolOfRun(r)
+	base := f.poolOfRun(f.poolsNow(ctx), r)
 	if base == nil {
 		return "", "", fmt.Errorf("%w: no pool keeps the member %s of the run %s", ErrNoPool, r.Member, runID)
 	}
@@ -605,12 +790,12 @@ func AllowRule(ctx context.Context, a *fw.Agent, runID, approvalID, note string)
 	return base.Name, rule, nil
 }
 
-// poolOfRun returns the pool whose Task runs the run: the pool of its
-// member by the name of the Task, else the only pool of its agent.
-func (f *Fleet) poolOfRun(r *fw.Run) *pools.Pool {
+// poolOfRun returns the pool of list whose Task runs the run: the pool of
+// its member by the name of the Task, else the only pool of its agent.
+func (f *Fleet) poolOfRun(list []*pools.Pool, r *fw.Run) *pools.Pool {
 	atespace, task, _ := strings.Cut(r.Member, "/")
 	var byAgent []*pools.Pool
-	for _, p := range f.platform.pools {
+	for _, p := range list {
 		if p.Owns(atespace, task) {
 			return p
 		}
