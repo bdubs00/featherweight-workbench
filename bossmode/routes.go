@@ -20,7 +20,8 @@ import (
 // extension mounts the routes with workbench.bossmode.enabled: the page
 // as a public route, because the page signs in on its own and calls /v1
 // with its token, and the settings and the stream behind the
-// authentication of the agent. Without it, the routes are not there, and
+// authentication of the agent. /bossmode without the slash moves to
+// /bossmode/ (slashRoute). Without it, the routes are not there, and
 // each answers 404. A configuration that does not load mounts nothing;
 // the service stops the start with the error.
 func extension(k *native.Kit) error {
@@ -29,21 +30,23 @@ func extension(k *native.Kit) error {
 	if err != nil || !c.Enabled {
 		return nil
 	}
-	page := pageRoute(c.Dir)
-	k.HandlePublic("GET "+Path, page)
-	k.HandlePublic("GET "+Path+"/{file...}", page)
+	k.HandlePublic("GET "+Path, slashRoute)
+	k.HandlePublic("GET "+Path+"/{file...}", pageRoute(c.Dir))
 	k.Handle("GET /v1/bossmode", settingsRoute(k, c))
+	k.Handle("GET "+LogoPath, logoRoute(a))
 	k.Handle("GET /v1/bossmode/stream", streamRoute(a))
 	return nil
 }
 
 // Settings is the answer of GET /v1/bossmode: the manager, when the
-// configuration names one, and the keys of workbench.bridges that the page
-// reads, as the package bridges reads them (bridges.Load).
+// configuration names one, the keys of workbench.bridges that the page
+// reads, as the package bridges reads them (bridges.Load), and the theme
+// of the deployment.
 type Settings struct {
-	Manager    *Manager `json:"manager"`
-	Placement  string   `json:"placement"`
-	MaxMembers int      `json:"maxMembers"`
+	Manager    *Manager  `json:"manager"`
+	Placement  string    `json:"placement"`
+	MaxMembers int       `json:"maxMembers"`
+	Theme      PageTheme `json:"theme"`
 }
 
 // Manager names the manager for the page. Agent is the profile of
@@ -70,7 +73,7 @@ func settingsRoute(k *native.Kit, c Config) http.HandlerFunc {
 			k.Fail(w, r, err)
 			return
 		}
-		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers}
+		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers, Theme: pageTheme(a, c.Theme)}
 		if c.Manager != "" {
 			m, err := managerOf(r.Context(), a, c.Manager)
 			if err != nil {

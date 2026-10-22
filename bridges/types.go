@@ -175,17 +175,23 @@ type Activity struct {
 
 // Item is a bridge as GET /v1/bridges lists it for one caller, and as the
 // other routes answer it with Members: the record and the counts of the
-// caller. Usage is set by GET /v1/bridges/{id} alone.
+// caller. Unread is at most MaxUnread, and UnreadMore is true when the
+// count reached past it. Usage is set by GET /v1/bridges/{id} alone.
 type Item struct {
 	Bridge
 	Read        uint64          `json:"read"`
 	Unread      int             `json:"unread"`
+	UnreadMore  bool            `json:"unreadMore"`
 	MemberCount int             `json:"memberCount"`
 	NeedsYou    int             `json:"needsYou"`
 	Usage       *fleet.UsageSum `json:"usage,omitempty"`
 }
 
-// Message is one entry of the channel of a bridge.
+// Message is one entry of the channel of a bridge. Page names the page of
+// the wiki that a system line is about, such as bridges/<id>/report.md, so
+// the page of bossmode links it without a link in the text. Pinned is true
+// for a message that a person pinned: each of its deliveries is a pinned
+// follow-up, which survives every compaction of the run that gets it.
 type Message struct {
 	Seq       uint64              `json:"seq"`
 	At        time.Time           `json:"at"`
@@ -194,7 +200,9 @@ type Message struct {
 	ReplyTo   *uint64             `json:"replyTo"`
 	Text      string              `json:"text"`
 	Event     string              `json:"event,omitempty"`
+	Page      string              `json:"page,omitempty"`
 	Cut       bool                `json:"cut"`
+	Pinned    bool                `json:"pinned"`
 	Mirrors   *Mirror             `json:"mirrors"`
 	Reactions map[string][]string `json:"reactions"`
 	Decision  *Decision           `json:"decision"`
@@ -234,11 +242,15 @@ type Decision struct {
 	Always    bool       `json:"always"`
 }
 
-// States of a decision.
+// States of a decision. DecisionUnknown is the state of a card whose run
+// the front failed to read after decisionTries tries: the run no longer
+// waits for the card, and nobody can decide it on the page. A later read
+// that works writes the card again with its real state.
 const (
 	DecisionPending = "pending"
 	DecisionAllow   = "allow"
 	DecisionDeny    = "deny"
+	DecisionUnknown = "unknown"
 )
 
 // record is a bridge as the store keeps it: the record of the routes and
@@ -305,10 +317,29 @@ type runMark struct {
 	// question, whose decision carries an answer.
 	AskSeq   uint64 `json:"askSeq,omitempty"`
 	Question bool   `json:"question,omitempty"`
-	// Limit is true once the channel says that the run stopped at a limit
-	// and takes no message.
+	// Limit is true once the channel says that the run failed and takes no
+	// message: at a limit of its budget, or for another reason.
 	Limit bool `json:"limit,omitempty"`
+	// Lost holds the cards of the run that show the state unknown, because
+	// the front failed to read the run after decisionTries tries. The
+	// watch reads the run again for them, so a later read writes each one
+	// again with its real decision.
+	Lost []lostCard `json:"lost,omitempty"`
 }
+
+// lostCard is a card whose decision the front failed to read: the
+// approval, the seq of the card, the seq of the run where the read
+// starts, and whether the card asks a question.
+type lostCard struct {
+	Pending  string `json:"pending"`
+	Card     uint64 `json:"card"`
+	AskSeq   uint64 `json:"askSeq,omitempty"`
+	Question bool   `json:"question,omitempty"`
+}
+
+// maxLost bounds the lost cards that the mark of one run keeps. An older
+// one stays unknown.
+const maxLost = 16
 
 // fanMark holds the counters of the caps of a bridge.
 type fanMark struct {

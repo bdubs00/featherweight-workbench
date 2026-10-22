@@ -410,24 +410,35 @@ func (b *buckets) setRead(ctx context.Context, id, subject string, seq uint64) e
 }
 
 // unreadScan bounds the entries that one count of the unread entries of a
-// bridge reads, newest first. Entries further back count as unread.
+// bridge reads, newest first. Entries further back count as unread, so
+// past this window the count can be too high.
 const unreadScan = 2000
+
+// MaxUnread is the largest unread count that the routes give. A count
+// above it is MaxUnread with the mark unreadMore, so the page shows 2000+.
+const MaxUnread = unreadScan
 
 // unread counts the entries after read that count for the person subject:
 // a message of a person or an agent other than the caller, and a card that
 // waits for a decision. A message of the caller and a plain system line do
-// not count.
-func (b *buckets) unread(ctx context.Context, rec *record, subject string, read uint64) (int, error) {
-	n := 0
+// not count. It reads at most unreadScan entries, newest first, and counts
+// every entry further back as unread. A count above MaxUnread is
+// MaxUnread, and more is true.
+func (b *buckets) unread(ctx context.Context, rec *record, subject string, read uint64) (n int, more bool, err error) {
 	scanned := 0
 	for seq := rec.LastSeq; seq > read; seq-- {
 		if scanned >= unreadScan {
-			return n + int(seq-read), nil
+			if rest := seq - read; rest > uint64(MaxUnread) {
+				n += MaxUnread + 1
+			} else {
+				n += int(rest)
+			}
+			break
 		}
 		scanned++
 		s, ok, err := b.summaryOf(ctx, rec.ID, seq)
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		switch {
 		case !ok:
@@ -440,7 +451,10 @@ func (b *buckets) unread(ctx context.Context, rec *record, subject string, read 
 			n++
 		}
 	}
-	return n, nil
+	if n > MaxUnread {
+		return MaxUnread, true, nil
+	}
+	return n, false, nil
 }
 
 // sortItems puts the open bridges first, the newest first in each group.

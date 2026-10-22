@@ -130,6 +130,83 @@ func TestFanOutSkipsALimit(t *testing.T) {
 	}
 }
 
+// A person pins a message: the entry records it, and each delivery of it
+// goes to the run of each addressed member with pinned, so it survives
+// every compaction of the run. A message without the pin carries none,
+// and an agent pins nothing.
+func TestPinnedMessage(t *testing.T) {
+	s, _, fm, url, id := fanBridge(t, "")
+	resp, body := do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Keep every test green.","pinned":true}`)
+	var m Message
+	decodeJSON(t, body, &m)
+	if resp.StatusCode != http.StatusCreated || !m.Pinned {
+		t.Fatalf("pinned post = %d %s", resp.StatusCode, body)
+	}
+	eventually(t, "both members get the pinned message", func() bool {
+		return len(fm.find(http.MethodPost, pathMig)) == 1 && len(fm.find(http.MethodPost, pathRev)) == 1
+	})
+	for _, path := range []string{pathMig, pathRev} {
+		if d := fm.find(http.MethodPost, path)[0]; d.Body["pinned"] != true {
+			t.Fatalf("delivery to %s = %+v", path, d.Body)
+		}
+	}
+	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Only you, and not pinned.","to":["reviewer"]}`)
+	eventually(t, "the reviewer gets the second message", func() bool { return len(fm.find(http.MethodPost, pathRev)) == 2 })
+	if d := fm.find(http.MethodPost, pathRev)[1]; d.Body["pinned"] != nil {
+		t.Fatalf("a message without the pin = %+v", d.Body)
+	}
+	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Pinned for you.","to":["reviewer"],"pinned":true}`)
+	eventually(t, "the reviewer gets the addressed pin", func() bool { return len(fm.find(http.MethodPost, pathRev)) == 3 })
+	time.Sleep(50 * time.Millisecond)
+	if d := fm.find(http.MethodPost, pathRev)[2]; d.Body["pinned"] != true || len(fm.find(http.MethodPost, pathMig)) != 1 {
+		t.Fatalf("an addressed pin = %+v", d.Body)
+	}
+	if got := channel(t, s, id)[m.Seq-1]; !got.Pinned {
+		t.Fatalf("the channel holds the entry as %+v", got)
+	}
+	if _, body := do(t, http.MethodGet, url+"/v1/bridges/"+id+"/messages", "alice", ""); !strings.Contains(body, `"pinned":true`) || !strings.Contains(body, `"pinned":false`) {
+		t.Fatalf("the page of the channel = %s", body)
+	}
+	if _, err := s.post(context.Background(), id, sender{handle: "migrator-1", run: "r-mig"}, PostSpec{Text: "Mine.", Pinned: true}); !errIs(err, fw.ErrInvalidRequest) {
+		t.Fatalf("an agent pins: %v", err)
+	}
+}
+
+// A seat whose newest run failed for another reason than a limit gets
+// nothing either, and the channel says so once for that run with the
+// reason from the run. A new run of the seat takes messages again.
+func TestFanOutSkipsAFailure(t *testing.T) {
+	s, v, fm, url, id := fanBridge(t, "")
+	r := workerRun("r-rev", id, "reviewer", "reviewer", fw.StateFailed)
+	r.Error = "model: the provider answered 500"
+	v.put(r)
+	for i := 0; i < 2; i++ {
+		do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Go on."}`)
+	}
+	eventually(t, "the migrator gets both", func() bool { return len(fm.find(http.MethodPost, pathMig)) == 2 })
+	time.Sleep(50 * time.Millisecond)
+	if n := len(fm.find(http.MethodPost, pathRev)); n != 0 {
+		t.Fatalf("the failed reviewer got %d messages", n)
+	}
+	caps := withEvent(channel(t, s, id), EventCap)
+	if len(caps) != 1 || caps[0].Text != "reviewer cannot take messages: its run failed (model: the provider answered 500). Give it its task again to seat it on a new run." {
+		t.Fatalf("cap lines = %+v", caps)
+	}
+	// An address reaches no failed run either.
+	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"You?","to":["reviewer"]}`)
+	time.Sleep(50 * time.Millisecond)
+	if n := len(fm.find(http.MethodPost, pathRev)); n != 0 || len(withEvent(channel(t, s, id), EventCap)) != 1 {
+		t.Fatalf("an address to the failed reviewer: %d messages, cap lines %+v", n, withEvent(channel(t, s, id), EventCap))
+	}
+	// The seat runs again: its new run gets the next message.
+	again := workerRun("r-rev-2", id, "reviewer", "reviewer", fw.StateRunning)
+	again.CreatedAt = r.CreatedAt.Add(time.Second)
+	v.put(again)
+	s.poll(context.Background())
+	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Welcome back.","to":["reviewer"]}`)
+	eventually(t, "the new run gets the message", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-rev-2/messages")) == 1 })
+}
+
 // The caps: maxMessages stops the fan-out until the operator raises it,
 // maxFanoutPerMinute stops the rest of a minute, and maxPairMessages stops
 // two agents until a person writes. Each cap posts one line, and the

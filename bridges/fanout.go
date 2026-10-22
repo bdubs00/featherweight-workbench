@@ -67,14 +67,20 @@ func (x sender) party(member string) fw.MessageFrom {
 }
 
 // PostSpec is a message of a person or an agent: the text, the handles
-// that it addresses, and the entry that it replies to.
+// that it addresses, and the entry that it replies to. Pinned is for a
+// message of a person alone: each delivery of the message is a pinned
+// follow-up (fw.WithMessagePinned), so the instruction stays in the
+// context of the members through every compaction. The tool bridge_post
+// does not take it.
 type PostSpec struct {
 	Text    string   `json:"text"`
 	To      []string `json:"to,omitempty"`
 	ReplyTo *uint64  `json:"replyTo,omitempty"`
+	Pinned  bool     `json:"pinned,omitempty"`
 }
 
 // delivery is one follow-up of a message to the newest run of a member.
+// pinned makes the follow-up survive every compaction of the run.
 type delivery struct {
 	bridge  string
 	seq     uint64
@@ -82,6 +88,7 @@ type delivery struct {
 	run     *fw.Run
 	content string
 	from    fw.MessageFrom
+	pinned  bool
 }
 
 // header is the first line of a follow-up, which names the bridge, so a
@@ -100,6 +107,18 @@ func limited(r *fw.Run) bool {
 	return r.State == fw.StateFailed && strings.HasPrefix(r.Error, "budget exceeded")
 }
 
+// cannotTake is the cap line of a member whose newest run failed, with the
+// reason from the run: at a limit of its budget, the member needs a larger
+// budget; after another failure, its task seats it again on a new run
+// (giveTask).
+func cannotTake(handle string, r *fw.Run) string {
+	reason := oneLine(orWords(r.Error, "no error text"), 300)
+	if limited(r) {
+		return fmt.Sprintf("%s cannot take messages: its run stopped at a limit (%s). It needs a larger budget.", handle, reason)
+	}
+	return fmt.Sprintf("%s cannot take messages: its run failed (%s). Give it its task again to seat it on a new run.", handle, reason)
+}
+
 // post appends a message of a person or an agent to the channel and fans
 // it out. It returns the entry.
 func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) (Message, error) {
@@ -111,6 +130,8 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 		return Message{}, invalid("a message holds at most %d bytes", maxTextBytes)
 	case len(spec.To) > maxTo:
 		return Message{}, invalid("a message addresses at most %d members", maxTo)
+	case spec.Pinned && snd.handle != "":
+		return Message{}, invalid("only a person pins a message")
 	}
 	var to []string
 	seen := map[string]bool{}
@@ -153,7 +174,7 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 		claim(rec, runs)
 		cut, isCut := cutText(text, entryTextBytes)
 		msg = newMessage(snd.from(), cut)
-		msg.Seq, msg.At, msg.Cut, msg.ReplyTo = rec.alloc(), now, isCut, spec.ReplyTo
+		msg.Seq, msg.At, msg.Cut, msg.ReplyTo, msg.Pinned = rec.alloc(), now, isCut, spec.ReplyTo, spec.Pinned
 		if to != nil {
 			msg.To = to
 		}
@@ -191,10 +212,12 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 //     last message of a person. Past it, the two get nothing more from
 //     each other until a person writes or the operator raises the cap.
 //
-// A member whose newest run stopped at a limit of its budget gets nothing,
-// and the channel says so once for that run. A member without a run, whose
-// job waits in the queue, gets nothing; its instructions tell it to read
-// the channel first.
+// A member whose newest run failed gets nothing, and the channel says so
+// once for that run with the reason from the run (cannotTake): at a limit
+// of its budget the member needs a larger budget, and after another
+// failure a new task seats it again. A member without a run, whose job
+// waits in the queue, gets nothing; its instructions tell it to read the
+// channel first.
 func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]*fw.Run, now time.Time) (lines []Message, plan []delivery) {
 	f := &rec.Fan
 	if snd.handle == "" {
@@ -237,10 +260,10 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 		if r == nil {
 			continue // the job waits in the queue; the channel holds the message
 		}
-		if limited(r) {
+		if r.State == fw.StateFailed {
 			if mk := rec.mark(r.ID, m.Handle); !mk.Limit {
 				mk.Limit = true
-				lines = append(lines, system(EventCap, fmt.Sprintf("%s cannot take messages: its run stopped at a limit (%s). It needs a larger budget.", m.Handle, r.Error)))
+				lines = append(lines, system(EventCap, cannotTake(m.Handle, r)))
 			}
 			continue
 		}
@@ -272,7 +295,7 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 			}
 			f.Pairs[pair]++
 		}
-		plan = append(plan, delivery{bridge: rec.ID, seq: msg.Seq, handle: m.Handle, run: r, content: head + text, from: snd.party(m.Handle)})
+		plan = append(plan, delivery{bridge: rec.ID, seq: msg.Seq, handle: m.Handle, run: r, content: head + text, from: snd.party(m.Handle), pinned: msg.Pinned})
 	}
 	if len(minuteMissed) > 0 && !f.MinuteCapped.Equal(minute) {
 		f.MinuteCapped = minute
@@ -325,7 +348,7 @@ type job struct {
 func (s *Store) deliveryJob(d delivery) *job {
 	return &job{
 		name: fmt.Sprintf("message %d of %s to %s", d.seq, d.bridge, d.handle),
-		do:   func(ctx context.Context) error { return s.send(ctx, d.run, d.content, d.from) },
+		do:   func(ctx context.Context) error { return s.send(ctx, d.run, d.content, d.from, d.pinned) },
 		fail: func(err error) {
 			s.log.Warn("bridges: a member did not get a message", "bridge", d.bridge, "seq", d.seq, "member", d.handle, "run", d.run.ID, "error", err)
 			_ = s.postLines(s.ctx, d.bridge, system(EventFailed, fmt.Sprintf("%s did not get message %d: %s.", d.handle, d.seq, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))

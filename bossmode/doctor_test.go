@@ -33,9 +33,12 @@ func TestLoad(t *testing.T) {
 	t.Setenv(EnvEnabled, "")
 	t.Setenv(EnvDir, "")
 	t.Setenv(EnvManager, "")
-	cfg := withBlock(t, "bossmode: {enabled: true, dir: /srv/page, manager: manager}\nbridges: {placement: spawn, maxMembers: 4}\n")
+	t.Setenv(EnvThemeAccent, "")
+	t.Setenv(EnvThemeName, "")
+	t.Setenv(EnvThemeLogo, "")
+	cfg := withBlock(t, "bossmode: {enabled: true, dir: /srv/page, manager: manager, theme: {accent: \"#FF4D00\", name: Example Ltd, logo: /srv/logo.svg}}\nbridges: {placement: spawn, maxMembers: 4}\n")
 	c, err := Load(cfg)
-	if err != nil || c != (Config{Enabled: true, Dir: "/srv/page", Manager: "manager"}) {
+	if err != nil || c != (Config{Enabled: true, Dir: "/srv/page", Theme: Theme{Accent: "#FF4D00", Name: "Example Ltd", Logo: "/srv/logo.svg"}, Manager: "manager"}) {
 		t.Fatalf("Load = %+v, %v", c, err)
 	}
 	if m := manager.Profile(cfg); m != c.Manager {
@@ -44,8 +47,11 @@ func TestLoad(t *testing.T) {
 	t.Setenv(EnvEnabled, "off")
 	t.Setenv(EnvDir, "/other")
 	t.Setenv(EnvManager, "boss")
+	t.Setenv(EnvThemeAccent, "#abcdef80")
+	t.Setenv(EnvThemeName, "Other")
+	t.Setenv(EnvThemeLogo, "/other/logo.png")
 	c, err = Load(cfg)
-	if err != nil || c != (Config{Dir: "/other", Manager: "boss"}) {
+	if err != nil || c != (Config{Dir: "/other", Theme: Theme{Accent: "#abcdef80", Name: "Other", Logo: "/other/logo.png"}, Manager: "boss"}) {
 		t.Errorf("Load with the variables = %+v, %v", c, err)
 	}
 	t.Setenv(EnvEnabled, "maybe")

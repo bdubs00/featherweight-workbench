@@ -1,7 +1,8 @@
 // Package bossmode serves the operator front of the fleet
 // (docs/ARCHITECTURE.md section 17): the static files of the page at
-// /bossmode, its settings at /v1/bossmode, and one stream of server-sent
-// events at /v1/bossmode/stream. The stream carries the changes of the
+// /bossmode, its settings with the theme of the deployment at
+// /v1/bossmode, the logo of the theme at /v1/bossmode/logo, and one
+// stream of server-sent events at /v1/bossmode/stream. The stream carries the changes of the
 // fleet view (fleet.Watcher), the entries and the seats of the bridges,
 // the pages of the wiki, and the faces of the agents, which the hooks of
 // those packages feed (feeds.go), and the events that other packages
@@ -99,8 +100,9 @@ func attach(a *fw.Agent, h *Hub) {
 // Start is the service of bossmode (fw.Service). With
 // workbench.bossmode.enabled, it starts the hub of the stream, attaches it
 // to the agent, and feeds it the changes of the fleet view. Without it, it
-// does nothing. A directory of the page that is not a directory stops the
-// start.
+// does nothing. A directory of the page that is not a directory, and a
+// logo of the theme that does not pass (readLogo), stop the start with
+// the reason.
 func Start(_ context.Context, a *fw.Agent) (io.Closer, error) {
 	c, err := Load(a.Config())
 	if err != nil {
@@ -112,7 +114,12 @@ func Start(_ context.Context, a *fw.Agent) (io.Closer, error) {
 	if err := checkDir(c.Dir); err != nil {
 		return nil, err
 	}
+	lg, err := readLogo(c.Theme.Logo)
+	if err != nil {
+		return nil, err
+	}
 	h := newHub(a, c)
+	h.logo = lg
 	if c.Dir != "" && !hasIndex(c.Dir) {
 		h.log.Warn("bossmode: the directory of the page holds no index.html, so /bossmode answers 503 until the page is built there", "dir", c.Dir)
 	}
@@ -133,11 +140,13 @@ func (c closer) Close() error {
 }
 
 // Hub is the stream of one agent: the ring of the newest events, the
-// count of the open streams, and the feed from the fleet view.
+// count of the open streams, and the feed from the fleet view. It also
+// holds the logo of the theme, which the service read at its start.
 type Hub struct {
-	a   *fw.Agent
-	cfg Config
-	log *slog.Logger
+	a    *fw.Agent
+	cfg  Config
+	log  *slog.Logger
+	logo *logo
 
 	mu      sync.Mutex
 	ring    []entry // circular: the event with the id n is at n % RingSize

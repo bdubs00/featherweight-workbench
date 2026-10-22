@@ -119,7 +119,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `/ui/connect/callback` | The end of a connection (section 2.1) | always |
 | `/.well-known/oauth-protected-resource` | Protected resource metadata (RFC 9728) | when `auth.mode` includes `oidc` |
 | `/v1/sources/{name}` | Webhook sources, POST only, with the credential of each source (section 13) | with a webhook source in `workbench.sources` |
-| `/bossmode`, `/bossmode/{file...}` | The page of bossmode: its static files, GET only, with no credential (section 17.2) | with `workbench.bossmode.enabled` |
+| `/bossmode`, `/bossmode/{file...}` | The page of bossmode: its static files under `/bossmode/`, GET only, with no credential, and a 301 from `/bossmode` to `/bossmode/` (section 17.2) | with `workbench.bossmode.enabled` |
 
 | Method and path | Purpose |
 |---|---|
@@ -147,15 +147,16 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `PUT /v1/faces/{agent}` | Set the face: an SVG of at most 32 KB that passes the sanitizer, else 422. Needs `agent.edit` on the agent. Answers the entry. |
 | `DELETE /v1/faces/{agent}` | Back to the identicon. Answers the entry. |
 | `PATCH /v1/faces/{agent}` | Set `displayName`, at most 64 characters, and `tagline`, at most 140. Answers the entry. |
-| `GET /v1/bossmode` | The settings of the page of bossmode: the manager for the caller, the placement, and the size of a roster (section 17.4). With `workbench.bossmode.enabled`. |
+| `GET /v1/bossmode` | The settings of the page of bossmode: the manager for the caller, the placement, the size of a roster, and the theme of the deployment (section 17.4). With `workbench.bossmode.enabled`. |
+| `GET /v1/bossmode/logo` | The logo of the theme, an SVG that passed the sanitizer or a PNG, with `ETag`, and 404 without a logo (section 17.4). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/stream` | The events of bossmode as server-sent events: the changes of the fleet, the entries and the seats of the bridges, the pages of the wiki, the faces, and the events of other packages that the caller can see, with `Last-Event-ID` to resume (section 17.3). With `workbench.bossmode.enabled`. |
-| `GET /v1/bridges` | The bridges of the caller and of the teams of the caller, open first, each with `lastSeq`, `read`, `unread`, `memberCount`, and `needsYou` (section 18.10). |
+| `GET /v1/bridges` | The bridges of the caller and of the teams of the caller, open first, each with `lastSeq`, `read`, `unread`, `unreadMore`, `memberCount`, and `needsYou` (section 18.10). `unread` stops at 2,000, and `unreadMore` is then true. |
 | `POST /v1/bridges` | Open a bridge from `{"title", "goal", "placement", "members", "delegation", "caps"}` and seat its members. 201 with the record and its members. |
 | `GET /v1/bridges/{id}` | One bridge with the presence and the activity of each member and the usage of its runs. |
 | `PATCH /v1/bridges/{id}` | Change `title`, `delegation` and `caps` in part, and `state`: `closed` closes the bridge, and `open` opens it again. |
 | `PUT /v1/bridges/{id}/read` | Move the read mark of the caller forward to `seq`. 204. |
 | `GET /v1/bridges/{id}/messages` | One page of the channel, as the transcript route pages a run: `before`, `from`, and `limit`. |
-| `POST /v1/bridges/{id}/messages` | A message of the caller, `{"text", "to", "replyTo"}`, which fans out to the members. 201 with the entry, 409 on a closed bridge. |
+| `POST /v1/bridges/{id}/messages` | A message of the caller, `{"text", "to", "replyTo", "pinned"}`, which fans out to the members. With `pinned`, each delivery is a pinned follow-up, which survives every compaction of the run (section 18.5). 201 with the entry, 409 on a closed bridge. |
 | `POST /v1/bridges/{id}/messages/{seq}/reactions` | A reaction of the caller on an entry, `{"reaction", "note"}`: `up`, `down`, or `heart`. 200 with the entry. |
 | `POST /v1/bridges/{id}/members` | Add a seat, `{"handle", "agent", "task"}`, and start its run. 201 with the seat. |
 | `DELETE /v1/bridges/{id}/members/{handle}` | Fire a seat: cancel its open runs and mute it. 200 with the fired seat. |
@@ -1568,16 +1569,33 @@ Bossmode reads the block `bossmode` under the key `workbench` of `fw.yaml` (sect
 | `workbench.bossmode.enabled` | `FW_WORKBENCH_BOSSMODE_ENABLED` | Serves the page at `/bossmode`, the settings at `/v1/bossmode`, and the stream at `/v1/bossmode/stream`. `on` or `off`. | off |
 | `workbench.bossmode.dir` | `FW_WORKBENCH_BOSSMODE_DIR` | The directory of the static files of the page: the `dist` directory of the build of `featherweight-bossmode`. Empty serves the copy that the binary embeds: the build of the page in `bossmode/static`, else the placeholder in `bossmode/placeholder` (sections 1.2 and 17.2). | empty |
 | `workbench.bossmode.manager` | `FW_WORKBENCH_BOSSMODE_MANAGER` | The profile name of the manager agent. The settings of the page, the bridges, the delegation checks, and the doctor lines read it. Empty means no manager. | empty |
+| `workbench.bossmode.theme.accent` | `FW_WORKBENCH_BOSSMODE_THEME_ACCENT` | The accent color of the page for this deployment, in hex: `#rgb`, `#rrggbb`, or `#rrggbbaa`. Empty means `#FF4D00`. | empty |
+| `workbench.bossmode.theme.name` | `FW_WORKBENCH_BOSSMODE_THEME_NAME` | The name of the organization that the page shows: one line of at most 64 characters | empty |
+| `workbench.bossmode.theme.logo` | `FW_WORKBENCH_BOSSMODE_THEME_LOGO` | The path of the logo on the front: an SVG or a PNG file of at most 256 KB, whose name ends with `.svg` or `.png`, in any case. The service reads it once at its start. | empty |
 
 Each key has one reader. The package `manager` reads `workbench.bossmode.manager` (`manager.Load`), because it sits below the packages `bridges` and `bossmode`, and both ask it. `bossmode.Load` reads `enabled` and `dir` and takes the manager from `manager.Load`. The settings of the page also name two keys of `workbench.bridges`, `placement` (`FW_WORKBENCH_BRIDGES_PLACEMENT`), `queue` by default, and `maxMembers` (`FW_WORKBENCH_BRIDGES_MAX_MEMBERS`), 16 by default. The package `bridges` reads that block (`bridges.Load`, section 18.13), and the settings ask it, so the settings, the bridges, and the doctor line never disagree.
 
-A configuration that cannot work stops the start: a value of `enabled` that is not a switch, a manager name with a space or a slash, which also stops the bridges, and a `dir` that is not a directory. A block `workbench.bridges` that does not load stops the bridges, so a process that serves always loads it. Without `enabled`, no route of bossmode exists, and each answers 404. The service runs in a process that serves, as the fleet does (section 4.6), so `fw-workbench run` starts no stream.
+A configuration that cannot work stops the start, and the error names the key and the reason: a value of `enabled` that is not a switch, a manager name with a space or a slash, which also stops the bridges, a `dir` that is not a directory, an accent that is no color in hex, and a name above 64 characters or with a control character. A logo stops the start when the service cannot read it, when its name ends neither with `.svg` nor with `.png`, when it holds more than 256 KB, when it is an SVG that the sanitizer of the faces refuses (section 16.2), and when it is a PNG that does not decode. The sanitizer bounds an SVG to 32 KB, so an SVG logo holds at most 32 KB. A block `workbench.bridges` that does not load stops the bridges, so a process that serves always loads it. Without `enabled`, no route of bossmode exists, and each answers 404. The service runs in a process that serves, as the fleet does (section 4.6), so `fw-workbench run` starts no stream.
+
+```yaml
+workbench:
+  bossmode:
+    enabled: true
+    manager: manager
+    theme:
+      accent: "#0A7E8C"
+      name: Example Ltd
+      logo: /etc/fw/logo.svg
+```
+
+Quote the accent in YAML, because `#` starts a comment there.
 
 ### 17.2 The page
 
-`GET /bossmode` and `GET /bossmode/{file...}` serve the static files of the page. They are public routes, as `/ui` is: the files hold no data, and the page signs in on its own and calls `/v1` with its token.
+`GET /bossmode/{file...}` serves the static files of the page. It is a public route, as `/ui` is: the files hold no data, and the page signs in on its own and calls `/v1` with its token.
 
-- `/bossmode`, `/bossmode/`, and every path whose last element has no file extension, such as `/bossmode/bridge/01K`, get `index.html`, because the page routes on the client.
+- `GET /bossmode` answers 301 with `Location: /bossmode/`, and the query goes along. The address of the page therefore always ends with the slash, and the sign-in returns only to a path under `/bossmode/` (section 5).
+- `/bossmode/` and every path whose last element has no file extension, such as `/bossmode/bridge/01K`, get `index.html`, because the page routes on the client.
 - A path with an extension gets that file with its content type, such as `text/javascript` or `image/svg+xml`. A missing file is a 404.
 - A path with an element that starts with a dot, such as `.env` or `.git/config`, is a 404, also without an extension.
 - A path that holds an element `..`, a backslash, or a control character is a 400. Such a path can reach the route only escaped, such as `%2e%2e`. The files of `dir` open through an `os.Root`, so no name and no symbolic link leads out of the directory.
@@ -1629,7 +1647,8 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
 {
   "manager": {"agent": "manager", "member": "default/manager-0", "run": "01K..."},
   "placement": "queue",
-  "maxMembers": 16
+  "maxMembers": 16,
+  "theme": {"accent": "#FF4D00", "name": "", "logo": ""}
 }
 ```
 
@@ -1637,6 +1656,9 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
 - `manager.member` is the fleet member that runs the manager, for `POST /v1/runs?member=`: a Task of the pool whose `agent` is the profile, the first one whose phase is Running, else the first. Without such a pool, it is the first member by name whose agents hold the profile. The front runs the configuration of its workers, so it holds every profile, and it is the member only when no other member is. The answer names only a pool and a member that the caller can see, and `""` when there is none.
 - `manager.run` is the newest top-level run of the profile that the caller started, from the runs of the fleet that the caller can see, or `""`. A run whose batch is the batch of a bridge, such as the manager run of a spawn bridge or the run that writes the report of a bridge, also acts as the operator, but it is no conversation of the page, so the settings skip it.
 - `placement` and `maxMembers` come from `workbench.bridges`, as `bridges.Load` reads them (section 17.1).
+- `theme` is the theme of the deployment (section 17.1). `accent` is the accent of the configuration, else `#FF4D00`. `name` is the name of the organization, else `""`. `logo` is `"/v1/bossmode/logo"` when the configuration names a logo, else `""`.
+
+`GET /v1/bossmode/logo`, behind the authentication of the native API, serves the logo with its content type, `image/svg+xml` or `image/png`, and an `ETag`, the SHA-256 of the body in quotes. `If-None-Match` with the ETag answers 304. An SVG goes out as the sanitizer wrote it, and a PNG goes out as it is. The answer carries `Cache-Control: private, no-cache`, `X-Content-Type-Options: nosniff`, and the content security policy of a face (section 16.3). Without a logo, the route answers 404. An `img` element sends no bearer token, so the page reads the logo with `fetch` and shows it as a blob URL, as it shows a face.
 
 ### 17.5 The broadcaster
 
@@ -1670,7 +1692,7 @@ A hook runs on the replica that made the change, so a stream on another replica 
 
 ### 17.6 Doctor and metrics
 
-`fw-workbench doctor` has one line for bossmode, which covers the page, the manager, and the stores. It says off, or on with these facts: the page that it serves, from `dir` with or without an `index.html`, or the embedded copy and whether that copy is the placeholder; the manager profile, and whether `fw.agents` or a pool defines a profile of that name; and the streams. Then, on or off, it adds the lines of the stores, `pages.Status`, `faces.Status`, and `bridges.Status`: where the wiki, the faces, and the bridges live, with their limits and the manager of the bridges. A `dir` that is not a directory, a `dir` without `index.html`, a manager that no profile defines, and a store whose configuration does not load fail the line. The doctor runs in a process of its own, which serves no stream, so it names the gauge of the server for the open streams. The line `manager` says more about the pool of the manager (section 19.6).
+`fw-workbench doctor` has one line for bossmode, which covers the page, the manager, and the stores. It says off, or on with these facts: the page that it serves, from `dir` with or without an `index.html`, or the embedded copy and whether that copy is the placeholder; the theme, when a key of it is set, with the type and the size of the logo; the manager profile, and whether `fw.agents` or a pool defines a profile of that name; and the streams. Then, on or off, it adds the lines of the stores, `pages.Status`, `faces.Status`, and `bridges.Status`: where the wiki, the faces, and the bridges live, with their limits and the manager of the bridges. A `dir` that is not a directory, a `dir` without `index.html`, a logo that does not pass, a manager that no profile defines, and a store whose configuration does not load fail the line. The doctor runs in a process of its own, which serves no stream, so it names the gauge of the server for the open streams. The line `manager` says more about the pool of the manager (section 19.6).
 
 | Metric | Type | What it counts |
 |---|---|---|
@@ -1716,14 +1738,16 @@ The channel holds one entry per message, under the key `<bridge>.<seq>`, with th
 | `replyTo` | The seq of the entry that it replies to, or null |
 | `text` | The text, cut to its first 4 KB at a rune |
 | `cut` | True when the channel holds only the first 4 KB of the text. The run that gets the message holds the whole text. |
+| `pinned` | True for a message that a person pinned, whose deliveries survive every compaction of the runs that get them (section 18.5) |
 | `event` | For a system line, what it says (section 18.6) |
+| `page` | For a system line about a page of the wiki, the path of the page, such as `bridges/<id>/report.md`, else absent. The page of bossmode links the page from this field. The text names the path and holds no link. |
 | `mirrors` | `{"run", "seq", "type"}`: the run event that the entry mirrors, or null |
 | `reactions` | The subjects of the people per reaction: `{"up": [], "down": [], "heart": []}` |
-| `decision` | On the card of an approval or a question of a member run: the fields of `dashboard.Decision`, the run, the state, and who decided, when, with which note and answer, and `always` (section 18.6). Null elsewhere. |
+| `decision` | On the card of an approval or a question of a member run: the fields of `dashboard.Decision`, the run, the state, and who decided, when, with which note and answer, and `always` (section 18.6). The state is `pending`, `allow`, `deny`, or `unknown`. Null elsewhere. |
 
 A message of a person or an agent holds at most 64 KB. `GET /v1/bridges/{id}/messages` pages the channel as the transcript route pages a run (section 2.2): without `from` and `before` the page holds the last `limit` entries, `limit` is 50 by default and 500 at most, `before` reads back, `from` reads forward, `next` is the seq to read on from, `prev` is the value of `before` for the page in front and 0 at the first page, and `from` and `before` together answer 400. A seq without an entry, such as the seq of a write that a crash cut, is left out.
 
-The read mark of a person lives in the same bucket, under `<bridge>.read.<the SHA-256 of the subject>`, so no subject enters a key. `PUT /v1/bridges/{id}/read` moves it forward, and a smaller seq leaves it. A message of a person moves the mark of that person to the message. `unread` counts the entries after the mark that count for the caller: a message of a person or an agent other than the caller, and a card that waits for a decision. A message of the caller and a plain system line do not count. The count reads the channel from its newest entry back, at most 2,000 entries, and counts the entries further back as unread. Each process keeps the sender of each entry that it read, so a count reads an entry once.
+The read mark of a person lives in the same bucket, under `<bridge>.read.<the SHA-256 of the subject>`, so no subject enters a key. `PUT /v1/bridges/{id}/read` moves it forward, and a smaller seq leaves it. A message of a person moves the mark of that person to the message. `unread` counts the entries after the mark that count for the caller: a message of a person or an agent other than the caller, and a card that waits for a decision. A message of the caller and a plain system line do not count. The count reads the channel from its newest entry back, at most 2,000 entries, and counts every entry further back as unread. Past that window the count can therefore be too high, because a plain system line or a message of the caller further back counts too. `unread` stops at 2,000, and `unreadMore` is true when the count reached past 2,000, so the page can show "2000+". Each process keeps the sender of each entry that it read, so a count reads an entry once.
 
 ### 18.3 The placements
 
@@ -1743,10 +1767,12 @@ For each new message of a person or an agent, the addressed members, or every ac
 
 A follow-up goes to the Task that owns the run through the forward of the fleet (section 4.5), as `POST /v1/runs/{id}/messages` with `content` and `from`, with the static token of the fleet, so the owner records the sender (the kernel architecture, section 5.5). For a person, `from` is `{"kind": "person", "name": <subject>, "member": <handle of the recipient>}`. For an agent, it is `{"kind": "agent", "name": <handle of the sender>, "run": <run of the sender>, "member": <handle of the recipient>}`. The content names the bridge in its first line, such as `[bridge "Migrate logrotate" 01k...] @reviewer from migrator-1: ...`, or `to everyone from alice:` for a broadcast, so a run that reads several bridges tells them apart. A run of the front itself gets the message from the kernel, `Agent.Send` with `fw.WithMessageFrom`.
 
+A person can pin a message with `pinned: true` in the body of `POST /v1/bridges/{id}/messages`. The entry records it as `pinned`. Each delivery of the message goes to the run of each addressed member, or of every active member for a broadcast, with `pinned: true` in the body of `POST /v1/runs/{id}/messages`, and with `fw.WithMessagePinned` for a run of the front itself. The kernel keeps a pinned follow-up through every compaction of the run (the kernel architecture, section 5.5), so an instruction that the operator pins stays in the context of the members. The pinned messages of one run hold at most 64 KB together, so a pinned delivery past that bound fails at once, and the channel gets the line `failed` that names the member and the message. The caps and the skips of this section hold for a pinned message as for any other. The tool `bridge_post` takes no `pinned`, so a run pins nothing, and the store refuses a pin from an agent.
+
 Some members get nothing, and the channel holds the message for them:
 
 - A member without a run, because its job waits in the queue. Its instructions tell it to read the channel first.
-- A member whose newest run stopped at a limit of its budget. A follow-up without a larger budget fails at once, so the channel gets one line with the event `cap` for that run, which says that the member needs a larger budget.
+- A member whose newest run failed. The channel gets one line with the event `cap` for that run, which says that the member cannot take messages and gives the reason from the run. After a stop at a limit of its budget, a follow-up without a larger budget fails at once, so the line says that the member needs a larger budget. After another failure, the line says that its task seats it again on a new run (section 18.9). A new run of the member takes messages again.
 - A member whose newest run was canceled, because a message starts it again.
 
 The caps of a bridge bound the fan-out. Past a cap the front delivers nothing more, posts one line with the event `cap`, and waits. Nothing leaves the channel.
@@ -1776,9 +1802,13 @@ The front watches the view of the fleet for the runs of each bridge by its batch
 | `asleep` | The Task of the newest run of a seat went quiet | `<handle> went to sleep. A message wakes its Task.` |
 | `started` | That Task runs again | `<handle> woke up.` |
 
-The decision of a card is the pending decision of the run as the result of a run words it (`dashboard.Decision`, section 6.3), with `run`, `state: pending`, and `always`, which is true when the card can offer Always allow by the rule of a pool (section 14.9): a run of a worker, a call of one tool, and an ask of the default or of a rule that names the tool, never a flag such as `destructive` and never a pattern. When the run no longer waits for the card, the front reads the events of the run after the card from its owner, with the static token, and finds the decision with its decider, its note, and the answer of a form. It writes the card again under the same seq with `state`, `decidedBy`, `decidedAt`, `note`, and `answer`, gives it to the hook `OnMessage` again, and posts the line. A card whose run no longer waits for it without a decision, because the run ended or asked again after a resume, is written again as denied with a note and no line. After 30 reads that fail, the front gives up on the card and says so in a line. For the end of a run, the front reads the last 20 events of the run from its owner, so the message holds the whole output up to 4 KB and mirrors the exact seq of the `fw.run.finished`. A run that finishes again after a follow-up gets one more message.
+The decision of a card is the pending decision of the run as the result of a run words it (`dashboard.Decision`, section 6.3), with `run`, `state: pending`, and `always`, which is true when the card can offer Always allow by the rule of a pool (section 14.9): a run of a worker, a call of one tool, and an ask of the default or of a rule that names the tool, never a flag such as `destructive` and never a pattern. When the run no longer waits for the card, the front reads the events of the run after the card from its owner, with the static token, and finds the decision with its decider, its note, and the answer of a form. It writes the card again under the same seq with `state`, `decidedBy`, `decidedAt`, `note`, and `answer`, gives it to the hook `OnMessage` again, and posts the line. A card whose run no longer waits for it without a decision, because the run ended or asked again after a resume, is written again as denied with a note and no line.
 
-The actions post their lines in the change of the record that makes them: `opened`, `closed`, `reopened`, `joined`, `fired`, `muted` (also for an unmute), `task`, `changed` (a change of the title, the delegation, or the caps, and the link to a report), and `cap`. A job of a fired seat that waited in the queue and starts after the fire stops: the watch cancels it.
+The front can fail to read the run of a card, such as when its Task does not answer. After 30 reads that fail, the front writes the card again with `state: "unknown"` and a note that says that the front failed to read the run. The card no longer counts as unread, and the channel gets one line with the event `failed` that says so. Nobody can decide such a card, because the run no longer waits for it, so the page shows it as not decidable. The front reads the run again for the card at most once a minute, while it watches the bridge. A read that works writes the card again with its real state: the decision with its decider and the line `decided`, or `deny` with a note for a run that ended without a decision.
+
+For the end of a run, the front reads the last 20 events of the run from its owner, so the message holds the whole output up to 4 KB and mirrors the exact seq of the `fw.run.finished`. A run that finishes again after a follow-up gets one more message.
+
+The actions post their lines in the change of the record that makes them: `opened`, `closed`, `reopened`, `joined`, `fired`, `muted` (also for an unmute), `task`, `changed` (a change of the title, the delegation, or the caps, and the line of a report), and `cap`. A job of a fired seat that waited in the queue and starts after the fire stops: the watch cancels it.
 
 ### 18.7 Presence
 
@@ -1793,7 +1823,7 @@ The presence of a member is its status light on the roster. `bridges.Presence(me
 | `working` | The run is queued or running, or the member has no run yet because its job waits in the queue |
 | `idle` | The run finished, and the Task is live |
 
-`activity` is the activity of the newest run (the kernel architecture, section 8.2), with `turn`, `tool`, `callId`, `since`, and `phrase`. The package words it with `fleet.ActivityPhrase`, which its `init` sets with `bridges.UsePhrase`. The view keeps the input of the latest tool call of each run (section 4.15), so a tool call reads as `Ran "go test ./..."` and a run that thinks as "Thinking in turn 7", the words of the `run` events of the stream (section 17.3). Without a function, the package words only a run that thinks and leaves the phrase of a tool call empty.
+`activity` is the activity of the newest run (the kernel architecture, section 8.2), with `turn`, `tool`, `callId`, `since`, and `phrase`. The package words it with `fleet.ActivityPhrase`, which its `init` sets with `bridges.UsePhrase`. The view keeps the input of the latest tool call of each run (section 4.15), so a tool call reads as `Ran "go test ./..."` and a run that thinks as "Thinking in turn 7", the words of the `run` events of the stream (section 17.3). A seat whose run is a run of the front itself gets its phrase from `fleet.ActivityPhrase` too, but no view holds the input of the tool call of such a run, so its phrase names the tool alone, such as `bash`. Without a function, the package words only a run that thinks and leaves the phrase of a tool call empty.
 
 ### 18.8 Reactions and hearts
 
@@ -1805,9 +1835,13 @@ A heart also appends an entry to the page `agents/<agent>/learned.md` of the wik
 
 `DELETE /v1/bridges/{id}/members/{handle}` fires a seat. The front cancels the open runs of the seat through the forward, `POST /v1/runs/{id}/cancel` with the static token, marks the seat fired and muted, and posts `<name> fired <handle>. Its Task stays in its pool.` In a spawn bridge the runs of a seat are children of the manager run, and the cancel of a child goes to the Task that holds it in the same way; the child Task stays. A fire of a fired seat answers 200 with the seat and changes nothing, and a fired seat takes no other change.
 
-`PATCH /v1/bridges/{id}/members/{handle}` mutes or unmutes a seat, and gives it a task. A task that differs from the task of the record changes the record and posts `<handle> has a new task: ...`. Every patch with `task` then looks at the newest run of the seat. A seat whose newest run failed or was canceled gets a new run with the task (section 18.3), with the next idempotency key `bridge:<id>:<handle>:<n+1>`. This holds also when the text did not change, because the page seats a stopped member again with the same task; the channel then gets `<name> seated <handle> again on its task: ...`. A second patch with the same text within a minute, before the new run shows in the view, seats nothing more, so a double click starts one run. After that minute, the same patch seats the seat once more, so a seating whose job never ran can be tried again. A seat that works, waits, or finished gets no new run: a changed task reaches its newest run as a follow-up of the person, `Your new task: ...`, and the same text changes nothing. A seat without a run gets nothing, because its job still waits.
+`PATCH /v1/bridges/{id}/members/{handle}` mutes or unmutes a seat, and gives it a task. A task that differs from the task of the record changes the record and posts `<handle> has a new task: ...`.
 
-A close marks the record closed and stops the fan-out. It cancels nothing. With `delegation.report`, it asks the manager for a report in the page `bridges/<id>/report.md` of the wiki, written with `pages_write`: one follow-up to the manager run of the bridge, or a new run of the manager when the bridge has none, which then becomes `manager.run`. A close through `bridge_close` by the manager run of the bridge asks nothing more, because the result of the tool asks that run for the report. The front reads the wiki while the bridge is closed, for up to ten minutes, and posts the link to the report once the page appears. An open after a close opens the bridge again and ends the wait.
+Every patch with `task` then looks at the newest run of the seat. A seat that works, waits, or finished keeps its run, and a changed task reaches that run as a follow-up message of the person, `Your new task: ...`. A seat whose newest run failed or was canceled gets a new run with the task (section 18.3), with the next idempotency key `bridge:<id>:<handle>:<n+1>`.
+
+The new run comes also when the text did not change, because the page seats a stopped member again with the same task; the channel then gets `<name> seated <handle> again on its task: ...`. A second patch with the same text within a minute, before the new run shows in the view, seats nothing more, so a double click starts one run. After that minute, the same patch seats the seat once more, so a seating whose job never ran can be tried again. On a seat that works, the same text changes nothing. A seat without a run gets nothing, because its job still waits.
+
+A close marks the record closed and stops the fan-out. It cancels nothing. With `delegation.report`, it asks the manager for a report in the page `bridges/<id>/report.md` of the wiki, written with `pages_write`: one follow-up to the manager run of the bridge, or a new run of the manager when the bridge has none, which then becomes `manager.run`. A close through `bridge_close` by the manager run of the bridge asks nothing more, because the result of the tool asks that run for the report. The front reads the wiki while the bridge is closed, for up to ten minutes. Once the page appears, it posts one line with the event `changed`, the text `The report is in the wiki: bridges/<id>/report.md.`, and the field `page: "bridges/<id>/report.md"`. The text holds no Markdown link: a link such as `#page/...` names a place of the page at `/ui`, and the page of bossmode routes on its own, so it links the page from the field. An open after a close opens the bridge again and ends the wait.
 
 ### 18.10 The routes
 
@@ -1815,7 +1849,7 @@ Every route needs the authentication of the native surface. A bridge is for its 
 
 | Method and path | Answer |
 |---|---|
-| `GET /v1/bridges` | `{"bridges": [...]}`: each record without `members`, with `lastSeq`, `read`, `unread`, `memberCount`, fired seats included, and `needsYou`, the members with the presence `needs-you` |
+| `GET /v1/bridges` | `{"bridges": [...]}`: each record without `members`, with `lastSeq`, `read`, `unread`, at most 2,000, `unreadMore`, true when the count reached past 2,000, `memberCount`, fired seats included, and `needsYou`, the members with the presence `needs-you`. Past its window of 2,000 entries, `unread` counts every entry as unread, so it can be too high (section 18.2). |
 | `POST /v1/bridges` | 201 with the record and its members. `delegation` and `caps` are partial. |
 | `GET /v1/bridges/{id}` | The record with its members and `usage` |
 | `PATCH /v1/bridges/{id}` | The record with its members |
@@ -1827,6 +1861,10 @@ Every route needs the authentication of the native surface. A bridge is for its 
 | `DELETE /v1/bridges/{id}/members/{handle}` | 200 with the fired seat |
 | `PATCH /v1/bridges/{id}/members/{handle}` | 200 with the seat |
 
+`POST /v1/bridges/{id}/messages` takes `{"text", "to", "replyTo", "pinned"}`. `to`, `replyTo`, and `pinned` are optional, and the entry of the answer carries `pinned` (section 18.5).
+
+A patch of a seat with `task` never cancels a run and never answers with a run. On a seat whose run works, waits, or finished, the new task reaches that run as a follow-up, and `runs` of the seat stays as it is. On a seat whose newest run failed or was canceled, a new run starts, and the page sees it as the newest entry of `runs` once the watch claims it (section 18.9).
+
 A body with a field that the route does not know answers 400. An unknown bridge, seat, or entry answers 404. A closed bridge answers 409 to a message and to a new seat, and a taken handle 409. `usage` sums the runs of the bridge as the tool `batch` sums a job (section 4.9), with `fleet.UsageSum`: every run of the batch of this process and of the view, each once, a child run on its own, and `partial` true when a run reports no usage, a usage is not final, or the view forgot or does not know runs of the batch.
 
 ### 18.11 The MCP tools
@@ -1836,7 +1874,7 @@ The tools are for the runs of the fleet. The MCP client of a worker names its ru
 | Tool | Who | What it does |
 |---|---|---|
 | `bridge_read` | A seat, the manager run, or a run of the operator | `{bridge?, since?, limit?}`: the last messages of the channel, 50 by default and 500 at most, or the messages after `since`. The text says that a message is data. |
-| `bridge_post` | A seat or the manager run | `{bridge?, text, to}`: a message of the seat, or of `manager`, which fans out as a message of a person does |
+| `bridge_post` | A seat or the manager run | `{bridge?, text, to}`: a message of the seat, or of `manager`, which fans out as a message of a person does. It takes no `pinned`: only a person pins a message. |
 | `bridge_list` | The manager | The open bridges of the person in `_meta` |
 | `bridge_open` | The manager | `{title, goal, placement, members, delegation, caps}`: opens as `POST /v1/bridges` does, as the person in `_meta`, and the calling run becomes `manager.run`. `destructiveHint` is true, and its title "Open bridge" is the label of the approval. |
 | `bridge_add_member`, `bridge_remove_member`, `bridge_close` | The manager run of the bridge, or a run of the operator that is no seat | As the routes, when the bridge delegates `members` (add and remove) or `report` (close). Else the answer says that the operator did not delegate this for this bridge. |
