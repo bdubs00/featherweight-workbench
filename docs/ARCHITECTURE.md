@@ -229,7 +229,7 @@ Each time a Task becomes live, the front reads its runs and its agents through t
 
 ### 4.2 The record of a member
 
-The front computes a record for each member from the sources: the name, the address, the atespace, the state, the agents that its runs name, and its runs. Every run that is not finished and the 50 newest finished runs are in it, as run objects whose input, output, and error are cut to 2 KB; a pending tool input larger than 4 KB is left out. A large job does not fit in a record, so the tool `batch` reads every run of a job from the view instead (section 4.9). When a person opens a run, the view reads the full run from its owner. The record names the authorization of the front, not of the worker: the front runs the same `fw.yaml` as the workers and decides for every worker with its own `access` block and agent profiles. A process that configures no agent profile offers no agent, so a person never sees the front itself as a member with agents.
+The front computes a record for each member from the sources: the name, the address, the atespace, the state, the agents that its runs name, and its runs. Every run that is not finished and the 50 newest finished runs are in it, as run objects whose input, output, and error are cut to 2 KB; a pending tool input larger than 4 KB is left out. A large job does not fit in a record, so the tool `batch` reads every run of a job from the view instead (section 4.9). When a person opens a run, the view reads the full run from its owner. Beside the record, the view keeps the input of the latest tool call of each run, so it can word what the run does now (section 4.15). The record names the authorization of the front, not of the worker: the front runs the same `fw.yaml` as the workers and decides for every worker with its own `access` block and agent profiles. A process that configures no agent profile offers no agent, so a person never sees the front itself as a member with agents.
 
 ### 4.3 The view
 
@@ -437,6 +437,17 @@ groups:
 ```
 
 The rules keep only the labels that they name, so the label of the replica goes, and they work for the series of a scrape and of the OTLP push alike.
+
+### 4.15 Changes and the activity of a run
+
+Another package follows the view through its changes. `fleet.Of(a)` returns the view, and the view of the fleet is a `fleet.Watcher` with two methods:
+
+- `Watch(ctx)` returns a channel of `fleet.Change` values: one per run update, one per change of the state of a member, and one per change of the phase of a Task. The channel closes when the context ends or the fleet closes. A change of the kind `run` holds a copy of the run as `GET /v1/fleet/runs` lists it, with `member`, and the words of its activity. A change of the kind `member` holds the state of the member: `live`, `quiet`, or `stopped`. A change of the kind `task` holds the phase of the Task, such as `Running` or `Suspended`. A member that leaves the view sends both kinds with `gone`. A worker that only the stream knows turns `quiet` with time, and that sends a change too. The runs of the front itself are not in the changes.
+- `Visible(ctx, change)` decides whether the caller can see a change, with the rules of section 4.4 at that moment. For a run, it decides as `GET /v1/fleet/runs` decides for that run and that caller, from the run and its ancestors on the member. For a member or a Task, it decides as `GET /v1/fleet` decides for the member. It keeps no decision. A decision point that does not answer is an error.
+
+A slow consumer never holds up the view. Each watcher keeps at most 1,024 changes (`fleet.WatchBuffer`) that its consumer has not read. A newer change of the same run, member, or Task replaces the change that waits, in its place. When the buffer is full, the oldest change goes. A consumer that must not miss a state reads the view again, as the page of bossmode does after a reconnect (section 17).
+
+The activity of a run (the kernel architecture, section 8.2) says what a run that works does now. It needs `fw.turn.started`, `fw.tool.requested`, and `fw.tool.responded` on the stream (section 4.1). The view keeps the input of the latest `fw.tool.requested` of each run, up to 4 KB (`fleet.ActivityInputLimit`). A larger input keeps its shape with each string cut shorter, and an input that does not fit even then is left out. The result of the call, the end of the turn, and the end of the run forget the input. An approval keeps it, because the call goes on after the decision. `fleet.ActivityPhrase(run)` words the activity with `view.ActivityPhrase` of the kernel, such as `Ran "go test ./..."` or "Thinking in turn 7", and a change of a run carries the same words. For a run that the view does not hold, and for a call whose input the view does not keep, the words name the tool.
 
 ## 5. Browser sign-in
 
