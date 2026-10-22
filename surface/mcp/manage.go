@@ -160,8 +160,9 @@ func agentPutSchema() json.RawMessage {
 					"deny":    ruleList("Rules that refuse a call, such as bash: rm -rf*."),
 				},
 			},
-			"budget":  budgetSchema("The limits of every run of the agent."),
-			"outcome": outcomeSchema("A grade of the answer of every run of the agent: a rubric, an optional grader model, and the number of passes."),
+			"budget":     budgetSchema("The limits of every run of the agent."),
+			"outcome":    outcomeSchema("A grade of the answer of every run of the agent: a rubric, an optional grader model, and the number of passes."),
+			"compaction": compactionSchema("When the runs of the agent compact their history: at, model, and off over the compaction block of the configuration."),
 			"access": map[string]any{
 				"type":        "object",
 				"description": "Who owns and uses the agent. Each entry is a subject, a glob over subjects, group:<name>, kind:<kind>, issuer:<url>, or *. Without access, a new profile gets you as its owner, and a replaced profile keeps the access block it has.",

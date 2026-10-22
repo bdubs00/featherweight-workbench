@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,5 +121,40 @@ func TestDurationArgumentPrecision(t *testing.T) {
 		if err != nil || budget.Deadline != tc.want {
 			t.Errorf("%s = %v, %v; want %v", tc.json, budget.Deadline, err, tc.want)
 		}
+	}
+}
+
+// TestCompactionRoundTrip checks that agent_put keeps the compaction block
+// of a profile, and that the profile that agent_get returns goes back
+// through agent_put unchanged.
+func TestCompactionRoundTrip(t *testing.T) {
+	ctx := testCtx(t)
+	a := manageAgent(t, newScript().model())
+	cs := as(t, ctx, serveAgent(t, a, nil).URL, "alice-token")
+	res := callTool(t, ctx, cs, toolAgentPut, map[string]any{"name": "short", "compaction": map[string]any{"at": 4096, "model": "fake/small"}})
+	if res.IsError {
+		t.Fatal(textOf(res))
+	}
+	want := fw.CompactionConfig{At: 4096, Model: "fake/small"}
+	if p, ok := a.ProfileNamed("short"); !ok || p.Compaction == nil || *p.Compaction != want {
+		t.Fatalf("saved compaction = %+v", p.Compaction)
+	}
+	res = callTool(t, ctx, cs, toolAgentGet, map[string]any{"name": "short"})
+	var got struct {
+		Agent struct {
+			Compaction json.RawMessage `json:"compaction"`
+		} `json:"agent"`
+	}
+	structured(t, res, &got)
+	res = callTool(t, ctx, cs, toolAgentPut, map[string]any{"name": "short", "compaction": got.Agent.Compaction})
+	if res.IsError {
+		t.Fatal(textOf(res))
+	}
+	if p, _ := a.ProfileNamed("short"); p.Compaction == nil || *p.Compaction != want {
+		t.Fatalf("compaction after the round trip = %+v from %s", p.Compaction, got.Agent.Compaction)
+	}
+	res = callTool(t, ctx, cs, toolAgentPut, map[string]any{"name": "short", "compaction": map[string]any{"at": 100, "off": true}})
+	if !res.IsError || !strings.Contains(textOf(res), "compaction.off") {
+		t.Fatalf("a bad block = %s", textOf(res))
 	}
 }
