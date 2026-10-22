@@ -170,7 +170,7 @@ func TestAllowedMatchesAsTheKernel(t *testing.T) {
 	if got := Allowed(a, []string{}); got == nil || len(got) != 0 {
 		t.Fatalf("empty = %v", got)
 	}
-	if got := Allowed(a, []string{"review-go"}); got[0].Description != "Go." || got[0].Origin != "" {
+	if got := Allowed(a, []string{"review-go"}); got[0].Description != "Go." || got[0].Origin != OriginLocal {
 		t.Fatalf("ref = %+v", got[0])
 	}
 }

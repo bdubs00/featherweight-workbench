@@ -117,7 +117,7 @@ func TestSkillsCatalog(t *testing.T) {
 		t.Fatalf("catalog = %s", body)
 	}
 	fix, fetched, odd := c.Skills[1], c.Skills[0], c.Skills[2]
-	if fix.Name != "fix" || !fix.UserInvocable || fix.ModelInvocable || fix.ArgumentHint != "<issue>" || len(fix.Arguments) != 1 || fix.Arguments[0].Name != "issue" || fix.URI != "fix/SKILL.md" || fix.Origin != "" {
+	if fix.Name != "fix" || !fix.UserInvocable || fix.ModelInvocable || fix.ArgumentHint != "<issue>" || len(fix.Arguments) != 1 || fix.Arguments[0].Name != "issue" || fix.URI != "fix/SKILL.md" || fix.Origin != "local" {
 		t.Fatalf("fix = %+v", fix)
 	}
 	if fetched.Name != "fetched" || fetched.Origin != skills.OriginImported || fetched.UserInvocable {
@@ -126,7 +126,7 @@ func TestSkillsCatalog(t *testing.T) {
 	if odd.Name != "odd" || !odd.UserInvocable || len(odd.Arguments) != 0 {
 		t.Fatalf("odd = %+v", odd)
 	}
-	for _, key := range []string{`"userInvocable"`, `"modelInvocable"`, `"argumentHint"`, `"arguments":[]`, `"files":[]`, `"uri"`, `"origin":""`} {
+	for _, key := range []string{`"userInvocable"`, `"modelInvocable"`, `"argumentHint"`, `"arguments":[]`, `"files":[]`, `"uri"`, `"origin":"local"`} {
 		if !strings.Contains(body, key) {
 			t.Fatalf("the catalog holds no %s: %s", key, body)
 		}

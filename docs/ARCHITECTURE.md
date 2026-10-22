@@ -2220,7 +2220,7 @@ The catalog holds every skill that the front knows: the skills of the kernel (`f
 | Field | Value |
 |---|---|
 | `name`, `description` | The name and the description, as the kernel reads them from the front matter |
-| `origin` | The origin as the kernel gives it: empty for a skill of a skills directory, and `mcp` for a skill of an MCP server. `imported` for a skill with the marker of an import. |
+| `origin` | The origin as `GET /v1/skills` of the kernel names it (`fw.Skill.OriginName`): `local` for a skill of a skills directory, and `mcp` for a skill of an MCP server. The catalog then names a skill with the marker of an import `imported` in the place of `local`. |
 | `server` | The name of the `tools.mcp` entry of a skill of an MCP server. Absent for any other skill. |
 | `uri` | The URI of `SKILL.md` that the kernel gives a skill of an MCP server, else the path of `SKILL.md` relative to its skills directory, such as `review/SKILL.md` |
 | `userInvocable` | False when a person cannot hand the skill to a run (section 20.3) |
@@ -2276,13 +2276,13 @@ The message starts with one line, `Skill: <name>`. A blank line and the expanded
 
 A run never hands a skill to another run. The tool `bridge_post` takes no skill, and `skill_send` refuses a call that names a run of the fleet in `_meta` (`mcp.CallRun`). Only a person sends a slash command, through the page, the routes, or the tool from a client of the person.
 
-In a bridge, `POST /v1/bridges/{id}/messages` takes `skill: {"name", "args"}` beside `to` and `replyTo`, and `text` is optional then. The message fans out as any message of a person does, with the first line of the bridge in front (section 18.5), under the caps. The entry of the channel records `skill`, and its text is the line `Skill: <name>` and one line that sums up the description of the skill, the arguments, and the text of the person, cut as other entries are, with `cut` true. Each run that gets the message holds the whole skill.
+In a bridge, `POST /v1/bridges/{id}/messages` takes `skill: {"name", "args"}` beside `to`, `replyTo`, and `pinned`, and `text` is optional then. The message fans out as any message of a person does, with the first line of the bridge in front (section 18.5), under the caps. The entry of the channel records `skill`, and its text is the line `Skill: <name>` and one line that sums up the description of the skill, the arguments, and the text of the person, cut as other entries are, with `cut` true and `pinned` true, as for a message that a person pinned (section 18.5). Each run that gets the message holds the whole skill.
 
 A conversation that is no bridge, such as the conversation of the person with the manager, or a direct conversation with an agent outside a bridge, takes the slash command at `POST /v1/bossmode/runs/{id}/skill`, with `{"name", "args", "text"}`. A field that the route does not know answers 400. The route first finds the run for the caller: a run of this process that the caller can operate, as the kernel decides, or a run of another member that the view shows the caller. Only then does it read the skill, so a caller who cannot act on the run learns nothing about the skills. The tool `skill_send` keeps the same order. The route answers 202 with the run object, as `POST /v1/runs/{id}/messages` answers.
 
 ### 20.4 The pinned delivery
 
-The front sends the message of a slash command pinned: `fw.WithMessagePinned` for a run of this process, and `pinned: true` in the body of `POST /v1/runs/{id}/messages` for a run of another member (the kernel architecture, section 5.5). A compaction keeps a pinned message word for word after the summary, so the run keeps the skill for the rest of its life. A plain message of a channel is never pinned.
+The front sends the message of a slash command pinned: `fw.WithMessagePinned` for a run of this process, and `pinned: true` in the body of `POST /v1/runs/{id}/messages` for a run of another member (the kernel architecture, section 5.5). A compaction keeps a pinned message word for word after the summary, so the run keeps the skill for the rest of its life. A message of a channel is pinned only when a person pins it with `pinned` (section 18.5) or sends a slash command, and the two take the same path: each delivery of a pinned entry is a pinned follow-up.
 
 The message is a message of the person:
 

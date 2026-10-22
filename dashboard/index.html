@@ -1936,7 +1936,7 @@ function abilities(all) {
 function skillList(sk) {
   if (!sk || !sk.skills) return '';
   if (!sk.skills.length) return '<h2 class="sec">Skills</h2><div class="group"><div class="row can"><span class="main"><span>It can load no skill.</span></span></div></div>';
-  return '<h2 class="sec">Skills</h2><div class="group">' + sk.skills.map(x => `<div class="row can"><span class="main"><span class="t">${esc(x.name)}</span>${x.description ? `<span class="s">${esc(x.description)}</span>` : ''}</span>${x.origin ? `<span class="end">${esc(x.origin)}</span>` : ''}</div>`).join('') + '</div>';
+  return '<h2 class="sec">Skills</h2><div class="group">' + sk.skills.map(x => `<div class="row can"><span class="main"><span class="t">${esc(x.name)}</span>${x.description ? `<span class="s">${esc(x.description)}</span>` : ''}</span>${x.origin && x.origin !== 'local' ? `<span class="end">${esc(x.origin)}</span>` : ''}</div>`).join('') + '</div>';
 }
 // fillDraft checks a proposal on the server and draws it as the contact card
 // of the agent. A proposal that matches a saved agent shows Start run.

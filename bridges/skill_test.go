@@ -37,7 +37,9 @@ func TestSlashCommandInABridge(t *testing.T) {
 	}
 	var m Message
 	decodeJSON(t, out, &m)
-	if m.Skill == nil || *m.Skill != (skills.Command{Name: "fix", Args: "42"}) || !m.Cut || m.From.Kind != KindPerson || m.From.Name != "alice" {
+	// A slash command is pinned, so its entry says so, as the entry of a
+	// message that a person pinned does.
+	if m.Skill == nil || *m.Skill != (skills.Command{Name: "fix", Args: "42"}) || !m.Cut || !m.Pinned || m.From.Kind != KindPerson || m.From.Name != "alice" {
 		t.Fatalf("entry = %+v", m)
 	}
 	if m.Text != "Skill: fix\nFixes an issue. arguments: 42. Then report." {

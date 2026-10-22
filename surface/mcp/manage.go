@@ -585,7 +585,7 @@ func skillsText(refs []skills.Ref, pooled bool) string {
 				b.WriteString(", ")
 			}
 			b.WriteString(r.Name)
-			if r.Origin != "" {
+			if r.Origin != skills.OriginLocal {
 				b.WriteString(" from " + r.Origin)
 			}
 		}

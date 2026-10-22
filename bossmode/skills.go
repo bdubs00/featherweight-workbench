@@ -128,7 +128,7 @@ func catalogText(list []skills.Entry) string {
 			b.WriteString(": " + e.Description)
 		}
 		var notes []string
-		if e.Origin != "" {
+		if e.Origin != skills.OriginLocal {
 			notes = append(notes, "from "+e.Origin)
 		}
 		if !e.UserInvocable {

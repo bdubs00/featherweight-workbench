@@ -30,8 +30,9 @@ import (
 
 // Origins of a skill.
 const (
-	// OriginLocal is the origin of a skill of a configured directory.
-	OriginLocal = ""
+	// OriginLocal is the origin of a skill of a skills directory, as the
+	// kernel names it in GET /v1/skills (fw.SkillOriginLocal).
+	OriginLocal = fw.SkillOriginLocal
 	// OriginImported is the origin of a skill that an admin imported.
 	OriginImported = "imported"
 	// OriginMCP is the origin of a skill of an MCP server, whose entry
