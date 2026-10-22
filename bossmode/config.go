@@ -32,6 +32,9 @@ const (
 	EnvThemeAccent = "FW_WORKBENCH_BOSSMODE_THEME_ACCENT"
 	EnvThemeName   = "FW_WORKBENCH_BOSSMODE_THEME_NAME"
 	EnvThemeLogo   = "FW_WORKBENCH_BOSSMODE_THEME_LOGO"
+	// The variables of the quick chat of the page (Chat).
+	EnvChatAgent  = "FW_WORKBENCH_BOSSMODE_CHAT_AGENT"
+	EnvChatMember = "FW_WORKBENCH_BOSSMODE_CHAT_MEMBER"
 )
 
 // Bounds and defaults of the theme.
@@ -42,6 +45,9 @@ const (
 	MaxThemeName = 64
 	// MaxLogoBytes bounds the file of the logo.
 	MaxLogoBytes = 256 << 10
+	// MaxChatMember bounds the name of the member of the quick chat, in
+	// bytes.
+	MaxChatMember = 256
 )
 
 // Config configures bossmode.
@@ -55,12 +61,24 @@ const (
 // is the profile name of the manager agent, from manager.Load. Empty means
 // no manager. Bossmode reads it for the settings of the page and for the
 // doctor line, and starts no run of it. Theme is the look of the page for
-// the deployment.
+// the deployment. Chat is the quick chat of the page.
 type Config struct {
 	Enabled bool   `yaml:"enabled"`
 	Dir     string `yaml:"dir"`
 	Theme   Theme  `yaml:"theme"`
+	Chat    Chat   `yaml:"chat"`
 	Manager string `yaml:"-"`
+}
+
+// Chat is the quick chat of the page (docs/ARCHITECTURE.md section 17.7):
+// a conversation of a person with a general assistant beside the bridges.
+// Agent is the profile that the page runs for a quick chat; empty means
+// no quick chat. Member is the fleet member that runs it, for POST
+// /v1/runs?member=; empty lets the settings pick the member as they pick
+// the member of the manager. Bossmode starts no run of it: the page does.
+type Chat struct {
+	Agent  string `yaml:"agent"`
+	Member string `yaml:"member"`
 }
 
 // Theme is the look of the page for one deployment, which the settings of
@@ -106,6 +124,9 @@ func Load(cfg *fw.Config) (Config, error) {
 	if c.Theme, err = loadTheme(c.Theme); err != nil {
 		return Config{}, err
 	}
+	if c.Chat, err = loadChat(c.Chat); err != nil {
+		return Config{}, err
+	}
 	if c.Manager, err = manager.Load(cfg); err != nil {
 		return Config{}, err
 	}
@@ -135,6 +156,31 @@ func loadTheme(t Theme) (Theme, error) {
 		return Theme{}, fmt.Errorf("bossmode: workbench.bossmode.theme.name (%s) must be one line of UTF-8 without a control character", EnvThemeName)
 	}
 	return t, nil
+}
+
+// loadChat applies the variables of the quick chat over the block and
+// checks the names. A member without an agent is an error, because the
+// member runs nothing then.
+func loadChat(c Chat) (Chat, error) {
+	if v, ok := lookup(EnvChatAgent); ok {
+		c.Agent = v
+	}
+	if v, ok := lookup(EnvChatMember); ok {
+		c.Member = v
+	}
+	c.Agent, c.Member = strings.TrimSpace(c.Agent), strings.TrimSpace(c.Member)
+	if strings.ContainsAny(c.Agent, " \t\r\n/") || strings.IndexFunc(c.Agent, unicode.IsControl) >= 0 {
+		return Chat{}, fmt.Errorf("bossmode: workbench.bossmode.chat.agent (%s) %q is not a profile name", EnvChatAgent, c.Agent)
+	}
+	switch {
+	case len(c.Member) > MaxChatMember:
+		return Chat{}, fmt.Errorf("bossmode: workbench.bossmode.chat.member (%s) has %d bytes; it holds at most %d", EnvChatMember, len(c.Member), MaxChatMember)
+	case !utf8.ValidString(c.Member) || strings.IndexFunc(c.Member, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0:
+		return Chat{}, fmt.Errorf("bossmode: workbench.bossmode.chat.member (%s) %q is not a member name; it holds no space and no control character", EnvChatMember, c.Member)
+	case c.Member != "" && c.Agent == "":
+		return Chat{}, fmt.Errorf("bossmode: workbench.bossmode.chat.member (%s) names the member %s, and workbench.bossmode.chat.agent (%s) names no profile; set the agent of the quick chat, or remove the member", EnvChatMember, c.Member, EnvChatAgent)
+	}
+	return c, nil
 }
 
 func readBlock(cfg *fw.Config) (block, error) {

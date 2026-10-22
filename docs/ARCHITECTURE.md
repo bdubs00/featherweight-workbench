@@ -20,7 +20,7 @@ The workbench changes no kernel code. It plugs in through the extension points o
 - `fw.Agent.SetPersonTokens` gives the tool sources of the kernel the access tokens of people, and `fw.Agent.Connected` resumes the calls that wait for a connection. The package `connections` uses both (section 11).
 - The package `sources` uses `fw.RegisterService`, `native.Extend`, and `cli.RegisterDoctorCheck` too: its service runs the sources, its route takes the events of webhooks, and its doctor line names the sources (section 13).
 - The packages `pages`, `faces`, and `bridges` use `fw.RegisterService` and `native.Extend`, and `mcp.RegisterTools` of the MCP server of the workbench (section 3.1): the service keeps the store, the routes serve it to people, and the tools offer it to MCP clients and agents (sections 15, 16, and 18). The service of `bridges` also watches the view of the fleet and fans the messages of a channel out to the runs of its members.
-- The package `bossmode` uses `fw.RegisterService`, `native.Extend`, `metrics.RegisterCollector`, and `cli.RegisterDoctorCheck`: its service keeps the stream of the page, its routes serve the page, its settings, and the stream, and its doctor line names the page, the manager, the streams, and the stores of the wiki, the faces, and the bridges (section 17).
+- The package `bossmode` uses `fw.RegisterService`, `native.Extend`, `metrics.RegisterCollector`, and `cli.RegisterDoctorCheck`: its service keeps the stream of the page, its routes serve the page, its settings, and the stream, and its doctor line names the page, the manager, the quick chat, the streams, and the stores of the wiki, the faces, and the bridges (section 17).
 - The package `manager` holds what makes an agent of the fleet a manager (section 19). `cmd/fw-workbench` wraps the authorization plug of every agent with `manager.Guard` through `fw.WithAuthzFrom`. It also adds the line `manager` to `fw doctor` with `cli.RegisterDoctorCheck`. Each tool of the MCP server that reads or acts calls `manager.OnBehalf` at its start.
 - The packages of bossmode meet at five seams in the workbench, and none of them is a hook of the kernel:
   - The service of `bridges` gives its store to `manager.SetBridges` when it starts and takes it back with `manager.ClearBridges` when it stops. So a manager run on a run of a bridge gets what the record of that bridge delegates (section 19.4).
@@ -1659,16 +1659,20 @@ Bossmode reads the block `bossmode` under the key `workbench` of `fw.yaml` (sect
 | `workbench.bossmode.theme.accent` | `FW_WORKBENCH_BOSSMODE_THEME_ACCENT` | The accent color of the page for this deployment, in hex: `#rgb`, `#rrggbb`, or `#rrggbbaa`. Empty means `#FF4D00`. | empty |
 | `workbench.bossmode.theme.name` | `FW_WORKBENCH_BOSSMODE_THEME_NAME` | The name of the organization that the page shows: one line of at most 64 characters | empty |
 | `workbench.bossmode.theme.logo` | `FW_WORKBENCH_BOSSMODE_THEME_LOGO` | The path of the logo on the front: an SVG or a PNG file of at most 256 KB, whose name ends with `.svg` or `.png`, in any case. The service reads it once at its start. | empty |
+| `workbench.bossmode.chat.agent` | `FW_WORKBENCH_BOSSMODE_CHAT_AGENT` | The profile of the quick chat of the page (section 17.7). Empty means no quick chat. | empty |
+| `workbench.bossmode.chat.member` | `FW_WORKBENCH_BOSSMODE_CHAT_MEMBER` | The fleet member that runs the quick chat, such as `default/manager-0`, at most 256 bytes. Empty lets the settings pick the member as they pick the member of the manager (section 17.4). | empty |
 
-Each key has one reader. The package `manager` reads `workbench.bossmode.manager` (`manager.Load`), because it sits below the packages `bridges` and `bossmode`, and both ask it. `bossmode.Load` reads `enabled` and `dir` and takes the manager from `manager.Load`. The settings of the page also name two keys of `workbench.bridges`, `placement` (`FW_WORKBENCH_BRIDGES_PLACEMENT`), `queue` by default, and `maxMembers` (`FW_WORKBENCH_BRIDGES_MAX_MEMBERS`), 16 by default. The package `bridges` reads that block (`bridges.Load`, section 18.13), and the settings ask it, so the settings, the bridges, and the doctor line never disagree.
+Each key has one reader. The package `manager` reads `workbench.bossmode.manager` (`manager.Load`), because it sits below the packages `bridges` and `bossmode`, and both ask it. `bossmode.Load` reads `enabled`, `dir`, `theme`, and `chat`, and takes the manager from `manager.Load`. The settings of the page also name two keys of `workbench.bridges`, `placement` (`FW_WORKBENCH_BRIDGES_PLACEMENT`), `queue` by default, and `maxMembers` (`FW_WORKBENCH_BRIDGES_MAX_MEMBERS`), 16 by default. The package `bridges` reads that block (`bridges.Load`, section 18.13), and the settings ask it, so the settings, the bridges, and the doctor line never disagree.
 
-A configuration that cannot work stops the start, and the error names the key and the reason: a value of `enabled` that is not a switch, a manager name with a space or a slash, which also stops the bridges, a `dir` that is not a directory, an accent that is no color in hex, and a name above 64 characters or with a control character. A logo stops the start when the service cannot read it, when its name ends neither with `.svg` nor with `.png`, when it holds more than 256 KB, when it is an SVG that the sanitizer of the faces refuses (section 16.2), and when it is a PNG that does not decode. The sanitizer bounds an SVG to 32 KB, so an SVG logo holds at most 32 KB. A block `workbench.bridges` that does not load stops the bridges, so a process that serves always loads it. Without `enabled`, no route of bossmode exists, and each answers 404. The service runs in a process that serves, as the fleet does (section 4.6), so `fw-workbench run` starts no stream.
+A configuration that cannot work stops the start, and the error names the key and the reason: a value of `enabled` that is not a switch, a manager name with a space or a slash, which also stops the bridges, a `dir` that is not a directory, an accent that is no color in hex, a name above 64 characters or with a control character, a chat agent with a space, a slash, or a control character, a chat member with a space or a control character or above 256 bytes, and a chat member without a chat agent. A logo stops the start when the service cannot read it, when its name ends neither with `.svg` nor with `.png`, when it holds more than 256 KB, when it is an SVG that the sanitizer of the faces refuses (section 16.2), and when it is a PNG that does not decode. The sanitizer bounds an SVG to 32 KB, so an SVG logo holds at most 32 KB. A block `workbench.bridges` that does not load stops the bridges, so a process that serves always loads it. Without `enabled`, no route of bossmode exists, and each answers 404. The service runs in a process that serves, as the fleet does (section 4.6), so `fw-workbench run` starts no stream.
 
 ```yaml
 workbench:
   bossmode:
     enabled: true
     manager: manager
+    chat:
+      agent: chat
     theme:
       accent: "#0A7E8C"
       name: Example Ltd
@@ -1736,7 +1740,8 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
   "placement": "queue",
   "maxMembers": 16,
   "theme": {"accent": "#FF4D00", "name": "", "logo": ""},
-  "templates": [{"name": "general", "default": true}, {"name": "python", "default": false}]
+  "templates": [{"name": "general", "default": true}, {"name": "python", "default": false}],
+  "chat": {"agent": "chat", "member": "default/manager-0"}
 }
 ```
 
@@ -1746,6 +1751,7 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
 - `placement` and `maxMembers` come from `workbench.bridges`, as `bridges.Load` reads them (section 17.1).
 - `theme` is the theme of the deployment (section 17.1). `accent` is the accent of the configuration, else `#FF4D00`. `name` is the name of the organization, else `""`. `logo` is `"/v1/bossmode/logo"` when the configuration names a logo, else `""`.
 - `templates` names the worker templates of the front in the order of the configuration, each with `default`, so the page offers the choice when it creates an agent. It is `[]` without templates. The page creates the agent and its workers with `PUT /v1/agents/{name}` and `workers` (section 14.10).
+- `chat` is `null` when `workbench.bossmode.chat.agent` is empty. `chat.agent` is the profile of the quick chat (section 17.7). `chat.member` is `workbench.bossmode.chat.member` as the configuration names it. Without it, the settings pick the member as for `manager.member`, with the profile of the quick chat in the place of the manager, and the answer names only a member that the caller can see, else `""`.
 
 `GET /v1/bossmode/logo`, behind the authentication of the native API, serves the logo with its content type, `image/svg+xml` or `image/png`, and an `ETag`, the SHA-256 of the body in quotes. `If-None-Match` with the ETag answers 304. An SVG goes out as the sanitizer wrote it, and a PNG goes out as it is. The answer carries `Cache-Control: private, no-cache`, `X-Content-Type-Options: nosniff`, and the content security policy of a face (section 16.3). Without a logo, the route answers 404. An `img` element sends no bearer token, so the page reads the logo with `fetch` and shows it as a blob URL, as it shows a face.
 
@@ -1781,12 +1787,24 @@ A hook runs on the replica that made the change, so a stream on another replica 
 
 ### 17.6 Doctor and metrics
 
-`fw-workbench doctor` has one line for bossmode, which covers the page, the manager, and the stores. It says off, or on with these facts: the page that it serves, from `dir` with or without an `index.html`, or the embedded copy and whether that copy is the placeholder; the theme, when a key of it is set, with the type and the size of the logo; the manager profile, and whether `fw.agents` or a pool defines a profile of that name; and the streams. Then, on or off, it adds the lines of the stores, `pages.Status`, `faces.Status`, and `bridges.Status`: where the wiki, the faces, and the bridges live, with their limits and the manager of the bridges. A `dir` that is not a directory, a `dir` without `index.html`, a logo that does not pass, a manager that no profile defines, and a store whose configuration does not load fail the line. The doctor runs in a process of its own, which serves no stream, so it names the gauge of the server for the open streams. The line `manager` says more about the pool of the manager (section 19.6).
+`fw-workbench doctor` has one line for bossmode, which covers the page, the manager, and the stores. It says off, or on with these facts: the page that it serves, from `dir` with or without an `index.html`, or the embedded copy and whether that copy is the placeholder; the theme, when a key of it is set, with the type and the size of the logo; the manager profile, and whether `fw.agents` or a pool defines a profile of that name; the profile of the quick chat, whether `fw.agents` or the profiles of a pool hold it, the overlay of the pool included, and the member of the configuration, or that the settings pick one; and the streams. Then, on or off, it adds the lines of the stores, `pages.Status`, `faces.Status`, and `bridges.Status`: where the wiki, the faces, and the bridges live, with their limits and the manager of the bridges. A `dir` that is not a directory, a `dir` without `index.html`, a logo that does not pass, a manager that no profile defines, a quick chat that no profile defines, and a store whose configuration does not load fail the line. The doctor runs in a process of its own, which serves no stream, so it names the gauge of the server for the open streams. The line `manager` says more about the pool of the manager (section 19.6).
 
 | Metric | Type | What it counts |
 |---|---|---|
 | `fw_bossmode_streams_open` | gauge | The streams of the page that are open now |
 | `fw_bossmode_streams_refused_total` | counter | The streams that the front refused with 429, because 64 were open |
+
+### 17.7 The quick chat
+
+The quick chat is a conversation of one person with a general assistant, beside the bridges. The deployer names its profile in `workbench.bossmode.chat.agent`, and the settings of the page carry it in `chat` (section 17.4). The front starts no run of it and keeps no state for it: the page holds the conversation, and the kernel holds the runs.
+
+- A quick chat is a run of the profile of `chat.agent`. The page starts it with `POST /v1/runs?member=<chat.member>`, with the credential of the person, the field `agent` set to the profile, the input of the person, and the metadata `fw.view: quickchat`, so a list of runs can tell a quick chat from other work. Without a member, the run starts on the front.
+- The picks of the person go in the inline profile of the run (the kernel architecture, section 12.5): `profile.tools`, the tools that the person turned on, and `profile.skills`, the skills that the person picked. Each list replaces the list of the profile for that run alone. A tool that the profile leaves out is named in `extraTools` of the run, and the conversation says so. The policy of the profile still decides each call.
+- Each later message of the person is a follow-up, `POST /v1/runs/{id}/messages`, as for the manager.
+- The history of the quick chat of a person is the runs of that profile for that person: `GET /v1/fleet/runs` with `agent` set to the profile and `principal` set to the subject of the person, as `GET /v1/whoami` names it. The list holds only the runs that the caller can see. The metadata `fw.view: quickchat` (`bossmode.ChatView`) marks the runs that the page started.
+- The page reads the answer as the model writes it from `GET /v1/runs/{id}/live` (the kernel architecture, sections 5.1 and 8.2). For a run on a Task, the request reaches the front, and the relay of the fleet forwards it to the Task and copies the stream back with a flush after each read (section 4.5). The live stream holds no replay, so the page reads the whole answer from the run object or the events when the stream closes.
+
+The profile is an ordinary profile of the pool that runs it. The example in `examples/bossmode` gives the pool of the manager a second profile, `chat`: a short system prompt for a general assistant, the tools `files`, `recall`, `memory`, `clock`, and the tools `front.pages_*` of the wiki, no model, and the memory scope `principal` of the pool, so the notes of the quick chat belong to one person. The pool names `agent: manager`, because a pool with two profiles takes the queue of one. The doctor line names the profile and the pool that runs it (section 17.6).
 
 ## 18. Bridges
 

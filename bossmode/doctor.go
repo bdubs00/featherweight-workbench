@@ -16,12 +16,14 @@ import (
 // DoctorCheck is the line of fw doctor about bossmode (cli.DoctorCheck):
 // the page, the manager, and the stores, in one line. It says off, or on
 // with the page that it serves, whether the directory of the page holds
-// index.html, the theme, the manager profile and where it is defined, and
-// the open streams. Then, on or off, it gives the lines of the stores that
+// index.html, the theme, the manager profile and where it is defined, the
+// profile of the quick chat and the pools that run it, and the open
+// streams. Then, on or off, it gives the lines of the stores that
 // bossmode reads: the wiki (pages.Status), the faces (faces.Status), and
 // the bridges (bridges.Status). A directory without index.html, a logo
 // that does not pass, a manager that no profile of fw.agents and no pool
-// defines, and a store whose configuration does not load fail the check. cmd/fw-workbench registers
+// defines, a quick chat that no profile defines, and a store whose
+// configuration does not load fail the check. cmd/fw-workbench registers
 // it. The line manager of the package manager says more about the pool of
 // the manager.
 func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duration) (bool, string) {
@@ -72,6 +74,9 @@ func pageCheck(cfg *fw.Config) (bool, string) {
 		ok = false
 		parts = append(parts, line)
 	}
+	line, found := chatLine(cfg, c.Chat)
+	ok = ok && found
+	parts = append(parts, line)
 	parts = append(parts, streamsLine())
 	return ok, "bossmode: " + strings.Join(parts, "; ")
 }
@@ -100,6 +105,51 @@ func managerLine(cfg *fw.Config, manager string) (line string, found bool) {
 		return fmt.Sprintf("the manager %s is no profile of fw.agents and the agent of no pool, so the page has no manager", manager), false
 	}
 	return "the manager " + manager + " is " + strings.Join(where, " and "), true
+}
+
+// chatLine names the profile of the quick chat and says where it is
+// defined: in fw.agents of this process, and in the profiles of each pool
+// whose workers run it, the overlay of the pool included. It names the
+// member of the configuration, or says that the settings pick one. found
+// is false for a quick chat whose profile neither defines.
+func chatLine(cfg *fw.Config, c Chat) (line string, found bool) {
+	if c.Agent == "" {
+		return "names no quick chat (workbench.bossmode.chat.agent)", true
+	}
+	var where []string
+	if _, ok := cfg.Agents[c.Agent]; ok {
+		where = append(where, "a profile of fw.agents")
+	}
+	var pools []string
+	if fc, err := fleet.Load(cfg); err == nil {
+		if list, err := fleet.LoadPools(cfg, fc); err == nil {
+			for _, p := range list {
+				if _, ok := p.Profiles()[c.Agent]; ok {
+					pools = append(pools, p.Name)
+				}
+			}
+		}
+	}
+	switch len(pools) {
+	case 0:
+	case 1:
+		where = append(where, "a profile of the pool "+pools[0])
+	default:
+		where = append(where, "a profile of the pools "+strings.Join(pools, ", "))
+	}
+	if len(where) == 0 {
+		return fmt.Sprintf("the quick chat %s is no profile of fw.agents and of no pool, so the page has no quick chat", c.Agent), false
+	}
+	line = "the quick chat " + c.Agent + " is " + strings.Join(where, " and ")
+	switch {
+	case c.Member != "":
+		line += ", and runs on the member " + c.Member
+	case len(pools) == 0:
+		line += ", and no pool runs it, so the settings pick a member that holds it, else this process"
+	default:
+		line += ", and the settings pick its member"
+	}
+	return line, true
 }
 
 // streamsLine counts the open streams of the hubs of this process. The

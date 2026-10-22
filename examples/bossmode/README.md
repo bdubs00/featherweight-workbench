@@ -9,9 +9,10 @@ one conversation with one operator. The design is in section 19 of
 `docs/ARCHITECTURE.md`.
 
 The file `fw.yaml` is the configuration of a front with this pool. To add
-the manager to a front that you run already, copy two parts into its
+the manager to a front that you run already, copy three parts into its
 `fw.yaml`: the entry `manager` of `workbench.pools`, beside the pools that
-the front keeps, and `workbench.bossmode.manager: manager`.
+the front keeps, `workbench.bossmode.manager: manager`, and
+`workbench.bossmode.chat.agent: chat` for the quick chat.
 
 ## What the pool holds
 
@@ -67,6 +68,32 @@ name the templates. Section 14.10 of the architecture has the rules.
   `front.bridge_open`. It writes its reports into the wiki, and it names the
   person it acts for. It answers in plain words. It never claims that a run
   passed a check that it did not see.
+
+## The profile `chat`
+
+The pool runs a second profile, `chat`, for the quick chat of the page:
+a conversation of one person with a general assistant, beside the
+bridges. `workbench.bossmode.chat.agent: chat` names it, and the settings
+of the page, `GET /v1/bossmode`, carry it in `chat` with the member that
+runs it. The pool names `agent: manager`, because a pool with two
+profiles takes the queue of one.
+
+- The tools `files`, `recall`, `memory`, `clock`, and the tools of the
+  wiki: `front.pages_list`, `front.pages_read`, `front.pages_write`,
+  `front.pages_search`, and `front.pages_history`. The page sends the
+  picks of the person as the inline profile of each run, so
+  `profile.tools` and `profile.skills` replace these lists for that run.
+- No model, as for the manager.
+- The memory scope `principal` of the pool: the notes of the quick chat
+  belong to one person.
+- A short system prompt for a general assistant. It reads before it
+  answers, writes a page of the wiki only when the person asks, and says
+  so when it does not know.
+
+The page starts a quick chat as it starts a conversation with the manager,
+with `{"agent": "chat", "input": "...", "metadata": {"fw.view":
+"quickchat"}}`, and reads the answer live from `GET /v1/runs/{id}/live`
+through the front. Section 17.7 of the architecture has the rules.
 
 ## Install
 

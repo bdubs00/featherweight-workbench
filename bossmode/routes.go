@@ -41,15 +41,31 @@ func extension(k *native.Kit) error {
 // Settings is the answer of GET /v1/bossmode: the manager, when the
 // configuration names one, the keys of workbench.bridges that the page
 // reads, as the package bridges reads them (bridges.Load), the theme of
-// the deployment, and the worker templates from which the page offers a
+// the deployment, the worker templates from which the page offers a
 // choice when it creates an agent (fleet.TemplatesOf), an empty list for
-// none.
+// none, and the quick chat, when the configuration names one.
 type Settings struct {
 	Manager    *Manager   `json:"manager"`
 	Placement  string     `json:"placement"`
 	MaxMembers int        `json:"maxMembers"`
 	Theme      PageTheme  `json:"theme"`
 	Templates  []Template `json:"templates"`
+	Chat       *QuickChat `json:"chat"`
+}
+
+// ChatView is the value of the metadata key fw.view (dashboard.ViewKey)
+// that the page sets on a run of the quick chat (docs/ARCHITECTURE.md
+// section 17.7).
+const ChatView = "quickchat"
+
+// QuickChat names the quick chat for the page. Agent is the profile of
+// workbench.bossmode.chat.agent. Member is the fleet member that runs it:
+// workbench.bossmode.chat.member when it names one, else the member that
+// the settings pick for the manager (Manager) for this profile, "" when
+// the caller sees none.
+type QuickChat struct {
+	Agent  string `json:"agent"`
+	Member string `json:"member"`
 }
 
 // Template names a worker template for the page: its name, and whether a
@@ -95,6 +111,14 @@ func settingsRoute(k *native.Kit, c Config) http.HandlerFunc {
 			}
 			out.Manager = m
 		}
+		if c.Chat.Agent != "" {
+			qc, err := chatOf(r.Context(), a, c.Chat)
+			if err != nil {
+				k.Fail(w, r, err)
+				return
+			}
+			out.Chat = qc
+		}
 		native.WriteJSON(w, http.StatusOK, out)
 	}
 }
@@ -130,7 +154,27 @@ func managerOf(ctx context.Context, a *fw.Agent, agent string) (*Manager, error)
 	return m, nil
 }
 
-// managerMember returns the member that runs the manager, as Manager says.
+// chatOf names the quick chat and its member for the caller in ctx. A
+// member of the configuration goes out as it is; without one, the member
+// comes from the fleet view as for the manager.
+func chatOf(ctx context.Context, a *fw.Agent, c Chat) (*QuickChat, error) {
+	qc := &QuickChat{Agent: c.Agent, Member: c.Member}
+	if qc.Member != "" {
+		return qc, nil
+	}
+	if v := fleet.Of(a); v != nil {
+		member, err := managerMember(ctx, v, c.Agent)
+		if err != nil {
+			return nil, err
+		}
+		qc.Member = member
+	}
+	return qc, nil
+}
+
+// managerMember returns the member that runs the profile agent, as Manager
+// says: the settings pick the member of the manager and of the quick chat
+// this way.
 func managerMember(ctx context.Context, v fleet.View, agent string) (string, error) {
 	if pv, ok := v.(fleet.PoolView); ok {
 		list, err := pv.Pools(ctx)

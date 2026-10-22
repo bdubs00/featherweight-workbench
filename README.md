@@ -121,7 +121,7 @@ On a NATS bus, both live in key-value buckets of the stream of the fleet, `<stre
 
 ## Bossmode
 
-Bossmode is the operator front of the fleet, a chat client in which an operator runs a team of agents. With `workbench.bossmode.enabled`, the front serves the page at `/bossmode`, its settings at `GET /v1/bossmode`, and one stream of server-sent events at `GET /v1/bossmode/stream`. The stream carries the runs, the members, and the Tasks of the fleet, the entries and the seats of the bridges, the pages of the wiki, and the faces, each to the people who can see it. `workbench.bossmode.theme` gives the page the accent, the name, and the logo of a deployment. `fw-workbench doctor` has one line for bossmode: the page, the theme, the manager, and the stores of the wiki, the faces, and the bridges. Section 17 of the architecture has the rules.
+Bossmode is the operator front of the fleet, a chat client in which an operator runs a team of agents. With `workbench.bossmode.enabled`, the front serves the page at `/bossmode`, its settings at `GET /v1/bossmode`, and one stream of server-sent events at `GET /v1/bossmode/stream`. The stream carries the runs, the members, and the Tasks of the fleet, the entries and the seats of the bridges, the pages of the wiki, and the faces, each to the people who can see it. `workbench.bossmode.theme` gives the page the accent, the name, and the logo of a deployment, and `workbench.bossmode.chat` names the profile of the quick chat, a conversation of one person with a general assistant. `fw-workbench doctor` has one line for bossmode: the page, the theme, the manager, the quick chat, and the stores of the wiki, the faces, and the bridges. Section 17 of the architecture has the rules.
 
 ## Bridges
 
