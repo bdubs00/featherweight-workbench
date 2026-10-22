@@ -3,3 +3,5 @@ bin
 .fw
 docs
 examples
+bossmode/static/*
+!bossmode/static/.gitkeep

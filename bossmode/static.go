@@ -2,7 +2,9 @@ package bossmode
 
 // This file serves the static files of the page at /bossmode
 // (docs/ARCHITECTURE.md section 17.2): from workbench.bossmode.dir, or from
-// the copy in static/ that the binary embeds.
+// the copy that the binary embeds, the build of the page in static/ when
+// make page or the Dockerfile put it there, else the placeholder in
+// placeholder/.
 
 import (
 	"embed"
@@ -20,11 +22,14 @@ import (
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 )
 
-// static holds the page that the binary embeds. The repository holds a
-// placeholder index.html that names the key to set. A build that embeds
-// the page copies the dist directory of featherweight-bossmode here.
+// static holds the page that the binary embeds. static/ holds the build
+// of the page when make page or the Dockerfile copied the dist directory
+// of featherweight-bossmode there, and only the file .gitkeep otherwise,
+// because git ignores the rest of it. placeholder/ holds the placeholder
+// page of the repository, which names the key to set. So go build works
+// with a build of the page and without one.
 //
-//go:embed static
+//go:embed all:static placeholder
 var static embed.FS
 
 // CSP is the content security policy of every answer of the page. The
@@ -144,7 +149,7 @@ func hidden(name string) bool {
 // what pageFS opened.
 func pageFS(dir string) (fs.FS, func(), error) {
 	if dir == "" {
-		sub, err := fs.Sub(static, "static")
+		sub, _, err := embeddedFS(static)
 		return sub, func() {}, err
 	}
 	root, err := os.OpenRoot(dir)
@@ -190,10 +195,26 @@ func hasIndex(dir string) bool {
 	return err == nil && !st.IsDir()
 }
 
+// embeddedFS returns the files of the page in fsys, the embedded tree:
+// static/ when it holds index.html, which a build of the page put there,
+// else placeholder/. built is true for static/.
+func embeddedFS(fsys fs.FS) (page fs.FS, built bool, err error) {
+	if st, err := fs.Stat(fsys, "static/"+indexFile); err == nil && !st.IsDir() {
+		sub, err := fs.Sub(fsys, "static")
+		return sub, true, err
+	}
+	sub, err := fs.Sub(fsys, "placeholder")
+	return sub, false, err
+}
+
 // embeddedPlaceholder reports whether the embedded copy is the placeholder
 // of the repository, which says that the page is not built in.
 func embeddedPlaceholder() bool {
-	b, err := static.ReadFile("static/" + indexFile)
+	page, _, err := embeddedFS(static)
+	if err != nil {
+		return true
+	}
+	b, err := fs.ReadFile(page, indexFile)
 	return err != nil || strings.Contains(string(b), placeholderMark)
 }
 

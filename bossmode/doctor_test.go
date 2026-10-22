@@ -78,8 +78,14 @@ func TestDoctorCheck(t *testing.T) {
 	if ok, line := check(withBlock(t, "bossmode: {enabled: true}\nbridges: {placement: sideways}\n")); ok || !strings.Contains(line, "workbench.bridges.placement") {
 		t.Errorf("bridges that do not load: %v %s", ok, line)
 	}
+	// The embedded copy is the placeholder, unless make page put a build of
+	// the page into static.
+	embedded := "the placeholder page that the binary embeds"
+	if !embeddedPlaceholder() {
+		embedded = "serves the page that the binary embeds"
+	}
 	ok, line := check(withBlock(t, "bossmode: {enabled: true}\n"))
-	if !ok || !strings.Contains(line, "placeholder") || !strings.Contains(line, "names no manager") || !strings.Contains(line, "fw_bossmode_streams_open") {
+	if !ok || !strings.Contains(line, embedded) || !strings.Contains(line, "names no manager") || !strings.Contains(line, "fw_bossmode_streams_open") {
 		t.Errorf("embedded: %v %s", ok, line)
 	}
 	dir := t.TempDir()

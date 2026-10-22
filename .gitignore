@@ -5,3 +5,7 @@ coverage.out
 CLAUDE.md
 go.work
 go.work.sum
+# The build of the page of bossmode (make page). The placeholder lives in
+# bossmode/placeholder, and .gitkeep keeps the directory for go:embed.
+/bossmode/static/*
+!/bossmode/static/.gitkeep

@@ -112,6 +112,12 @@ func TestStaticFromDir(t *testing.T) {
 // Without a directory, the route serves the embedded placeholder, which
 // names the key to set.
 func TestStaticPlaceholder(t *testing.T) {
+	if !embeddedPlaceholder() {
+		if os.Getenv(innerBuild) != "" {
+			t.Fatal("the overlay of the build left a build of the page in static")
+		}
+		t.Skip("this binary embeds a build of the page (make page); TestBuildWithThePlaceholder builds it without one")
+	}
 	fr := newFront(t, nil)
 	for _, path := range []string{"/bossmode", "/bossmode/", "/bossmode/bridge/01K"} {
 		resp, body := get(t, fr.url+path, "")
@@ -121,9 +127,6 @@ func TestStaticPlaceholder(t *testing.T) {
 		if resp.Header.Get("Content-Security-Policy") != CSP || resp.Header.Get("Cache-Control") != cacheIndex {
 			t.Errorf("%s: headers %v", path, resp.Header)
 		}
-	}
-	if !embeddedPlaceholder() {
-		t.Error("the embedded copy is not the placeholder")
 	}
 	if resp, _ := get(t, fr.url+"/bossmode/app.js", ""); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("a missing embedded file: %d", resp.StatusCode)
