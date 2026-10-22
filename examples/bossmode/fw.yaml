@@ -49,6 +49,40 @@ workbench:
     atespaces: [default]
     egress: fw.events
     intake: fw.jobs
+  # The page of bossmode creates an agent with its workers from this
+  # template: PUT /v1/agents/{name} makes a runtime pool of two workers for
+  # a new agent (docs/ARCHITECTURE.md section 14.10). The template names no
+  # model either: the profile of each agent sets one, or set fw.model here.
+  templates:
+    - name: agent
+      default: true
+      image: ghcr.io/bdubs00/featherweight-kernel@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      env:
+        - {name: OPENAI_API_KEY, value: strata-needs-no-key}
+        - {name: ANTHROPIC_API_KEY, value: the-proxy-holds-the-key}
+      egress:
+        rules:
+          - http: {hostnames: [nats.fw-fleet.svc.cluster.local], ports: [8080]}
+          - http: {hostnames: [ax-model.fw-fleet.svc.cluster.local], ports: [8080]}
+          - http: {hostnames: [ax-anthropic.fw-fleet.svc.cluster.local], ports: [8080]}
+      fw:
+        bus:
+          url: ws://nats.fw-fleet.svc.cluster.local:8080
+        providers:
+          openai:
+            baseUrl: http://ax-model.fw-fleet.svc.cluster.local:8080/v1
+            apiKeyEnv: OPENAI_API_KEY
+          anthropic:
+            baseUrl: http://ax-anthropic.fw-fleet.svc.cluster.local:8080
+            apiKeyEnv: ANTHROPIC_API_KEY
+        tools:
+          builtin: [files, clock]
+        policy:
+          default: allow
+        # The person who creates an agent owns it, so the front reads the
+        # runs of the workers with the static token as an admin.
+        access:
+          admins: ["kind:token"]
   pools:
     - name: manager
       # One Task serves several operators at once (maxRuns below). More

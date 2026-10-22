@@ -205,7 +205,7 @@ func TestSettings(t *testing.T) {
 func TestSettingsWithoutManager(t *testing.T) {
 	fr := newFront(t, nil)
 	resp, body := get(t, fr.url+"/v1/bossmode", "ada")
-	if resp.StatusCode != http.StatusOK || body != `{"manager":null,"placement":"queue","maxMembers":16}`+"\n" {
+	if resp.StatusCode != http.StatusOK || body != `{"manager":null,"placement":"queue","maxMembers":16,"templates":[]}`+"\n" {
 		t.Errorf("settings: %d %q", resp.StatusCode, body)
 	}
 }

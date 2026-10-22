@@ -38,12 +38,22 @@ func extension(k *native.Kit) error {
 }
 
 // Settings is the answer of GET /v1/bossmode: the manager, when the
-// configuration names one, and the keys of workbench.bridges that the page
-// reads, as the package bridges reads them (bridges.Load).
+// configuration names one, the keys of workbench.bridges that the page
+// reads, as the package bridges reads them (bridges.Load), and the worker
+// templates from which the page offers a choice when it creates an agent
+// (fleet.TemplatesOf), an empty list for none.
 type Settings struct {
-	Manager    *Manager `json:"manager"`
-	Placement  string   `json:"placement"`
-	MaxMembers int      `json:"maxMembers"`
+	Manager    *Manager   `json:"manager"`
+	Placement  string     `json:"placement"`
+	MaxMembers int        `json:"maxMembers"`
+	Templates  []Template `json:"templates"`
+}
+
+// Template names a worker template for the page: its name, and whether a
+// new agent gets it when the page names none.
+type Template struct {
+	Name    string `json:"name"`
+	Default bool   `json:"default"`
 }
 
 // Manager names the manager for the page. Agent is the profile of
@@ -70,7 +80,10 @@ func settingsRoute(k *native.Kit, c Config) http.HandlerFunc {
 			k.Fail(w, r, err)
 			return
 		}
-		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers}
+		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers, Templates: []Template{}}
+		for _, t := range fleet.TemplatesOf(a) {
+			out.Templates = append(out.Templates, Template{Name: t.Name, Default: t.Default})
+		}
 		if c.Manager != "" {
 			m, err := managerOf(r.Context(), a, c.Manager)
 			if err != nil {

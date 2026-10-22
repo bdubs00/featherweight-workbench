@@ -1714,7 +1714,8 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
 {
   "manager": {"agent": "manager", "member": "default/manager-0", "run": "01K..."},
   "placement": "queue",
-  "maxMembers": 16
+  "maxMembers": 16,
+  "templates": [{"name": "general", "default": true}, {"name": "python", "default": false}]
 }
 ```
 
@@ -1722,6 +1723,7 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
 - `manager.member` is the fleet member that runs the manager, for `POST /v1/runs?member=`: a Task of the pool whose `agent` is the profile, the first one whose phase is Running, else the first. Without such a pool, it is the first member by name whose agents hold the profile. The front runs the configuration of its workers, so it holds every profile, and it is the member only when no other member is. The answer names only a pool and a member that the caller can see, and `""` when there is none.
 - `manager.run` is the newest top-level run of the profile that the caller started, from the runs of the fleet that the caller can see, or `""`. A run whose batch is the batch of a bridge, such as the manager run of a spawn bridge or the run that writes the report of a bridge, also acts as the operator, but it is no conversation of the page, so the settings skip it.
 - `placement` and `maxMembers` come from `workbench.bridges`, as `bridges.Load` reads them (section 17.1).
+- `templates` names the worker templates of the front in the order of the configuration, each with `default`, so the page offers the choice when it creates an agent. It is `[]` without templates. The page creates the agent and its workers with `PUT /v1/agents/{name}` and `workers` (section 14.10).
 
 ### 17.5 The broadcaster
 
