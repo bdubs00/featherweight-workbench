@@ -33,6 +33,7 @@ import (
 	_ "github.com/bdubs00/featherweight-kernel/tools/mcp"
 
 	_ "github.com/bdubs00/featherweight-kernel/authn/oidc"
+	_ "github.com/bdubs00/featherweight-workbench/bridges"
 	_ "github.com/bdubs00/featherweight-workbench/faces"
 	_ "github.com/bdubs00/featherweight-workbench/pages"
 	_ "github.com/bdubs00/featherweight-workbench/surface/web"

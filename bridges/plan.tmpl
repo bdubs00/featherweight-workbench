@@ -1,0 +1,23 @@
+Seat the members of the bridge "{{.Title}}" (id {{.ID}}) for {{.Operator}}.
+
+The goal of the bridge: {{.Goal}}
+
+Call spawn_task once for each seat below, with wait false, one call per seat. Give each call:
+- agent: the profile of the seat.
+- input: the first line "[seat <handle>]" and then the task of the seat, as the seat below shows it. The front finds the seat of a child by that line.
+- instructions: the instructions of the seat between <<< and >>>, word for word, without the two marks.
+- max_turns and deadline: the budget of the seat, when the seat has one.
+
+Do not do the work of a seat yourself. When every call returned, end your turn with the list of the children that you started: the handle, the run id, and the task of each.
+{{range .Seats}}
+Seat {{.Handle}}
+- agent: {{.Agent}}
+- input:
+[seat {{.Handle}}] {{.Task}}
+{{if .MaxTurns}}- max_turns: {{.MaxTurns}}
+{{end}}{{if .Deadline}}- deadline: {{.Deadline}}
+{{end}}- instructions:
+<<<
+{{.Instructions}}
+>>>
+{{end}}

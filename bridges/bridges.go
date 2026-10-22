@@ -1,0 +1,331 @@
+// Package bridges is the bridges of bossmode (docs/ARCHITECTURE.md section
+// 18). A bridge is one large job split into seats, with one agent on each
+// seat and one channel where the agents and the operator talk. The package
+// keeps the record of each bridge and its channel, seats the members on
+// the queues of their pools or under the run of the manager, fans each
+// message out to the runs of the members as a follow-up, mirrors the life
+// of each run into the channel as system lines, and records the reactions
+// of people, with a heart on the wiki.
+//
+// The package runs as a service of the kernel (fw.RegisterService). On a
+// NATS bus the records live in the key-value bucket <stream>_BRIDGES and
+// the channels in <stream>_CHANNELS, so every replica of the front reads
+// one truth. On the bus mem both live in the memory of the process, and
+// two processes share nothing. On another bus the package logs once that
+// the bridges are off and serves nothing. It mounts the routes under
+// /v1/bridges on the native surface (native.Extend), adds the MCP tools
+// bridge_read, bridge_post, bridge_list, bridge_open, bridge_add_member,
+// bridge_remove_member, and bridge_close (mcp.RegisterTools), and reads
+// workbench.bridges, FW_WORKBENCH_BRIDGES_*, and workbench.bossmode.manager.
+//
+// Two hooks are the seams of the live stream of bossmode: OnMessage gets
+// every new or changed entry of a channel, and OnMember every new or
+// changed seat, with its presence and its activity. UsePhrase lets the
+// stream word the activity of a run with the tool input that it keeps.
+package bridges
+
+import (
+	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/internal/bucket"
+	"github.com/bdubs00/featherweight-workbench/surface/mcp"
+)
+
+func init() {
+	fw.RegisterService(Start)
+	native.Extend(mount)
+	mcp.RegisterTools(tools)
+}
+
+// Times of the service.
+const (
+	// pollEvery is the time between two reads of the view of the fleet.
+	pollEvery = 2 * time.Second
+	// retryFirst is the first pause before a delivery is tried again, and
+	// retryMax the longest; the pause doubles. retryFor bounds the tries
+	// of one delivery.
+	retryFirst = time.Second
+	retryMax   = time.Minute
+	retryFor   = 10 * time.Minute
+	// reportWait bounds the wait for the report of a closed bridge.
+	reportWait = 10 * time.Minute
+	// workers is the number of deliveries that run at once, and queueSize
+	// the deliveries that wait.
+	workers   = 4
+	queueSize = 4096
+)
+
+// Store is the bridges of one agent: the records, the channels, the
+// fan-out, and the watch of the view. Build it with Open, and find the one
+// of an agent with Of.
+type Store struct {
+	a   *fw.Agent
+	log *slog.Logger
+	cfg Config
+	b   *buckets
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	jobs   chan *job
+	wake   chan struct{}
+
+	// The times of the service, which a test shortens.
+	pollEvery  time.Duration
+	retryFirst time.Duration
+	retryMax   time.Duration
+	retryFor   time.Duration
+	reportWait time.Duration
+	now        func() time.Time
+
+	// What this replica knows of the view, for the watch (watch.go).
+	mu       sync.Mutex
+	checked  map[string]uint64 // by run id: the seq of the run at its last read of the ends
+	tries    map[string]int    // by run id: the reads of a decision that failed
+	shown    map[string]string // by bridge and handle: the presence and activity that a hook got
+	canceled map[string]bool   // by run id: the runs of fired seats that a cancel went to
+}
+
+// New returns a store on two buckets. The service starts nothing until
+// run.
+func New(a *fw.Agent, records, channels bucket.Bucket, cfg Config, log *slog.Logger) *Store {
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Store{
+		a:          a,
+		log:        log,
+		cfg:        cfg,
+		b:          &buckets{records: records, channels: channels},
+		ctx:        ctx,
+		cancel:     cancel,
+		jobs:       make(chan *job, queueSize),
+		wake:       make(chan struct{}, 1),
+		pollEvery:  pollEvery,
+		retryFirst: retryFirst,
+		retryMax:   retryMax,
+		retryFor:   retryFor,
+		reportWait: reportWait,
+		now:        time.Now,
+		checked:    map[string]uint64{},
+		tries:      map[string]int{},
+		shown:      map[string]string{},
+		canceled:   map[string]bool{},
+	}
+}
+
+// run starts the workers of the fan-out and the watch of the view.
+func (s *Store) run() {
+	s.runWorkers()
+	s.wg.Add(1)
+	go s.watch()
+}
+
+// runWorkers starts the workers of the fan-out.
+func (s *Store) runWorkers() {
+	for i := 0; i < workers; i++ {
+		s.wg.Add(1)
+		go s.work()
+	}
+}
+
+// Close stops the watch and the fan-out. A delivery that waits for a retry
+// is lost; the channel holds its message.
+func (s *Store) Close() {
+	s.cancel()
+	s.wg.Wait()
+}
+
+// Wake makes the watch read the view now, before its next tick. The live
+// stream of bossmode calls it for each change of the fleet (fleet.Watch),
+// so the channel follows a run without the wait of the poll. It never
+// blocks.
+func (s *Store) Wake() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Describe names where the store keeps the bridges.
+func (s *Store) Describe() string { return s.b.records.Describe() }
+
+// stores ties the bridges of an agent to the agent. Start attaches them,
+// and the routes and the tools find them through Of.
+var stores sync.Map // *fw.Agent to *Store
+
+// Of returns the bridges of an agent, or nil when the process keeps none:
+// the bus keeps no store, or the process does not serve.
+func Of(a *fw.Agent) *Store {
+	if a == nil {
+		return nil
+	}
+	s, ok := stores.Load(a)
+	if !ok {
+		return nil
+	}
+	return s.(*Store)
+}
+
+// Attach makes s the bridges of a. A nil s detaches.
+func Attach(a *fw.Agent, s *Store) {
+	if s == nil {
+		stores.Delete(a)
+		return
+	}
+	stores.Store(a, s)
+}
+
+// Start is the service of the bridges (fw.Service). It opens the two
+// buckets on the bus of the configuration, attaches the store to the
+// agent, and starts the watch of the view and the workers of the fan-out.
+// On a bus that keeps no store it logs once that the bridges are off and
+// returns nil. A configuration that does not fit stops the start.
+func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
+	log := a.Logger().With("component", "bridges")
+	cfg, err := Load(a.Config())
+	if err != nil {
+		return nil, err
+	}
+	rc, cc := bucketConfigs()
+	records, closeRecords, err := bucket.Open(ctx, a.Config(), rc, log)
+	if errors.Is(err, bucket.ErrNoStore) {
+		where, _ := bucket.Where(a.Config(), rc)
+		log.Warn("bridges: the bridges are off; they live "+where, "bus", a.Config().Bus.Driver)
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	channels, closeChannels, err := bucket.Open(ctx, a.Config(), cc, log)
+	if err != nil {
+		if closeRecords != nil {
+			closeRecords()
+		}
+		return nil, err
+	}
+	s := New(a, records, channels, cfg, log)
+	s.run()
+	Attach(a, s)
+	log.Info("bridges: the bridges are on", "store", s.Describe(), "placement", cfg.Placement, "maxMembers", cfg.MaxMembers, "manager", cfg.Manager)
+	return service{a: a, s: s, close: []func(){closeRecords, closeChannels}}, nil
+}
+
+// service detaches the bridges of an agent and closes their connections.
+type service struct {
+	a     *fw.Agent
+	s     *Store
+	close []func()
+}
+
+func (x service) Close() error {
+	Attach(x.a, nil)
+	x.s.Close()
+	for _, f := range x.close {
+		if f != nil {
+			f()
+		}
+	}
+	return nil
+}
+
+// hooks holds the functions that OnMessage, OnMember, and UsePhrase
+// register.
+var hooks struct {
+	mu      sync.Mutex
+	message []func(bridge string, m Message)
+	member  []func(bridge string, m Member)
+	phrase  func(r *fw.Run) string
+}
+
+// OnMessage registers a function that gets every new entry of a channel,
+// and every entry that changes, with the same seq: a reaction, or a card
+// whose decision landed. The live stream of bossmode registers one in init
+// and sends each entry to the pages as the event bridge.message. The
+// function runs on the goroutine that changed the entry, so it must not
+// block; each replica calls it for the changes that it makes.
+func OnMessage(fn func(bridge string, m Message)) {
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	hooks.message = append(hooks.message, fn)
+}
+
+// OnMember registers a function that gets every new seat and every change
+// of a seat: its presence, its activity, its task, muted, or fired. The
+// live stream of bossmode sends each one as the event bridge.member. Each
+// replica watches the view on its own, so each replica calls it for the
+// changes of presence that it sees. The function must not block.
+func OnMember(fn func(bridge string, m Member)) {
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	hooks.member = append(hooks.member, fn)
+}
+
+// UsePhrase sets the function that words the activity of a run for the
+// activity of a member. The fleet keeps the tool input of the call that a
+// run waits for, so it words the call as a result words a step; without
+// it the package words only a run that thinks, and leaves the phrase of a
+// tool call empty. The last call wins.
+func UsePhrase(fn func(r *fw.Run) string) {
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	hooks.phrase = fn
+}
+
+// emitMessage calls the OnMessage hooks.
+func emitMessage(bridge string, m Message) {
+	hooks.mu.Lock()
+	list := append([]func(string, Message){}, hooks.message...)
+	hooks.mu.Unlock()
+	for _, fn := range list {
+		fn(bridge, m)
+	}
+}
+
+// emitMember calls the OnMember hooks.
+func emitMember(bridge string, m Member) {
+	hooks.mu.Lock()
+	list := append([]func(string, Member){}, hooks.member...)
+	hooks.mu.Unlock()
+	for _, fn := range list {
+		fn(bridge, m)
+	}
+}
+
+// phraseFn returns the function of UsePhrase, or nil.
+func phraseFn() func(r *fw.Run) string {
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	return hooks.phrase
+}
+
+// subjectOf is the subject of the principal in ctx, or "".
+func subjectOf(ctx context.Context) string {
+	if p := fw.PrincipalFrom(ctx); p != nil {
+		return p.Subject
+	}
+	return ""
+}
+
+// clean trims a text and drops its control characters but the line
+// breaks and the tabs.
+func clean(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(s))
+}

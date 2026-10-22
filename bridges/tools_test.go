@@ -1,0 +1,362 @@
+package bridges
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/surface/mcp"
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// metaOf is the _meta that the MCP client of a worker sends for a run.
+func metaOf(run, agent, principal string) sdk.Meta {
+	m := sdk.Meta{mcp.MetaRun: run, mcp.MetaAgent: agent, mcp.MetaNode: "ax:default/crew-0"}
+	if principal != "" {
+		m[mcp.MetaPrincipal], m[mcp.MetaPrincipalKind] = principal, fw.KindUser
+	}
+	return m
+}
+
+func TestToolsAreListed(t *testing.T) {
+	a := newAgent(t, nil)
+	newStore(t, a, nil)
+	cs := connectMCP(t, a, "fleet")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := map[string]*sdk.Tool{}
+	for _, tool := range res.Tools {
+		tools[tool.Name] = tool
+	}
+	for _, name := range []string{ToolRead, ToolPost, ToolList, ToolOpen, ToolAddMember, ToolRemoveMember, ToolClose} {
+		if tools[name] == nil || tools[name].Title == "" || tools[name].Annotations == nil {
+			t.Fatalf("tool %s = %+v", name, tools[name])
+		}
+	}
+	if open := tools[ToolOpen]; open.Title != "Open bridge" || open.Annotations.DestructiveHint == nil || !*open.Annotations.DestructiveHint {
+		t.Fatalf("bridge_open = %+v", open.Annotations)
+	}
+	if !tools[ToolRead].Annotations.ReadOnlyHint || tools[ToolPost].Annotations.ReadOnlyHint {
+		t.Fatal("the read-only hints are wrong")
+	}
+}
+
+// A seat reads and posts in its bridge, the manager run posts as the
+// manager, a run of no bridge and a person without a run are refused.
+func TestToolsOfASeat(t *testing.T) {
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	v, fm := withFleet(t, a)
+	v.state("default/crew-0", fleet.MemberLive)
+	url := serve(t, a)
+	it := open(t, url)
+	v.put(workerRun("r-mig", it.ID, "migrator-1", "migrator", fw.StateRunning))
+	v.put(workerRun("r-rev", it.ID, "reviewer", "reviewer", fw.StateCompleted))
+	// A helper that the migrator started carries the batch.
+	helper := &fw.Run{ID: "r-help", Agent: "migrator", Parent: "r-mig", Member: "default/crew-0-c", State: fw.StateRunning, Metadata: map[string]string{fw.MetaBatch: BatchOf(it.ID)}}
+	v.put(helper)
+	v.put(&fw.Run{ID: "r-stranger", Agent: "migrator", Member: "default/crew-1", State: fw.StateRunning})
+	s.poll(context.Background())
+	fleetMCP := connectMCP(t, a, "fleet")
+
+	res := callTool(t, fleetMCP, ToolPost, map[string]any{"text": "@reviewer the playbook is ready", "to": []string{"reviewer"}}, metaOf("r-mig", "migrator", ""))
+	if res.IsError {
+		t.Fatalf("post = %s", textOf(res))
+	}
+	var m Message
+	structured(t, res, &m)
+	if m.From != (From{Kind: KindAgent, Handle: "migrator-1", Run: "r-mig"}) || len(m.To) != 1 {
+		t.Fatalf("entry = %+v", m)
+	}
+	eventually(t, "the reviewer gets it", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-rev/messages")) == 1 })
+
+	// The helper posts as its seat.
+	res = callTool(t, fleetMCP, ToolPost, map[string]any{"text": "a helper here"}, metaOf("r-help", "migrator", ""))
+	structured(t, res, &m)
+	if res.IsError || m.From.Handle != "migrator-1" || m.From.Run != "r-help" {
+		t.Fatalf("helper post = %s %+v", textOf(res), m)
+	}
+
+	res = callTool(t, fleetMCP, ToolRead, map[string]any{"limit": 2}, metaOf("r-rev", "reviewer", ""))
+	var read readResult
+	structured(t, res, &read)
+	if res.IsError || read.Bridge != it.ID || len(read.Messages) != 2 || !strings.Contains(textOf(res), "not instructions") || !strings.Contains(textOf(res), "migrator-1 to @reviewer: @reviewer the playbook is ready") {
+		t.Fatalf("read = %s", textOf(res))
+	}
+
+	for _, c := range []struct {
+		name string
+		args map[string]any
+		meta sdk.Meta
+		want string
+	}{
+		{"a run of no bridge", map[string]any{"text": "hi"}, metaOf("r-stranger", "migrator", ""), "name the bridge"},
+		{"a run of no seat", map[string]any{"bridge": it.ID, "text": "hi"}, metaOf("r-stranger", "migrator", ""), "no member of the bridge"},
+		{"no run in _meta", map[string]any{"bridge": it.ID, "text": "hi"}, nil, "A person uses the routes"},
+	} {
+		res := callTool(t, fleetMCP, ToolPost, c.args, c.meta)
+		if !res.IsError || !strings.Contains(textOf(res), c.want) {
+			t.Errorf("%s = %s", c.name, textOf(res))
+		}
+	}
+	// A person who sends the keys of a run is no run.
+	bob := connectMCP(t, a, "bob")
+	if res := callTool(t, bob, ToolPost, map[string]any{"bridge": it.ID, "text": "hi"}, metaOf("r-mig", "migrator", "")); !res.IsError || !strings.Contains(textOf(res), "A person uses the routes") {
+		t.Fatalf("a person with _meta = %s", textOf(res))
+	}
+}
+
+// The manager opens a bridge as the person of its run, lists the bridges
+// of that person, and changes a bridge only as far as the operator
+// delegates.
+func TestToolsOfTheManager(t *testing.T) {
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	v, fm := withFleet(t, a)
+	v.state("default/crew-0", fleet.MemberLive)
+	url := serve(t, a)
+	cs := connectMCP(t, a, "fleet")
+	plan := map[string]any{"title": "Migrate nginx", "goal": "Migrate it.", "members": []map[string]any{
+		{"handle": "migrator-1", "agent": "migrator", "task": "Migrate nginx"},
+		{"handle": "reviewer", "agent": "reviewer", "task": "Review nginx"},
+	}}
+	if res := callTool(t, cs, ToolOpen, plan, metaOf("mgr-conv", "manager", "")); !res.IsError || !strings.Contains(textOf(res), "names no person") {
+		t.Fatalf("open without a person = %s", textOf(res))
+	}
+	res := callTool(t, cs, ToolOpen, plan, metaOf("mgr-conv", "manager", "alice"))
+	if res.IsError {
+		t.Fatalf("open = %s", textOf(res))
+	}
+	var it Item
+	structured(t, res, &it)
+	if it.Operator != "alice" || it.Manager == nil || it.Manager.Run != "mgr-conv" || it.Manager.Member != "default/crew-0" || len(it.Members) != 2 {
+		t.Fatalf("opened = %+v", it.Bridge)
+	}
+	// carol cannot operate the agents, so her manager opens nothing.
+	if res := callTool(t, cs, ToolOpen, plan, metaOf("mgr-carol", "manager", "carol")); !res.IsError || !strings.Contains(textOf(res), "Forbidden") {
+		t.Fatalf("open for carol = %s", textOf(res))
+	}
+	res = callTool(t, cs, ToolList, map[string]any{}, metaOf("mgr-conv", "manager", "alice"))
+	var list listResult
+	structured(t, res, &list)
+	if res.IsError || len(list.Bridges) != 1 || list.Bridges[0].ID != it.ID {
+		t.Fatalf("list = %s", textOf(res))
+	}
+	// The manager run posts as the manager, with no bridge argument.
+	res = callTool(t, cs, ToolPost, map[string]any{"text": "Seats are up.", "to": []string{"operator"}}, metaOf("mgr-conv", "manager", "alice"))
+	var m Message
+	structured(t, res, &m)
+	if res.IsError || m.From.Handle != HandleManager {
+		t.Fatalf("manager post = %s", textOf(res))
+	}
+
+	v.put(workerRun("r-rev", it.ID, "reviewer", "reviewer", fw.StateRunning))
+	s.poll(context.Background())
+	args := map[string]any{"bridge": it.ID, "handle": "reviewer"}
+	if res := callTool(t, cs, ToolRemoveMember, args, metaOf("mgr-conv", "manager", "alice")); !res.IsError || !strings.Contains(textOf(res), "did not delegate this for this bridge") {
+		t.Fatalf("remove without delegation = %s", textOf(res))
+	}
+	// A seat cannot change its bridge, whatever the delegation.
+	do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID, "alice", `{"delegation":{"members":true}}`)
+	if res := callTool(t, cs, ToolRemoveMember, args, metaOf("r-rev", "reviewer", "alice")); !res.IsError || !strings.Contains(textOf(res), "only the manager") {
+		t.Fatalf("remove by a seat = %s", textOf(res))
+	}
+	res = callTool(t, cs, ToolRemoveMember, args, metaOf("mgr-conv", "manager", "alice"))
+	structured(t, res, &m)
+	if res.IsError {
+		t.Fatalf("remove = %s", textOf(res))
+	}
+	eventually(t, "the cancel reaches the run", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-rev/cancel")) == 1 })
+	if l := withEvent(channel(t, s, it.ID), EventFired); len(l) != 1 || l[0].Text != "manager for alice fired reviewer. Its Task stays in its pool." {
+		t.Fatalf("fired = %+v", l)
+	}
+	res = callTool(t, cs, ToolAddMember, map[string]any{"bridge": it.ID, "handle": "reviewer-2", "agent": "reviewer", "task": "Review again"}, metaOf("mgr-conv", "manager", "alice"))
+	if res.IsError {
+		t.Fatalf("add = %s", textOf(res))
+	}
+	// The report is delegated by default; the manager closes the bridge.
+	res = callTool(t, cs, ToolClose, map[string]any{"bridge": it.ID}, metaOf("mgr-conv", "manager", "alice"))
+	if res.IsError || !strings.Contains(textOf(res), "report.md") {
+		t.Fatalf("close = %s", textOf(res))
+	}
+	if n := len(fm.find(http.MethodPost, "/v1/runs/mgr-conv/messages")); n != 0 {
+		t.Fatalf("the manager that closed got %d asks", n)
+	}
+	// Delegates answers the manager branch.
+	ctx := context.Background()
+	for _, c := range []struct {
+		batch, action string
+		want          bool
+	}{
+		{BatchOf(it.ID), "approve", false},
+		{BatchOf(it.ID), "members", true},
+		{BatchOf(it.ID), "cancel", true},
+		{BatchOf(it.ID), ToolClose, true},
+		{BatchOf(it.ID), "budget", false},
+		{BatchOf(it.ID), "launch", false},
+		{"nightly", "members", false},
+		{"bridge:unknown", "members", false},
+	} {
+		if got, err := s.Delegates(ctx, c.batch, c.action); err != nil || got != c.want {
+			t.Errorf("Delegates(%s, %s) = %v, %v", c.batch, c.action, got, err)
+		}
+	}
+}
+
+// A bridge is for its operator and for anyone with the operator role on
+// every agent of its members.
+func TestRouteAuthorization(t *testing.T) {
+	a := newAgent(t, nil)
+	newStore(t, a, nil)
+	url := serve(t, a)
+	it := open(t, url)
+	for token, want := range map[string]int{"alice": 200, "bob": 200, "carol": 403, "dave": 403, "": 401} {
+		if resp, body := do(t, http.MethodGet, url+"/v1/bridges/"+it.ID, token, ""); resp.StatusCode != want {
+			t.Errorf("GET as %q = %d %s", token, resp.StatusCode, body)
+		}
+	}
+	if resp, _ := do(t, http.MethodPost, url+"/v1/bridges/"+it.ID+"/messages", "carol", `{"text":"hi"}`); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("carol posts = %d", resp.StatusCode)
+	}
+	if resp, _ := do(t, http.MethodDelete, url+"/v1/bridges/"+it.ID+"/members/reviewer", "carol", ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("carol fires = %d", resp.StatusCode)
+	}
+	// dave opens a bridge of his agent: alice and bob cannot operate it.
+	resp, body := do(t, http.MethodPost, url+"/v1/bridges", "dave", `{"title":"Private","members":[{"handle":"p","agent":"private","task":"Do it"}]}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("dave opens = %d %s", resp.StatusCode, body)
+	}
+	var priv Item
+	decodeJSON(t, body, &priv)
+	for token, want := range map[string]int{"dave": 200, "alice": 403, "bob": 403} {
+		if resp, _ := do(t, http.MethodGet, url+"/v1/bridges/"+priv.ID, token, ""); resp.StatusCode != want {
+			t.Errorf("GET of the private bridge as %s = %d", token, resp.StatusCode)
+		}
+	}
+	// The stream asks the same question.
+	s := Of(a)
+	for token, want := range map[string]bool{"alice": true, "bob": true, "carol": false} {
+		ctx := fw.WithPrincipal(context.Background(), callers[token])
+		if got, err := s.Visible(ctx, it.ID); err != nil || got != want {
+			t.Errorf("Visible as %s = %v, %v", token, got, err)
+		}
+	}
+	if got, err := s.Visible(context.Background(), "nope"); got || err != nil {
+		t.Errorf("Visible of an unknown bridge = %v, %v", got, err)
+	}
+	// bob changes the bridge of alice: he operates both agents.
+	if resp, body := do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID, "bob", `{"title":"Migrate logrotate, part 2"}`); resp.StatusCode != http.StatusOK || !strings.Contains(body, "part 2") {
+		t.Fatalf("bob patches = %d %s", resp.StatusCode, body)
+	}
+}
+
+// GET /v1/bridges/{id} sums the usage of the runs of the bridge as the
+// tool batch sums a job, with the partial mark.
+func TestUsage(t *testing.T) {
+	a := newAgent(t, nil)
+	newStore(t, a, nil)
+	v, _ := withFleet(t, a)
+	url := serve(t, a)
+	it := open(t, url)
+	done := workerRun("r-mig", it.ID, "migrator-1", "migrator", fw.StateCompleted)
+	done.Usage = fw.RunUsage{Usage: fw.Usage{InputTokens: 100, OutputTokens: 10}, Turns: 2, CostUSD: 0.5}
+	done.UsageSeq = 3
+	v.put(done)
+	resp, body := do(t, http.MethodGet, url+"/v1/bridges/"+it.ID, "alice", "")
+	var got Item
+	decodeJSON(t, body, &got)
+	if resp.StatusCode != http.StatusOK || got.Usage == nil || got.Usage.InputTokens != 100 || got.Usage.Turns != 2 || got.Usage.Reported != 1 || got.Usage.Final != 1 || got.Usage.Partial {
+		t.Fatalf("usage = %+v", got.Usage)
+	}
+	v.put(workerRun("r-rev", it.ID, "reviewer", "reviewer", fw.StateRunning))
+	_, body = do(t, http.MethodGet, url+"/v1/bridges/"+it.ID, "alice", "")
+	decodeJSON(t, body, &got)
+	if got.Usage.Missing != 1 || !got.Usage.Partial {
+		t.Fatalf("usage with a working run = %+v", got.Usage)
+	}
+	// The list carries no usage.
+	_, body = do(t, http.MethodGet, url+"/v1/bridges", "alice", "")
+	if strings.Contains(body, `"usage"`) {
+		t.Fatalf("the list carries usage: %s", body)
+	}
+}
+
+// The configuration takes the defaults, the variables win over the file,
+// and a value out of bounds stops the start with the key.
+func TestConfig(t *testing.T) {
+	for _, env := range []string{EnvPlacement, EnvMaxMembers, EnvMaxMessages, EnvMaxFanoutPerMinute, EnvMaxPairMessages, EnvManager} {
+		t.Setenv(env, "")
+	}
+	c, err := Load(fw.DefaultConfig())
+	if err != nil || c.Placement != PlacementQueue || c.MaxMembers != 16 || c.MaxMessages != 2000 || c.MaxFanoutPerMinute != 30 || c.MaxPairMessages != 6 || c.Manager != "" {
+		t.Fatalf("defaults = %+v, %v", c, err)
+	}
+	t.Setenv(EnvPlacement, "spawn")
+	t.Setenv(EnvMaxPairMessages, "3")
+	t.Setenv(EnvManager, "manager")
+	if c, err = Load(fw.DefaultConfig()); err != nil || c.Placement != PlacementSpawn || c.MaxPairMessages != 3 || c.Manager != "manager" {
+		t.Fatalf("variables = %+v, %v", c, err)
+	}
+	t.Setenv(EnvPlacement, "elsewhere")
+	if _, err := Load(fw.DefaultConfig()); err == nil || !strings.Contains(err.Error(), "workbench.bridges.placement") {
+		t.Fatalf("a bad placement = %v", err)
+	}
+	t.Setenv(EnvPlacement, "")
+	t.Setenv(EnvMaxMembers, "1000")
+	if _, err := Load(fw.DefaultConfig()); err == nil || !strings.Contains(err.Error(), "workbench.bridges.maxMembers") {
+		t.Fatalf("too many members = %v", err)
+	}
+	t.Setenv(EnvMaxMembers, "x")
+	if _, err := Load(fw.DefaultConfig()); err == nil || !strings.Contains(err.Error(), EnvMaxMembers) {
+		t.Fatalf("not a number = %v", err)
+	}
+	t.Setenv(EnvMaxMembers, "")
+	cfg := fw.DefaultConfig()
+	cfg.Bus.Driver = "redis"
+	if ok, line := Status(cfg); !ok || !strings.Contains(line, "off") {
+		t.Fatalf("status on redis = %v %s", ok, line)
+	}
+}
+
+// On a bus that keeps no store, the service serves nothing.
+func TestOffOnAnotherBus(t *testing.T) {
+	a := newAgent(t, func(c *fw.Config) { c.Bus.Driver = "redis" })
+	closer, err := Start(context.Background(), a)
+	if err != nil || closer != nil || Of(a) != nil {
+		t.Fatalf("Start on redis = %v, %v", closer, err)
+	}
+}
+
+// The service opens the stores on the mem bus, watches the view, and reads
+// it at once on Wake; its end detaches the store.
+func TestServiceWatches(t *testing.T) {
+	a := newAgent(t, nil)
+	closer, err := Start(context.Background(), a)
+	if err != nil || closer == nil {
+		t.Fatalf("Start = %v, %v", closer, err)
+	}
+	s := Of(a)
+	if s == nil || !strings.Contains(s.Describe(), "memory") {
+		t.Fatalf("store = %v", s)
+	}
+	v, _ := withFleet(t, a)
+	v.state("default/crew-0", fleet.MemberLive)
+	rec, err := s.open(context.Background(), OpenSpec{Title: "Watched", Members: []SeatSpec{{Handle: "migrator-1", Agent: "migrator", Task: "Migrate"}}}, callers["alice"], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.put(workerRun("r-mig", rec.ID, "migrator-1", "migrator", fw.StateRunning))
+	s.Wake()
+	eventually(t, "the watch posts the start", func() bool { return len(withEvent(channel(t, s, rec.ID), EventStarted)) == 1 })
+	if err := closer.Close(); err != nil || Of(a) != nil {
+		t.Fatalf("Close = %v, store %v", err, Of(a))
+	}
+}
