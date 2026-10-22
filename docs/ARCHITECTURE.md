@@ -72,6 +72,7 @@ tools/builder/          the tool propose_agent (section 6.4)
 examples/agentgateway/  a fleet behind agentgateway on one public URL
 examples/pools/         a front that keeps a pool of three workers (section 14)
 examples/sources/       a configuration with a webhook source and a poll source
+examples/bossmode/      a front with the pool and the profile of the manager of bossmode (section 19)
 docs/ARCHITECTURE.md    this document
 Dockerfile              fw-workbench:static on distroless
 Dockerfile.toolbox      fw-workbench:toolbox on Debian with git
@@ -1503,7 +1504,9 @@ The package `manager` holds no agent. It holds what makes an agent a manager:
 - the guard of the authorization (section 19.2),
 - the attribution of what a run of the fleet does (section 19.3),
 - the delegation checks (section 19.4),
-- and the doctor line (section 19.5).
+- and the doctor line (section 19.6).
+
+The directory `examples/bossmode` holds the pool and the profile (section 19.5).
 
 ### 19.1 Why a Task and not the front
 
@@ -1592,7 +1595,24 @@ Outside a bridge, the policy of its profile alone binds a manager run. Any other
 
 `manager.Bridges` is the interface `Delegates(ctx, batch, action) (bool, error)`. The package `bridges` keeps the delegation flags in the record of each bridge. The integration sets its store with `manager.SetBridges`. A nil value delegates nothing, and so does a nil pointer in the interface. It is the one value of the package that changes after `init`.
 
-### 19.5 The doctor line
+### 19.5 The example
+
+`examples/bossmode/fw.yaml` is a front with the pool `manager`, and its README says how to use it. The pool has one replica, and its `fw` sets `maxRuns: 4`, so one Task serves several operators. It sets `spawn.driver: ax`. Its egress reaches the bus, the model proxy, the front, the ax API, and the router. Its variables are those of the pools of the lab. The entry `front` of `tools.mcp` sends `FW_API_TOKEN` and is `trusted`. The memory scope is `principal`, the default under ax. The pool names no model, so the front refuses it until the operator sets one.
+
+The profile `manager` has the tools `front.*`, `memory`, `recall`, `clock`, and `files`. Its policy allows every read. It asks before these calls:
+
+- `front.approve`, `front.cancel`, and `front.run_budget`,
+- `front.enqueue` and `front.run`,
+- `front.bridge_open` and `front.bridge_remove_member`,
+- `front.agent_put`, `front.agent_delete`, and `front.faces_put`.
+
+A write to the wiki runs without a question, because the wiki keeps each older version. The budget of a conversation is 400 turns, 8 hours of working time, and 2000 tool calls.
+
+The system prompt says what a manager does and does not do. It reads before it acts, and it asks before it spends. It opens a bridge only with `bridge_open`. It writes its reports into the wiki, and it names the person it acts for. It answers the operator in plain words. It never claims that a run passed a check that it did not see.
+
+The person who talks to the manager sends their own credential, and the front forwards it to the Task (section 4.5). So the `fw` of the pool reads the tokens of people as the front does. A conversation that the token starts has no person, and the front acts as the token for it. A spawn bridge needs `spawn_task` and `await_task` in the profile. The example leaves them out until the operator chooses that placement. A test reads the example with the checks of the front, with a model and without one, and renders its Task.
+
+### 19.6 The doctor line
 
 `fw-workbench doctor` has the line `manager`. It names the profile of the manager and the pool that runs it. It names the `tools.mcp` entry through which the profile reaches the front, and the spawn driver of the pool. It says whether the bridges are set. The entry of the front is the entry that sends the static token as its bearer. The front acts for the person of a run only for that token.
 
@@ -1604,7 +1624,7 @@ The line fails in three cases:
 
 Without a manager, the line says off. The line reads the configuration alone, so a profile that the overlay of a pool adds does not count.
 
-### 19.6 Security
+### 19.7 Security
 
 These are the rules of section 8 of the plan of bossmode, as the code keeps them:
 

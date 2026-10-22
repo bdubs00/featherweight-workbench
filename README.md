@@ -95,7 +95,7 @@ On a NATS bus, both live in key-value buckets of the stream of the fleet, `<stre
 
 ## The manager
 
-The manager of bossmode is one more agent that helps an operator run the fleet. A pool runs it on a Task of its own, and its tool server is the MCP server of the front. It calls that server with the static token of the fleet, and each call names the person of its run. The front then reads and acts as that person. A check for the person also needs the token, so the token never reaches more through a person. On a run of a bridge, the manager approves, changes a budget, or cancels only what the operator of the bridge delegated. Section 19 of the architecture has the rules.
+The manager of bossmode is one more agent that helps an operator run the fleet. A pool runs it on a Task of its own, and its tool server is the MCP server of the front. It calls that server with the static token of the fleet, and each call names the person of its run. The front then reads and acts as that person. A check for the person also needs the token, so the token never reaches more through a person. On a run of a bridge, the manager approves, changes a budget, or cancels only what the operator of the bridge delegated. [examples/bossmode](examples/bossmode/README.md) holds the pool and the profile, and section 19 of the architecture has the rules.
 
 ## How the workbench builds on the kernel
 
@@ -125,6 +125,7 @@ The workbench changes no kernel code. It uses these hooks of the kernel:
 | `tools/builder` | the `propose_agent` tool |
 | `examples/agentgateway` | a fleet behind agentgateway |
 | `examples/pools` | a front that keeps a pool of three workers |
+| `examples/bossmode` | a front with the pool and the profile of the manager |
 
 ## License
 
