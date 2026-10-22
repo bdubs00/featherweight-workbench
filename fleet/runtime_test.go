@@ -169,18 +169,29 @@ func TestRuntimePoolLifecycle(t *testing.T) {
 		t.Fatalf("a change of no pool = %v", err)
 	}
 
-	// A change raises the generation, and the pool replaces its Tasks.
+	// A change of the replicas keeps the generation and the Task that
+	// stays; a change of what the workers run raises the generation, and
+	// the pool replaces its Task.
 	idle := time.Now().Add(-time.Hour)
 	tasks.set("team/helper-0", view.Status{Idle: true, IdleSince: &idle})
 	tasks.set("team/helper-1", view.Status{Idle: true, IdleSince: &idle})
+	first := ax.get("team", "helper-0").GetMetadata().GetCreateTime().AsTime()
 	one := 1
 	st, err = PatchPool(carol, front.a, "helper", PoolPatch{Replicas: &one})
-	if err != nil || st.Wanted != 1 || st.Generation != 2 {
+	if err != nil || st.Wanted != 1 || st.Generation != 1 {
 		t.Fatalf("PatchPool of an admin = %+v, %v", st, err)
+	}
+	eventually(t, "the pool runs one Task", func() bool { return ax.get("team", "helper-1") == nil })
+	if t0 := ax.get("team", "helper-0"); t0 == nil || !t0.GetMetadata().GetCreateTime().AsTime().Equal(first) {
+		t.Fatalf("a change of the replicas replaced the Task that stays: %v", t0)
+	}
+	st, err = PatchPool(alice, front.a, "helper", PoolPatch{Env: &[]pools.RuntimeEnv{{Name: "MODE", Value: "fast"}}})
+	if err != nil || st.Generation != 2 {
+		t.Fatalf("PatchPool of the variables = %+v, %v", st, err)
 	}
 	eventually(t, "the pool runs one Task of generation 2", func() bool {
 		t0 := ax.get("team", "helper-0")
-		return t0 != nil && envOfTask(t0, pools.EnvGeneration) == "2" && ax.get("team", "helper-1") == nil
+		return t0 != nil && envOfTask(t0, pools.EnvGeneration) == "2" && envOfTask(t0, "MODE") == "fast"
 	})
 
 	// A delete sets the replicas to 0, and the pass removes the entry and

@@ -341,8 +341,13 @@ func TestRuntimeStore(t *testing.T) {
 		e.Replicas = 5
 		return nil
 	})
-	if err != nil || updated.Replicas != 5 || updated.Revision != "other" || updated.Generation != 3 {
+	// The revision changes what the workers run, so it raises the
+	// generation; the replicas alone keep it.
+	if err != nil || updated.Replicas != 5 || updated.Revision != "other" || updated.Generation != 2 {
 		t.Fatalf("Update = %+v, %v", updated, err)
+	}
+	if again, err := s.Update(ctx, "helper", func(e *Runtime) error { e.Replicas = 5; return nil }); err != nil || again.Rev != updated.Rev {
+		t.Fatalf("an Update that changes nothing = %+v, %v", again, err)
 	}
 	if _, err := s.Update(ctx, "nope", func(*Runtime) error { return nil }); !errors.Is(err, ErrRuntimeNotFound) {
 		t.Fatalf("Update of no pool = %v", err)
@@ -364,7 +369,7 @@ func TestRuntimeStore(t *testing.T) {
 		t.Fatalf("List after Remove = %+v", list)
 	}
 	again, err := s.Create(ctx, runtimeEntry())
-	if err != nil || again.Generation != 4 {
+	if err != nil || again.Generation != 3 {
 		t.Fatalf("Create of an old name = %+v, %v", again, err)
 	}
 }

@@ -34,9 +34,10 @@ const (
 // the profile whose queue its workers take; the profile itself lives in
 // the overlay of the pool. Intake is the queue of the workers, empty for
 // the default of the front. Revision is free text that replaces every Task
-// when it changes. Generation counts the changes of the entry: the store
-// sets it to 1 at the create and raises it with every change, and the
-// pool adds the generation of its template (Template.apply).
+// when it changes. Generation orders the configurations of the pool: the
+// store sets it to 1 at the create and raises it with every change of what
+// the workers run, and the pool adds the generation of its template
+// (Template.apply). A change of Replicas or Deleting keeps it.
 //
 // Env holds the variables that the pool sets over its template, each with
 // a value: a runtime pool copies no variable of the front. Resources holds

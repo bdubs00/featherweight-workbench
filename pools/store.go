@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bdubs00/featherweight-kernel/ax"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
 )
 
@@ -161,10 +162,15 @@ func (s *Store) Create(ctx context.Context, r Runtime) (Stored, error) {
 	return Stored{Runtime: r, Rev: rev}, nil
 }
 
-// Update reads the runtime pool of the name, applies f, raises the
-// generation, and writes the result at the revision that it read. When
-// another writer came first, it reads again and applies f again. An error
-// of f stops the update and comes back as it is.
+// Update reads the runtime pool of the name, applies f, and writes the
+// result at the revision that it read. A change of the configuration of
+// the workers, the template, the agent, the queue, the revision, the
+// variables, or the resources, raises the generation, so the Tasks of the
+// pool are replaced. A change of the replicas or of the mark of a delete
+// keeps it, so no running worker goes for it. A result that changes
+// nothing writes nothing. When another writer came first, it reads again
+// and applies f again. An error of f stops the update and comes back as it
+// is.
 func (s *Store) Update(ctx context.Context, name string, f func(*Runtime) error) (Stored, error) {
 	for range storeAttempts {
 		cur, err := s.Get(ctx, name)
@@ -173,10 +179,20 @@ func (s *Store) Update(ctx context.Context, name string, f func(*Runtime) error)
 		}
 		next := cur.Runtime
 		next.Env = append([]RuntimeEnv(nil), cur.Env...)
+		if cur.Resources != nil {
+			r := *cur.Resources
+			next.Resources = &r
+		}
 		if err := f(&next); err != nil {
 			return Stored{}, err
 		}
-		next.Name, next.Generation = cur.Name, cur.Generation+1
+		next.Name, next.Generation = cur.Name, cur.Generation
+		if same(cur.Runtime, next) {
+			return cur, nil
+		}
+		if workerConfig(cur.Runtime) != workerConfig(next) {
+			next.Generation++
+		}
 		value, err := json.Marshal(next)
 		if err != nil {
 			return Stored{}, fmt.Errorf("pools: encode the runtime pool %s: %w", name, err)
@@ -208,4 +224,23 @@ func (s *Store) Remove(ctx context.Context, name string, rev uint64) error {
 		return fmt.Errorf("pools: remove the runtime pool %s: %w", name, err)
 	}
 	return nil
+}
+
+// workerConfig returns the part of an entry that the workers run, as one
+// comparable text: the template, the agent, the queue, the revision, the
+// variables, and the resources.
+func workerConfig(r Runtime) string {
+	b, _ := json.Marshal(struct {
+		Template, Agent, Intake, Revision string
+		Env                               []RuntimeEnv
+		Resources                         *ax.ResourcesSpec
+	}{r.Template, r.Agent, r.Intake, r.Revision, r.Env, r.Resources})
+	return string(b)
+}
+
+// same reports whether two entries hold the same values.
+func same(a, b Runtime) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return string(x) == string(y)
 }
