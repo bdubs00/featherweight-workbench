@@ -40,6 +40,11 @@
 // source acts for a person, the tools connections and disconnect list and
 // remove the grants of the caller.
 //
+// Another package adds its tools through RegisterTools in init, with no
+// edit of this package, and reads the run behind a call with CallRun,
+// which trusts the keys io.featherweight/* of _meta only from the static
+// token of the fleet (register.go).
+//
 // The tasks extension (io.modelcontextprotocol/tasks) is not served,
 // because the SDK has no support for tasks/get or CreateTaskResult.
 //
@@ -215,6 +220,9 @@ type server struct {
 	key      []byte        // signs requestState
 	stateTTL time.Duration // lifetime of a requestState
 	gw       *gateway      // nil when mcp.expose is empty
+	// registered holds the names of the tools that other packages add
+	// through RegisterTools.
+	registered map[string]bool
 }
 
 // NewServer builds the MCP server that the HTTP and the stdio transports
@@ -225,9 +233,10 @@ func NewServer(a *fw.Agent) (*sdk.Server, error) {
 	}
 	cfg := a.Config()
 	s := &server{
-		a:        a,
-		log:      a.Logger().With("component", "mcp"),
-		stateTTL: cfg.MCP.TaskTTL,
+		a:          a,
+		log:        a.Logger().With("component", "mcp"),
+		stateTTL:   cfg.MCP.TaskTTL,
+		registered: map[string]bool{},
 	}
 	s.key = stateKey(a, s.log)
 	if s.stateTTL <= 0 {
@@ -257,8 +266,10 @@ func NewServer(a *fw.Agent) (*sdk.Server, error) {
 	s.addManageTools()
 	s.addConnectionTools()
 	s.addBatchTools()
+	s.addRegisteredTools()
 	s.addResources()
 	s.addPrompts()
+	s.srv.AddReceivingMiddleware(withCallMeta)
 	if len(cfg.MCP.Expose) > 0 {
 		s.gw = newGateway(s, cfg.MCP.Expose)
 		s.srv.AddReceivingMiddleware(s.gw.middleware)

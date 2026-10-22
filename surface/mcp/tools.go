@@ -40,10 +40,11 @@ var workTools = map[string]bool{
 }
 
 // reserved reports whether an exposed tool cannot take the name: a work
-// tool, a management tool, the fleet tool when the fleet is on, or a
-// connection tool when a tool source acts for a person.
+// tool, a management tool, the fleet tool when the fleet is on, a
+// connection tool when a tool source acts for a person, or a tool that
+// another package added through RegisterTools.
 func (s *server) reserved(name string) bool {
-	return workTools[name] || (name == toolFleet && fleet.Of(s.a) != nil) ||
+	return workTools[name] || s.registered[name] || (name == toolFleet && fleet.Of(s.a) != nil) ||
 		((name == toolConnections || name == toolDisconnect) && connections.Of(s.a) != nil) ||
 		((name == toolEnqueue || name == toolBatch) && s.intakeOn())
 }

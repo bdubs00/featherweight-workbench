@@ -53,6 +53,8 @@ Open `http://localhost:8080/ui` and paste the token. The listener serves the rou
 | `POST /v1/builder` | a run of the agent builder |
 | `GET /v1/fleet` | the members and the pools of the fleet |
 | `/v1/connections` | the connections of the caller to services |
+| `/v1/pages` | the wiki of the fleet: pages of Markdown with a history |
+| `/v1/faces` | the faces of the agents: an SVG, else an identicon, with a display name and a tagline |
 | `GET /v1/usage` | the usage of the runs, deprecated |
 
 For a desktop client, run the MCP server over standard input and output:
@@ -83,13 +85,21 @@ A worker is a bare `fw` in an ax Task, and the front is `fw-workbench` outside t
 
 A pool (`workbench.pools`) keeps a number of Tasks that run one profile. The front creates the Tasks with their Workspaces. It replaces a Task of an older configuration once the Task is idle. It deletes the Tasks above the count, but never a Task with an active run. The front owns the profiles of its pools: `agent_put`, `agent_delete`, and the builder write to the overlay of the pool in a NATS key-value bucket, `agents_list` and `agent_get` show what the workers run, and Always allow on the approval card adds an allow rule to the policy of the pool. `fw-workbench pools render` prints the Tasks that the front applies, with a placeholder for each secret and the overlay merged. [examples/pools](examples/pools/fw.yaml) keeps three workers of one profile, and section 14 of the architecture has the rules.
 
+## The wiki and the faces
+
+The front keeps a wiki for the fleet: pages of Markdown such as `notes/plan.md`, with optional front matter, a hash of each text, and the last 64 versions of each page. A write can name the hash that it read, so a stale write fails instead of losing a change. Agents read and write the pages with the MCP tools `pages_list`, `pages_read`, `pages_write`, `pages_search`, and `pages_history`, and people with the routes under `/v1/pages`. After each change, the front writes `_index.md` with the tree. `fw-workbench pages export <dir>` and `fw-workbench pages import <dir>` copy the wiki to files and back.
+
+Each agent has a face: an SVG, a display name, and a tagline. An agent without an SVG has an identicon from the hash of its name. The front keeps only an SVG that passes its sanitizer, and it refuses any other SVG with the reason. The manager sets a face with the MCP tool `faces_put`.
+
+On a NATS bus, both live in key-value buckets of the stream of the fleet, `<stream>_PAGES` and `<stream>_FACES`, so every replica of the front reads the same pages and faces. On the bus `mem`, they live in the memory of the process. Sections 15 and 16 of the architecture have the rules.
+
 ## How the workbench builds on the kernel
 
 The workbench changes no kernel code. It uses these hooks of the kernel:
 
 1. `native.Extend` mounts the routes of `surface/web` on the native surface of the kernel, behind the same authentication.
 2. `fw.RegisterDefaults` turns on the `mcp` surface and adds the `propose_agent` tool.
-3. Package `cli` gives the verbs of `fw`, and `cmd/fw-workbench` adds the MCP server to the verb `mcp`, the writes to the verb `agents`, and the verb `pools`.
+3. Package `cli` gives the verbs of `fw`, and `cmd/fw-workbench` adds the MCP server to the verb `mcp`, the writes to the verb `agents`, and the verbs `pools` and `pages`.
 4. `fw.RegisterExtension` claims the block `workbench` of `fw.yaml`, and `fw.RegisterRunAnnotator` records the teams of a run.
 5. `fw.Agent.Annotate` records a title that a model wrote, and `fw.Agent.SetProfiles` makes a saved agent profile live.
 
@@ -103,6 +113,9 @@ The workbench changes no kernel code. It uses these hooks of the kernel:
 | `surface/mcp` | the MCP server |
 | `fleet` | the fleet driver |
 | `pools` | the pools of Tasks that the fleet keeps |
+| `pages` | the wiki of the fleet |
+| `faces` | the faces of the agents, the sanitizer, and the identicon |
+| `internal/bucket` | the key-value bucket under the stores of the front |
 | `tools/builder` | the `propose_agent` tool |
 | `examples/agentgateway` | a fleet behind agentgateway |
 | `examples/pools` | a front that keeps a pool of three workers |
