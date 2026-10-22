@@ -106,3 +106,46 @@ func TestRelayErrors(t *testing.T) {
 		t.Errorf("the 403 carries a challenge")
 	}
 }
+
+// While the owner sleeps, the view answers a read of the run object, and
+// nothing reaches the owner, so the read wakes no Task. The result, the
+// transcript, the events, and every write still go to the owner. Once the
+// owner runs, it answers the read itself again.
+func TestRelayReadsFromTheViewWhileTheOwnerSleeps(t *testing.T) {
+	p := newFleetPair(t)
+	base := p.viewURL + "/v1/runs/" + p.remote.ID
+	p.fleet.sleep("owner", fleet.MemberQuiet)
+
+	resp, b := do(t, "GET", base, "", "Authorization", asAlice)
+	r := decodeRun(t, resp, b, http.StatusOK)
+	if r.ID != p.remote.ID || r.Member != "owner" || r.State != fw.StateInputRequired || r.Pending == nil || r.Pending.ID != p.remote.Pending.ID {
+		t.Fatalf("run from the view = %+v", r)
+	}
+	if n := len(p.fleet.forwarded()); n != 0 {
+		t.Fatalf("a read of a sleeping owner reached it %d times", n)
+	}
+	// The answers that live on the worker go there, one request or more each.
+	for _, path := range []string{"/result", "/transcript", "/events?limit=2"} {
+		before := len(p.fleet.forwarded())
+		resp, b := do(t, "GET", base+path, "", "Authorization", asAlice, "Accept", "application/json")
+		if resp.StatusCode != http.StatusOK || len(p.fleet.forwarded()) == before {
+			t.Fatalf("%s = %d %s, forwarded %d", path, resp.StatusCode, b, len(p.fleet.forwarded())-before)
+		}
+	}
+	before := len(p.fleet.forwarded())
+	resp, b = do(t, "POST", base+"/approvals/"+p.remote.Pending.ID, `{"decision":"allow"}`, "Authorization", asAlice)
+	if r := decodeRun(t, resp, b, http.StatusOK); r.Member != "owner" || len(p.fleet.forwarded()) != before+1 {
+		t.Fatalf("decided run = %+v, forwarded %d", r, len(p.fleet.forwarded())-before)
+	}
+	if _, err := p.owner.WaitFor(testCtx(t), p.remote.ID, func(r *fw.Run) bool { return r.State.Terminal() }); err != nil {
+		t.Fatal(err)
+	}
+
+	// A live owner answers the read itself.
+	p.fleet.sleep("owner", fleet.MemberLive)
+	before = len(p.fleet.forwarded())
+	resp, b = do(t, "GET", base, "", "Authorization", asAlice)
+	if r := decodeRun(t, resp, b, http.StatusOK); r.Member != "owner" || len(p.fleet.forwarded()) != before+1 {
+		t.Fatalf("run of a live owner = %+v, forwarded %d", r, len(p.fleet.forwarded())-before)
+	}
+}

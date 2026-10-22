@@ -3,8 +3,12 @@ package fleet
 // This file is the relay of the native surface (native.Relay): it answers a
 // request about a run that another member owns by sending it to that member
 // with the credential of the caller, and it relays the answer as the member
-// sent it. POST /v1/runs?member=<name> starts a run on another member. A
-// request that a member forwarded is never forwarded again.
+// sent it. A read of the run object of a member that sleeps is the
+// exception: the view answers it, because a request through the router of
+// ax wakes the Task (ViewRoutes). POST /v1/runs?member=<name> starts a run
+// on another member. A request that a member forwarded is never forwarded
+// again. The relay also answers GET /v1/agents/{name} for a profile that
+// the workers of a pool run (native.AgentRelay).
 
 import (
 	"bytes"
@@ -15,6 +19,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -40,23 +45,138 @@ type Relay struct{ a *fw.Agent }
 // NewRelay returns the relay of an agent.
 func NewRelay(a *fw.Agent) *Relay { return &Relay{a: a} }
 
+// Where the front answers a run route of the kernel for a run of another
+// member (docs/ARCHITECTURE.md section 4.5). A request to a member goes
+// through the router of ax, and the router wakes a Task that sleeps for
+// any request. So the view answers the reads whose answer it holds, and
+// only the routes whose answer lives on the worker reach the member.
+var (
+	// ViewRoutes are the reads that the view answers itself while the
+	// member of the run does not run: its state is quiet or stopped. The
+	// answer has the shape of the answer of the member, with the field
+	// member, and the view fills it as it holds the run (RestView). A
+	// member that runs answers these reads itself.
+	ViewRoutes = []string{"GET /v1/runs/{id}"}
+
+	// WorkerRoutes always go to the member that holds the run, because
+	// their answer lives on the worker: the ledger of the run, its live
+	// text, its files, and every write. Each of them wakes a Task that
+	// sleeps. A run route that neither list names goes to the member too,
+	// because only the member knows it.
+	WorkerRoutes = []string{
+		"GET /v1/runs/{id}/events",
+		"GET /v1/runs/{id}/live",
+		"GET /v1/runs/{id}/files",
+		"GET /v1/runs/{id}/files/{path...}",
+		"POST /v1/runs/{id}/messages",
+		"POST /v1/runs/{id}/reactions",
+		"PATCH /v1/runs/{id}/budget",
+		"POST /v1/runs/{id}/approvals/{approval}",
+		"POST /v1/runs/{id}/cancel",
+		"POST /v1/runs/{id}/fork",
+	}
+)
+
+// RestView is a View that can stand in for a member that does not run, so
+// a read of a run wakes no Task (ViewRoutes).
+//
+// AtRest takes a run that Run returned for the caller, with Member set,
+// and returns a copy of the run as the view holds it when that member is
+// quiet or stopped. The copy carries the texts that the egress stream
+// carried, not the texts of a record, which TextLimit cuts. AtRest
+// returns nil when the member runs, or when the view holds no copy that
+// can stand in for the answer of the member. The read then goes to the
+// member.
+type RestView interface {
+	AtRest(run *fw.Run) *fw.Run
+}
+
 // Take implements native.Relay. A route with the path value id goes to the
-// member that owns the run, when another member owns it. POST /v1/runs with
-// the query parameter member goes to that member.
+// member that owns the run, when another member owns it, unless the view
+// answers it (ViewRoutes). POST /v1/runs with the query parameter member
+// goes to that member.
 func (rl *Relay) Take(w http.ResponseWriter, r *http.Request) bool {
 	if id := r.PathValue("id"); id != "" {
-		member, ok := rl.Owner(w, r, id)
+		run, ok := rl.owned(w, r, id)
 		switch {
 		case !ok:
 			return true
-		case member != "":
-			rl.Forward(w, r, member)
+		case run == nil:
+			return false
+		case rl.answerAtRest(w, r, run):
 			return true
 		}
-		return false
+		rl.Forward(w, r, run.Member)
+		return true
 	}
 	if member := strings.TrimSpace(r.URL.Query().Get("member")); member != "" && r.Method == http.MethodPost {
 		return rl.startOn(w, r, member)
+	}
+	return false
+}
+
+// answerAtRest answers a read of ViewRoutes from the view when the member
+// of the run does not run, and reports whether it answered. The answer is
+// the run object with member, as GET /v1/runs/{id} of the member answers
+// it and the relay sets member on it.
+func (rl *Relay) answerAtRest(w http.ResponseWriter, r *http.Request, run *fw.Run) bool {
+	if !slices.Contains(ViewRoutes, r.Pattern) {
+		return false
+	}
+	rv, ok := Of(rl.a).(RestView)
+	if !ok {
+		return false
+	}
+	c := rv.AtRest(run)
+	if c == nil {
+		return false
+	}
+	c.Member = run.Member
+	native.WriteJSON(w, http.StatusOK, c)
+	return true
+}
+
+// The relay answers the read of a profile of a pool.
+var _ native.AgentRelay = (*Relay)(nil)
+
+// TakeAgent implements native.AgentRelay. It answers GET /v1/agents/{name}
+// with the profile that the workers of a pool run, as the MCP tool
+// agent_get reads it (PoolAgentNamed): the profile with pool, the role of
+// the caller, and the policy of the workers, and with no abilities,
+// because the tools of the workers live in their Tasks. The query
+// parameter pool names the pool when several pools run the profile. The
+// kernel calls it after the authentication and checks no right, so the
+// read decides with the rules of the pool for the caller in the context.
+// A profile that a pool runs and the caller cannot view answers 404, as
+// the kernel answers a profile that the caller cannot view. A profile that
+// no pool runs, and every profile of a front without pools, stay with the
+// kernel.
+func (rl *Relay) TakeAgent(w http.ResponseWriter, r *http.Request, name string) bool {
+	if !Pooled(rl.a) {
+		return false
+	}
+	ctx := r.Context()
+	pool := strings.TrimSpace(r.URL.Query().Get("pool"))
+	pa, found, err := PoolAgentNamed(ctx, rl.a, name, pool)
+	switch {
+	case err != nil:
+		fail(w, r, err)
+		return true
+	case found:
+		native.WriteJSON(w, http.StatusOK, pa)
+		return true
+	}
+	// A context without a principal sees every profile of the pools. A
+	// profile that a pool runs stays hidden from a caller who cannot view
+	// it, also when this process holds a profile of the same name.
+	_, held, err := PoolAgentNamed(fw.WithPrincipal(ctx, nil), rl.a, name, pool)
+	if held || pool != "" || errors.Is(err, fw.ErrInvalidRequest) {
+		detail := "no agent profile has the name " + strconv.Quote(name)
+		if pool != "" {
+			detail += " in the pool " + pool
+		}
+		native.WriteProblem(w, r, http.StatusNotFound, detail)
+		return true
 	}
 	return false
 }
@@ -66,25 +186,36 @@ func (rl *Relay) Take(w http.ResponseWriter, r *http.Request) bool {
 // member forwarded never goes out again. On failure it writes the problem
 // and returns false.
 func (rl *Relay) Owner(w http.ResponseWriter, r *http.Request, id string) (string, bool) {
+	run, ok := rl.owned(w, r, id)
+	if run == nil {
+		return "", ok
+	}
+	return run.Member, ok
+}
+
+// owned returns the run of another member as the view gives it to the
+// caller, with Member set, and nil when the run is local, unknown, or the
+// fleet is off. On failure it writes the problem and returns false.
+func (rl *Relay) owned(w http.ResponseWriter, r *http.Request, id string) (*fw.Run, bool) {
 	f := Of(rl.a)
 	if f == nil || r.Header.Get(HeaderVia) != "" {
-		return "", true
+		return nil, true
 	}
 	// A context without a principal asks the kernel whether the run exists
 	// at all, without an authorization check. The handler authorizes a
 	// local run as before.
 	if _, err := rl.a.Get(context.Background(), id); !errors.Is(err, fw.ErrRunNotFound) {
-		return "", true
+		return nil, true
 	}
 	run, err := f.Run(r.Context(), id)
 	switch {
-	case err == nil:
-		return run.Member, true
-	case errors.Is(err, fw.ErrRunNotFound):
-		return "", true
+	case err == nil && run.Member != "":
+		return run, true
+	case err == nil, errors.Is(err, fw.ErrRunNotFound):
+		return nil, true
 	default:
 		fail(w, r, err)
-		return "", false
+		return nil, false
 	}
 }
 
@@ -267,6 +398,8 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 		native.WriteProblem(w, r, http.StatusServiceUnavailable, "the authorization service did not answer: "+detail)
 	case errors.Is(err, fw.ErrForbidden):
 		native.WriteProblem(w, r, http.StatusForbidden, detail)
+	case errors.Is(err, fw.ErrInvalidRequest):
+		native.WriteProblem(w, r, http.StatusBadRequest, strings.TrimPrefix(detail, strings.TrimPrefix(fw.ErrInvalidRequest.Error(), "fw: ")+": "))
 	case errors.Is(err, ErrNoRoute):
 		native.WriteProblem(w, r, http.StatusBadGateway, detail)
 	case errors.Is(err, ErrNoCredential):

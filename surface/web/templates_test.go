@@ -107,6 +107,13 @@ func TestPutAgentCreatesARuntimePool(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || strings.Contains(string(b), `"pool"`) {
 		t.Fatalf("a second PUT = %d %s", resp.StatusCode, b)
 	}
+	// The read of the agent answers the profile that its workers run.
+	resp, b = do(t, "GET", srv.URL+"/v1/agents/writer", "", "Authorization", asAlice)
+	var read fleet.PoolAgent
+	decodeJSON(t, resp, b, http.StatusOK, &read)
+	if read.Pool != "writer" || read.Description != "Writes more." || read.Role != "owner" {
+		t.Fatalf("GET = %s", b)
+	}
 	resp, b = do(t, "PUT", srv.URL+"/v1/agents/other?pool=writer", `{"workers":{}}`, "Authorization", asAlice)
 	if p := decodeProblem(t, resp, b, http.StatusBadRequest); !strings.Contains(p.Detail, "not both") {
 		t.Fatalf("PUT with pool and workers = %+v", p)
