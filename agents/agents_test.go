@@ -158,14 +158,15 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	cfg := fw.DefaultConfig()
 	cfg.Home = home
 	a := newAgent(t, cfg)
-	if _, _, err := Put(ctx, a, fw.AgentProfile{Name: "writer", System: "You write.", Skills: []string{}}); err != nil {
+	if _, _, err := Put(ctx, a, fw.AgentProfile{Name: "writer", System: "You write.", Skills: []string{}, Compaction: &fw.CompactionConfig{Off: true}}); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("FW_HOME", home)
 	t.Setenv("FW_CONFIG", "")
 	b := newAgent(t, nil, fw.WithConfigFile(""))
 	p, ok := b.ProfileNamed("writer")
-	if !ok || p.System != "You write." || p.Access == nil || p.Access.Owners[0] != "alice" || p.Skills == nil || len(p.Skills) != 0 {
+	if !ok || p.System != "You write." || p.Access == nil || p.Access.Owners[0] != "alice" || p.Skills == nil || len(p.Skills) != 0 ||
+		p.Compaction == nil || !p.Compaction.Off {
 		t.Fatalf("profile after a restart = %+v, %v", p, ok)
 	}
 	if b.ProfileLocked("writer") {

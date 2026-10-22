@@ -116,8 +116,9 @@ func runSchema(a *fw.Agent) json.RawMessage {
 							"deny":    ruleList("Rules that refuse a call, such as bash: rm -rf*."),
 						},
 					},
-					"budget":  budgetSchema("Limits of this run from the profile side; the request budget wins over them."),
-					"outcome": outcomeSchema("A grade of the answer from the profile side; the outcome of the request wins over it."),
+					"budget":     budgetSchema("Limits of this run from the profile side; the request budget wins over them."),
+					"outcome":    outcomeSchema("A grade of the answer from the profile side; the outcome of the request wins over it."),
+					"compaction": compactionSchema("When this run compacts its history. A field that is set replaces the same field of the profile."),
 				},
 			},
 			"outcome": outcomeSchema("A grade of the answer: a rubric, an optional grader model, and the number of passes. It replaces the outcome of the profile as a whole."),
@@ -175,6 +176,19 @@ func runBudgetSchema() json.RawMessage {
 // outcomeSchema is the schema of an outcome block: the kernel grades the
 // answer of the run against the rubric in a grader run (the kernel
 // architecture, section 20).
+// compactionSchema is the schema of the compaction block of a profile.
+func compactionSchema(desc string) map[string]any {
+	return map[string]any{
+		"type":        "object",
+		"description": desc,
+		"properties": map[string]any{
+			"at":    map[string]any{"type": "integer", "minimum": 0, "description": "The estimated tokens of context that start a summary. 0 takes compaction.at of the configuration."},
+			"model": map[string]any{"type": "string", "description": "A provider/model selector or a name from the models map for the summary call. Empty takes compaction.model of the configuration."},
+			"off":   map[string]any{"type": "boolean", "description": "true: the runs never compact. Leave at unset with it."},
+		},
+	}
+}
+
 func outcomeSchema(desc string) map[string]any {
 	return map[string]any{
 		"type":        "object",
@@ -249,6 +263,9 @@ type profileArgs struct {
 	Policy       *fw.Rules   `json:"policy,omitempty"`
 	Budget       *budgetArgs `json:"budget,omitempty"`
 	Outcome      *fw.Outcome `json:"outcome,omitempty"`
+	// Compaction is the compaction block of the profile
+	// (fw.CompactionConfig); the kernel checks it.
+	Compaction *fw.CompactionConfig `json:"compaction,omitempty"`
 }
 
 // profile converts the arguments. The prefix names the fields in an
@@ -264,6 +281,7 @@ func (p *profileArgs) profile(prefix string) (fw.AgentProfile, error) {
 		Effort:       strings.ToLower(p.Effort),
 		TimeZone:     strings.TrimSpace(p.TimeZone),
 		Outcome:      p.Outcome,
+		Compaction:   p.Compaction,
 	}
 	if out.TimeZone != "" {
 		if _, _, err := fw.LoadZone(out.TimeZone); err != nil {
