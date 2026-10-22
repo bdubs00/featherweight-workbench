@@ -147,7 +147,8 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `PUT /v1/faces/{agent}` | Set the face: an SVG of at most 32 KB that passes the sanitizer, else 422. Needs `agent.edit` on the agent. Answers the entry. |
 | `DELETE /v1/faces/{agent}` | Back to the identicon. Answers the entry. |
 | `PATCH /v1/faces/{agent}` | Set `displayName`, at most 64 characters, and `tagline`, at most 140. Answers the entry. |
-| `GET /v1/bossmode` | The settings of the page of bossmode: the manager for the caller, the placement, and the size of a roster (section 17.4). With `workbench.bossmode.enabled`. |
+| `GET /v1/bossmode` | The settings of the page of bossmode: the manager for the caller, the placement, the size of a roster, and the theme of the deployment (section 17.4). With `workbench.bossmode.enabled`. |
+| `GET /v1/bossmode/logo` | The logo of the theme, an SVG that passed the sanitizer or a PNG, with `ETag`, and 404 without a logo (section 17.4). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/stream` | The events of bossmode as server-sent events: the changes of the fleet, the entries and the seats of the bridges, the pages of the wiki, the faces, and the events of other packages that the caller can see, with `Last-Event-ID` to resume (section 17.3). With `workbench.bossmode.enabled`. |
 | `GET /v1/bridges` | The bridges of the caller and of the teams of the caller, open first, each with `lastSeq`, `read`, `unread`, `memberCount`, and `needsYou` (section 18.10). |
 | `POST /v1/bridges` | Open a bridge from `{"title", "goal", "placement", "members", "delegation", "caps"}` and seat its members. 201 with the record and its members. |
@@ -1568,10 +1569,26 @@ Bossmode reads the block `bossmode` under the key `workbench` of `fw.yaml` (sect
 | `workbench.bossmode.enabled` | `FW_WORKBENCH_BOSSMODE_ENABLED` | Serves the page at `/bossmode`, the settings at `/v1/bossmode`, and the stream at `/v1/bossmode/stream`. `on` or `off`. | off |
 | `workbench.bossmode.dir` | `FW_WORKBENCH_BOSSMODE_DIR` | The directory of the static files of the page: the `dist` directory of the build of `featherweight-bossmode`. Empty serves the copy that the binary embeds: the build of the page in `bossmode/static`, else the placeholder in `bossmode/placeholder` (sections 1.2 and 17.2). | empty |
 | `workbench.bossmode.manager` | `FW_WORKBENCH_BOSSMODE_MANAGER` | The profile name of the manager agent. The settings of the page, the bridges, the delegation checks, and the doctor lines read it. Empty means no manager. | empty |
+| `workbench.bossmode.theme.accent` | `FW_WORKBENCH_BOSSMODE_THEME_ACCENT` | The accent color of the page for this deployment, in hex: `#rgb`, `#rrggbb`, or `#rrggbbaa`. Empty means `#FF4D00`. | empty |
+| `workbench.bossmode.theme.name` | `FW_WORKBENCH_BOSSMODE_THEME_NAME` | The name of the organization that the page shows: one line of at most 64 characters | empty |
+| `workbench.bossmode.theme.logo` | `FW_WORKBENCH_BOSSMODE_THEME_LOGO` | The path of the logo on the front: an SVG or a PNG file of at most 256 KB, whose name ends with `.svg` or `.png`, in any case. The service reads it once at its start. | empty |
 
 Each key has one reader. The package `manager` reads `workbench.bossmode.manager` (`manager.Load`), because it sits below the packages `bridges` and `bossmode`, and both ask it. `bossmode.Load` reads `enabled` and `dir` and takes the manager from `manager.Load`. The settings of the page also name two keys of `workbench.bridges`, `placement` (`FW_WORKBENCH_BRIDGES_PLACEMENT`), `queue` by default, and `maxMembers` (`FW_WORKBENCH_BRIDGES_MAX_MEMBERS`), 16 by default. The package `bridges` reads that block (`bridges.Load`, section 18.13), and the settings ask it, so the settings, the bridges, and the doctor line never disagree.
 
-A configuration that cannot work stops the start: a value of `enabled` that is not a switch, a manager name with a space or a slash, which also stops the bridges, and a `dir` that is not a directory. A block `workbench.bridges` that does not load stops the bridges, so a process that serves always loads it. Without `enabled`, no route of bossmode exists, and each answers 404. The service runs in a process that serves, as the fleet does (section 4.6), so `fw-workbench run` starts no stream.
+A configuration that cannot work stops the start, and the error names the key and the reason: a value of `enabled` that is not a switch, a manager name with a space or a slash, which also stops the bridges, a `dir` that is not a directory, an accent that is no color in hex, and a name above 64 characters or with a control character. A logo stops the start when the service cannot read it, when its name ends neither with `.svg` nor with `.png`, when it holds more than 256 KB, when it is an SVG that the sanitizer of the faces refuses (section 16.2), and when it is a PNG that does not decode. The sanitizer bounds an SVG to 32 KB, so an SVG logo holds at most 32 KB. A block `workbench.bridges` that does not load stops the bridges, so a process that serves always loads it. Without `enabled`, no route of bossmode exists, and each answers 404. The service runs in a process that serves, as the fleet does (section 4.6), so `fw-workbench run` starts no stream.
+
+```yaml
+workbench:
+  bossmode:
+    enabled: true
+    manager: manager
+    theme:
+      accent: "#0A7E8C"
+      name: Example Ltd
+      logo: /etc/fw/logo.svg
+```
+
+Quote the accent in YAML, because `#` starts a comment there.
 
 ### 17.2 The page
 
@@ -1630,7 +1647,8 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
 {
   "manager": {"agent": "manager", "member": "default/manager-0", "run": "01K..."},
   "placement": "queue",
-  "maxMembers": 16
+  "maxMembers": 16,
+  "theme": {"accent": "#FF4D00", "name": "", "logo": ""}
 }
 ```
 
@@ -1638,6 +1656,9 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
 - `manager.member` is the fleet member that runs the manager, for `POST /v1/runs?member=`: a Task of the pool whose `agent` is the profile, the first one whose phase is Running, else the first. Without such a pool, it is the first member by name whose agents hold the profile. The front runs the configuration of its workers, so it holds every profile, and it is the member only when no other member is. The answer names only a pool and a member that the caller can see, and `""` when there is none.
 - `manager.run` is the newest top-level run of the profile that the caller started, from the runs of the fleet that the caller can see, or `""`. A run whose batch is the batch of a bridge, such as the manager run of a spawn bridge or the run that writes the report of a bridge, also acts as the operator, but it is no conversation of the page, so the settings skip it.
 - `placement` and `maxMembers` come from `workbench.bridges`, as `bridges.Load` reads them (section 17.1).
+- `theme` is the theme of the deployment (section 17.1). `accent` is the accent of the configuration, else `#FF4D00`. `name` is the name of the organization, else `""`. `logo` is `"/v1/bossmode/logo"` when the configuration names a logo, else `""`.
+
+`GET /v1/bossmode/logo`, behind the authentication of the native API, serves the logo with its content type, `image/svg+xml` or `image/png`, and an `ETag`, the SHA-256 of the body in quotes. `If-None-Match` with the ETag answers 304. An SVG goes out as the sanitizer wrote it, and a PNG goes out as it is. The answer carries `Cache-Control: private, no-cache`, `X-Content-Type-Options: nosniff`, and the content security policy of a face (section 16.3). Without a logo, the route answers 404. An `img` element sends no bearer token, so the page reads the logo with `fetch` and shows it as a blob URL, as it shows a face.
 
 ### 17.5 The broadcaster
 
@@ -1671,7 +1692,7 @@ A hook runs on the replica that made the change, so a stream on another replica 
 
 ### 17.6 Doctor and metrics
 
-`fw-workbench doctor` has one line for bossmode, which covers the page, the manager, and the stores. It says off, or on with these facts: the page that it serves, from `dir` with or without an `index.html`, or the embedded copy and whether that copy is the placeholder; the manager profile, and whether `fw.agents` or a pool defines a profile of that name; and the streams. Then, on or off, it adds the lines of the stores, `pages.Status`, `faces.Status`, and `bridges.Status`: where the wiki, the faces, and the bridges live, with their limits and the manager of the bridges. A `dir` that is not a directory, a `dir` without `index.html`, a manager that no profile defines, and a store whose configuration does not load fail the line. The doctor runs in a process of its own, which serves no stream, so it names the gauge of the server for the open streams. The line `manager` says more about the pool of the manager (section 19.6).
+`fw-workbench doctor` has one line for bossmode, which covers the page, the manager, and the stores. It says off, or on with these facts: the page that it serves, from `dir` with or without an `index.html`, or the embedded copy and whether that copy is the placeholder; the theme, when a key of it is set, with the type and the size of the logo; the manager profile, and whether `fw.agents` or a pool defines a profile of that name; and the streams. Then, on or off, it adds the lines of the stores, `pages.Status`, `faces.Status`, and `bridges.Status`: where the wiki, the faces, and the bridges live, with their limits and the manager of the bridges. A `dir` that is not a directory, a `dir` without `index.html`, a logo that does not pass, a manager that no profile defines, and a store whose configuration does not load fail the line. The doctor runs in a process of its own, which serves no stream, so it names the gauge of the server for the open streams. The line `manager` says more about the pool of the manager (section 19.6).
 
 | Metric | Type | What it counts |
 |---|---|---|

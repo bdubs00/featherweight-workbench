@@ -33,17 +33,20 @@ func extension(k *native.Kit) error {
 	k.HandlePublic("GET "+Path, slashRoute)
 	k.HandlePublic("GET "+Path+"/{file...}", pageRoute(c.Dir))
 	k.Handle("GET /v1/bossmode", settingsRoute(k, c))
+	k.Handle("GET "+LogoPath, logoRoute(a))
 	k.Handle("GET /v1/bossmode/stream", streamRoute(a))
 	return nil
 }
 
 // Settings is the answer of GET /v1/bossmode: the manager, when the
-// configuration names one, and the keys of workbench.bridges that the page
-// reads, as the package bridges reads them (bridges.Load).
+// configuration names one, the keys of workbench.bridges that the page
+// reads, as the package bridges reads them (bridges.Load), and the theme
+// of the deployment.
 type Settings struct {
-	Manager    *Manager `json:"manager"`
-	Placement  string   `json:"placement"`
-	MaxMembers int      `json:"maxMembers"`
+	Manager    *Manager  `json:"manager"`
+	Placement  string    `json:"placement"`
+	MaxMembers int       `json:"maxMembers"`
+	Theme      PageTheme `json:"theme"`
 }
 
 // Manager names the manager for the page. Agent is the profile of
@@ -70,7 +73,7 @@ func settingsRoute(k *native.Kit, c Config) http.HandlerFunc {
 			k.Fail(w, r, err)
 			return
 		}
-		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers}
+		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers, Theme: pageTheme(a, c.Theme)}
 		if c.Manager != "" {
 			m, err := managerOf(r.Context(), a, c.Manager)
 			if err != nil {

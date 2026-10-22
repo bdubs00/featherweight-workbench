@@ -16,12 +16,12 @@ import (
 // DoctorCheck is the line of fw doctor about bossmode (cli.DoctorCheck):
 // the page, the manager, and the stores, in one line. It says off, or on
 // with the page that it serves, whether the directory of the page holds
-// index.html, the manager profile and where it is defined, and the open
-// streams. Then, on or off, it gives the lines of the stores that bossmode
-// reads: the wiki (pages.Status), the faces (faces.Status), and the
-// bridges (bridges.Status). A directory without index.html, a manager
-// that no profile of fw.agents and no pool defines, and a store whose
-// configuration does not load fail the check. cmd/fw-workbench registers
+// index.html, the theme, the manager profile and where it is defined, and
+// the open streams. Then, on or off, it gives the lines of the stores that
+// bossmode reads: the wiki (pages.Status), the faces (faces.Status), and
+// the bridges (bridges.Status). A directory without index.html, a logo
+// that does not pass, a manager that no profile of fw.agents and no pool
+// defines, and a store whose configuration does not load fail the check. cmd/fw-workbench registers
 // it. The line manager of the package manager says more about the pool of
 // the manager.
 func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duration) (bool, string) {
@@ -61,6 +61,10 @@ func pageCheck(cfg *fw.Config) (bool, string) {
 			ok = false
 			parts = append(parts, "serves the page from "+c.Dir+", which holds no index.html, so /bossmode answers 503; build the page there")
 		}
+	}
+	if line, good := themeLine(c.Theme); line != "" {
+		ok = ok && good
+		parts = append(parts, line)
 	}
 	if line, found := managerLine(cfg, c.Manager); found {
 		parts = append(parts, line)

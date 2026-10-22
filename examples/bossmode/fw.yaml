@@ -45,6 +45,16 @@ workbench:
     # of the manager by this name, and only a run of the manager needs the
     # delegation of the operator of a bridge.
     manager: manager
+    # The look of the page for this deployment: the accent color in hex,
+    # quoted, because # starts a comment in YAML; the name of the
+    # organization, at most 64 characters; and the logo, an SVG or a PNG
+    # file on the front of at most 256 KB. The front reads the logo at its
+    # start, and a logo that it cannot read or that fails the sanitizer
+    # stops the start. Without a theme, the page has the accent #FF4D00.
+    theme:
+      accent: "#FF4D00"
+      name: Example Ltd
+      # logo: /etc/fw/logo.svg
   fleet:
     atespaces: [default]
     egress: fw.events
