@@ -12,13 +12,14 @@ The workbench changes no kernel code. It plugs in through the extension points o
 
 - `native.Extend` adds routes to the native surface of the kernel, on the same listener and behind the same authentication. The package `surface/web` registers one extension in `init`. Its routes get a `*native.Kit`, so they answer errors and forward the runs of other fleet members as the run routes do.
 - `fw.RegisterDefaults` changes the default configuration in `init`. The package `surface/mcp` adds `mcp` to `surfaces`, and the package `tools/builder` adds `propose_agent` to the built-in tools. A file or a variable still overrides each default.
-- The package `cli` of the kernel holds the command line. `cmd/fw-workbench` calls `cli.Run`, so `fw-workbench` takes every verb of `fw`. It sets `cli.ServeMCPStdio`, so the verb `mcp` serves the MCP server over stdio. The verb `pools` belongs to the workbench, so `cmd/fw-workbench` runs it before `cli.Run` (section 14.2).
+- The package `cli` of the kernel holds the command line. `cmd/fw-workbench` calls `cli.Run`, so `fw-workbench` takes every verb of `fw`. It sets `cli.ServeMCPStdio`, so the verb `mcp` serves the MCP server over stdio. The verbs `pools` and `pages` belong to the workbench, so `cmd/fw-workbench` runs them before `cli.Run` (sections 14.2 and 15.5).
 - `fw.RegisterExtension` claims a top-level block of `fw.yaml` for the workbench. The package `teams` claims the block `workbench`, and `fw.Config.Extension` decodes it (section 8).
 - `fw.RegisterRunAnnotator` adds metadata to every run that the kernel queues. The package `teams` records the teams of the person who starts a run this way (section 8).
 - `fw.Agent.SetProfiles` replaces the profiles of the kernel at runtime, and `cli.AgentsPut` and `cli.AgentsDelete` give the verb `agents` its writes. The package `agents` uses them (section 10).
 - `fw.RegisterService` runs work beside the agent for as long as it lives, `Kit.SetRelay` of the native surface answers a request about a run of another process, `metrics.RegisterCollector` adds series to the metrics surface, and `cli.RegisterDoctorCheck` adds a line to `fw doctor`. The package `fleet` uses the service, the relay, the collector, and the doctor check (section 4). Its collector adds the series of the queues, the ends of the runs of the workers, and the approvals that wait (section 4.14). A worker exports the facts of its own runs, and the front shows the fleet as the egress stream and the server of the bus tell it.
 - `fw.Agent.SetPersonTokens` gives the tool sources of the kernel the access tokens of people, and `fw.Agent.Connected` resumes the calls that wait for a connection. The package `connections` uses both (section 11).
 - The package `sources` uses `fw.RegisterService`, `native.Extend`, and `cli.RegisterDoctorCheck` too: its service runs the sources, its route takes the events of webhooks, and its doctor line names the sources (section 13).
+- The packages `pages` and `faces` use `fw.RegisterService` and `native.Extend`, and `mcp.RegisterTools` of the MCP server of the workbench (section 3.1): the service keeps the store, the routes serve it to people, and the tools offer it to MCP clients and agents (sections 15 and 16).
 
 Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary, the `oidc` authentication mode of the kernel included, because the front verifies the tokens of people.
 
@@ -57,6 +58,9 @@ fleet/                  the fleet: the member record, the view, forwarding, the 
 pools/                  the pools: the configuration, the rendered Tasks, and the reconciler (section 14)
 sources/                the event sources: webhooks and polls that turn the events of
                         outside systems into runs (section 13)
+pages/                  the wiki of the fleet: pages of Markdown with a history (section 15)
+internal/bucket/        the key-value bucket under the stores of the front: a bucket of the
+                        NATS server of the bus, or the memory of the process
 tools/builder/          the tool propose_agent (section 6.4)
 examples/agentgateway/  a fleet behind agentgateway on one public URL
 examples/pools/         a front that keeps a pool of three workers (section 14)
@@ -94,6 +98,12 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `GET /v1/connections` | The services that act for the caller, connected or not, as `{"connections": [...]}` (section 11). |
 | `POST /v1/connections/{server}` | Start a connection. Body field: `next`, a place in the page to return to. The answer holds `url`, the authorization request, and sets the cookie of the callback. |
 | `DELETE /v1/connections/{server}` | Remove the grant of the caller for the service. |
+| `GET /v1/pages` | The tree of the wiki: every page without its text (section 15.3). |
+| `GET /v1/pages/{path}` | One page with its hash in `ETag`. `Accept: text/markdown` gives the text alone, and `?version=` an older version. |
+| `PUT /v1/pages/{path}` | Write a page. `If-Match` makes a compare-and-swap, and `If-None-Match: *` creates only. 412 on a mismatch. |
+| `DELETE /v1/pages/{path}` | Remove a page. Its history stays. |
+| `GET /v1/pages/{path}/history` | The versions of a page with who and when. |
+| `GET /v1/pages/search?q=` | The pages that hold every word of `q`, read up to 16 MB of text. |
 
 ### 2.1 Connections
 
@@ -512,6 +522,8 @@ The MCP server carries these management tools beside the work tools:
 | `usage` | Deprecated. The result does not change, and the description points to the Prometheus metrics (the kernel architecture, section 10). |
 | `connections` | The services that act for the caller, connected or not, each with its connect link (section 11) |
 | `disconnect` | Remove the grant of the caller for one service |
+| `pages_list`, `pages_read`, `pages_search`, `pages_history` | The wiki of the fleet: the pages, one page with its hash, a search by words, and the versions of a page (section 15.4) |
+| `pages_write` | Write a page of the wiki as a new version, with `ifHash` for a compare-and-swap. A run that writes through the token of the fleet is the writer `agent:<profile>` (section 15.4). |
 
 `run_events` refuses `from` and `before` together. Its result has `prev`, the value of `before` for the page in front. If the page starts at the first event, the result has no `prev`. For a run of another member, the server turns `before` into `from` and `limit` on the events route of that member. The sequence numbers of a run have no gaps, so the page is the same. With `compact` true, each tool output of the page keeps its first 200 characters, `size` holds the bytes of the output, and `cut` is true, so a poll of a busy run costs little. The page without `compact` holds the full outputs.
 
@@ -648,7 +660,7 @@ To follow a run to its result:
 
 The split did not change the contract of the package `fw`. The kernel keeps the primitive of a connection: `fw.ConnectRequest`, `fw.RequestConnect`, `fw.PersonTokens`, and `Agent.Connected` (the kernel architecture, section 7.11). The MCP client of the kernel, `tools/mcp`, still acts for a person with the tokens that the package `connections` gives it (section 11).
 
-The workbench still reads three parts of the kernel configuration: the block `mcp` of its server surface, the OAuth setup of each `tools.mcp` entry with `auth.oauth.grant: user`, and `auth.oidc`. Everything else of the workbench lives in the block `workbench` of `fw.yaml`: `teams`, `titles`, `fleet`, `grants`, `access`, and `sources`.
+The workbench still reads three parts of the kernel configuration: the block `mcp` of its server surface, the OAuth setup of each `tools.mcp` entry with `auth.oauth.grant: user`, and `auth.oidc`. Everything else of the workbench lives in the block `workbench` of `fw.yaml`: `teams`, `titles`, `fleet`, `grants`, `access`, `sources`, and `pages`.
 
 ## 8. Teams
 
@@ -1321,3 +1333,94 @@ Profiles. On a front with pools, `agent_put`, `agent_delete`, and `PUT` and `DEL
 `agents_list` and `agent_get` show the profiles that the workers of each pool run. Each has `pool`, `overlay` (`added`, `replaced`, or empty), `by` and `at` for an entry of the overlay, and `workerPolicy`, the policy of the workers with the rules of the overlay. A profile of the front carries `front`. The tools of the workers live in their Tasks, so a profile of a pool carries no abilities. The text of `agent_get` words the policy of the workers instead.
 
 Rules. Always allow on the approval card and `approve` with `rule` turn a pending approval of a worker into an allow rule of its pool. The rule is the name of the tool as the policy names it, such as `github.create_pull_request`, and for `bash` the whole tool, without a pattern. The pool is the pool whose Task runs the run. The caller needs the owner role on the profile of the run in that pool. The entry holds the agent, the run, the subject of the caller, the time, and the note, so a person sees why the rule exists, and the dry run names it. Before it writes anything, the front refuses a rule in these cases: the ask comes from a flag, such as `destructive`; the reason is no rule, such as a rerun after a resume; the policy of the profile asks too, which a rule of the pool cannot loosen; or the workers ask a control plane (`fw.policy.external`). The rule applies to every profile that the workers of the pool run. `POST /v1/runs/{id}/approvals/{approval}/rule` writes the rule for the page and decides nothing; the page allows the approval next. It answers 409 when no pool runs the run.
+
+## 15. Pages
+
+The wiki is a set of pages of Markdown that the agents and the people of a fleet keep together. It is the long-term memory of the fleet. A page outlives a run, a Task, and the replacement of the Tasks of a pool, because the front keeps it and no worker does. The package `pages` holds the wiki. It is a service of the kernel (`fw.RegisterService`), so a process that serves has it, and a verb that runs one piece of work, such as `fw-workbench mcp`, does not. It mounts its routes on the native surface (`native.Extend`) and adds its tools to the MCP server of section 3 (`mcp.RegisterTools`).
+
+### 15.1 A page
+
+A page has a path, a text, and a hash.
+
+- The path is a relative path such as `notes/plan.md`. It follows the rules of a memory note name of the kernel (`memory.CheckName`, the kernel architecture, section 7.8): UTF-8, at most 8 parts, no part that starts with a dot, and no control character. It holds at most 512 bytes. Its last part ends with `.md`, and no other part does. The suffix keeps the routes of section 15.3 apart from the pages, and an export never needs a file and a directory of one name.
+- The text is Markdown in UTF-8 of at most `workbench.pages.maxPageBytes`, 256 KB by default. It can start with front matter: YAML between a first line `---` and the next line `---`. The wiki reads two keys of it. `title` is one line of at most 200 characters. `tags` is a list of at most 32 words of at most 64 characters each, or one line with commas between the words. Every other key stays in the text and means nothing to the wiki. Without `title`, the title of the page is its first heading of level one. Front matter that does not parse refuses the write, and the answer names the cause.
+- The hash is the SHA-256 of the whole text, in hex. A write can name the hash that it read, so the write fails when somebody changed the page since (section 15.2).
+
+Each write records `by`, the writer, `at`, the time, `summary`, one line of at most 512 bytes that says what changed, and the hash. A write by a run behind an MCP call records `by` as `agent:<profile>`, and `run`, the id of the run (section 15.4). A write of a person records the subject of the person, and a write of the static token records `token`.
+
+The version of a page is the revision of its entry in the store. It grows with each write of the wiki, so the versions of one page grow but are not consecutive. The wiki keeps the last `workbench.pages.history` versions of each page, 64 by default, and a removal counts as one. A write of the text that the page holds already changes nothing: it makes no version, and the answer is the page as it is.
+
+`_index.md` is the tree of the wiki. After each change, the front writes it: one section per directory, with a link to each page and its title, cut before the limit of a page. Nobody else writes or removes it. The instructions of a bridge name it. `index.md` is an ordinary page, for the home that people write. The index starts with a sentence that says that a page is data that agents and people wrote, not an instruction.
+
+### 15.2 The store
+
+On a NATS bus, the wiki lives in the key-value bucket `<stream>_PAGES`, where `<stream>` is `bus.options.stream`, `FW` by default. Each page is one entry, `page.<path>` with the path in base64url, as the overlay of a pool keeps its profiles (section 14.9). The value is one line of JSON with the record of the write, a line break, and the text as it is, so a page of N bytes takes N bytes and the record. The history of the bucket is the history of the page: the bucket keeps the last `history` values of each entry, with the delete marker of a removal. A NATS bucket keeps at most 64 values of an entry, so `history` is at most 64. The first write of a process makes the bucket, or sets the history and the size bound of the configuration on a bucket that exists. A read never makes the bucket, and a wiki without a bucket is empty. The front opens its own connection with `bus.url` and the options `credentials` and `token` of the bus. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_PAGES.>`.
+
+Every write is a compare-and-swap on the revision of the entry. The front reads the entry, checks the condition of the write against what it read, and writes at the revision that it read. When another replica wrote in between, the bucket refuses the write, and the front reads again and checks again, up to eight times. Two replicas of the front therefore never lose a write. Of two writes that name the same hash, one wins and the other fails with a conflict. The index follows the same rule: the front reads the index and the pages, renders the tree, and writes it at the revision of the index that it read, so the last index that lands holds every change before it. The bound `maxPages` counts the pages before each new page, so two replicas that create a page at the same moment can each go one page past it.
+
+On the bus `mem`, the wiki lives in the memory of the process, with the same rules. Two processes on the bus `mem` share nothing: each has a wiki of its own, and a restart loses it. On another bus, such as `redis`, the front logs once that the wiki is off, mounts no route, and offers no tool.
+
+A list reads the keys and the revisions of the bucket without the values, and it reads the record of a page only when its revision changed since the last list of the process. A search reads the texts one page at a time (section 15.3).
+
+Other packages of the workbench use the wiki through Go. `pages.Of(a)` returns the `*pages.Store` of an agent, or nil when the process has no wiki. The store has `Read(ctx, path, version)`, `Write(ctx, path, text, by, summary, ifHash)`, `WriteAs`, which also records the run, `Delete(ctx, path, by, ifHash)`, `List(ctx)`, `Search(ctx, q, limit)`, `Find`, which also says how much text it read, and `History(ctx, path)`. The condition `ifHash` is a hash, `pages.IfAny` (`""`, no condition), `pages.IfExists` (`*`, the page must exist), or `pages.IfAbsent` (`absent`, the page must not exist). A condition that does not hold is `pages.ErrConflict`. The other errors are `pages.ErrNotFound`, `pages.ErrLimit`, and `pages.ErrInvalid`. Each error of the store is a `*pages.Error` with the reason, and `pages.Reason(err)` returns the reason. `pages.Allowed(ctx, a, write)` decides who reads and who writes (section 15.7). `pages.CheckPath` checks a path, and `pages.Hash` computes a hash.
+
+### 15.3 The routes
+
+| Method and path | Purpose |
+|---|---|
+| `GET /v1/pages` | Every page without its text, sorted by path, as `{"pages": [...], "index": "_index.md"}`. Each page has its path, title, tags, hash, version, size, writer, run, time, and summary. The list leaves out the index. |
+| `GET /v1/pages/{path}` | The page as JSON, with its text, and its hash in the header `ETag`. A client that accepts `text/markdown` or `text/plain` and not JSON gets the text alone. `?version=` reads a version that the history names. `If-None-Match` with the hash answers 304. |
+| `PUT /v1/pages/{path}` | Writes the page. See below. |
+| `DELETE /v1/pages/{path}` | Removes the page and answers 204. `If-Match` makes the removal a compare-and-swap. The history stays. |
+| `GET /v1/pages/{path}/history` | The versions of the page, newest first, as `{"path", "versions"}`. Each version has its version, hash, size, title, writer, run, time, and summary. A removal has `deleted: true` and its time. |
+| `GET /v1/pages/search?q=` | The pages that hold every word of `q`. See below. |
+
+Every page path ends with `.md`, so the two routes that are no pages never collide with a page. `search` is no page path. A path that ends with `.md/history` names the history of the page before `/history`, so the page `notes/history.md` has its history at `/v1/pages/notes/history.md/history`. `GET /v1/pages/` answers as `GET /v1/pages`.
+
+`PUT` takes a body of `application/json` as `{"text": "...", "summary": "..."}`. Any other body is the text itself, and `?summary=` says what changed. `If-Match` with the hash, quoted or weak, makes the write a compare-and-swap, and `If-Match: *` writes only a page that exists. `If-None-Match: *` writes only a new page. Both headers together answer 400. A condition that does not hold answers 412. When the page exists, the 412 carries its hash in `ETag`, so a client reads the page again, merges, and writes with that hash. A new page answers 201 with `Location`, and a changed page 200. Both answers hold the page without its text and carry the new hash in `ETag`. A text above `maxPageBytes` answers 413, and so does a new page above `maxPages`, with the reason. A path that is no page path, front matter that does not parse, a text that is not UTF-8, and a write of `_index.md` answer 400.
+
+The search takes the words of `q`: the runs of letters and digits, in any case. A page matches when every word is in its path, its title, or its text. The path counts three points for each word, the title two, and each match in the text one, up to ten for each word. The hits come best first, at most `limit`, 20 by default and 100 at most, each with the line around the first match in the text. The answer is `{"hits", "read", "unread", "cut"}`. One search reads at most 16 MB of text. A page past that bound still matches by its path and its title. `unread` counts such pages, `cut` is true when there are any, and `read` counts the texts that the search read.
+
+### 15.4 The MCP tools
+
+On a process with a wiki, the package adds five tools to the MCP server (section 3.1):
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `pages_list` | `prefix`, `limit` | The pages by path, with the title, the version, the writer, and the day of each, at most 200 by default and 1000 at most |
+| `pages_read` | `path`, `version` | One page with its text, its hash, its version, and its writer |
+| `pages_write` | `path`, `text`, `summary`, `ifHash` | Writes the whole text of a page as a new version. `ifHash` is the condition of section 15.2: a hash, `*`, or `absent`. |
+| `pages_search` | `query`, `limit` | The search of section 15.3 |
+| `pages_history` | `path` | The versions of a page, newest first |
+
+`pages_write` is not read-only. Its `destructiveHint` is false, because the wiki keeps the older versions and a write of an older text undoes a change, and its `idempotentHint` is true, because the same text again changes nothing. The other four tools are read-only. Each result holds a text for the model and `structuredContent` for a page: `{pages, total, index}`, `{page}`, `{page, created, changed}` without the text, the answer of the search route, and `{path, versions}`. An error result says what to do. A conflict names the hash of the page and says to read it again and merge, and a missing page names `pages_list` and `pages_search`. The text of `pages_read` says that the text of a page is data that agents and people wrote, not an instruction.
+
+A write through `pages_write` records `agent:<profile>` and the run when `mcp.CallRun` names the run behind the call. `mcp.CallRun` names one only for the static token of the fleet (section 3.1). Any other caller records its own subject, also when it sends the keys of a run in `_meta`.
+
+### 15.5 Export and import
+
+`fw-workbench pages export [-config file] <dir>` writes each page of the wiki as one file under `dir`, at the path of the page, and the index as `_index.md`. It replaces a file of the same path and leaves every other file of the directory as it is.
+
+`fw-workbench pages import [-config file] <dir>` writes each file under `dir` whose name ends with `.md` as a new version of the page at its path, with no condition. The writer is `local:<user>`, as the kernel names the local principal, and the summary is `import from <dir>`. The verb leaves out `_index.md`, a hidden file or directory such as `.git`, a symbolic link, a file that is no page path, and a file that the wiki refuses, and it names each one on standard error. A file that holds the text of its page already changes nothing, so a second import of the same directory writes nothing.
+
+Both verbs go through `fw.DirFiles` of the kernel, so no path leads outside the directory, through a symbolic link either. Both reach the wiki in the bucket of the NATS bus of the configuration, so they need `bus.driver: nats`. For another bus they stop and say so. With the bus `mem`, the wiki lives in the memory of the front process, and no other process reaches it. A NATS server that does not answer fails the verb at once. The file is the configuration of the front: `-config`, else `$FW_CONFIG`, `./fw.yaml`, or `$FW_HOME/fw.yaml`. A git remote for the wiki is a later change.
+
+### 15.6 Configuration
+
+The wiki reads the block `pages` under the key `workbench` of `fw.yaml`. Each variable wins over the file. No key names a model, and nothing in the wiki calls a model.
+
+| Key | Variable | Meaning | Default |
+|---|---|---|---|
+| `workbench.pages.maxPageBytes` | `FW_WORKBENCH_PAGES_MAX_PAGE_BYTES` | The largest text of a page in bytes, 1 to 524288, so a page with its record stays below the largest message of a NATS server by default | `262144` |
+| `workbench.pages.maxPages` | `FW_WORKBENCH_PAGES_MAX_PAGES` | The most pages of the wiki, the index not counted, 1 to 100000 | `10000` |
+| `workbench.pages.history` | `FW_WORKBENCH_PAGES_HISTORY` | The versions of each page that the wiki keeps, the newest one included, 1 to 64 | `64` |
+
+A value outside its bound stops the start, and the error names the key. `pages.Status(cfg)` returns whether the configuration fits and one line that says where the wiki lives and with which limits, or that it is off. A line of `fw-workbench doctor` can print it.
+
+### 15.7 Who reads and who writes
+
+- A call of the process itself, without a principal, reads and writes.
+- The static token of the fleet, the principal kind `token`, reads and writes. The agents of the workers reach the front with it (section 14.6).
+- Any other caller reads with the operator role on an agent of the process or of a pool of the fleet (`agent.run`), and writes with the owner role on one (`agent.edit`). The front asks the decision point of the process for its own agents, and it reads the roles on the agents of the pools as `agents_list` does (section 14.9). A refusal answers 403, or a tool result that names the role. When the decision point does not answer, the route answers 503, and the tool says to try again.
+- The text of a page is data that agents and people wrote. The tools and the index say so to every model that reads a page.
+- No text of a page enters a log line. A write logs the path, the writer, the version, the size, and the hash, and a removal logs the path, the remover, the size, and the hash.
