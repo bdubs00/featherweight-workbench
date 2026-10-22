@@ -29,6 +29,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/surface/metrics"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 	"github.com/bdubs00/featherweight-workbench/surface/web"
 )
 
@@ -69,6 +70,7 @@ func init() {
 	fw.RegisterService(Start)
 	native.Extend(extension)
 	metrics.RegisterCollector(newCollector)
+	mcp.RegisterTools(skillTools)
 	// After a sign-in, the browser returns to the page.
 	web.AllowSigninReturn(Path + "/")
 }

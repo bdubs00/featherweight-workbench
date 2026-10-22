@@ -34,6 +34,7 @@ func extension(k *native.Kit) error {
 	k.HandlePublic("GET "+Path+"/{file...}", page)
 	k.Handle("GET /v1/bossmode", settingsRoute(k, c))
 	k.Handle("GET /v1/bossmode/stream", streamRoute(a))
+	mountSkills(k)
 	return nil
 }
 

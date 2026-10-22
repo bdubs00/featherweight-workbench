@@ -97,6 +97,8 @@ internal/behalf/        the run behind an MCP call, and the guard that keeps a p
                         static token within what the token can do (section 19)
 manager/                the manager of bossmode: the on-behalf-of, the guard of the authorization,
                         the attribution, the delegation checks, and the doctor line (section 19)
+skills/                 the skills of the front: the catalog, the front matter of a slash command,
+                        the matching of a profile, the expansion, and the import (section 20)
 tools/builder/          the tool propose_agent (section 6.4)
 examples/agentgateway/  a fleet behind agentgateway on one public URL
 examples/pools/         a front that keeps a pool of three workers (section 14)
@@ -149,6 +151,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `PATCH /v1/faces/{agent}` | Set `displayName`, at most 64 characters, and `tagline`, at most 140. Answers the entry. |
 | `GET /v1/bossmode` | The settings of the page of bossmode: the manager for the caller, the placement, and the size of a roster (section 17.4). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/stream` | The events of bossmode as server-sent events: the changes of the fleet, the entries and the seats of the bridges, the pages of the wiki, the faces, and the events of other packages that the caller can see, with `Last-Event-ID` to resume (section 17.3). With `workbench.bossmode.enabled`. |
+| `GET /v1/bossmode/skills` | The catalog of the skills of the front, each with the keys of a slash command (section 20.1). With `workbench.bossmode.enabled`. |
 | `GET /v1/bridges` | The bridges of the caller and of the teams of the caller, open first, each with `lastSeq`, `read`, `unread`, `memberCount`, and `needsYou` (section 18.10). |
 | `POST /v1/bridges` | Open a bridge from `{"title", "goal", "placement", "members", "delegation", "caps"}` and seat its members. 201 with the record and its members. |
 | `GET /v1/bridges/{id}` | One bridge with the presence and the activity of each member and the usage of its runs. |
@@ -599,6 +602,7 @@ The MCP server carries these management tools beside the work tools:
 | `faces_put` | Set the face of an agent from the text of an SVG that passes the sanitizer, for the manager (section 16.4) |
 | `bridge_read`, `bridge_post` | For a run of a seat of a bridge, or the manager run of a bridge: read the last messages of the channel, and post a message with `to` (section 18.11) |
 | `bridge_list` | The open bridges of the person of the run, for the manager |
+| `skills_list` | The catalog of the skills of the front, read-only (section 20.1) |
 | `bridge_open` | Open a bridge from a plan as the person of the run, for the manager. Its title, "Open bridge", is the label of the approval that the policy of the manager asks for. |
 | `bridge_add_member`, `bridge_remove_member`, `bridge_close` | Add a seat, fire a seat, or close a bridge, for the manager when the operator delegates it in that bridge |
 
@@ -2049,3 +2053,35 @@ Three limits remain:
 - The tools of the wiki and of the faces write with the rights of the token. So every person who can talk to the manager can write a page through it. The access block of the profile names who can talk to it.
 - A conversation that the token starts acts as the token.
 - Through the manager, a person reaches no group rule, because `_meta` carries no groups.
+
+## 20. Skills
+
+A skill is a directory with a `SKILL.md` file: a set of instructions that an agent reads when a task needs them (the kernel architecture, section 12.5). The kernel lists the skills that a profile allows in the system prompt, and the built-in tool `skill` returns the body of one skill. The workbench adds four things for people: the catalog of the skills of the front, the skills that an agent can load, the slash command, which hands a skill to a running conversation, and the import of a skill by an admin. The package `skills` holds the catalog, the matching, the expansion, and the import. The package `bossmode` serves its routes and its tools, and the package `bridges` takes the slash command in a channel. Nothing in these packages calls a model.
+
+### 20.1 The catalog
+
+The catalog holds every skill that the front knows: the skills of the kernel (`fw.Agent.Skills`, which reads the skills directories at each call), and then the imported skills under `$FW_HOME/skills/imported` whose names the kernel does not know (section 20.7). Each entry has these fields:
+
+| Field | Value |
+|---|---|
+| `name`, `description` | The name and the description, as the kernel reads them from the front matter |
+| `origin` | Empty for a skill of a skills directory, `imported` for an imported skill |
+| `uri` | The path of `SKILL.md` relative to its skills directory, such as `review/SKILL.md` |
+| `userInvocable` | False when a person cannot hand the skill to a run (section 20.3) |
+| `modelInvocable` | False when the front matter asks that a model never load the skill on its own |
+| `argumentHint` | The words that the page shows after the name of the skill in the composer |
+| `arguments` | The named arguments in order, each `{"name", "description"}`, for the placeholders `$name` |
+| `files` | The other files of the skill directory, relative to it, without hidden files |
+
+The package reads the front matter of each `SKILL.md` with the YAML decoder. The kernel reads the name and the description, so the catalog and the system prompt agree on them. The catalog reads four more keys:
+
+| Key | Field | Default | Takes |
+|---|---|---|---|
+| `user-invocable` | `userInvocable` | true | true or false |
+| `disable-model-invocation` | `modelInvocable`, negated | false, so `modelInvocable` is true | true or false |
+| `argument-hint` | `argumentHint` | empty | A text or a number. A list of words, such as `[issue]`, reads as `[issue]`. |
+| `arguments` | `arguments` | `[]` | A list of names, a list of objects with `name` and an optional `description`, or one text of names with spaces between them. A name holds letters, digits, and underscores, does not start with a digit, and is not `ARGUMENTS`. |
+
+A key that is absent takes its default. A value of the wrong type also takes the default, and the log names the skill and the key, so the skill still shows. The catalog never answers an error for a front matter. A front matter that is no YAML, such as `argument-hint: [issue] [priority]`, is read one `key: value` per line, as the kernel reads it: the hint keeps its text, and `arguments` takes its default.
+
+`GET /v1/bossmode/skills` answers `{"skills": [...]}`, sorted by name. The MCP tool `skills_list` gives the same entries in `structuredContent` and a text for a model, one line per skill. The tool is read-only. The route and the tool exist with `workbench.bossmode.enabled`. Both need a caller who can start an agent: the operator role on a profile of this process or of a pool, the static token of the fleet, or the process itself. Any other caller gets 403. A decision point that does not answer gives 503.
