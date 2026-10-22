@@ -39,7 +39,7 @@ func TestLoadFillsTheDefaults(t *testing.T) {
 	}
 	b := wc.Bus
 	if b.Driver != "nats" || b.URL != "ws://nats.agents.svc.cluster.local:8080" || b.Intake != "fw.jobs.triage" || b.Egress != "fw.events" ||
-		!slices.Equal(b.EgressTypes, testFront().EgressTypes) || b.Options["concurrency"] != "1" {
+		!slices.Equal(b.EgressTypes, testFront().EgressTypes) || b.EgressMaxBytes != 4096 || b.Options["concurrency"] != "1" {
 		t.Fatalf("bus = %+v", b)
 	}
 	if wc.Auth.Mode != "token" || wc.AX.Router != "atenet-router" || wc.Model != "openai/some-model" || wc.Policy.Default != "allow" {
@@ -50,6 +50,23 @@ func TestLoadFillsTheDefaults(t *testing.T) {
 	}
 	if got := FromEnv(list); !slices.Equal(got, []string{"FRONT_TICKETS_TOKEN", "FW_API_TOKEN"}) {
 		t.Fatalf("FromEnv = %v", got)
+	}
+}
+
+// The worker cuts the long strings of its stream to the bound of the
+// front, unless the pool sets its own bound, and a pool that sets 0
+// publishes the data whole.
+func TestLoadEgressMaxBytes(t *testing.T) {
+	for set, want := range map[string]int{"": 4096, ", egressMaxBytes: 1000": 1000, ", egressMaxBytes: 0": 0} {
+		text := strings.Replace(fixture, `bus: {url: "ws://nats.agents.svc.cluster.local:8080"}`, `bus: {url: "ws://nats.agents.svc.cluster.local:8080"`+set+`}`, 1)
+		list := loadFixture(t, text)
+		wc := fw.DefaultConfig()
+		if err := yaml.Unmarshal([]byte(list[0].files[0].Content), wc); err != nil {
+			t.Fatal(err)
+		}
+		if wc.Bus.EgressMaxBytes != want {
+			t.Errorf("bus %q: egressMaxBytes = %d, want %d", set, wc.Bus.EgressMaxBytes, want)
+		}
 	}
 }
 

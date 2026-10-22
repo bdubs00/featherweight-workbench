@@ -20,6 +20,7 @@ The workbench changes no kernel code. It plugs in through the extension points o
 - `fw.Agent.SetPersonTokens` gives the tool sources of the kernel the access tokens of people, and `fw.Agent.Connected` resumes the calls that wait for a connection. The package `connections` uses both (section 11).
 - The package `sources` uses `fw.RegisterService`, `native.Extend`, and `cli.RegisterDoctorCheck` too: its service runs the sources, its route takes the events of webhooks, and its doctor line names the sources (section 13).
 - The packages `pages` and `faces` use `fw.RegisterService` and `native.Extend`, and `mcp.RegisterTools` of the MCP server of the workbench (section 3.1): the service keeps the store, the routes serve it to people, and the tools offer it to MCP clients and agents (sections 15 and 16).
+- The package `bossmode` uses `fw.RegisterService`, `native.Extend`, `metrics.RegisterCollector`, and `cli.RegisterDoctorCheck`: its service keeps the stream of the page, its routes serve the page, its settings, and the stream, and its doctor line names the page, the manager, and the streams (section 17).
 
 Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary, the `oidc` authentication mode of the kernel included, because the front verifies the tokens of people.
 
@@ -63,6 +64,8 @@ faces/                  the faces of the agents: an SVG, a display name, and a t
                         the sanitizer, and the identicon (section 16)
 internal/bucket/        the key-value bucket under the stores of the front: a bucket of the
                         NATS server of the bus, or the memory of the process
+bossmode/               the page of bossmode at /bossmode, its settings, and its stream of
+                        events (section 17); static/ holds the embedded copy of the page
 tools/builder/          the tool propose_agent (section 6.4)
 examples/agentgateway/  a fleet behind agentgateway on one public URL
 examples/pools/         a front that keeps a pool of three workers (section 14)
@@ -84,6 +87,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `/ui/connect/callback` | The end of a connection (section 2.1) | always |
 | `/.well-known/oauth-protected-resource` | Protected resource metadata (RFC 9728) | when `auth.mode` includes `oidc` |
 | `/v1/sources/{name}` | Webhook sources, POST only, with the credential of each source (section 13) | with a webhook source in `workbench.sources` |
+| `/bossmode`, `/bossmode/{file...}` | The page of bossmode: its static files, GET only, with no credential (section 17.2) | with `workbench.bossmode.enabled` |
 
 | Method and path | Purpose |
 |---|---|
@@ -111,6 +115,8 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `PUT /v1/faces/{agent}` | Set the face: an SVG of at most 32 KB that passes the sanitizer, else 422. Needs `agent.edit` on the agent. Answers the entry. |
 | `DELETE /v1/faces/{agent}` | Back to the identicon. Answers the entry. |
 | `PATCH /v1/faces/{agent}` | Set `displayName`, at most 64 characters, and `tagline`, at most 140. Answers the entry. |
+| `GET /v1/bossmode` | The settings of the page of bossmode: the manager for the caller, the placement, and the size of a roster (section 17.4). With `workbench.bossmode.enabled`. |
+| `GET /v1/bossmode/stream` | The events of bossmode as server-sent events: the changes of the fleet and the events of other packages that the caller can see, with `Last-Event-ID` to resume (section 17.3). With `workbench.bossmode.enabled`. |
 
 ### 2.1 Connections
 
@@ -244,13 +250,13 @@ A fleet is not a set of replicas. Replicas of one agent share one ledger and ser
 
 ### 4.1 The sources
 
-The front reads two sources, which the configuration names (section 4.6). `workbench.fleet.atespaces` names the atespaces whose Tasks are members: at every interval the front lists them on the ax API at `ax.server`, and each Task is a member named `<atespace>/<task>` with the address `ax:<atespace>/<task>` and the state of its phase, live when it runs, quiet when it is suspended or pending, stopped otherwise. A Task that leaves the list leaves the view. `workbench.fleet.egress` names the subject prefix of the egress stream of the workers, `bus.egress` on each of them. The front subscribes to that stream and projects every run from its events with the projection of the kernel, so the state, the title, the pending approval, the turns, and the usage of a run are those of the ledger of the worker. The usage comes from the totals that `fw.run.finished` and `fw.run.suspended` carry (the kernel architecture, section 9.4). The stream therefore needs no `fw.model.responded`, which holds the content of a run, and the front knows the usage of a run each time it finishes or is suspended. A lost event costs nothing once a later `fw.run.finished` or `fw.run.suspended` of the run arrives. A lost final `fw.run.finished` has no later event, so the view keeps the state and the usage of the event before it until the front reads the Task again (below). The cost is the cost at the prices of the worker. The totals carry no breakdown by model, so the front cannot price them again: it loses its own pricing at every totals event, its price table prices only the increments that the stream carries after the totals, such as the title call of `fw.run.annotated`, and the cost that it shows can go down at an end of a run, to $0 with every token unpriced when the worker has no price table. A breakdown by model in the totals, a later change, can let the front price them with its own table. The stream keeps the order of the events of a run, unless two processes publish for the run or the bus is the mem bus (the kernel architecture, section 9.4). For a reorder, the view applies the first `fw.run.queued` of a run even when it arrives after later events, because only that event names the agent, the person, and the metadata of the run, and it keeps the state of the later events; a repeated `fw.run.queued` changes nothing. A late end of a run, `fw.run.finished` or `fw.run.suspended`, applies when no event that changes the state of the run came after it, as after a title annotation, and the usage that the later events added stays on top of its totals. Any other late event changes nothing. When two processes publish for one branch, because its source took its start for failed while its process took it after all, the `fw.run.queued` with the larger `kept` applies too: the record of the source holds no copy and no work, so the copies of the branch never count as its own work. Each event names its node (the kernel architecture, section 9.4), so the front knows which Task holds the run. A `fw.run.child` event of a run tells the view where a child of that run lives, a child of `spawn_task` or a branch in a Task of its own (the kernel architecture, sections 4.7 and 11.9); each child sends it twice, a child of `spawn_task` before its Task exists and again once its run started, a branch when it is placed and again when it starts, and the view keeps one link. The view shows the child under its parent. Until the events of the child arrive, because its Task is still starting, the view shows it as a queued run of the member of the parent, so a request for it goes to the parent, which answers for it.
+The front reads two sources, which the configuration names (section 4.6). `workbench.fleet.atespaces` names the atespaces whose Tasks are members: at every interval the front lists them on the ax API at `ax.server`, and each Task is a member named `<atespace>/<task>` with the address `ax:<atespace>/<task>` and the state of its phase, live when it runs, quiet when it is suspended or pending, stopped otherwise. A Task that leaves the list leaves the view. `workbench.fleet.egress` names the subject prefix of the egress stream of the workers, `bus.egress` on each of them. The front subscribes to that stream and projects every run from its events with the projection of the kernel, so the state, the title, the pending approval, the turns, and the usage of a run are those of the ledger of the worker. The usage comes from the totals that `fw.run.finished` and `fw.run.suspended` carry (the kernel architecture, section 9.4). The stream therefore needs no `fw.model.responded`, which holds the content of a run, and the front knows the usage of a run each time it finishes or is suspended. A worker sets `bus.egressTypes` to the types of `fleet.EgressTypes`, as the pools render it (section 14.1): the lifecycle events of its runs, the approvals and the decisions, the annotations, the messages, the start and the end of each turn, the tool calls with `fw.tool.requested` and `fw.tool.responded`, the children, the grades of an outcome, and the reactions with `fw.run.reacted`. The turns and the tool calls give the view the activity of each run (section 4.15), and the reactions give the counts of `reactions` on the run object. The tool calls carry the inputs and the outputs of the tools, so a worker of a pool also sets `bus.egressMaxBytes` to 4,096 (`fleet.EgressMaxBytes`): its egress cuts each string value in the data of a published event to 4,096 bytes at a rune boundary, with the note ` [cut N of M bytes]`, and its ledger stays whole (the kernel architecture, section 9.4). An event without such a long string goes out byte for byte. A lost event costs nothing once a later `fw.run.finished` or `fw.run.suspended` of the run arrives. A lost final `fw.run.finished` has no later event, so the view keeps the state and the usage of the event before it until the front reads the Task again (below). The cost is the cost at the prices of the worker. The totals carry no breakdown by model, so the front cannot price them again: it loses its own pricing at every totals event, its price table prices only the increments that the stream carries after the totals, such as the title call of `fw.run.annotated`, and the cost that it shows can go down at an end of a run, to $0 with every token unpriced when the worker has no price table. A breakdown by model in the totals, a later change, can let the front price them with its own table. The stream keeps the order of the events of a run, unless two processes publish for the run or the bus is the mem bus (the kernel architecture, section 9.4). For a reorder, the view applies the first `fw.run.queued` of a run even when it arrives after later events, because only that event names the agent, the person, and the metadata of the run, and it keeps the state of the later events; a repeated `fw.run.queued` changes nothing. A late end of a run, `fw.run.finished` or `fw.run.suspended`, applies when no event that changes the state of the run came after it, as after a title annotation, and the usage that the later events added stays on top of its totals. Any other late event changes nothing. When two processes publish for one branch, because its source took its start for failed while its process took it after all, the `fw.run.queued` with the larger `kept` applies too: the record of the source holds no copy and no work, so the copies of the branch never count as its own work. Each event names its node (the kernel architecture, section 9.4), so the front knows which Task holds the run. A `fw.run.child` event of a run tells the view where a child of that run lives, a child of `spawn_task` or a branch in a Task of its own (the kernel architecture, sections 4.7 and 11.9); each child sends it twice, a child of `spawn_task` before its Task exists and again once its run started, a branch when it is placed and again when it starts, and the view keeps one link. The view shows the child under its parent. Until the events of the child arrive, because its Task is still starting, the view shows it as a queued run of the member of the parent, so a request for it goes to the parent, which answers for it.
 
 Each time a Task becomes live, the front reads its runs and its agents through the router, with the static token of the fleet, so the runs that started before the front listened are in the view and the front knows which profiles the Task serves. A Task becomes live when the Task list shows its phase as Running after another phase, or when the router woke it for a request (section 4.12). A running Task is awake, so the reads wake nobody, and the front never reads a Task that sleeps. The front subscribes to the stream before it reads the Tasks, one after another, so the stream can reach a run before the read of its Task, without the `fw.run.queued` that named the run before the front listened. The read then gives the run its identity: a read at the sequence number of the view or later replaces the run, and a read that is older gives the agent, the person, the input, and the batch, while the newer state of the stream and the usage that it added after the read stay. A read of the runs that fails is tried again after a pause of one interval, which doubles up to five minutes, so a run stays without identity only briefly. After that read the front lives on the stream, with one exception. A worker that a suspend cuts can hold back its final events: the bus is out of reach, and the process is gone before the bus answers. A kernel with the file ledger sends them at its next boot (the kernel architecture, section 9.4), but a Task that sleeps does not boot, and a worker with another ledger loses them. Without a new read, the view holds the run as running for good, and the suspend controller never puts the Task to sleep. So while the view holds a run of a live Task as queued or running, the front reads the runs of that Task again once a minute, and a read at a later sequence number ends the run in the view. A short suspend and resume between two reads of the Task list leaves no trace in the phase, and this read repairs that case too. Each replica of the front reads on its own. A worker outside ax that publishes events is visible too, under its node name, without an address, and it leaves the view when no event arrived for `workbench.fleet.expire`. The view drops a finished run after `workbench.fleet.expire` without an event, and it keeps a copy of the identity of the run for as long again: a later event of the run, such as the `fw.run.child` of a branch of a finished run, brings the run back with its agent, its person, and its batch. A run that the view knows from events alone, because no `fw.run.queued`, no read of its Task, and no such copy named it, has no identity: the view lists it nowhere, and it leaves the view after `workbench.fleet.expire` without an event, whatever its state.
 
 ### 4.2 The record of a member
 
-The front computes a record for each member from the sources: the name, the address, the atespace, the state, the agents that its runs name, and its runs. Every run that is not finished and the 50 newest finished runs are in it, as run objects whose input, output, and error are cut to 2 KB; a pending tool input larger than 4 KB is left out. A large job does not fit in a record, so the tool `batch` reads every run of a job from the view instead (section 4.9). When a person opens a run, the view reads the full run from its owner. The record names the authorization of the front, not of the worker: the front runs the same `fw.yaml` as the workers and decides for every worker with its own `access` block and agent profiles. A process that configures no agent profile offers no agent, so a person never sees the front itself as a member with agents.
+The front computes a record for each member from the sources: the name, the address, the atespace, the state, the agents that its runs name, and its runs. Every run that is not finished and the 50 newest finished runs are in it, as run objects whose input, output, and error are cut to 2 KB; a pending tool input larger than 4 KB is left out. A large job does not fit in a record, so the tool `batch` reads every run of a job from the view instead (section 4.9). When a person opens a run, the view reads the full run from its owner. Beside the record, the view keeps the input of the latest tool call of each run, so it can word what the run does now (section 4.15). The record names the authorization of the front, not of the worker: the front runs the same `fw.yaml` as the workers and decides for every worker with its own `access` block and agent profiles. A process that configures no agent profile offers no agent, so a person never sees the front itself as a member with agents.
 
 ### 4.3 The view
 
@@ -335,7 +341,7 @@ An event source (section 13) puts its runs on the same queues through the same p
 
 ### 4.10 Security
 
-The events of the stream carry the inputs, the outputs, and the tool inputs of runs, cut to size. The `Redact` middleware removes secrets before an event enters the ledger, so no secret reaches the stream. Limit publish and subscribe on the egress and the intake subjects to `fw` workloads, for example with NATS accounts. A process that can publish on the egress subject can show false runs in a view, and a process that can publish on an intake queue can give a worker work; it cannot act on a real run, because the owner decides, and a credential goes to the router only. The dead-letter subjects `<queue>.dead` carry the records of jobs, and the bucket `fw_workbench_jobs` holds batch names, the subjects of people, and the positions of their jobs, with no input. Limit them in the same way. The buckets `<stream>_POOL_<pool>` hold the profiles and the allow rules that the front adds to its pools (section 14.9). A process that can write there changes what every worker of a pool runs, so allow the writes to the front alone. The front logs the id, the type, and the run of a dead letter, never its data.
+The events of the stream carry the inputs and the outputs of runs and the inputs and the outputs of their tool calls. A worker of a pool cuts each string value of an event to 4,096 bytes (`bus.egressMaxBytes`, section 4.1), and a record cuts the input, the output, and the error of a run again to 2 KB (section 4.2). The `Redact` middleware removes secrets before an event enters the ledger, so no secret reaches the stream. Limit publish and subscribe on the egress and the intake subjects to `fw` workloads, for example with NATS accounts. A process that can publish on the egress subject can show false runs in a view, and a process that can publish on an intake queue can give a worker work; it cannot act on a real run, because the owner decides, and a credential goes to the router only. The dead-letter subjects `<queue>.dead` carry the records of jobs, and the bucket `fw_workbench_jobs` holds batch names, the subjects of people, and the positions of their jobs, with no input. Limit them in the same way. The buckets `<stream>_POOL_<pool>` hold the profiles and the allow rules that the front adds to its pools (section 14.9). A process that can write there changes what every worker of a pool runs, so allow the writes to the front alone. The front logs the id, the type, and the run of a dead letter, never its data.
 
 ### 4.11 What the fleet does not do
 
@@ -459,6 +465,17 @@ groups:
 
 The rules keep only the labels that they name, so the label of the replica goes, and they work for the series of a scrape and of the OTLP push alike.
 
+### 4.15 Changes and the activity of a run
+
+Another package follows the view through its changes. `fleet.Of(a)` returns the view, and the view of the fleet is a `fleet.Watcher` with two methods:
+
+- `Watch(ctx)` returns a channel of `fleet.Change` values: one per run update, one per change of the state of a member, and one per change of the phase of a Task. The channel closes when the context ends or the fleet closes. A change of the kind `run` holds a copy of the run as `GET /v1/fleet/runs` lists it, with `member`, and the words of its activity. A change of the kind `member` holds the state of the member: `live`, `quiet`, or `stopped`. A change of the kind `task` holds the phase of the Task, such as `Running` or `Suspended`. A member that leaves the view sends both kinds with `gone`. A worker that only the stream knows turns `quiet` with time, and that sends a change too. The runs of the front itself are not in the changes.
+- `Visible(ctx, change)` decides whether the caller can see a change, with the rules of section 4.4 at that moment. For a run, it decides as `GET /v1/fleet/runs` decides for that run and that caller, from the run and its ancestors on the member. For a member or a Task, it decides as `GET /v1/fleet` decides for the member. It keeps no decision. A decision point that does not answer is an error.
+
+A slow consumer never holds up the view. Each watcher keeps at most 1,024 changes (`fleet.WatchBuffer`) that its consumer has not read. A newer change of the same run, member, or Task replaces the change that waits, in its place. When the buffer is full, the oldest change goes. A consumer that must not miss a state reads the view again, as the page of bossmode does after a reconnect (section 17).
+
+The activity of a run (the kernel architecture, section 8.2) says what a run that works does now. It needs `fw.turn.started`, `fw.tool.requested`, and `fw.tool.responded` on the stream (section 4.1). The view keeps the input of the latest `fw.tool.requested` of each run, up to 4 KB (`fleet.ActivityInputLimit`). A larger input keeps its shape with each string cut shorter, and an input that does not fit even then is left out. The result of the call, the end of the turn, and the end of the run forget the input. An approval keeps it, because the call goes on after the decision. `fleet.ActivityPhrase(run)` words the activity with `view.ActivityPhrase` of the kernel, such as `Ran "go test ./..."` or "Thinking in turn 7", and a change of a run carries the same words. For a run that the view does not hold, and for a call whose input the view does not keep, the words name the tool.
+
 ## 5. Browser sign-in
 
 A person signs in to the dashboard at `/ui` through the OpenID Connect issuer of `auth.oidc`. Three keys turn the sign-in on and shape it:
@@ -480,14 +497,14 @@ A configuration that cannot work stops the start. These are the cases:
 
 The flow has these steps:
 
-1. The page sends the person to `GET /ui/signin?next=<fragment>`. `next` is the place in the page to return to. If it does not start with `#`, or if it holds a control character, the page returns to `/ui`.
+1. The page sends the person to `GET /ui/signin?next=<fragment>`. `next` is the place in the page to return to. It is a fragment of `/ui` that starts with `#`, or a path under a page that a package registers with `web.AllowSigninReturn`, such as `/bossmode/#bridge/01K` for the page of bossmode (section 17.2). Such a path starts with the prefix of the page, here `/bossmode/`, so it names no scheme and no host, and it holds no backslash. If `next` is neither, holds a control character, or is longer than 1 KB, the person returns to `/ui`.
 2. The person can open `/ui` on another origin than the redirect URI. Then the route first answers 302 to `/ui/signin` on the host of the redirect URI. A default port counts as the same origin. The new address keeps `next` and adds `hop=1`. The cookie therefore lands on the host that receives the callback. A prefix before `/callback` in the redirect URI stays in the path. With `hop`, the route never moves again, so a proxy that hides the host causes no loop.
 3. The route reads the discovery document of the issuer and keeps it for an hour. It sends the person to the authorization endpoint with the authorization code flow, PKCE with S256, a `state`, and a `nonce`.
 4. The cookie `fw_signin` holds the PKCE verifier, the state, the nonce, `next`, and the redirect URI. It lasts 10 minutes. It is signed with HMAC-SHA256, HttpOnly, SameSite=Lax, and limited to the path `/ui`. Over https, it is also Secure.
 5. The issuer sends the person to `GET /ui/callback`. The route compares the state with the cookie and exchanges the code at the token endpoint. A confidential client authenticates with HTTP Basic. If the issuer lists only `client_secret_post`, the client sends the secret in the form.
 6. If the answer holds an ID token, its nonce must match the cookie.
 7. If the `Authn` of the agent accepts the access token, the route keeps it. If the `Authn` refuses the access token and accepts the ID token, the route keeps the ID token. A token that gives an anonymous principal signs nobody in. To accept ID tokens in `oidc` mode, put the client id in `auth.oidc.audience`.
-8. The answer is a small page with a strict content security policy and one script. The script stores the token in `sessionStorage["fw.token"]` and replaces the location with `/ui` plus `next`. The callback therefore leaves the history of the browser.
+8. The answer is a small page with a strict content security policy and one script. The script stores the token in `sessionStorage["fw.token"]` and replaces the location with `/ui` plus `next`, or with the path of `next` for a registered page. The callback therefore leaves the history of the browser. The page of bossmode reads the same token, because it has the origin of `/ui`.
 
 Every answer of `/ui/callback` deletes the cookie. A failure answers a plain page that says in one sentence what failed. No token, code, verifier, or secret enters a log line or an error message. When browser sign-in is on, every 401 problem document of the native API has the member `"signin": "/ui/signin"`. The content security policy of `GET /ui` allows the move to `/ui/signin` and still blocks forms.
 
@@ -580,6 +597,8 @@ The screen of an agent says what the agent can do in plain words, so a person ne
 New agent opens the agent builder. It asks one question, `What should this agent handle?`, and Set it up by hand opens the editor. The answer starts the builder on the server with `POST /v1/builder` or `agent_builder` (see "The builder on the server" below). The builder talks with the person and calls `propose_agent`. The call holds a name, a description, and the instructions of the agent. It also holds the tools of the agent, the tools that ask first, the commands that it never runs, and its minutes of work. The tool checks the names against the tools of the process. When a name is wrong, it lists the tools that exist. It saves nothing. The page reads the `profile` of an accepted proposal from its item. It draws the contact card of the new agent from a dry run, with Create agent. A tap saves the profile through `agent_put` with the rights of the person. The model therefore never creates an agent, and the person becomes its owner. A later proposal fades the earlier card. Save as agent in the next actions of a result sends `fromRun` to the same route.
 
 A run that hands work to other agents reads as a group conversation. A call of `spawn_task` is a line with the face of the helper and its task, and a tap opens the run of the helper. When the tool waits, the answer of the helper is a bubble with its face and its name. The status line names the helpers, for example "with reviewer and writer". A child run records its parent and not the call. The page therefore finds the child run of a handoff by its agent and its task. Subtasks lists only the child runs that no handoff shows. The conversation names no tool for a step. It says "Waits for you to allow a command", "Working on a step", or "Took 3 steps". Activity reads the `lines` of the events page, as over MCP.
+
+Each message of a person or of another agent names its sender in `who` of its transcript item. The first message names the person who started the run. A follow-up names the subject of the principal that sent it, from `by` of `fw.message.received`. A follow-up that a trusted caller relayed for another party, such as the front for a member of a bridge, names that party from `from`, and `whoKind` says `person` or `agent` (the kernel architecture, section 5.5). The page shows the name above a message that someone else sent.
 
 A question of `ask_user` is a message of the agent in the conversation, and the answer is a message of the person. Its card reads the schema of the question. When the answer is one property with an enum, or one boolean, the card shows one button per choice and a Decline link. A flat schema of strings, numbers, integers, booleans, and enums becomes a small form. A free answer and a schema that nests keep the text box.
 
@@ -699,7 +718,7 @@ The runs lists of the workbench take `by`, which keeps a part of the runs that t
 | `team` | The runs that the caller started, and the runs that a person on a team of the caller started |
 | `others` | Every other run that the caller can see |
 
-The MCP tool `runs_list` takes `by`, and the sentence and the counts of its answer cover the same runs. Home (`GET /v1/home`) holds the runs of `by=team`, and `GET /v1/home/others` holds the top-level runs of `by=others`. The row and the status line of a run of a teammate name that person, for example "by alice". In the conversation, a message of another person shows the name of that person above it. In the Agents place, the agents that the caller owns come first, then the agents of the caller's teams, then the rest. If other people have runs that the caller can see, a last row on home reads "Runs by others" with their number. It opens their runs, grouped by person. A person with no team sees only their own runs on home and the rest behind that row.
+The MCP tool `runs_list` takes `by`, and the sentence and the counts of its answer cover the same runs. Home (`GET /v1/home`) holds the runs of `by=team`, and `GET /v1/home/others` holds the top-level runs of `by=others`. The row and the status line of a run of a teammate name that person, for example "by alice". In the conversation, a message of another person shows the name of that person above it: the first message, and every follow-up, which records its sender (section 6.2). In the Agents place, the agents that the caller owns come first, then the agents of the caller's teams, then the rest. If other people have runs that the caller can see, a last row on home reads "Runs by others" with their number. It opens their runs, grouped by person. A person with no team sees only their own runs on home and the rest behind that row.
 
 ## 9. Titles
 
@@ -1144,6 +1163,7 @@ Each entry of `workbench.pools` has these keys. A key that a pool does not know 
 The front writes `fw` to `.fw/fw.yaml` in the Workspace of each Task. The Workspace is bound at `/workspace`, where the kernel reads its configuration under ax. The front adds these keys:
 
 - `bus.intake` from `intake`, `bus.egress` from `workbench.fleet.egress`, and `bus.egressTypes` with the event types that the view reads (section 4.1). A pool cannot set them in `fw`.
+- `bus.egressMaxBytes: 4096`, unless `fw` sets it: the egress of the worker cuts each long string value of a published event to that many bytes, so the tool calls on the stream stay small (section 4.1). `0` in `fw` publishes the data whole. The key changes the rendered fw.yaml, so a front that adds it replaces the Tasks of its pools once, as for any change of a pool (section 14.4).
 - The defaults that `fw` can change: `bus.driver` and `bus.url` of the front, `auth.mode: token`, and `ax.server` and `ax.router` of the front. A worker in a Substrate sandbox reaches NATS over WebSocket, so a pool usually sets its own `bus.url`. The front never copies a bus URL that holds a credential.
 - On NATS, the default `bus.options.concurrency: 1`. A Task runs one run at a time. The NATS intake takes four messages at a time by default, so one worker can hold four jobs while the other workers idle.
 
@@ -1478,3 +1498,109 @@ The name of the agent holds 1 to 64 letters, digits, `-`, `_`, or `.`, as a prof
 On a NATS bus, the faces live in the key-value bucket `<stream>_FACES`. Each agent with a face, a display name, or a tagline is one entry, `face.<agent>` with the name in base64url. The value is one line of JSON with the display name, the tagline, the hash, the writer, and the time, a line break, and the SVG. The bucket keeps the last ten values of each entry. Each change reads the entry and writes at the revision that it read, so two replicas of the front never lose a change. A stored SVG passes the sanitizer again on each read, so a value that something else wrote into the bucket never reaches a browser: such a face reads as the identicon, and so does an entry that does not decode, until a change replaces it. The log says so. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_FACES.>`. On the bus `mem`, the faces live in the memory of the process, and two processes share nothing. On another bus, the front logs once that the faces are off, mounts no route, and offers no tool.
 
 Other packages of the workbench use the faces through Go. `faces.Of(a)` returns the `*faces.Store` of an agent, or nil. The store has `Get(ctx, agent)`, which gives the identicon for an agent without a face, `Put(ctx, agent, svg, by)`, which sanitizes first, `Meta(ctx, agent, displayName, tagline, by)`, `Patch`, which leaves a nil value as it is, and `Delete(ctx, agent, by)`. Each returns the `faces.Face` after the change, the entry of the routes. `faces.List(ctx, a)` returns the entries of the agents that the caller can view. A refused face is a `*faces.Refusal`, which is `faces.ErrRefused`. `faces.Check(ctx, a, agent, action)` decides an action on an agent as the routes do. `faces.Status(cfg)` gives one line for `fw-workbench doctor`. No key of the configuration sets the faces.
+
+## 17. Bossmode
+
+Bossmode is the operator front of the fleet. It looks like a chat client for a team, and the team is the fleet: an operator opens a bridge, which is one large job with one agent on each subtask, and the agents and the operator talk in one channel. The page is a separate repository, `featherweight-bossmode`, which builds to static files. The workbench serves those files, the settings of the page, and one stream of live events. The package `bossmode` holds these three parts. Other packages hold the bridges, the channel, the pages of the wiki, the faces, and the manager, and they feed the stream through one call (section 17.5). Nothing in the package calls a model, and no key of it names a model.
+
+### 17.1 Configuration
+
+Bossmode reads the block `bossmode` under the key `workbench` of `fw.yaml` (section 8). Each variable wins over the file.
+
+| Key | Variable | Meaning | Default |
+|---|---|---|---|
+| `workbench.bossmode.enabled` | `FW_WORKBENCH_BOSSMODE_ENABLED` | Serves the page at `/bossmode`, the settings at `/v1/bossmode`, and the stream at `/v1/bossmode/stream`. `on` or `off`. | off |
+| `workbench.bossmode.dir` | `FW_WORKBENCH_BOSSMODE_DIR` | The directory of the static files of the page: the `dist` directory of the build of `featherweight-bossmode`. Empty serves the copy in `bossmode/static` that the binary embeds. | empty |
+| `workbench.bossmode.manager` | `FW_WORKBENCH_BOSSMODE_MANAGER` | The profile name of the manager agent. The settings of the page and the doctor line read it. Empty means no manager. | empty |
+
+The settings of the page also read two keys of `workbench.bridges`, which the package of the bridges owns: `placement` (`FW_WORKBENCH_BRIDGES_PLACEMENT`), `queue` or `spawn`, `queue` by default, and `maxMembers` (`FW_WORKBENCH_BRIDGES_MAX_MEMBERS`), 16 by default. A value that does not fit gives the default here, and the package of the bridges checks the block.
+
+A configuration that cannot work stops the start: a value of `enabled` that is not a switch, a manager name with a space or a slash, and a `dir` that is not a directory. Without `enabled`, no route of bossmode exists, and each answers 404. The service runs in a process that serves, as the fleet does (section 4.6), so `fw-workbench run` starts no stream.
+
+### 17.2 The page
+
+`GET /bossmode` and `GET /bossmode/{file...}` serve the static files of the page. They are public routes, as `/ui` is: the files hold no data, and the page signs in on its own and calls `/v1` with its token.
+
+- `/bossmode`, `/bossmode/`, and every path whose last element has no file extension, such as `/bossmode/bridge/01K`, get `index.html`, because the page routes on the client.
+- A path with an extension gets that file with its content type, such as `text/javascript` or `image/svg+xml`. A missing file is a 404.
+- A path with an element that starts with a dot, such as `.env` or `.git/config`, is a 404, also without an extension.
+- A path that holds an element `..`, a backslash, or a control character is a 400. Such a path can reach the route only escaped, such as `%2e%2e`. The files of `dir` open through an `os.Root`, so no name and no symbolic link leads out of the directory.
+- `index.html` gets `Cache-Control: no-store`. A file under `assets/`, where the build puts the files with a hash in their names, gets `public, max-age=3600`. Any other file gets `no-cache`.
+- Without `dir`, the route serves the embedded copy. The repository holds a placeholder `index.html` there, which says that the binary does not hold the page and names `workbench.bossmode.dir`, so the route is never a 404 that confuses. A build that embeds the page copies `dist` into `bossmode/static` before `go build`. A `dir` without `index.html` answers 503 with a sentence that names the key, and the log of the start says so once.
+
+Every answer of the page carries this content security policy, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`:
+
+```
+default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:;
+connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none';
+form-action 'self'; frame-ancestors 'none'
+```
+
+The build of the page holds no inline script, no inline style element, and no data URI, and the faces are blob images. The page keeps its token in `sessionStorage["fw.token"]`, as `/ui` does, and sends it as a bearer token. On a 401 with `signin`, it sends the person to `/ui/signin` with `next` set to its own path and fragment, such as `/bossmode/#bridge/01K`, and the callback returns the person there (section 5).
+
+### 17.3 The stream
+
+`GET /v1/bossmode/stream` answers `text/event-stream`, behind the authentication of the native API. The page reads it with `fetch` and the bearer header, because an EventSource cannot send the header. The route needs no cookie and takes no token in the query. Each event has three fields:
+
+- `id`, a decimal counter that grows for the life of the process. The counter starts at the time of the start in microseconds, so an id of an earlier process, or of a replica that started earlier, is below every id of this process.
+- `event`, the kind.
+- `data`, one line of JSON.
+
+| Kind | Data | Who gets it |
+|---|---|---|
+| `run` | The run object as `GET /v1/fleet/runs` lists it, with `member` and `reactions`. `activity` is the activity of the run with its words in `phrase`, such as `{"turn": 7, "tool": "bash", "callId": "...", "since": "...", "phrase": "Ran \"go test ./...\""}`, and `null` for a run that does not work. One event per update of a run of another member (section 4.15). | A caller who can see the run, as `GET /v1/fleet/runs` decides for that run and that caller |
+| `member` | `{"kind": "member", "member": "<name>", "state": "live", "time": "..."}`: the state of a member changed, or `"gone": true` | A caller who can see the member, as `GET /v1/fleet` decides |
+| `task` | `{"kind": "task", "member": "<name>", "phase": "Running", "time": "..."}`: the phase of the Task of a member changed, or `"gone": true` | As `member` |
+| `reset` | `null`: the stream cannot resume, and the page reads its lists again | Every caller |
+| `bridge.message`, `bridge.member`, `page`, `face`, and any other kind of `Publish` | The data of the package, unchanged (section 17.5) | Every caller, or the callers that the `Allow` of the event allows |
+
+The stream decides for each event and each caller when it sends the event, with the functions of the view (`fleet.Watcher.Visible`) and the current rules, and it keeps no decision across callers or events. A decision point that does not answer leaves the event out, and the log says so once until a decision works again.
+
+The front keeps the newest 4,096 events of every kind in a ring. A stream that opens with `Last-Event-ID` gets every event after that id that the caller can see, in order, and then the new events. An id that the ring no longer holds, an id above the newest one, and a value that is no number each give one event `reset` with the data `null` and the id of the newest event. The stream goes on from there, and the page reads its bridges, its faces, its channel, and its roster again. A stream without `Last-Event-ID` starts with the next event. A stream resumes on the replica that holds its ring. The ids of two replicas start at their start times, so another replica answers with `reset`, unless it sent more events than the microseconds between the two starts.
+
+A comment line, `: keep-alive`, goes out after 15 seconds without an event, so a proxy keeps the stream open. A stream ends after 15 minutes, and the page opens a new one with `Last-Event-ID`, so the front checks the credential again: a token that expired or that the issuer revoked stops the stream within that time, and the new request gets a 401. A process serves at most 64 streams at once, one per tab. The next request gets 429 with `Retry-After`.
+
+The fleet sends its changes through `Watch` (section 4.15), and the service of bossmode reads them at once into the ring. A slow stream reads from the ring and never holds up the fleet: a stream that falls more than 4,096 events behind gets `reset`.
+
+### 17.4 The settings
+
+`GET /v1/bossmode`, behind the authentication of the native API, answers the settings that the page reads:
+
+```json
+{
+  "manager": {"agent": "manager", "member": "default/manager-0", "run": "01K..."},
+  "placement": "queue",
+  "maxMembers": 16
+}
+```
+
+- `manager` is `null` when `workbench.bossmode.manager` is empty.
+- `manager.member` is the fleet member that runs the manager, for `POST /v1/runs?member=`: a Task of the pool whose `agent` is the profile, the first one whose phase is Running, else the first. Without such a pool, it is the first member by name whose agents hold the profile. The front runs the configuration of its workers, so it holds every profile, and it is the member only when no other member is. The answer names only a pool and a member that the caller can see, and `""` when there is none.
+- `manager.run` is the newest top-level run of the profile that the caller started, from the runs of the fleet that the caller can see, or `""`.
+- `placement` and `maxMembers` come from `workbench.bridges` (section 17.1).
+
+### 17.5 The broadcaster
+
+Any package puts an event on the stream with one call:
+
+```go
+bossmode.Publish("bridge.message", bridgeID, map[string]any{"bridge": bridgeID, "message": entry})
+bossmode.Publish("page", path, meta, bossmode.Allow(func(ctx context.Context) bool { return canRead(ctx, path) }))
+```
+
+- `kind` is 1 to 64 lower-case letters, digits, dots, dashes, and underscores. The kinds `run`, `member`, `task`, and `reset` belong to the package, and `Publish` refuses them with `bossmode.ErrKind`.
+- `id` names the object of the event, such as a bridge or the path of a page. The stream sends `data` alone, so the data carries every id that the page needs.
+- `data` goes out as JSON, unchanged, and is at most 16 KB (`bossmode.MaxEventBytes`). A larger event is refused with `bossmode.ErrTooLarge`, so a package cuts its long texts first.
+- Without an option, every caller of the stream gets the event. With `bossmode.Allow(fn)`, the stream calls `fn` with the context of each stream, which holds the principal of its caller (`fw.PrincipalFrom`), once per event and stream, also for a resume, and sends the event only when `fn` returns true.
+- `Publish` reaches the stream of every agent of the process that runs bossmode, which is one agent in `fw-workbench`, and `PublishTo(a, ...)` reaches the stream of one agent. While bossmode is off, both drop the event and return nil.
+
+The page reads the kinds `bridge.message`, `bridge.member`, `page`, and `face`, which the packages of the bridges, the pages, and the faces publish with this call.
+
+### 17.6 Doctor and metrics
+
+`fw-workbench doctor` has one line for bossmode. It says off, or on with these facts: the page that it serves, from `dir` with or without an `index.html`, or the embedded copy and whether that copy is the placeholder; the manager profile, and whether `fw.agents` or a pool defines a profile of that name; and the streams. A `dir` that is not a directory, a `dir` without `index.html`, and a manager that no profile defines fail the line. The doctor runs in a process of its own, which serves no stream, so it names the gauge of the server for the open streams.
+
+| Metric | Type | What it counts |
+|---|---|---|
+| `fw_bossmode_streams_open` | gauge | The streams of the page that are open now |
+| `fw_bossmode_streams_refused_total` | counter | The streams that the front refused with 429, because 64 were open |

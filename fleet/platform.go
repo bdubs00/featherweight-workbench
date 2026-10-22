@@ -53,15 +53,26 @@ const fillRepairInterval = time.Minute
 
 // EgressTypes are the ledger event types that a worker publishes for the
 // view of the front: enough for the state, the title, the pending
-// approval, and the turns of a run, and nothing of its content. The usage
-// of a run comes from the totals that fw.run.finished and fw.run.suspended
-// carry, so fw.model.responded, which holds the content, stays out. A
-// worker sets bus.egressTypes to this list.
+// approval, the turns, the activity, and the reactions of a run. The
+// usage of a run comes from the totals that fw.run.finished and
+// fw.run.suspended carry, so fw.model.responded, which holds the content
+// of the model, stays out. fw.tool.requested and fw.tool.responded carry
+// the input and the output of each tool call for the activity of the run
+// (watch.go), each string cut to EgressMaxBytes. A worker sets
+// bus.egressTypes to this list.
 var EgressTypes = []string{
 	fw.EvRunQueued, fw.EvRunStarted, fw.EvRunResumed, fw.EvRunSuspended, fw.EvRunFinished,
 	fw.EvApprovalRequested, fw.EvApprovalDecided, fw.EvRunAnnotated, fw.EvTurnStarted, fw.EvMessageReceived,
 	fw.EvRunChild, fw.EvOutcomeEvaluated,
+	fw.EvToolRequested, fw.EvToolResponded, fw.EvTurnFinished, fw.EvRunReacted,
 }
+
+// EgressMaxBytes is bus.egressMaxBytes of a worker of a pool, unless the
+// pool sets it: the egress of the worker cuts each string value in the
+// data of a published event to this many bytes, with a note of the cut,
+// so the stream carries no whole tool input or output. The ledger of the
+// worker stays whole.
+const EgressMaxBytes = 4096
 
 // platform is the view of the members that the platforms know.
 type platform struct {
@@ -91,6 +102,12 @@ type platform struct {
 	// merged holds each pool with the overlay that its last pass merged
 	// (profiles.go), by name.
 	merged map[string]*pools.Pool
+	// shown holds the state of each member that the last member change
+	// named, by name, so a change goes out once, and quiet is the time
+	// without an event after which a member that only the stream knows is
+	// quiet (watch.go).
+	shown map[string]string
+	quiet time.Duration
 }
 
 // childLink is where a child of a run lives, from the fw.run.child event
@@ -170,6 +187,12 @@ type platformRun struct {
 	// (lateEnd).
 	stateSeq uint64
 	added    []addedUsage
+	// callID and input are the call id and the input of the latest
+	// fw.tool.requested of the run, cut to ActivityInputLimit, for the
+	// activity of the run (watch.go). The view forgets them when the call
+	// returns.
+	callID string
+	input  json.RawMessage
 }
 
 // addedUsage is the usage that one event added to a run.
@@ -208,6 +231,8 @@ func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv strin
 		children:  map[string]childLink{},
 		gone:      map[string]forgotRun{},
 		ends:      newRunEnds(),
+		shown:     map[string]string{},
+		quiet:     QuietAfter * f.interval,
 	}
 	if len(p.atespaces) > 0 {
 		if p.server == "" {
@@ -230,6 +255,7 @@ func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv strin
 		f.viewMu.Lock()
 		f.stops = append(f.stops, stop)
 		f.viewMu.Unlock()
+		go p.watchLoop(f.ctx, f.interval)
 	}
 	p.startPools(list, vals)
 	f.platform = p
@@ -315,12 +341,16 @@ func (p *platform) poll(ctx context.Context) {
 				m = &platformMember{name: name, url: "ax:" + name, atespace: atespace}
 				p.members[name] = m
 			}
-			was := m.state
+			was, wasPhase := m.state, m.phase
 			m.phase = t.GetStatus().GetPhase()
 			m.state, m.seen = stateOfPhase(m.phase), now
 			if m.state == MemberLive && was != MemberLive {
 				m.liveSince, m.filled = now, false
 			}
+			if m.phase != wasPhase {
+				p.noteTask(m, now)
+			}
+			p.noteMember(m, now)
 			if p.needsFill(m, now) {
 				// The read takes the request now, so a wake during the read
 				// sets filled to false again and the next poll reads again.
@@ -338,6 +368,7 @@ func (p *platform) poll(ctx context.Context) {
 	for name, m := range p.members {
 		if m.atespace != "" && !seen[name] {
 			delete(p.members, name)
+			p.noteGone(m, now)
 			for id, r := range p.runs {
 				if r.member == name {
 					p.drop(id, r, now)
@@ -535,11 +566,17 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 			r.Blocked = cut(p.f.a.Redact(r.Blocked), TextLimit)
 		}
 		cur, ok := p.runs[r.ID]
+		changed := true
 		switch {
 		case !ok || cur.run.Seq < r.Seq || (!cur.queued && cur.run.Seq == r.Seq):
 			// The read is newer than the view, or as new and the view has
-			// no identity for the run: the read is the whole run.
-			p.runs[r.ID] = &platformRun{run: r, member: m.name, updated: now, queued: true, stateSeq: r.Seq}
+			// no identity for the run: the read is the whole run. The input
+			// of the latest tool call stays, because a read has none.
+			next := &platformRun{run: r, member: m.name, updated: now, queued: true, stateSeq: r.Seq}
+			if ok {
+				next.callID, next.input = cur.callID, cur.input
+			}
+			p.runs[r.ID] = next
 		case !cur.queued:
 			cur.identify(r)
 		case cur.run.Seq == r.Seq:
@@ -548,7 +585,13 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 			// and the run keeps its last recorded state. The time of the
 			// last update stays, so the suspend controller still sees how
 			// long the run sent nothing.
+			changed = cur.run.Blocked != r.Blocked
 			cur.run.Blocked = r.Blocked
+		default:
+			changed = false
+		}
+		if changed {
+			p.noteRun(r.ID, p.runs[r.ID], now)
 		}
 		if p.runs[r.ID].run.Blocked != "" {
 			m.runsBlocked = true
@@ -645,6 +688,7 @@ func (p *platform) onEvent(e fw.Event) error {
 		// An event is a sign of life, whatever the last phase said.
 		m.seen = now
 	}
+	p.noteMember(m, now)
 	r := p.runs[e.Subject]
 	if r == nil {
 		r = &platformRun{run: &fw.Run{}, member: name}
@@ -681,6 +725,7 @@ func (p *platform) onEvent(e fw.Event) error {
 		before := r.run.Usage
 		r.run.Apply(e, p.prices)
 		r.track(e, before)
+		r.noteToolInput(e)
 	case e.Type == fw.EvRunQueued && (!r.queued || kept > r.kept):
 		r.run.Apply(e, p.prices)
 	case (e.Type == fw.EvRunFinished || e.Type == fw.EvRunSuspended) && e.Seq > r.stateSeq:
@@ -709,6 +754,7 @@ func (p *platform) onEvent(e fw.Event) error {
 			p.children[d.Child] = childLink{parent: e.Subject, member: child, at: now}
 		}
 	}
+	p.noteRun(e.Subject, r, now)
 	return nil
 }
 
@@ -957,24 +1003,52 @@ func (p *platform) records(now time.Time, all bool) []remote {
 			delete(p.children, id) // a child that never spoke
 		}
 	}
+	byMember := p.runsByMember()
+	out := make([]remote, 0, len(p.members))
+	for _, m := range p.members {
+		out = append(out, p.record(m, byMember[m.name], all))
+	}
+	return out
+}
+
+// memberRecord returns the record of one member as records gives it, or
+// nil when the view does not hold the member.
+func (p *platform) memberRecord(name string, now time.Time) *Record {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	m := p.members[name]
+	if m == nil {
+		return nil
+	}
+	return p.record(m, p.runsByMember()[name], false).rec
+}
+
+// listed returns a run as the records list it. A child in another process
+// has no parent in its own ledger; the parent recorded it, so the view
+// shows it under the parent. The caller holds p.mu.
+func (p *platform) listed(id string, r *platformRun) *fw.Run {
+	run := r.run
+	if l, ok := p.children[id]; ok && run.Parent == "" {
+		c := *run
+		c.Parent, c.Depth = l.parent, 1
+		if src := p.runs[l.parent]; src != nil {
+			c.Depth = src.run.Depth + 1
+		}
+		run = &c
+	}
+	return run
+}
+
+// runsByMember returns the runs that the records list, by member: every
+// run with an identity, and a queued stub for each child that its process
+// does not have yet. The caller holds p.mu.
+func (p *platform) runsByMember() map[string][]*fw.Run {
 	byMember := map[string][]*fw.Run{}
 	for id, r := range p.runs {
 		if r.run.ID == "" || !r.queued {
 			continue // a run that has no identity yet is not listed
 		}
-		run := r.run
-		if l, ok := p.children[id]; ok && run.Parent == "" {
-			// A child in another process has no parent in its own ledger;
-			// the parent recorded it, so the view shows it under the
-			// parent.
-			c := *run
-			c.Parent, c.Depth = l.parent, 1
-			if src := p.runs[l.parent]; src != nil {
-				c.Depth = src.run.Depth + 1
-			}
-			run = &c
-		}
-		byMember[r.member] = append(byMember[r.member], run)
+		byMember[r.member] = append(byMember[r.member], p.listed(id, r))
 	}
 	for id, l := range p.children {
 		// A child that its process does not have yet, for example a branch
@@ -992,64 +1066,65 @@ func (p *platform) records(now time.Time, all bool) []remote {
 		}
 		byMember[src.member] = append(byMember[src.member], stub)
 	}
+	return byMember
+}
+
+// record builds the record of one member from its runs (runsByMember).
+// The caller holds p.mu.
+func (p *platform) record(m *platformMember, runs []*fw.Run, all bool) remote {
 	cfg := p.f.a.Config()
-	out := make([]remote, 0, len(p.members))
-	for _, m := range p.members {
-		runs := byMember[m.name]
-		sort.Slice(runs, func(i, j int) bool {
-			if !runs[i].CreatedAt.Equal(runs[j].CreatedAt) {
-				return runs[i].CreatedAt.After(runs[j].CreatedAt)
-			}
-			return runs[i].ID > runs[j].ID
-		})
-		kept, omitted := pickRuns(runs)
-		if all {
-			kept, omitted = make([]*fw.Run, 0, len(runs)), 0
-			for _, r := range runs {
-				kept = append(kept, shorten(r))
-			}
+	sort.Slice(runs, func(i, j int) bool {
+		if !runs[i].CreatedAt.Equal(runs[j].CreatedAt) {
+			return runs[i].CreatedAt.After(runs[j].CreatedAt)
 		}
-		rec := &Record{
-			Name:          m.name,
-			URL:           m.url,
-			Atespace:      m.atespace,
-			Access:        Access{Mode: p.f.a.AccessMode(), Default: cfg.Access.Default, Admins: cfg.Access.Admins},
-			Agents:        []RecordAgent{},
-			Runs:          kept,
-			Omitted:       omitted,
-			State:         m.state,
-			BlockedReason: m.blocked,
-			UpdatedAt:     m.seen,
-		}
-		// The agents of a member are the profiles that it serves, read
-		// from the Task once (backfill), and the ones that its runs name,
-		// so an idle Task is visible to the people who can use it.
-		seenAgent := map[string]bool{}
-		addAgent := func(name string) {
-			if name == "" || seenAgent[name] {
-				return
-			}
-			seenAgent[name] = true
-			ag := RecordAgent{Name: name}
-			if prof, ok := p.f.a.ProfileNamed(name); ok {
-				ag.Description, ag.Access = prof.Description, prof.Access
-			}
-			rec.Agents = append(rec.Agents, ag)
-		}
-		for name := range m.agents {
-			addAgent(name)
-		}
+		return runs[i].ID > runs[j].ID
+	})
+	kept, omitted := pickRuns(runs)
+	if all {
+		kept, omitted = make([]*fw.Run, 0, len(runs)), 0
 		for _, r := range runs {
-			addAgent(r.Agent)
+			kept = append(kept, shorten(r))
 		}
-		sort.Slice(rec.Agents, func(i, j int) bool { return rec.Agents[i].Name < rec.Agents[j].Name })
-		seen := m.seen
-		for _, r := range runs {
-			if r.UpdatedAt.After(seen) {
-				seen = r.UpdatedAt
-			}
-		}
-		out = append(out, remote{rec: rec, seen: seen})
 	}
-	return out
+	rec := &Record{
+		Name:          m.name,
+		URL:           m.url,
+		Atespace:      m.atespace,
+		Access:        Access{Mode: p.f.a.AccessMode(), Default: cfg.Access.Default, Admins: cfg.Access.Admins},
+		Agents:        []RecordAgent{},
+		Runs:          kept,
+		Omitted:       omitted,
+		State:         m.state,
+		BlockedReason: m.blocked,
+		UpdatedAt:     m.seen,
+	}
+	// The agents of a member are the profiles that it serves, read from
+	// the Task once (backfill), and the ones that its runs name, so an idle
+	// Task is visible to the people who can use it.
+	seenAgent := map[string]bool{}
+	addAgent := func(name string) {
+		if name == "" || seenAgent[name] {
+			return
+		}
+		seenAgent[name] = true
+		ag := RecordAgent{Name: name}
+		if prof, ok := p.f.a.ProfileNamed(name); ok {
+			ag.Description, ag.Access = prof.Description, prof.Access
+		}
+		rec.Agents = append(rec.Agents, ag)
+	}
+	for name := range m.agents {
+		addAgent(name)
+	}
+	for _, r := range runs {
+		addAgent(r.Agent)
+	}
+	sort.Slice(rec.Agents, func(i, j int) bool { return rec.Agents[i].Name < rec.Agents[j].Name })
+	seen := m.seen
+	for _, r := range runs {
+		if r.UpdatedAt.After(seen) {
+			seen = r.UpdatedAt
+		}
+	}
+	return remote{rec: rec, seen: seen}
 }

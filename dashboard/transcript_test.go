@@ -107,3 +107,37 @@ func TestTranscriptExtraTools(t *testing.T) {
 		t.Fatalf("items = %+v", items)
 	}
 }
+
+// A follow-up names its sender: the party that a trusted caller relayed it
+// for, with its kind, else the principal that sent it.
+func TestTranscriptSender(t *testing.T) {
+	seq := uint64(0)
+	ev := func(data fw.MessageReceivedData) fw.Event {
+		seq++
+		data.Role = fw.RoleUser
+		e := fw.MustEvent("r1", fw.EvMessageReceived, data)
+		e.Seq = seq
+		return e
+	}
+	items := Transcript([]fw.Event{
+		ev(fw.MessageReceivedData{Content: []fw.Block{fw.Text("From the reviewer")}, By: "fleet-token",
+			From: &fw.MessageFrom{Kind: fw.FromAgent, Name: "reviewer", Run: "01R", Member: "team/crew-1"}}),
+		ev(fw.MessageReceivedData{Content: []fw.Block{fw.Text("From Ada")}, By: "fleet-token",
+			From: &fw.MessageFrom{Kind: fw.FromPerson, Name: "ada"}}),
+		ev(fw.MessageReceivedData{Content: []fw.Block{fw.Text("From Bob")}, By: "bob"}),
+		ev(fw.MessageReceivedData{Content: []fw.Block{fw.Text("From the kernel")}}),
+	})
+	want := []struct{ who, kind string }{{"reviewer", fw.FromAgent}, {"ada", fw.FromPerson}, {"bob", ""}, {"", ""}}
+	if len(items) != len(want) {
+		t.Fatalf("items = %+v", items)
+	}
+	for i, w := range want {
+		if items[i].Kind != ItemUser || items[i].Who != w.who || items[i].WhoKind != w.kind {
+			t.Errorf("item %d = %+v, want who %q and kind %q", i, items[i], w.who, w.kind)
+		}
+	}
+	b, _ := json.Marshal(items[0])
+	if !strings.Contains(string(b), `"who":"reviewer","whoKind":"agent"`) {
+		t.Errorf("JSON of the item = %s", b)
+	}
+}

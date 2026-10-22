@@ -32,8 +32,8 @@ func toolModel() fw.Model {
 }
 
 // TestPlatformUsageFromLifecycleEvents runs work on a worker whose egress
-// sends only the lifecycle events (EgressTypes), as a worker of the lab
-// does: no fw.model.responded and no fw.tool.requested. The front still
+// sends only the types of EgressTypes, as a worker of a pool does: the
+// lifecycle events and the tool calls, and no fw.model.responded. The front still
 // shows the tokens, the turns, the tool calls, and the cost of the run,
 // which come from the totals of fw.run.finished, and the usage grows with
 // a follow-up. The front has no price table, so the cost is the cost of
@@ -95,7 +95,7 @@ func TestPlatformUsageFromLifecycleEvents(t *testing.T) {
 		return n == want
 	})
 	mu.Lock()
-	if sent[fw.EvModelResponded] != 0 || sent[fw.EvToolRequested] != 0 || sent[fw.EvRunFinished] != 1 {
+	if sent[fw.EvModelResponded] != 0 || sent[fw.EvToolRequested] != 1 || sent[fw.EvToolResponded] != 1 || sent[fw.EvRunFinished] != 1 {
 		t.Fatalf("the stream carried %v", sent)
 	}
 	mu.Unlock()

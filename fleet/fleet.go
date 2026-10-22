@@ -10,7 +10,8 @@
 // workers (enqueue.go), reads the depth of those queues and wakes the Tasks
 // for the jobs that wait (queues.go), suspends the Tasks that idle
 // (suspend.go), keeps the Tasks of the pools of the configuration
-// (pools.go), and adds its series to the metrics (metrics.go). The
+// (pools.go), adds its series to the metrics (metrics.go), and sends its
+// changes to the packages that watch it (watch.go). The
 // kernel knows no fleet, and a worker publishes nothing about itself: it
 // is a bare kernel, and the platforms keep the state.
 package fleet
@@ -103,8 +104,10 @@ type Fleet struct {
 	viewMu    sync.Mutex // guards stops
 	stops     []func()
 
-	// The members that the platforms know (platform.go).
+	// The members that the platforms know (platform.go), and the
+	// consumers of their changes (watch.go).
 	platform *platform
+	watch    watchers
 
 	// The intake queues (queues.go), the job records (jobs.go), and the
 	// end of the connection to the server of the bus (nats.go).

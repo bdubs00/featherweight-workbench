@@ -126,6 +126,7 @@ type Front struct {
 	Egress      string       // workbench.fleet.egress
 	Intake      string       // workbench.fleet.intake
 	EgressTypes []string     // the event types of the stream of a worker
+	MaxBytes    int          // bus.egressMaxBytes of a worker that the pool does not set; 0 sets none
 	Bus         fw.BusConfig // the bus of the front, which the workers share
 	AX          fw.AXConfig  // the ax API and the router of the front
 	TokenEnv    string       // the variable of the static token of the front
@@ -721,6 +722,12 @@ func (p *Pool) workerFile(front Front) (string, error) {
 	}
 	b["egress"] = front.Egress
 	b["egressTypes"] = append([]string(nil), front.EgressTypes...)
+	if _, set := b["egressMaxBytes"]; !set && front.MaxBytes > 0 {
+		// The stream carries the inputs and the outputs of the tool calls,
+		// so the worker cuts their long strings, unless the pool says
+		// otherwise.
+		b["egressMaxBytes"] = front.MaxBytes
+	}
 	if p.Intake != "" {
 		b["intake"] = p.Intake
 	}

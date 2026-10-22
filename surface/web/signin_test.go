@@ -340,8 +340,12 @@ func checkDone(t *testing.T, resp *http.Response, body, token, next string) {
 		t.Fatalf("policy %q, page %s", csp, body)
 	}
 	tok, _ := json.Marshal(token)
-	nx, _ := json.Marshal(next)
-	if !strings.Contains(body, `sessionStorage.setItem("fw.token", `+string(tok)+`)`) || !strings.Contains(body, `location.replace("/ui" + `+string(nx)+`)`) {
+	target := "/ui" + next
+	if strings.HasPrefix(next, "/") {
+		target = next
+	}
+	nx, _ := json.Marshal(target)
+	if !strings.Contains(body, `sessionStorage.setItem("fw.token", `+string(tok)+`)`) || !strings.Contains(body, `location.replace(`+string(nx)+`)`) {
 		t.Fatalf("page = %s", body)
 	}
 }
@@ -898,6 +902,48 @@ func TestUIPolicyAllowsSignin(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", resp.StatusCode)
+	}
+}
+
+// A page that a package registers takes the person back to its own path
+// after the sign-in; any other path returns to /ui.
+func TestSigninReturnsToPage(t *testing.T) {
+	AllowSigninReturn("/bossmode/")
+	e := newSigninEnv(t, nil)
+	q, cookie := e.start(t, "/bossmode/#bridge/01K")
+	code := e.issuer.authorized(q, "access-good", "carol")
+	resp, body := e.callback(t, url.Values{"code": {code}, "state": {q.Get("state")}}, cookie)
+	checkDone(t, resp, body, "access-good", "/bossmode/#bridge/01K")
+
+	q, cookie = e.start(t, "/elsewhere/#x")
+	code = e.issuer.authorized(q, "access-good", "carol")
+	resp, body = e.callback(t, url.Values{"code": {code}, "state": {q.Get("state")}}, cookie)
+	checkDone(t, resp, body, "access-good", "")
+}
+
+func TestSigninNext(t *testing.T) {
+	AllowSigninReturn("/bossmode/")
+	AllowSigninReturn("no-slash")
+	for in, want := range map[string]string{
+		"#run/01ABC":                "#run/01ABC",
+		"/bossmode/":                "/bossmode/",
+		"/bossmode/#bridge/01K":     "/bossmode/#bridge/01K",
+		"/bossmode/bridges/01K?x=1": "/bossmode/bridges/01K?x=1",
+		"/bossmode":                 "",
+		"/bossmodex/":               "",
+		"//evil.example/bossmode/":  "",
+		"https://evil.example/":     "",
+		"/bossmode/\\evil.example":  "",
+		"/bossmode/\x00":            "",
+		"/bossmode/\t":              "",
+		"/bossmode/\xff":            "",
+		"no-slash/x":                "",
+		"/ui#x":                     "",
+		"/bossmode/" + strings.Repeat("x", maxNextBytes): "",
+	} {
+		if got := signinNext(in); got != want {
+			t.Errorf("signinNext(%.30q) = %.30q, want %.30q", in, got, want)
+		}
 	}
 }
 

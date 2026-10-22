@@ -15,7 +15,7 @@ import (
 
 // Kinds of a chat item.
 const (
-	ItemUser      = "user"      // a message to the agent: the input or a follow-up
+	ItemUser      = "user"      // a message to the agent: the input or a follow-up, with Who and WhoKind
 	ItemAssistant = "assistant" // the text of one model response
 	ItemTool      = "tool"      // a tool call: Tool, CallID, Input, and Profile for propose_agent
 	ItemResult    = "result"    // the result of a tool call: CallID, Text, IsError
@@ -35,6 +35,14 @@ const MaxItemText = 32 << 10
 // of the event that made it, so a page asks for the items after the last
 // one it has. A result names the call that it answers with CallID, and the
 // page puts it under that call.
+//
+// Who names the sender of a user message: the person who started the run
+// for its input, and for a follow-up the party that wrote it. A follow-up
+// that a trusted caller relayed (fw.MessageFrom) takes the name of that
+// party, and WhoKind tells a person (fw.FromPerson) from an agent
+// (fw.FromAgent). Any other follow-up takes the subject of the principal
+// that sent it, and WhoKind stays empty. A decision names its decider in
+// Who.
 type Item struct {
 	Seq     uint64          `json:"seq"`
 	Time    time.Time       `json:"time"`
@@ -47,6 +55,7 @@ type Item struct {
 	Input   json.RawMessage `json:"input,omitempty"`
 	Schema  json.RawMessage `json:"schema,omitempty"`
 	Who     string          `json:"who,omitempty"`
+	WhoKind string          `json:"whoKind,omitempty"`
 	Path    string          `json:"path,omitempty"`
 	Size    int64           `json:"size,omitempty"`
 	IsError bool            `json:"isError,omitempty"`
@@ -106,6 +115,10 @@ func Transcript(events []fw.Event) []Item {
 				text, files := fw.TextOf(d.Content), fileRefs(d.Content)
 				if text != "" || len(files) > 0 {
 					it := at(ItemUser)
+					it.Who = d.By
+					if d.From != nil && d.From.Name != "" {
+						it.Who, it.WhoKind = d.From.Name, d.From.Kind
+					}
 					it.setText(text)
 					it.Files = files
 					out = append(out, it)
