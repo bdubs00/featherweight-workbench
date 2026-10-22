@@ -20,7 +20,8 @@ import (
 // extension mounts the routes with workbench.bossmode.enabled: the page
 // as a public route, because the page signs in on its own and calls /v1
 // with its token, and the settings and the stream behind the
-// authentication of the agent. Without it, the routes are not there, and
+// authentication of the agent. /bossmode without the slash moves to
+// /bossmode/ (slashRoute). Without it, the routes are not there, and
 // each answers 404. A configuration that does not load mounts nothing;
 // the service stops the start with the error.
 func extension(k *native.Kit) error {
@@ -29,9 +30,8 @@ func extension(k *native.Kit) error {
 	if err != nil || !c.Enabled {
 		return nil
 	}
-	page := pageRoute(c.Dir)
-	k.HandlePublic("GET "+Path, page)
-	k.HandlePublic("GET "+Path+"/{file...}", page)
+	k.HandlePublic("GET "+Path, slashRoute)
+	k.HandlePublic("GET "+Path+"/{file...}", pageRoute(c.Dir))
 	k.Handle("GET /v1/bossmode", settingsRoute(k, c))
 	k.Handle("GET /v1/bossmode/stream", streamRoute(a))
 	return nil

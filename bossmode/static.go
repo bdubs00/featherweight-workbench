@@ -49,6 +49,23 @@ const (
 // indexFile is the page itself.
 const indexFile = "index.html"
 
+// slashRoute answers GET /bossmode with a permanent redirect to
+// /bossmode/, with the query, so the address of the page always ends with
+// the slash. The sign-in returns only to a path under /bossmode/
+// (web.AllowSigninReturn), and the page sends its own address as next.
+func slashRoute(w http.ResponseWriter, r *http.Request) {
+	h := w.Header()
+	h.Set("Content-Security-Policy", CSP)
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("Cache-Control", cacheOther)
+	target := Path + "/"
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
+}
+
 // pageRoute serves the files of the page. dir is workbench.bossmode.dir,
 // and empty serves the embedded copy.
 func pageRoute(dir string) http.HandlerFunc {

@@ -59,7 +59,6 @@ func TestStaticFromDir(t *testing.T) {
 		path, ctype, cache, body string
 		status                   int
 	}{
-		{"/bossmode", "text/html; charset=utf-8", cacheIndex, "<title>bossmode</title>", http.StatusOK},
 		{"/bossmode/", "text/html; charset=utf-8", cacheIndex, "<title>bossmode</title>", http.StatusOK},
 		{"/bossmode/bridge/01K/channel", "text/html; charset=utf-8", cacheIndex, "<title>bossmode</title>", http.StatusOK},
 		{"/bossmode/assets/index-BeZQCCyd.js", "text/javascript; charset=utf-8", cacheAssets, "console.log", http.StatusOK},
@@ -109,6 +108,43 @@ func TestStaticFromDir(t *testing.T) {
 	}
 }
 
+// /bossmode without the slash moves to /bossmode/ for good, with its
+// query, so the address of the page always has the form that the sign-in
+// returns to. The page itself keeps its answers.
+func TestSlash(t *testing.T) {
+	t.Setenv(EnvDir, pageDir(t))
+	fr := newFront(t, nil)
+	stay := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for path, want := range map[string]string{
+		"/bossmode":            "/bossmode/",
+		"/bossmode?bridge=01K": "/bossmode/?bridge=01K",
+	} {
+		resp, err := stay.Get(fr.url + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != want {
+			t.Errorf("%s: %d to %q, want 301 to %q", path, resp.StatusCode, resp.Header.Get("Location"), want)
+		}
+		if resp.Header.Get("Content-Security-Policy") != CSP || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("%s: headers %v", path, resp.Header)
+		}
+	}
+	resp, err := stay.Get(fr.url + "/bossmode/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != cacheIndex {
+		t.Errorf("/bossmode/: %d %v", resp.StatusCode, resp.Header)
+	}
+	// A browser that follows the move gets the page.
+	if resp, body := get(t, fr.url+"/bossmode", ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, "<title>bossmode</title>") || resp.Request.URL.Path != "/bossmode/" {
+		t.Errorf("/bossmode after the move: %d %s", resp.StatusCode, body)
+	}
+}
+
 // Without a directory, the route serves the embedded placeholder, which
 // names the key to set.
 func TestStaticPlaceholder(t *testing.T) {
@@ -119,7 +155,7 @@ func TestStaticPlaceholder(t *testing.T) {
 		t.Skip("this binary embeds a build of the page (make page); TestBuildWithThePlaceholder builds it without one")
 	}
 	fr := newFront(t, nil)
-	for _, path := range []string{"/bossmode", "/bossmode/", "/bossmode/bridge/01K"} {
+	for _, path := range []string{"/bossmode/", "/bossmode/bridge/01K"} {
 		resp, body := get(t, fr.url+path, "")
 		if resp.StatusCode != http.StatusOK || !strings.Contains(body, "workbench.bossmode.dir") || !strings.Contains(body, EnvDir) {
 			t.Errorf("%s: %d %s", path, resp.StatusCode, body)

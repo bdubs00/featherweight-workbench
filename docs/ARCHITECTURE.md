@@ -119,7 +119,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `/ui/connect/callback` | The end of a connection (section 2.1) | always |
 | `/.well-known/oauth-protected-resource` | Protected resource metadata (RFC 9728) | when `auth.mode` includes `oidc` |
 | `/v1/sources/{name}` | Webhook sources, POST only, with the credential of each source (section 13) | with a webhook source in `workbench.sources` |
-| `/bossmode`, `/bossmode/{file...}` | The page of bossmode: its static files, GET only, with no credential (section 17.2) | with `workbench.bossmode.enabled` |
+| `/bossmode`, `/bossmode/{file...}` | The page of bossmode: its static files under `/bossmode/`, GET only, with no credential, and a 301 from `/bossmode` to `/bossmode/` (section 17.2) | with `workbench.bossmode.enabled` |
 
 | Method and path | Purpose |
 |---|---|
@@ -1575,9 +1575,10 @@ A configuration that cannot work stops the start: a value of `enabled` that is n
 
 ### 17.2 The page
 
-`GET /bossmode` and `GET /bossmode/{file...}` serve the static files of the page. They are public routes, as `/ui` is: the files hold no data, and the page signs in on its own and calls `/v1` with its token.
+`GET /bossmode/{file...}` serves the static files of the page. It is a public route, as `/ui` is: the files hold no data, and the page signs in on its own and calls `/v1` with its token.
 
-- `/bossmode`, `/bossmode/`, and every path whose last element has no file extension, such as `/bossmode/bridge/01K`, get `index.html`, because the page routes on the client.
+- `GET /bossmode` answers 301 with `Location: /bossmode/`, and the query goes along. The address of the page therefore always ends with the slash, and the sign-in returns only to a path under `/bossmode/` (section 5).
+- `/bossmode/` and every path whose last element has no file extension, such as `/bossmode/bridge/01K`, get `index.html`, because the page routes on the client.
 - A path with an extension gets that file with its content type, such as `text/javascript` or `image/svg+xml`. A missing file is a 404.
 - A path with an element that starts with a dot, such as `.env` or `.git/config`, is a 404, also without an extension.
 - A path that holds an element `..`, a backslash, or a control character is a 400. Such a path can reach the route only escaped, such as `%2e%2e`. The files of `dir` open through an `os.Root`, so no name and no symbolic link leads out of the directory.
