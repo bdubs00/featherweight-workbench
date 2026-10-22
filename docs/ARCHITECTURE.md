@@ -1818,7 +1818,7 @@ The presence of a member is its status light on the roster. `bridges.Presence(me
 | `working` | The run is queued or running, or the member has no run yet because its job waits in the queue |
 | `idle` | The run finished, and the Task is live |
 
-`activity` is the activity of the newest run (the kernel architecture, section 8.2), with `turn`, `tool`, `callId`, `since`, and `phrase`. The package words it with `fleet.ActivityPhrase`, which its `init` sets with `bridges.UsePhrase`. The view keeps the input of the latest tool call of each run (section 4.15), so a tool call reads as `Ran "go test ./..."` and a run that thinks as "Thinking in turn 7", the words of the `run` events of the stream (section 17.3). Without a function, the package words only a run that thinks and leaves the phrase of a tool call empty.
+`activity` is the activity of the newest run (the kernel architecture, section 8.2), with `turn`, `tool`, `callId`, `since`, and `phrase`. The package words it with `fleet.ActivityPhrase`, which its `init` sets with `bridges.UsePhrase`. The view keeps the input of the latest tool call of each run (section 4.15), so a tool call reads as `Ran "go test ./..."` and a run that thinks as "Thinking in turn 7", the words of the `run` events of the stream (section 17.3). A seat whose run is a run of the front itself gets its phrase from `fleet.ActivityPhrase` too, but no view holds the input of the tool call of such a run, so its phrase names the tool alone, such as `bash`. Without a function, the package words only a run that thinks and leaves the phrase of a tool call empty.
 
 ### 18.8 Reactions and hearts
 

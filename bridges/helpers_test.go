@@ -71,6 +71,13 @@ func textModel(out string) fw.Model {
 // fw.jobs, so a queue bridge reaches the queues fw.jobs.<agent>.
 func newAgent(t *testing.T, mut func(*fw.Config)) *fw.Agent {
 	t.Helper()
+	return newAgentWith(t, mut)
+}
+
+// newAgentWith is newAgent with more options, which win over the ones of
+// newAgent, such as another model or a tool.
+func newAgentWith(t *testing.T, mut func(*fw.Config), opts ...fw.Option) *fw.Agent {
+	t.Helper()
 	t.Setenv(titles.EnvTitles, titles.ModeInput)
 	t.Setenv("FW_ATESPACE", "")
 	t.Setenv("FW_API_TOKEN", fleetToken)
@@ -85,7 +92,7 @@ func newAgent(t *testing.T, mut func(*fw.Config)) *fw.Agent {
 	if mut != nil {
 		mut(cfg)
 	}
-	a, err := fw.New(
+	a, err := fw.New(append([]fw.Option{
 		fw.WithConfig(cfg),
 		fw.WithoutDefaults(),
 		fw.WithAuthn(callers),
@@ -98,7 +105,7 @@ func newAgent(t *testing.T, mut func(*fw.Config)) *fw.Agent {
 		fw.WithProfile(fw.AgentProfile{Name: "migrator", Access: &fw.Access{Owners: []string{"alice"}, Operators: []string{"bob"}}}),
 		fw.WithProfile(fw.AgentProfile{Name: "reviewer", Access: &fw.Access{Owners: []string{"alice"}, Operators: []string{"bob"}}}),
 		fw.WithProfile(fw.AgentProfile{Name: "private", Access: &fw.Access{Owners: []string{"dave"}}}),
-	)
+	}, opts...)...)
 	if err != nil {
 		t.Fatalf("fw.New: %v", err)
 	}
