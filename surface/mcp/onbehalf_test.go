@@ -61,7 +61,7 @@ func deployModel() fw.Model {
 }
 
 // personFleet is a fake view of one other member, owner, that decides as
-// the rules of a front with the token as an admin would: the token sees
+// the rules of a front with the token as an admin decide: the token sees
 // every run, and a person the runs that the person started. Runners are
 // the people who can run an agent on the owner.
 type personFleet struct {

@@ -1131,8 +1131,8 @@ func (s *server) send(ctx context.Context, req *sdk.CallToolRequest, in sendArgs
 	caller := ctx // the context of the caller, before the server acts for a person
 	ctx, act, acting := manager.OnBehalf(ctx)
 	if acting && act.IsManager(s.a.Config()) && in.Budget != nil {
-		// The policy of the manager asks before run_budget; a budget in a
-		// message would pass by that question.
+		// The policy of the manager asks before run_budget, and a budget in
+		// a message passes by that question.
 		return errorResult("Invalid request: a manager run changes the budget of a run with run_budget alone, so its policy asks first. Send the message without budget."), nil, nil
 	}
 	text := in.Content
