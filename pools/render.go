@@ -349,6 +349,12 @@ func Write(w io.Writer, list []*Pool) error {
 		for _, r := range p.overlay.Allow {
 			fmt.Fprintf(&b, "The overlay of the front adds the rule %q to fw.policy.allow%s.\n", r.Rule, written(r.By, r.At, r.Run))
 		}
+		if len(p.skillNames) > 0 {
+			fmt.Fprintf(&b, "The front ships its skills %s, which the profiles of the pool allow, to %s/%s of each worker.\n", strings.Join(p.skillNames, ", "), WorkspacePath, SkillsPath)
+		}
+		if len(p.skillSkipped) > 0 {
+			fmt.Fprintf(&b, "The front leaves out these files of its skills, because they are hidden, links, or not text: %s.\n", strings.Join(p.skillSkipped, ", "))
+		}
 		if p.replicas() == 0 {
 			b.WriteString("The pool wants no Task, so the front deletes each Task of the pool once it is idle.\n")
 		}

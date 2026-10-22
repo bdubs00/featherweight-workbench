@@ -65,8 +65,25 @@ func MergeOverlays(ctx context.Context, cfg *fw.Config, list []*pools.Pool) ([]*
 		return list, nil
 	}
 	store, closeStore, err := OpenOverlays(ctx, cfg, slog.New(slog.DiscardHandler))
-	if err != nil || store == nil {
+	if err != nil {
 		return list, err
+	}
+	if store == nil {
+		// Without a store, a pool merges an empty overlay, which ships
+		// the skills of the front that its profiles allow.
+		out := slices.Clone(list)
+		var problems []string
+		for i, p := range list {
+			if m, err := p.WithOverlay(pools.Overlay{}); err == nil {
+				out[i] = m
+			} else {
+				problems = append(problems, fmt.Sprintf("the pool %s: %v", p.Name, err))
+			}
+		}
+		if len(problems) > 0 {
+			return out, fmt.Errorf("fleet: %s", strings.Join(problems, "; "))
+		}
+		return out, nil
 	}
 	if closeStore != nil {
 		defer closeStore()
@@ -91,11 +108,16 @@ func MergeOverlays(ctx context.Context, cfg *fw.Config, list []*pools.Pool) ([]*
 	return out, nil
 }
 
-// mergedPool reads the overlay of a pool and merges it into the pool. A
-// front without a store of the overlays runs the pool as it is.
+// mergedPool reads the overlay of a pool and merges it into the pool, with
+// the skills of the front that the profiles of the pool allow. A front
+// without a store of the overlays merges an empty overlay.
 func (f *Fleet) mergedPool(ctx context.Context, base *pools.Pool) (*pools.Pool, error) {
 	if f.overlays == nil {
-		return base, nil
+		merged, err := base.WithOverlay(pools.Overlay{})
+		if err != nil {
+			return nil, &overlayFitError{err: err}
+		}
+		return merged, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, overlayTimeout)
 	defer cancel()

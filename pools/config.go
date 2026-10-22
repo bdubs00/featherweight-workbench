@@ -127,6 +127,13 @@ type Pool struct {
 	lenient bool
 	probe   bool
 	runtime *Runtime
+
+	// The skills of the front that the merged render ships (skills.go):
+	// the files of the Workspace, the names of the skills, and the files
+	// that it left out.
+	skillFiles   []ax.File
+	skillNames   []string
+	skillSkipped []string
 }
 
 // EnvVar is one variable of the workers. Exactly one of Value and FromEnv
@@ -148,6 +155,7 @@ type Front struct {
 	Bus         fw.BusConfig // the bus of the front, which the workers share
 	AX          fw.AXConfig  // the ax API and the router of the front
 	TokenEnv    string       // the variable of the static token of the front
+	SkillDirs   []string     // the skills directories of the front, which a merged render ships (skills.go)
 }
 
 // Replicas returns the number of Tasks that the pool wants.
@@ -678,7 +686,7 @@ func (p *Pool) render(front Front) []string {
 		add("fw: %v", err)
 		return problems
 	}
-	p.files = append([]ax.File{{Path: ConfigFile, Content: text}}, p.Files...)
+	p.files = append(append([]ax.File{{Path: ConfigFile, Content: text}}, p.Files...), p.skillFiles...)
 	p.hash = p.computeHash()
 	return problems
 }

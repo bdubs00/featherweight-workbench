@@ -57,6 +57,7 @@ func LoadAll(cfg *fw.Config, fc Config) ([]*pools.Pool, []*pools.Template, error
 		Bus:         cfg.Bus,
 		AX:          cfg.AX,
 		TokenEnv:    tokenEnv,
+		SkillDirs:   cfg.SkillDirs(),
 	})
 }
 

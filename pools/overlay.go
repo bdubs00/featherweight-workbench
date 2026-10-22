@@ -183,7 +183,9 @@ func (p *Pool) Overlay() Overlay { return p.overlay }
 // merge also removes from fw.policy.ask the entries that name the same
 // tool as a rule; an ask by a glob, a flag, or a pattern still holds. The
 // copy is rendered and checked as Load renders a pool, and its hash covers
-// the merged fw.yaml. The pool itself does not change. A runtime pool
+// the merged fw.yaml. The merge also ships the skills of the front that the
+// profiles of the pool allow (shipSkills). The pool itself does not
+// change. A runtime pool
 // takes the profile of its agent from the overlay alone, so its overlay
 // must hold that profile, else the error wraps ErrNoProfile. The copy
 // checks the model, which a runtime pool before its overlay leaves out.
@@ -205,8 +207,19 @@ func (p *Pool) WithOverlay(o Overlay) (*Pool, error) {
 		return nil, fmt.Errorf("pools: the overlay of the pool %s: %w", p.Name, err)
 	}
 	c.FW = merged
+	c.skillFiles, c.skillNames, c.skillSkipped = nil, nil, nil
 	if problems := c.render(p.front); len(problems) > 0 {
 		return nil, fmt.Errorf("pools: the overlay of the pool %s does not fit: %s", p.Name, strings.Join(problems, "; "))
+	}
+	// The skills of the front that the profiles allow join the Workspace,
+	// and the hash covers them.
+	if err := c.shipSkills(); err != nil {
+		return nil, err
+	}
+	if len(c.skillFiles) > 0 {
+		if problems := c.render(p.front); len(problems) > 0 {
+			return nil, fmt.Errorf("pools: the pool %s with the skills of the front does not fit: %s", p.Name, strings.Join(problems, "; "))
+		}
 	}
 	return &c, nil
 }

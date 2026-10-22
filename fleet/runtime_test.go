@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -410,3 +412,61 @@ func TestDoctorNamesTheTemplates(t *testing.T) {
 }
 
 func ptrInt(n int) *int { return &n }
+
+// A pass ships the skills of the front that the profile of a runtime pool
+// allows into the Workspace of each worker, a changed skill replaces the
+// Tasks, and a skill above the bound of a pool makes the pool wait with
+// the reason.
+func TestRuntimePoolShipsTheSkills(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "team")
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
+	ax := newPoolAX(t)
+	tasks := newFakeTasks(t)
+	useMemRuntime(t)
+	skills := t.TempDir()
+	write := func(name, file, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(skills, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skills, name, file), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("review", "SKILL.md", "Review a change.")
+	base := runtimeFront(t, ax, strings.TrimPrefix(tasks.srv.URL, "http://"), templateBlock, nil, nil)
+	front := newMember(t, fw.NewMemBus(), "front", func(cfg *fw.Config, fc *Config) {
+		cfg.Tools.Skills = []string{skills}
+		base(cfg, fc)
+	})
+	alice := as("alice")
+	at, err := PlaceFor(alice, front.a, "helper", "", &Workers{Replicas: ptrInt(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := agents.PutIn(alice, front.a, at, fw.AgentProfile{Name: "helper", Skills: []string{"review"}}); err != nil {
+		t.Fatal(err)
+	}
+	skillOf := func() string {
+		ax.mu.Lock()
+		defer ax.mu.Unlock()
+		if ws := ax.workspaces["team/helper-0-ws"]; ws != nil {
+			for _, f := range ws.Spec.Files {
+				if f.Path == pools.SkillsPath+"/review/SKILL.md" {
+					return f.Content
+				}
+			}
+		}
+		return ""
+	}
+	eventually(t, "the Workspace holds the skill", func() bool { return skillOf() == "Review a change." })
+	idle := time.Now().Add(-time.Hour)
+	tasks.set("team/helper-0", view.Status{Idle: true, IdleSince: &idle})
+	write("review", "SKILL.md", "Review a change with care.")
+	eventually(t, "the changed skill replaces the Task", func() bool { return skillOf() == "Review a change with care." })
+
+	write("review", "data.txt", strings.Repeat("x", pools.MaxSkillBytes))
+	eventually(t, "the pool waits for smaller skills", func() bool {
+		return hasGapWith(stateOf(front.f, "helper"), "the most that a pool ships")
+	})
+}
