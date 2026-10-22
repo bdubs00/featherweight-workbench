@@ -34,7 +34,36 @@ type fakeFleet struct {
 
 func (f *fakeFleet) Name() string { return f.name }
 
-func (f *fakeFleet) Members(context.Context) ([]fleet.Member, error) { return f.members, nil }
+func (f *fakeFleet) Members(context.Context) ([]fleet.Member, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fleet.Member(nil), f.members...), nil
+}
+
+// AtRest stands in for a member whose state in the fake is not live, as
+// the view of the fleet does (fleet.RestView).
+func (f *fakeFleet) AtRest(run *fw.Run) *fw.Run {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.members {
+		if m.Name == run.Member && m.State != fleet.MemberLive {
+			c := *run
+			return &c
+		}
+	}
+	return nil
+}
+
+// sleep sets the state of a member of the fake.
+func (f *fakeFleet) sleep(member, state string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.members {
+		if f.members[i].Name == member {
+			f.members[i].State = state
+		}
+	}
+}
 
 func (f *fakeFleet) Runs(context.Context) ([]*fw.Run, error) {
 	f.mu.Lock()
