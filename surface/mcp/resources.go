@@ -45,16 +45,18 @@ func (s *server) addResources() {
 		Title:       "Run file",
 		Description: "A file that a run changed, as an item of kind file in run_events names it: text for a UTF-8 text file, else a blob with its media type, up to 4 MiB. The reader rules of run_file apply. It reads the runs of this process only: for a run of another fleet member, use run_file with raw true.",
 	}, s.readFile)
+	// {+name} keeps the slash of the name of a skill of an MCP server, so
+	// fw://skills/github/review matches as well as github%2Freview.
 	s.srv.AddResourceTemplate(&sdk.ResourceTemplate{
-		URITemplate: skillPrefix + "{name}",
+		URITemplate: skillPrefix + "{+name}",
 		Name:        "skill",
 		Title:       "Skill",
-		Description: "The SKILL.md file of a skill from the skills directories of the configuration (tools.skills, or skills under the home directory).",
+		Description: "The SKILL.md file of a skill of the agent, as GET /v1/skills lists it: a skill of the skills directories of the configuration (tools.skills, or skills under the home directory), or a skill of an MCP server under <server>/<name>, which the kernel reads from the server and checks at the moment of use.",
 		MIMEType:    "text/markdown",
 	}, s.readSkill)
 	for _, sk := range s.skills() {
 		s.srv.AddResource(&sdk.Resource{
-			URI:         skillPrefix + url.PathEscape(sk.Name),
+			URI:         skillURI(sk.Name),
 			Name:        sk.Name,
 			Title:       "Skill " + sk.Name,
 			Description: truncate(skillDescription(sk), 300),
@@ -125,15 +127,49 @@ func (s *server) readLedger(ctx context.Context, req *sdk.ReadResourceRequest) (
 	return &sdk.ReadResourceResult{Contents: []*sdk.ResourceContents{{URI: uri, MIMEType: "application/jsonl", Text: buf.String()}}}, nil
 }
 
-// skills lists the skills of the configured skill directories, as the
-// kernel sees them. A read error is logged and leaves the skills that
-// could be read.
+// skills lists the skills of the agent as the kernel serves them
+// (fw.Agent.Skills): the skills of the skill directories, then the skills
+// of each MCP server under <server>/<name>. The kernel logs a read error
+// and keeps the skills that it could read.
 func (s *server) skills() []fw.Skill {
-	skills, err := fw.LoadSkills(s.a.Config().SkillDirs()...)
-	if err != nil {
-		s.log.Warn("mcp: load skills", "error", err)
+	return s.a.Skills()
+}
+
+// skillURI is the URI of the resource of a skill. Each part of the name is
+// escaped on its own, so the name of a skill of an MCP server keeps its
+// slash: fw://skills/github/review.
+func skillURI(name string) string {
+	parts := strings.Split(name, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
 	}
-	return skills
+	return skillPrefix + strings.Join(parts, "/")
+}
+
+// skillFromURI returns the name of the skill of fw://skills/{name}. It
+// decodes the escaped name, so github%2Freview and github/review name the
+// same skill of a server. A name with an empty part, a part "." or "..",
+// or a control character is no name.
+func skillFromURI(uri string) (string, bool) {
+	rest, ok := strings.CutPrefix(uri, skillPrefix)
+	if !ok {
+		return "", false
+	}
+	name, err := url.PathUnescape(rest)
+	if err != nil || name == "" {
+		return "", false
+	}
+	for _, p := range strings.Split(name, "/") {
+		if p == "" || p == "." || p == ".." {
+			return "", false
+		}
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return "", false
+		}
+	}
+	return name, true
 }
 
 // skillDescription is the description of a skill, or a line that names it.
@@ -144,21 +180,20 @@ func skillDescription(sk fw.Skill) string {
 	return "The skill " + sk.Name + "."
 }
 
-func (s *server) readSkill(_ context.Context, req *sdk.ReadResourceRequest) (*sdk.ReadResourceResult, error) {
+// readSkill reads SKILL.md of a skill of the agent. A skill of an MCP
+// server is read from the server at the moment of use, and the kernel
+// checks it against the listing, as the skill tool does.
+func (s *server) readSkill(ctx context.Context, req *sdk.ReadResourceRequest) (*sdk.ReadResourceResult, error) {
 	uri := req.Params.URI
-	rest, ok := strings.CutPrefix(uri, skillPrefix)
+	name, ok := skillFromURI(uri)
 	if !ok {
-		return nil, sdk.ResourceNotFoundError(uri)
-	}
-	name, err := url.PathUnescape(rest)
-	if err != nil || name == "" || fw.ValidSkillName(name) != name {
 		return nil, sdk.ResourceNotFoundError(uri)
 	}
 	sk, ok := s.a.SkillNamed(name)
 	if !ok {
 		return nil, sdk.ResourceNotFoundError(uri)
 	}
-	body, err := sk.Body()
+	body, err := sk.ReadFile(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("mcp: read skill %s: %w", name, err)
 	}

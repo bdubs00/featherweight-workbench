@@ -6,7 +6,7 @@
 // agent_delete, runs_list, run_events, run_file, run_result,
 // agent_builder, capabilities, dashboard, and the deprecated usage, every
 // tool that mcp.expose names, the resources fw://runs/{id},
-// fw://runs/{id}/ledger, fw://runs/{id}/files/{path}, fw://skills/{name},
+// fw://runs/{id}/ledger, fw://runs/{id}/files/{path}, fw://skills/{+name},
 // and the MCP App ui://fw/dashboard, and one prompt per agent profile. The
 // library is github.com/modelcontextprotocol/go-sdk.
 //
@@ -326,7 +326,7 @@ Disconnects: when the connection closes, the run call ends but the run continues
 
 Retries: pass requestId to make a retried run call return the same run instead of a second one.
 
-Resources: fw://runs/{id} is the run object as JSON. fw://runs/{id}/ledger is the event log of the run as JSONL. fw://runs/{id}/files/{path} is a file that the run changed, up to 4 MiB. These three read the runs of this process only. fw://skills/{name} is the SKILL.md file of a skill from the skills directories of the configuration; the resource list names every skill.
+Resources: fw://runs/{id} is the run object as JSON. fw://runs/{id}/ledger is the event log of the run as JSONL. fw://runs/{id}/files/{path} is a file that the run changed, up to 4 MiB. These three read the runs of this process only. fw://skills/{name} is the SKILL.md file of a skill: a skill of the skills directories of the configuration, or a skill of an MCP server under <server>/<name>, such as fw://skills/github/review, which the kernel reads from the server at the moment of use; the resource list names every skill that the agent had when the server started.
 
 Prompts: there is one prompt per profile. It holds the system prompt of the profile and the optional argument input.`)
 	if c := connections.Of(a); c != nil && len(c.Connectors()) > 0 {
