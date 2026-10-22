@@ -35,7 +35,9 @@ const (
 	// to find its decision.
 	decisionEvents = 200
 	// decisionTries bounds the reads of a decision that fail before the
-	// watch gives up on the card.
+	// watch writes the card again with the state unknown. The watch then
+	// reads the run again every lostEvery, so a read that works restores
+	// the real state of the card.
 	decisionTries = 30
 )
 
@@ -155,6 +157,11 @@ func (s *Store) poll(ctx context.Context) {
 			delete(s.tries, id)
 		}
 	}
+	for id := range s.lostAt {
+		if !live[id] {
+			delete(s.lostAt, id)
+		}
+	}
 	s.mu.Unlock()
 }
 
@@ -190,6 +197,7 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 	claim(rec, runs)
 	ends := map[string]*ending{}
 	verdicts := map[string]*verdict{}
+	lost := map[string]map[string]*verdict{} // by run and approval: the decisions of lost cards
 	for _, r := range runs {
 		seat := mirrored(rec, r)
 		if seat == "" {
@@ -199,6 +207,16 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 		if mk != nil && mk.Pending != "" && (r.Pending == nil || r.Pending.ID != mk.Pending) {
 			if v := s.readVerdict(ctx, r, mk); v != nil {
 				verdicts[r.ID] = v
+			}
+		}
+		if mk != nil && len(mk.Lost) > 0 && s.lostDue(r.ID) {
+			for _, lc := range mk.Lost {
+				if v := s.readLost(ctx, r, lc); v != nil {
+					if lost[r.ID] == nil {
+						lost[r.ID] = map[string]*verdict{}
+					}
+					lost[r.ID][lc.Pending] = v
+				}
 			}
 		}
 		if r.State.Terminal() && s.unchecked(r) {
@@ -222,7 +240,7 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 			if seat == "" {
 				continue
 			}
-			cards = append(cards, s.facts(ctx, rec, r, seat, ends[r.ID], verdicts[r.ID], add)...)
+			cards = append(cards, s.facts(ctx, rec, r, seat, ends[r.ID], verdicts[r.ID], lost[r.ID], add)...)
 		}
 		for _, l := range sleepLines(rec, runs, states) {
 			add(l)
@@ -303,13 +321,10 @@ func (s *Store) readEnd(ctx context.Context, r *fw.Run) *ending {
 
 // readVerdict reads the decision of the card of a run from its owner. It
 // returns nil when the read failed and the watch tries again, and an empty
-// verdict after decisionTries failed reads.
+// verdict after decisionTries failed reads, which writes the card again
+// with the state unknown.
 func (s *Store) readVerdict(ctx context.Context, r *fw.Run, mk *runMark) *verdict {
-	from := mk.AskSeq
-	if from == 0 {
-		from = 1
-	}
-	events, err := s.events(ctx, r, from, decisionEvents)
+	v, err := s.findVerdict(ctx, r, mk.Pending, mk.AskSeq)
 	if err != nil {
 		s.mu.Lock()
 		s.tries[r.ID]++
@@ -321,24 +336,66 @@ func (s *Store) readVerdict(ctx context.Context, r *fw.Run, mk *runMark) *verdic
 		}
 		return nil
 	}
+	return v
+}
+
+// readLost reads the decision of a card that shows the state unknown. It
+// returns nil when the read fails again; the card stays unknown, and the
+// watch reads again after lostEvery.
+func (s *Store) readLost(ctx context.Context, r *fw.Run, lc lostCard) *verdict {
+	v, err := s.findVerdict(ctx, r, lc.Pending, lc.AskSeq)
+	if err != nil {
+		s.log.Debug("bridges: read the decision of a card that shows unknown", "run", r.ID, "card", lc.Card, "error", err)
+		return nil
+	}
+	return v
+}
+
+// lostDue reports whether the watch reads a run for its lost cards now: at
+// most once per lostEvery for each run.
+func (s *Store) lostDue(run string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	if at, ok := s.lostAt[run]; ok && now.Sub(at) < s.lostEvery {
+		return false
+	}
+	s.lostAt[run] = now
+	return true
+}
+
+// findVerdict reads the events of a run from the seq from on, and finds
+// the decision of the approval: a verdict that found it, or a verdict
+// that the run ended without it. It returns the error of a read that
+// failed.
+func (s *Store) findVerdict(ctx context.Context, r *fw.Run, approval string, from uint64) (*verdict, error) {
+	if from == 0 {
+		from = 1
+	}
+	events, err := s.events(ctx, r, from, decisionEvents)
+	if err != nil {
+		return nil, err
+	}
 	for _, e := range events {
 		if e.Type != fw.EvApprovalDecided {
 			continue
 		}
 		var d fw.ApprovalDecidedData
-		if e.Decode(&d) == nil && d.ApprovalID == mk.Pending {
-			return &verdict{found: true, seq: e.Seq, at: e.Time, d: d}
+		if e.Decode(&d) == nil && d.ApprovalID == approval {
+			return &verdict{found: true, seq: e.Seq, at: e.Time, d: d}, nil
 		}
 	}
 	// The ledger holds no decision of the approval, and the run no longer
 	// waits for it: the run ended, or a resume asked again under a new id.
-	return &verdict{ended: true}
+	return &verdict{ended: true}, nil
 }
 
 // facts adds the lines that one run brings to the channel since its mark
 // with add, which gives each line its seq, moves the mark, and returns the
-// cards whose decision landed. It runs inside the change of the record.
-func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, end *ending, v *verdict, add func(Message)) (cards []Message) {
+// cards whose decision landed. lost holds the decisions that the watch
+// read for the cards of the run that show the state unknown, by approval.
+// It runs inside the change of the record.
+func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, end *ending, v *verdict, lost map[string]*verdict, add func(Message)) (cards []Message) {
 	mk := rec.mark(r.ID, seat)
 	task := ""
 	if m := rec.member(seat); m != nil {
@@ -354,14 +411,41 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 		l.Mirrors = &Mirror{Run: r.ID, Seq: 1, Type: fw.EvRunQueued}
 		add(l)
 	}
-	// A card whose decision landed, from any surface.
+	// A card that shows the state unknown, whose run the watch could read
+	// again: the real decision.
+	if len(mk.Lost) > 0 && len(lost) > 0 {
+		keep := make([]lostCard, 0, len(mk.Lost))
+		for _, lc := range mk.Lost {
+			lv := lost[lc.Pending]
+			if lv == nil || (!lv.found && !lv.ended) {
+				keep = append(keep, lc)
+				continue
+			}
+			card, line := decidedCard(r.ID, seat, lc.Card, lc.Question, lv)
+			if card != nil {
+				cards = append(cards, *card)
+			}
+			if line != nil {
+				add(*line)
+			}
+		}
+		mk.Lost = keep
+	}
+	// A card whose decision landed, from any surface, or whose run the
+	// front could not read after decisionTries tries.
 	if mk.Pending != "" && (r.Pending == nil || r.Pending.ID != mk.Pending) && v != nil {
-		card, line := decidedCard(r.ID, seat, mk, v)
+		card, line := decidedCard(r.ID, seat, mk.Card, mk.Question, v)
 		if card != nil {
 			cards = append(cards, *card)
 		}
 		if line != nil {
 			add(*line)
+		}
+		if !v.found && !v.ended && mk.Card != 0 {
+			mk.Lost = append(mk.Lost, lostCard{Pending: mk.Pending, Card: mk.Card, AskSeq: mk.AskSeq, Question: mk.Question})
+			if len(mk.Lost) > maxLost {
+				mk.Lost = mk.Lost[len(mk.Lost)-maxLost:]
+			}
 		}
 		rec.dropCard(mk.Card)
 		mk.Pending, mk.Card, mk.AskSeq, mk.Question = "", 0, 0, false
@@ -494,35 +578,44 @@ func alwaysOffered(r *fw.Run, d dashboard.Decision) bool {
 	return !strings.ContainsAny(entry, ":*?[")
 }
 
-// decidedCard returns the card of a mark written again with its decision,
-// and the line that says who decided. A card whose run no longer waits for
-// it without a decision, because the run ended or asked again, is written
-// again as denied, with no line. A card whose decision
-// the watch fails to read gets a line and stays as it is.
-func decidedCard(run, seat string, mk *runMark, v *verdict) (*Message, *Message) {
+// decidedCard returns the card with the seq card written again with its
+// decision, and the line that says who decided. question is true for a
+// card that asks a question. A card whose run no longer waits for it
+// without a decision, because the run ended or asked again, is written
+// again as denied, with no line. A card whose run the front could not
+// read after decisionTries tries is written again with the state unknown
+// and the note unknownNote, and the channel gets a line with the event
+// failed that says so.
+func decidedCard(run, seat string, card uint64, question bool, v *verdict) (*Message, *Message) {
 	switch {
 	case v.found:
 		at := v.at.UTC()
 		d := Decision{State: v.d.Decision, DecidedBy: v.d.Decider, DecidedAt: &at, Note: v.d.Note}
-		if mk.Question {
+		if question {
 			d.Answer = answerOf(v.d)
 		}
-		line := system(EventDecided, decidedText(seat, v.d, mk.Question, d.Answer))
+		line := system(EventDecided, decidedText(seat, v.d, question, d.Answer))
 		line.Mirrors = &Mirror{Run: run, Seq: v.seq, Type: fw.EvApprovalDecided}
-		if mk.Card == 0 {
+		if card == 0 {
 			return nil, &line
 		}
-		return &Message{Seq: mk.Card, Decision: &d}, &line
+		return &Message{Seq: card, Decision: &d}, &line
 	case v.ended:
-		if mk.Card == 0 {
+		if card == 0 {
 			return nil, nil
 		}
 		now := time.Now().UTC()
-		return &Message{Seq: mk.Card, Decision: &Decision{State: DecisionDeny, DecidedAt: &now, Note: "The run no longer waits for this decision."}}, nil
+		return &Message{Seq: card, Decision: &Decision{State: DecisionDeny, DecidedAt: &now, Note: "The run no longer waits for this decision."}}, nil
 	}
-	line := system(EventDecided, fmt.Sprintf("%s no longer waits for its decision; the front failed to read who decided.", seat))
-	return nil, &line
+	line := system(EventFailed, fmt.Sprintf("%s no longer waits for its decision, and the front could not read the run, so it cannot tell who decided. The card shows the decision once the front reads the run again.", seat))
+	if card == 0 {
+		return nil, &line
+	}
+	return &Message{Seq: card, Decision: &Decision{State: DecisionUnknown, Note: unknownNote}}, &line
 }
+
+// unknownNote is the note of a card with the state unknown.
+const unknownNote = "The front could not read the run, so it cannot tell whether anyone decided this card. Nobody can decide it here."
 
 // answerOf words the answer to a question: the value of a form with one
 // field, Yes or No for a boolean, the fields of a larger form, or the
@@ -596,13 +689,23 @@ func decidedText(seat string, d fw.ApprovalDecidedData, question bool, answer st
 }
 
 // rewriteCard writes a card again with its decision, under its seq, and
-// gives the hook the changed entry.
+// gives the hook the changed entry. A card that waits takes any state, and
+// a card with the state unknown takes its real decision.
 func (s *Store) rewriteCard(ctx context.Context, id string, c Message) {
 	if c.Decision == nil {
 		return
 	}
 	got, changed, err := s.b.changeEntry(ctx, id, c.Seq, func(m *Message) bool {
-		if m.Decision == nil || m.Decision.State != DecisionPending {
+		if m.Decision == nil {
+			return false
+		}
+		switch m.Decision.State {
+		case DecisionPending:
+		case DecisionUnknown:
+			if c.Decision.State == DecisionUnknown {
+				return false
+			}
+		default:
 			return false
 		}
 		d := *m.Decision

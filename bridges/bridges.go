@@ -84,6 +84,9 @@ const (
 	retryFor   = 10 * time.Minute
 	// reportWait bounds the wait for the report of a closed bridge.
 	reportWait = 10 * time.Minute
+	// lostEvery is the time between two reads of a run whose card shows
+	// the state unknown.
+	lostEvery = time.Minute
 	// workers is the number of deliveries that run at once, and queueSize
 	// the deliveries that wait.
 	workers   = 4
@@ -114,6 +117,7 @@ type Store struct {
 	retryMax    time.Duration
 	retryFor    time.Duration
 	reportWait  time.Duration
+	lostEvery   time.Duration
 	now         func() time.Time
 
 	// following is true while the service follows the changes of the
@@ -123,10 +127,11 @@ type Store struct {
 
 	// What this replica knows of the view, for the watch (watch.go).
 	mu       sync.Mutex
-	checked  map[string]uint64 // by run id: the seq of the run at its last read of the ends
-	tries    map[string]int    // by run id: the reads of a decision that failed
-	shown    map[string]string // by bridge and handle: the presence and activity that a hook got
-	canceled map[string]bool   // by run id: the runs of fired seats that a cancel went to
+	checked  map[string]uint64    // by run id: the seq of the run at its last read of the ends
+	tries    map[string]int       // by run id: the reads of a decision that failed
+	lostAt   map[string]time.Time // by run id: the last read for the cards of the run that show unknown
+	shown    map[string]string    // by bridge and handle: the presence and activity that a hook got
+	canceled map[string]bool      // by run id: the runs of fired seats that a cancel went to
 }
 
 // New returns a store on two buckets. The service starts nothing until
@@ -153,9 +158,11 @@ func New(a *fw.Agent, records, channels bucket.Bucket, cfg Config, log *slog.Log
 		retryMax:    retryMax,
 		retryFor:    retryFor,
 		reportWait:  reportWait,
+		lostEvery:   lostEvery,
 		now:         time.Now,
 		checked:     map[string]uint64{},
 		tries:       map[string]int{},
+		lostAt:      map[string]time.Time{},
 		shown:       map[string]string{},
 		canceled:    map[string]bool{},
 	}

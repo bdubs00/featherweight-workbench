@@ -241,3 +241,121 @@ func TestCardOfAnEndedRun(t *testing.T) {
 		t.Fatalf("the watch read the run again: %d reads after %d", n, reads)
 	}
 }
+
+// A card whose run the front cannot read: after decisionTries failed
+// reads the card shows the state unknown with a note, it no longer counts
+// as unread, and the channel gets one line with the event failed. The
+// watch reads the run again at most once per lostEvery, and a read that
+// works restores the real state: the decision with its line, or a deny
+// for a run that ended without one.
+func TestCardOfAnUnreadableRun(t *testing.T) {
+	h := hooked(t)
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	v, fm := withFleet(t, a)
+	v.state("default/crew-0", fleet.MemberLive)
+	url := serve(t, a)
+	it := open(t, url)
+	ctx := context.Background()
+	mig := workerRun("r-mig", it.ID, "migrator-1", "migrator", fw.StateInputRequired)
+	mig.Pending = &fw.Approval{ID: "ap1", Tool: "bash", Input: json.RawMessage(`{"command":"make deploy"}`), Reason: "rule: ask bash"}
+	rev := workerRun("r-rev", it.ID, "reviewer", "reviewer", fw.StateInputRequired)
+	rev.Pending = &fw.Approval{ID: "ap2", Tool: "bash", Input: json.RawMessage(`{"command":"make check"}`), Reason: "rule: ask bash"}
+	v.put(mig)
+	v.put(rev)
+	s.poll(ctx)
+	cards := withEvent(channel(t, s, it.ID), EventNeedsYou)
+	if len(cards) != 2 {
+		t.Fatalf("cards = %+v", cards)
+	}
+	seqOf := map[string]uint64{}
+	for _, c := range cards {
+		seqOf[c.Decision.Run] = c.Seq
+	}
+	unread := func() int {
+		t.Helper()
+		_, body := do(t, http.MethodGet, url+"/v1/bridges", "bob", "")
+		var out struct{ Bridges []Item }
+		decodeJSON(t, body, &out)
+		return out.Bridges[0].Unread
+	}
+	before := unread()
+
+	// The decisions land elsewhere, and the owner answers no read.
+	fm.mu.Lock()
+	fm.status["/v1/runs/r-mig/events"] = http.StatusServiceUnavailable
+	fm.status["/v1/runs/r-rev/events"] = http.StatusServiceUnavailable
+	fm.mu.Unlock()
+	mig.State, mig.Pending, mig.Seq = fw.StateRunning, nil, 6
+	rev.State, rev.Pending, rev.Seq = fw.StateCompleted, nil, 6
+	v.put(mig)
+	v.put(rev)
+	for i := 1; i < decisionTries; i++ {
+		s.poll(ctx)
+	}
+	msgs := channel(t, s, it.ID)
+	if c := msgs[seqOf["r-mig"]-1]; c.Decision.State != DecisionPending || len(withEvent(msgs, EventFailed)) != 0 {
+		t.Fatalf("after %d failed reads: card %+v, lines %+v", decisionTries-1, c.Decision, withEvent(msgs, EventFailed))
+	}
+	s.poll(ctx)
+	msgs = channel(t, s, it.ID)
+	for run, seq := range seqOf {
+		c := msgs[seq-1]
+		if c.Decision.State != DecisionUnknown || !strings.Contains(c.Decision.Note, "could not read the run") || c.Decision.DecidedBy != "" || c.Decision.DecidedAt != nil || c.Decision.Effect == "" {
+			t.Fatalf("the card of %s after %d failed reads = %+v", run, decisionTries, c.Decision)
+		}
+		if hm := h.message(seq); len(hm) != 2 || hm[1].Decision.State != DecisionUnknown {
+			t.Fatalf("the hook got the card of %s as %+v", run, hm)
+		}
+	}
+	failed := withEvent(msgs, EventFailed)
+	if len(failed) != 2 || !strings.Contains(failed[0].Text, "could not read the run") || len(withEvent(msgs, EventDecided)) != 0 {
+		t.Fatalf("lines = %+v", failed)
+	}
+	if n := unread(); n != before-2 {
+		t.Fatalf("unread = %d, want %d: a card that shows unknown waits for nobody", n, before-2)
+	}
+	// The next look reads the runs once more, and then waits lostEvery.
+	s.poll(ctx)
+	reads := len(fm.find(http.MethodGet, "/v1/runs/r-mig/events"))
+	s.poll(ctx)
+	if n := len(fm.find(http.MethodGet, "/v1/runs/r-mig/events")); n != reads || reads != decisionTries+1 {
+		t.Fatalf("reads = %d, then %d, want %d", reads, n, decisionTries+1)
+	}
+	if again := len(channel(t, s, it.ID)); again != len(msgs) {
+		t.Fatalf("a look without a read posted %d lines", again-len(msgs))
+	}
+
+	// The owner answers again: the migrator was allowed, and the reviewer
+	// ended without a decision.
+	fm.mu.Lock()
+	delete(fm.status, "/v1/runs/r-mig/events")
+	delete(fm.status, "/v1/runs/r-rev/events")
+	fm.mu.Unlock()
+	fm.setEvents("r-mig", ev(fw.EvRunQueued, nil), ev(fw.EvRunStarted, nil), ev(fw.EvTurnStarted, fw.TurnData{Turn: 1}),
+		ev(fw.EvApprovalRequested, fw.ApprovalRequestedData{ApprovalID: "ap1", Tool: "bash"}),
+		ev(fw.EvApprovalDecided, fw.ApprovalDecidedData{ApprovalID: "ap1", Decision: "allow", Decider: "bob", Note: "ship it"}))
+	fm.setEvents("r-rev", ev(fw.EvRunQueued, nil), ev(fw.EvApprovalRequested, fw.ApprovalRequestedData{ApprovalID: "ap2"}), ev(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted}))
+	s.lostEvery = 0
+	s.poll(ctx)
+	msgs = channel(t, s, it.ID)
+	if c := msgs[seqOf["r-mig"]-1]; c.Decision.State != DecisionAllow || c.Decision.DecidedBy != "bob" || c.Decision.Note != "ship it" || c.Decision.DecidedAt == nil {
+		t.Fatalf("the card of the migrator after the read = %+v", c.Decision)
+	}
+	if c := msgs[seqOf["r-rev"]-1]; c.Decision.State != DecisionDeny || c.Decision.Note != "The run no longer waits for this decision." {
+		t.Fatalf("the card of the reviewer after the read = %+v", c.Decision)
+	}
+	if d := withEvent(msgs, EventDecided); len(d) != 1 || d[0].Text != "bob allowed the call of migrator-1, with the note: ship it." {
+		t.Fatalf("decided lines = %+v", d)
+	}
+	if hm := h.message(seqOf["r-mig"]); len(hm) != 3 || hm[2].Decision.State != DecisionAllow {
+		t.Fatalf("the hook got the card %+v", hm)
+	}
+	// A restored card is done: no more reads, and no more lines.
+	reads = len(fm.find(http.MethodGet, "/v1/runs/r-mig/events"))
+	n := len(msgs)
+	s.poll(ctx)
+	if got := len(fm.find(http.MethodGet, "/v1/runs/r-mig/events")); got != reads || len(channel(t, s, it.ID)) != n {
+		t.Fatalf("after the restore: %d reads after %d, %d entries after %d", got, reads, len(channel(t, s, it.ID)), n)
+	}
+}

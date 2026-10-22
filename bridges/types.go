@@ -237,11 +237,15 @@ type Decision struct {
 	Always    bool       `json:"always"`
 }
 
-// States of a decision.
+// States of a decision. DecisionUnknown is the state of a card whose run
+// the front could not read after decisionTries tries: the run no longer
+// waits for the card, and nobody can decide it on the page. A later read
+// that works writes the card again with its real state.
 const (
 	DecisionPending = "pending"
 	DecisionAllow   = "allow"
 	DecisionDeny    = "deny"
+	DecisionUnknown = "unknown"
 )
 
 // record is a bridge as the store keeps it: the record of the routes and
@@ -311,7 +315,26 @@ type runMark struct {
 	// Limit is true once the channel says that the run stopped at a limit
 	// and takes no message.
 	Limit bool `json:"limit,omitempty"`
+	// Lost holds the cards of the run that show the state unknown, because
+	// the front could not read the run after decisionTries tries. The
+	// watch reads the run again for them, so a later read writes each one
+	// again with its real decision.
+	Lost []lostCard `json:"lost,omitempty"`
 }
+
+// lostCard is a card whose decision the front could not read: the
+// approval, the seq of the card, the seq of the run where the read
+// starts, and whether the card asks a question.
+type lostCard struct {
+	Pending  string `json:"pending"`
+	Card     uint64 `json:"card"`
+	AskSeq   uint64 `json:"askSeq,omitempty"`
+	Question bool   `json:"question,omitempty"`
+}
+
+// maxLost bounds the lost cards that the mark of one run keeps. An older
+// one stays unknown.
+const maxLost = 16
 
 // fanMark holds the counters of the caps of a bridge.
 type fanMark struct {
