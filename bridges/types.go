@@ -275,6 +275,11 @@ type seatMark struct {
 	// Asleep is true when the channel says that the Task of the seat
 	// sleeps and no line after it says that it woke.
 	Asleep bool `json:"asleep,omitempty"`
+	// Again is the newest run of the seat when the bridge last seated it
+	// again, and AgainAt the time, so a second patch with the same task
+	// before a new run shows seats nothing more (giveTask).
+	Again   string     `json:"again,omitempty"`
+	AgainAt *time.Time `json:"againAt,omitempty"`
 }
 
 // SeatBudget is the budget of one seat: the turns and the working time of

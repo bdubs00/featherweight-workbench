@@ -214,13 +214,18 @@ func (s *Store) place(ctx context.Context, rec *record, m Member) error {
 	return nil
 }
 
-// seatAgain starts a new run for a seat whose newest run cannot go on.
+// seatAgain starts a new run for a seat whose newest run cannot go on. It
+// marks the newest run of the seat and the time, for the guard of giveTask.
 func (s *Store) seatAgain(ctx context.Context, id, handle string) error {
+	now := s.now().UTC()
 	rec, err := s.b.update(ctx, id, func(rec *record) error {
-		if rec.member(handle) == nil {
+		m := rec.member(handle)
+		if m == nil {
 			return fmt.Errorf("%w: no member %s in the bridge %s", ErrNotFound, handle, id)
 		}
-		rec.seat(handle).Seatings++
+		sm := rec.seat(handle)
+		sm.Seatings++
+		sm.Again, sm.AgainAt = m.newest(), &now
 		return nil
 	})
 	if err != nil {
@@ -386,8 +391,10 @@ func (s *Store) patchMember(ctx context.Context, id, handle string, p MemberPatc
 // changed is true when the patch changed the task of the record. A seat
 // whose newest run failed or was canceled is seated again with the next
 // idempotency key, bridge:<id>:<handle>:<n+1>, also when the task did not
-// change; a second patch with the same task while that seating has no run
-// yet seats nothing more, so a double click starts one run. A changed task
+// change. A second patch with the same task within seatAgainWait, while
+// the new seating has no run in the view yet, seats nothing more, so a
+// double click starts one run, and a seating whose job never ran can be
+// tried again after the wait. A changed task
 // reaches any other run as a follow-up of the person, and an unchanged
 // one changes nothing. A seat without a run gets nothing: its job waits in
 // the queue, and the channel holds the line of the task.
@@ -398,7 +405,8 @@ func (s *Store) giveTask(ctx context.Context, rec *record, m Member, by *fw.Prin
 	}
 	if r.State == fw.StateFailed || r.State == fw.StateCanceled {
 		if !changed {
-			if rec.seat(m.Handle).Seatings > len(m.Runs) {
+			sm := rec.seat(m.Handle)
+			if sm.Again != "" && sm.Again == m.newest() && sm.AgainAt != nil && s.now().Sub(*sm.AgainAt) < seatAgainWait {
 				return
 			}
 			_ = s.postLines(ctx, rec.ID, system(EventTask, fmt.Sprintf("%s seated %s again on its task: %s", nameOf(by), m.Handle, oneLine(m.Task, 300))))
@@ -415,6 +423,10 @@ func (s *Store) giveTask(ctx context.Context, rec *record, m Member, by *fw.Prin
 	s.submit(s.deliveryJob(delivery{bridge: rec.ID, seq: rec.LastSeq, handle: m.Handle, run: r,
 		content: header(rec, []string{m.Handle}, snd.name()) + "Your new task: " + m.Task, from: snd.party(m.Handle)}))
 }
+
+// seatAgainWait is how long a seating of a seat with the same task waits
+// for its run before the same patch seats the seat once more.
+const seatAgainWait = time.Minute
 
 // subjectOfPrincipal is the subject of a principal, or "".
 func subjectOfPrincipal(p *fw.Principal) string {
