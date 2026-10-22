@@ -100,6 +100,18 @@ func limited(r *fw.Run) bool {
 	return r.State == fw.StateFailed && strings.HasPrefix(r.Error, "budget exceeded")
 }
 
+// cannotTake is the cap line of a member whose newest run failed, with the
+// reason from the run: at a limit of its budget, the member needs a larger
+// budget; after another failure, its task seats it again on a new run
+// (giveTask).
+func cannotTake(handle string, r *fw.Run) string {
+	reason := oneLine(orWords(r.Error, "no error text"), 300)
+	if limited(r) {
+		return fmt.Sprintf("%s cannot take messages: its run stopped at a limit (%s). It needs a larger budget.", handle, reason)
+	}
+	return fmt.Sprintf("%s cannot take messages: its run failed (%s). Give it its task again to seat it on a new run.", handle, reason)
+}
+
 // post appends a message of a person or an agent to the channel and fans
 // it out. It returns the entry.
 func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) (Message, error) {
@@ -191,10 +203,12 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 //     last message of a person. Past it, the two get nothing more from
 //     each other until a person writes or the operator raises the cap.
 //
-// A member whose newest run stopped at a limit of its budget gets nothing,
-// and the channel says so once for that run. A member without a run, whose
-// job waits in the queue, gets nothing; its instructions tell it to read
-// the channel first.
+// A member whose newest run failed gets nothing, and the channel says so
+// once for that run with the reason from the run (cannotTake): at a limit
+// of its budget the member needs a larger budget, and after another
+// failure a new task seats it again. A member without a run, whose job
+// waits in the queue, gets nothing; its instructions tell it to read the
+// channel first.
 func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]*fw.Run, now time.Time) (lines []Message, plan []delivery) {
 	f := &rec.Fan
 	if snd.handle == "" {
@@ -237,10 +251,10 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 		if r == nil {
 			continue // the job waits in the queue; the channel holds the message
 		}
-		if limited(r) {
+		if r.State == fw.StateFailed {
 			if mk := rec.mark(r.ID, m.Handle); !mk.Limit {
 				mk.Limit = true
-				lines = append(lines, system(EventCap, fmt.Sprintf("%s cannot take messages: its run stopped at a limit (%s). It needs a larger budget.", m.Handle, r.Error)))
+				lines = append(lines, system(EventCap, cannotTake(m.Handle, r)))
 			}
 			continue
 		}

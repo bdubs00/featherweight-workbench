@@ -314,8 +314,8 @@ type runMark struct {
 	// question, whose decision carries an answer.
 	AskSeq   uint64 `json:"askSeq,omitempty"`
 	Question bool   `json:"question,omitempty"`
-	// Limit is true once the channel says that the run stopped at a limit
-	// and takes no message.
+	// Limit is true once the channel says that the run failed and takes no
+	// message: at a limit of its budget, or for another reason.
 	Limit bool `json:"limit,omitempty"`
 	// Lost holds the cards of the run that show the state unknown, because
 	// the front could not read the run after decisionTries tries. The

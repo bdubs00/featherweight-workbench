@@ -1769,7 +1769,7 @@ A follow-up goes to the Task that owns the run through the forward of the fleet 
 Some members get nothing, and the channel holds the message for them:
 
 - A member without a run, because its job waits in the queue. Its instructions tell it to read the channel first.
-- A member whose newest run stopped at a limit of its budget. A follow-up without a larger budget fails at once, so the channel gets one line with the event `cap` for that run, which says that the member needs a larger budget.
+- A member whose newest run failed. The channel gets one line with the event `cap` for that run, which says that the member cannot take messages and gives the reason from the run. After a stop at a limit of its budget, a follow-up without a larger budget fails at once, so the line says that the member needs a larger budget. After another failure, the line says that its task seats it again on a new run (section 18.9). A new run of the member takes messages again.
 - A member whose newest run was canceled, because a message starts it again.
 
 The caps of a bridge bound the fan-out. Past a cap the front delivers nothing more, posts one line with the event `cap`, and waits. Nothing leaves the channel.

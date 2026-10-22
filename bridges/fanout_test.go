@@ -130,6 +130,41 @@ func TestFanOutSkipsALimit(t *testing.T) {
 	}
 }
 
+// A seat whose newest run failed for another reason than a limit gets
+// nothing either, and the channel says so once for that run with the
+// reason from the run. A new run of the seat takes messages again.
+func TestFanOutSkipsAFailure(t *testing.T) {
+	s, v, fm, url, id := fanBridge(t, "")
+	r := workerRun("r-rev", id, "reviewer", "reviewer", fw.StateFailed)
+	r.Error = "model: the provider answered 500"
+	v.put(r)
+	for i := 0; i < 2; i++ {
+		do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Go on."}`)
+	}
+	eventually(t, "the migrator gets both", func() bool { return len(fm.find(http.MethodPost, pathMig)) == 2 })
+	time.Sleep(50 * time.Millisecond)
+	if n := len(fm.find(http.MethodPost, pathRev)); n != 0 {
+		t.Fatalf("the failed reviewer got %d messages", n)
+	}
+	caps := withEvent(channel(t, s, id), EventCap)
+	if len(caps) != 1 || caps[0].Text != "reviewer cannot take messages: its run failed (model: the provider answered 500). Give it its task again to seat it on a new run." {
+		t.Fatalf("cap lines = %+v", caps)
+	}
+	// An address reaches no failed run either.
+	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"You?","to":["reviewer"]}`)
+	time.Sleep(50 * time.Millisecond)
+	if n := len(fm.find(http.MethodPost, pathRev)); n != 0 || len(withEvent(channel(t, s, id), EventCap)) != 1 {
+		t.Fatalf("an address to the failed reviewer: %d messages, cap lines %+v", n, withEvent(channel(t, s, id), EventCap))
+	}
+	// The seat runs again: its new run gets the next message.
+	again := workerRun("r-rev-2", id, "reviewer", "reviewer", fw.StateRunning)
+	again.CreatedAt = r.CreatedAt.Add(time.Second)
+	v.put(again)
+	s.poll(context.Background())
+	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Welcome back.","to":["reviewer"]}`)
+	eventually(t, "the new run gets the message", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-rev-2/messages")) == 1 })
+}
+
 // The caps: maxMessages stops the fan-out until the operator raises it,
 // maxFanoutPerMinute stops the rest of a minute, and maxPairMessages stops
 // two agents until a person writes. Each cap posts one line, and the
