@@ -29,6 +29,8 @@ import (
 var (
 	ErrNotFound = errors.New("bridges: not found")
 	ErrConflict = errors.New("bridges: conflict")
+	// ErrTooLarge is a slash command whose message passes its bound.
+	ErrTooLarge = errors.New("bridges: too large")
 )
 
 // casAttempts bounds the tries of a change that other writers race.

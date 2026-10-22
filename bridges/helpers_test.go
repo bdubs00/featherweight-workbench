@@ -308,10 +308,11 @@ type fakeMember struct {
 	events map[string][]fw.Event // by run id
 	fail   map[string]int        // by path: the 503 answers before a 200
 	status map[string]int        // by path: a fixed answer
+	detail map[string]string     // by path: the detail of the fixed answer
 }
 
 func newMember(t *testing.T) *fakeMember {
-	fm := &fakeMember{events: map[string][]fw.Event{}, fail: map[string]int{}, status: map[string]int{}}
+	fm := &fakeMember{events: map[string][]fw.Event{}, fail: map[string]int{}, status: map[string]int{}, detail: map[string]string{}}
 	fm.srv = httptest.NewServer(http.HandlerFunc(fm.serve))
 	t.Cleanup(fm.srv.Close)
 	return fm
@@ -330,10 +331,14 @@ func (fm *fakeMember) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if code := fm.status[r.URL.Path]; code != 0 {
+		detail := fm.detail[r.URL.Path]
 		fm.mu.Unlock()
+		if detail == "" {
+			detail = "refused"
+		}
 		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(code)
-		_, _ = w.Write([]byte(`{"detail":"refused"}`))
+		_ = json.NewEncoder(w).Encode(map[string]string{"detail": detail})
 		return
 	}
 	events := fm.events

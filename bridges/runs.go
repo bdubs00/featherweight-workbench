@@ -335,12 +335,20 @@ func (s *Store) call(ctx context.Context, member, method, path string, body any,
 // runPath is the path of a route of a run.
 func runPath(id, rest string) string { return "/v1/runs/" + url.PathEscape(id) + rest }
 
-// send gives a run a follow-up message from a party.
-func (s *Store) send(ctx context.Context, r *fw.Run, content string, from fw.MessageFrom) error {
+// send gives a run a follow-up message from a party. A pinned message
+// survives every compaction of the run (fw.WithMessagePinned).
+func (s *Store) send(ctx context.Context, r *fw.Run, content string, from fw.MessageFrom, pinned bool) error {
 	if r.Member == "" {
-		return s.a.Send(s.asFront(ctx), r.ID, fw.Message{Role: fw.RoleUser, Content: []fw.Block{fw.Text(content)}}, fw.OriginHTTP, fw.WithMessageFrom(from))
+		opts := []fw.SendOption{fw.WithMessageFrom(from)}
+		if pinned {
+			opts = append(opts, fw.WithMessagePinned())
+		}
+		return s.a.Send(s.asFront(ctx), r.ID, fw.Message{Role: fw.RoleUser, Content: []fw.Block{fw.Text(content)}}, fw.OriginHTTP, opts...)
 	}
 	body := map[string]any{"content": content, "from": from}
+	if pinned {
+		body["pinned"] = true
+	}
 	return s.call(ctx, r.Member, http.MethodPost, runPath(r.ID, "/messages"), body, "", nil)
 }
 

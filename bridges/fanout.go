@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/skills"
 )
 
 // Bounds of a message.
@@ -67,11 +68,15 @@ func (x sender) party(member string) fw.MessageFrom {
 }
 
 // PostSpec is a message of a person or an agent: the text, the handles
-// that it addresses, and the entry that it replies to.
+// that it addresses, and the entry that it replies to. Skill makes the
+// message a slash command of a person: the front expands the skill of the
+// catalog (skills.Prepare), and Text, which is optional then, follows the
+// skill (docs/ARCHITECTURE.md section 20.3).
 type PostSpec struct {
-	Text    string   `json:"text"`
-	To      []string `json:"to,omitempty"`
-	ReplyTo *uint64  `json:"replyTo,omitempty"`
+	Text    string          `json:"text"`
+	To      []string        `json:"to,omitempty"`
+	ReplyTo *uint64         `json:"replyTo,omitempty"`
+	Skill   *skills.Command `json:"skill,omitempty"`
 }
 
 // delivery is one follow-up of a message to the newest run of a member.
@@ -82,6 +87,7 @@ type delivery struct {
 	run     *fw.Run
 	content string
 	from    fw.MessageFrom
+	pinned  bool // a slash command, which survives every compaction
 }
 
 // header is the first line of a follow-up, which names the bridge, so a
@@ -104,9 +110,23 @@ func limited(r *fw.Run) bool {
 // it out. It returns the entry.
 func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) (Message, error) {
 	text := clean(spec.Text)
+	var cmd *skills.Expansion
+	if spec.Skill != nil {
+		if snd.handle != "" {
+			return Message{}, invalid("a run hands no skill to its teammates; a person sends a skill through the route")
+		}
+		if len(text) > maxTextBytes {
+			return Message{}, invalid("a message holds at most %d bytes", maxTextBytes)
+		}
+		x, err := skills.Prepare(s.a, *spec.Skill, text)
+		if err != nil {
+			return Message{}, skillError(err)
+		}
+		cmd, text = &x, x.Message
+	}
 	switch {
 	case text == "":
-		return Message{}, invalid("a message needs a text")
+		return Message{}, invalid("a message needs a text or a skill")
 	case len(text) > maxTextBytes:
 		return Message{}, invalid("a message holds at most %d bytes", maxTextBytes)
 	case len(spec.To) > maxTo:
@@ -151,13 +171,28 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 			return invalid("no entry %d to reply to", *spec.ReplyTo)
 		}
 		claim(rec, runs)
-		cut, isCut := cutText(text, entryTextBytes)
+		shown := text
+		if cmd != nil {
+			// The channel holds the line Skill and a summary, and the run
+			// holds the whole message.
+			shown = cmd.Summary
+		}
+		cut, isCut := cutText(shown, entryTextBytes)
 		msg = newMessage(snd.from(), cut)
-		msg.Seq, msg.At, msg.Cut, msg.ReplyTo = rec.alloc(), now, isCut, spec.ReplyTo
+		msg.Seq, msg.At, msg.Cut, msg.ReplyTo = rec.alloc(), now, isCut || cmd != nil, spec.ReplyTo
 		if to != nil {
 			msg.To = to
 		}
+		if cmd != nil {
+			c := cmd.Command
+			msg.Skill = &c
+		}
 		lines, plan = fanPlan(rec, snd, msg, text, runs, now)
+		if cmd != nil {
+			for i := range plan {
+				plan[i].pinned = true
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -325,7 +360,7 @@ type job struct {
 func (s *Store) deliveryJob(d delivery) *job {
 	return &job{
 		name: fmt.Sprintf("message %d of %s to %s", d.seq, d.bridge, d.handle),
-		do:   func(ctx context.Context) error { return s.send(ctx, d.run, d.content, d.from) },
+		do:   func(ctx context.Context) error { return s.send(ctx, d.run, d.content, d.from, d.pinned) },
 		fail: func(err error) {
 			s.log.Warn("bridges: a member did not get a message", "bridge", d.bridge, "seq", d.seq, "member", d.handle, "run", d.run.ID, "error", err)
 			_ = s.postLines(s.ctx, d.bridge, system(EventFailed, fmt.Sprintf("%s did not get message %d: %s.", d.handle, d.seq, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
@@ -383,4 +418,23 @@ func (s *Store) attempt(j *job) {
 	}
 	s.log.Debug("bridges: a job failed and runs again", "job", j.name, "pause", j.pause, "error", err)
 	time.AfterFunc(j.pause, func() { s.submit(j) })
+}
+
+// skillError words an error of a slash command for the routes: an unknown
+// skill is not found, a skill that is not for people is an invalid
+// request, and a message over its bound is too large.
+func skillError(err error) error {
+	msg := err.Error()
+	for _, e := range []error{skills.ErrUnknown, skills.ErrNotInvocable, skills.ErrTooLarge} {
+		msg = strings.TrimPrefix(msg, e.Error()+": ")
+	}
+	switch {
+	case errors.Is(err, skills.ErrUnknown):
+		return fmt.Errorf("%w: %s", ErrNotFound, msg)
+	case errors.Is(err, skills.ErrNotInvocable):
+		return invalid("%s", msg)
+	case errors.Is(err, skills.ErrTooLarge):
+		return fmt.Errorf("%w: %s", ErrTooLarge, msg)
+	}
+	return err
 }

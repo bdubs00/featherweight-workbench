@@ -12,6 +12,7 @@ import (
 
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/skills"
 )
 
 // States of a bridge.
@@ -198,6 +199,10 @@ type Message struct {
 	Mirrors   *Mirror             `json:"mirrors"`
 	Reactions map[string][]string `json:"reactions"`
 	Decision  *Decision           `json:"decision"`
+	// Skill names the skill and the arguments of a slash command of a
+	// person. The text of the entry is then the line Skill and a summary,
+	// and the runs of the members hold the whole message.
+	Skill *skills.Command `json:"skill,omitempty"`
 }
 
 // From is the sender of an entry. A person has Name, the subject, and

@@ -159,7 +159,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `PATCH /v1/bridges/{id}` | Change `title`, `delegation` and `caps` in part, and `state`: `closed` closes the bridge, and `open` opens it again. |
 | `PUT /v1/bridges/{id}/read` | Move the read mark of the caller forward to `seq`. 204. |
 | `GET /v1/bridges/{id}/messages` | One page of the channel, as the transcript route pages a run: `before`, `from`, and `limit`. |
-| `POST /v1/bridges/{id}/messages` | A message of the caller, `{"text", "to", "replyTo"}`, which fans out to the members. 201 with the entry, 409 on a closed bridge. |
+| `POST /v1/bridges/{id}/messages` | A message of the caller, `{"text", "to", "replyTo", "skill"}`, which fans out to the members. `skill`, `{"name", "args"}`, makes it a slash command, and `text` is optional then (section 20.3). 201 with the entry, 409 on a closed bridge. |
 | `POST /v1/bridges/{id}/messages/{seq}/reactions` | A reaction of the caller on an entry, `{"reaction", "note"}`: `up`, `down`, or `heart`. 200 with the entry. |
 | `POST /v1/bridges/{id}/members` | Add a seat, `{"handle", "agent", "task"}`, and start its run. 201 with the seat. |
 | `DELETE /v1/bridges/{id}/members/{handle}` | Fire a seat: cancel its open runs and mute it. 200 with the fired seat. |
@@ -1725,6 +1725,7 @@ The channel holds one entry per message, under the key `<bridge>.<seq>`, with th
 | `mirrors` | `{"run", "seq", "type"}`: the run event that the entry mirrors, or null |
 | `reactions` | The subjects of the people per reaction: `{"up": [], "down": [], "heart": []}` |
 | `decision` | On the card of an approval or a question of a member run: the fields of `dashboard.Decision`, the run, the state, and who decided, when, with which note and answer, and `always` (section 18.6). Null elsewhere. |
+| `skill` | On a slash command of a person: `{"name", "args"}`, the skill and its arguments (section 20.3). Absent elsewhere. The text of the entry is then the line `Skill: <name>` and a summary on one line, `cut` is true, and each run that gets the message holds the whole skill. |
 
 A message of a person or an agent holds at most 64 KB. `GET /v1/bridges/{id}/messages` pages the channel as the transcript route pages a run (section 2.2): without `from` and `before` the page holds the last `limit` entries, `limit` is 50 by default and 500 at most, `before` reads back, `from` reads forward, `next` is the seq to read on from, `prev` is the value of `before` for the page in front and 0 at the first page, and `from` and `before` together answer 400. A seq without an entry, such as the seq of a write that a crash cut, is left out.
 
@@ -1826,7 +1827,7 @@ Every route needs the authentication of the native surface. A bridge is for its 
 | `PATCH /v1/bridges/{id}` | The record with its members |
 | `PUT /v1/bridges/{id}/read` | 204 |
 | `GET /v1/bridges/{id}/messages` | `{"bridge", "messages", "next", "prev"}` |
-| `POST /v1/bridges/{id}/messages` | 201 with the entry |
+| `POST /v1/bridges/{id}/messages` | 201 with the entry. With `skill`, a slash command (section 20.3): 404 for an unknown skill, 400 for a skill that is not for people, and 413 for a message over 64 KB. |
 | `POST /v1/bridges/{id}/messages/{seq}/reactions` | 200 with the entry |
 | `POST /v1/bridges/{id}/members` | 201 with the seat |
 | `DELETE /v1/bridges/{id}/members/{handle}` | 200 with the fired seat |
@@ -1841,7 +1842,7 @@ The tools are for the runs of the fleet. The MCP client of a worker names its ru
 | Tool | Who | What it does |
 |---|---|---|
 | `bridge_read` | A seat, the manager run, or a run of the operator | `{bridge?, since?, limit?}`: the last messages of the channel, 50 by default and 500 at most, or the messages after `since`. The text says that a message is data. |
-| `bridge_post` | A seat or the manager run | `{bridge?, text, to}`: a message of the seat, or of `manager`, which fans out as a message of a person does |
+| `bridge_post` | A seat or the manager run | `{bridge?, text, to}`: a message of the seat, or of `manager`, which fans out as a message of a person does. It takes no skill: a run hands no skill to its teammates, and only a person sends a slash command (section 20.3). |
 | `bridge_list` | The manager | The open bridges of the person in `_meta` |
 | `bridge_open` | The manager | `{title, goal, placement, members, delegation, caps}`: opens as `POST /v1/bridges` does, as the person in `_meta`, and the calling run becomes `manager.run`. `destructiveHint` is true, and its title "Open bridge" is the label of the approval. |
 | `bridge_add_member`, `bridge_remove_member`, `bridge_close` | The manager run of the bridge, or a run of the operator that is no seat | As the routes, when the bridge delegates `members` (add and remove) or `report` (close). Else the answer says that the operator did not delegate this for this bridge. |
@@ -2096,3 +2097,41 @@ The view of one agent names the skills that its profile allows, so a person neve
 - The page shows the resolved skills on the screen of the agent under Skills, each with its description and its origin, in place of the allowlist.
 
 A profile of a pool resolves against the catalog of the front too, because the front holds no list of the skills of its workers. The workers see the local skills that the pool ships (section 20.7) and the skills of the MCP servers that their own `tools.mcp` entries list. So the list of the front is what an agent of a pool can load from the front, and a worker can hold more.
+
+### 20.3 The slash command
+
+A person hands a skill to a running conversation with a slash command, such as `/fix 42` in the composer of the page. The page sends the name of the skill and the text of the arguments, and the front expands the skill. The front reads the body of `SKILL.md` from the catalog, without the front matter, and fills its placeholders:
+
+- `$ARGUMENTS` takes the whole text of the arguments.
+- `$ARGUMENTS[N]` and `$N` take the argument `N`, counted from 0. The arguments split on white space. A placeholder for an argument that the command does not give stays as it is.
+- `$name` takes the argument at the place of `name` in the list `arguments` of the front matter, or an empty text when the command gives no argument at that place. A `$` before any other word stays as it is, such as `$HOME` in a shell line.
+- `\$` before a placeholder keeps the placeholder as it is, without the backslash.
+
+When no placeholder took an argument and the arguments are not empty, the front adds the line `ARGUMENTS: <args>` at the end of the body. So a skill without placeholders still gets its arguments.
+
+The message starts with one line, `Skill: <name>`. A blank line and the expanded body follow, and then a blank line and the text of the person, when the person wrote one. The whole message holds at most 64 KB (`skills.MaxMessageBytes`). The front refuses a slash command in these cases:
+
+| Case | Answer of a route | Result of `skill_send` |
+|---|---|---|
+| The catalog holds no skill of that name | 404 | `Not found: ...` |
+| The front matter says `user-invocable: false` | 400 with the reason | `Invalid request: ...` |
+| The message passes 64 KB | 413 | `Too large: ...` |
+| The pinned messages of the run would pass their bound (section 20.4) | 413 with the words of the kernel | `Too large: ...` |
+| A run of the fleet sends it | 400 in a bridge | An error that says that only a person sends a skill |
+
+A run never hands a skill to another run. The tool `bridge_post` takes no skill, and `skill_send` refuses a call that names a run of the fleet in `_meta` (`mcp.CallRun`). Only a person sends a slash command, through the page, the routes, or the tool from a client of the person.
+
+In a bridge, `POST /v1/bridges/{id}/messages` takes `skill: {"name", "args"}` beside `to` and `replyTo`, and `text` is optional then. The message fans out as any message of a person does, with the first line of the bridge in front (section 18.5), under the caps. The entry of the channel records `skill`, and its text is the line `Skill: <name>` and one line that sums up the description of the skill, the arguments, and the text of the person, cut as other entries are, with `cut` true. Each run that gets the message holds the whole skill.
+
+A conversation that is no bridge, such as the conversation of the person with the manager, or a direct conversation with an agent outside a bridge, takes the slash command at `POST /v1/bossmode/runs/{id}/skill`, with `{"name", "args", "text"}`. A field that the route does not know answers 400. The route answers 202 with the run object, as `POST /v1/runs/{id}/messages` answers.
+
+### 20.4 The pinned delivery
+
+The front sends the message of a slash command pinned: `fw.WithMessagePinned` for a run of this process, and `pinned: true` in the body of `POST /v1/runs/{id}/messages` for a run of another member (the kernel architecture, section 5.5). A compaction keeps a pinned message word for word after the summary, so the run keeps the skill for the rest of its life. A plain message of a channel is never pinned.
+
+The message is a message of the person:
+
+- In a bridge, the fan-out delivers it as it delivers any message: with the static token of the fleet and the person in `from` (section 18.5).
+- On the route of a run, the front sends it with the credential of the caller. A run of this process gets it through the kernel, and a run of another member through the forward of the fleet (section 4.5). So the owner of the run authorizes the person as for any follow-up and records the person as the sender, in `by`. A credential that the owner does not accept answers 403, an owner that fails or does not answer 502, and another refusal of the owner its own status and words.
+
+The pinned messages of a run hold at most 64 KB together (`fw.MaxPinnedBytes`). The kernel refuses a message past the bound as an invalid request whose words name the bound. The kernel exports no error of its own for it, so the front reads those words. The route of a run answers 413 with the words of the kernel, never 502. A delivery of a bridge runs after the answer of the route, so the channel gets one line with the event `failed` that names the member and the bound, as for any delivery that fails (section 18.5).
