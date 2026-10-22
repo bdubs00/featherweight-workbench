@@ -123,6 +123,10 @@ func (m *Market) index(ctx context.Context, mp Marketplace) Index {
 	}
 	idx = m.read(ctx, mp)
 	idx.FetchedAt = now.UTC()
+	if idx.Error != "" && ctx.Err() != nil {
+		// The caller went away, which says nothing about the host.
+		return idx
+	}
 	m.mu.Lock()
 	m.cache[key] = idx
 	m.mu.Unlock()

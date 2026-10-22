@@ -75,7 +75,7 @@ func NewFetcher() *Fetcher {
 	f.Client = &http.Client{
 		Timeout: FetchTimeout,
 		Transport: &http.Transport{
-			// A proxy of the environment would see every address as its
+			// A proxy of the environment hides the address of each host behind its
 			// own, so the front dials the host itself.
 			Proxy:                 nil,
 			DialContext:           dialer.DialContext,

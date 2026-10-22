@@ -46,7 +46,8 @@ type SkillRequest struct {
 }
 
 // ErrPinnedBound is the refusal of the owner of a run to pin a message,
-// because the pinned messages of the run would pass fw.MaxPinnedBytes.
+// because the message takes the pinned messages of the run past
+// fw.MaxPinnedBytes.
 var ErrPinnedBound = errors.New("bossmode: the pinned messages of the run are full")
 
 // memberError is an answer of the owner of a run other than 2xx.

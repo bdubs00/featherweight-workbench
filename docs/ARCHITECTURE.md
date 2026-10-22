@@ -2125,7 +2125,7 @@ The message starts with one line, `Skill: <name>`. A blank line and the expanded
 | The catalog holds no skill of that name | 404 | `Not found: ...` |
 | The front matter says `user-invocable: false` | 400 with the reason | `Invalid request: ...` |
 | The message passes 64 KB | 413 | `Too large: ...` |
-| The pinned messages of the run would pass their bound (section 20.4) | 413 with the words of the kernel | `Too large: ...` |
+| The message takes the pinned messages of the run past their bound (section 20.4) | 413 with the words of the kernel | `Too large: ...` |
 | The front cannot read `SKILL.md` now, such as a skill of an MCP server that does not answer or whose file does not match its listing | 502 | `Unavailable: ...` |
 | A run of the fleet sends it | 400 in a bridge | An error that says that only a person sends a skill |
 
@@ -2174,7 +2174,7 @@ A worker of a pool runs a kernel of its own, and that kernel reads its own skill
 
 A slash command carries the whole body of the skill in its message, so a worker that does not hold the skill still gets its instructions, pinned. The other files of the skill, such as scripts and references, do not travel with the message. A skill that needs its files on a worker must ship with the pool.
 
-The front ships no imported skill to the workers. The imported skills live on the disk of one replica of the front (section 20.7), and the Workspace of a pool is part of the hash of the pool (section 14.4). A copy into the files of each pool would replace every Task of every pool at each install, and two replicas of the front with different imported skills would replace the Tasks of each other. A later revision can keep the imported skills in a bucket of the bus, as the wiki keeps its pages, and ship them through the overlay of each pool with a generation (section 14.9).
+The front ships no imported skill to the workers. The imported skills live on the disk of one replica of the front (section 20.7), and the Workspace of a pool is part of the hash of the pool (section 14.4). A copy into the files of each pool will replace every Task of every pool at each install, and two replicas of the front with different imported skills will replace the Tasks of each other. A later revision can keep the imported skills in a bucket of the bus, as the wiki keeps its pages, and ship them through the overlay of each pool with a generation (section 14.9).
 
 ### 20.7 The import
 
@@ -2197,7 +2197,7 @@ A repository is read through the routes of its host, never with a git binary. Th
 - A URL that ends in `.git`, with the ref in the fragment, such as `https://git.example.com/team/skills.git#main`. The front reads the zip archive of the host at `<repo>/archive/<ref>.zip`. The ref is `main` by default.
 - A URL of a directory of the forms `<host>/<owner>/<repo>/src/branch/<ref>/<dir>` and `<host>/<owner>/<repo>/-/tree/<ref>/<dir>`. The front reads the zip archive of the host for that ref, `<repo>/archive/<ref>.zip` or `<repo>/-/archive/<ref>/<repo>-<ref>.zip`, and takes the files of the directory.
 
-The directory of a skill must hold `SKILL.md`, and the import takes the files below it.
+The directory of a skill must hold `SKILL.md`, and the import takes the files below it. The archive of a repository passes the bound of one fetch, 4 MB, sooner than its listing does, so a large repository on a host without the API reads better through a manifest that names the URL of each skill.
 
 #### 20.7.1 The marketplaces
 
@@ -2212,15 +2212,15 @@ The front keeps the index of each marketplace for ten minutes (`skills.IndexTTL`
 
 #### 20.7.2 The preview
 
-`POST /v1/bossmode/skills/preview` takes a source and installs nothing. It answers what an install would write:
+`POST /v1/bossmode/skills/preview` takes a source and installs nothing. It answers what an install will write:
 
 | Field | Value |
 |---|---|
 | `name`, `description` | From the front matter, or the name of the directory of the source |
 | `frontMatter` | The front matter as the YAML decoder reads it |
-| `entry` | The entry of the catalog that the install would give (section 20.1) |
+| `entry` | The entry of the catalog that the install will give (section 20.1) |
 | `body` | The body of `SKILL.md`, without the front matter, which every agent that loads the skill reads |
-| `files` | Each file that the install would write, `{"path", "size"}` |
+| `files` | Each file that the install will write, `{"path", "size"}` |
 | `digest` | `sha256:` and the hex SHA-256 of the files, each path with its length and its bytes, in the order of the paths |
 | `source` | `{"kind", "url", "marketplace", "name", "digest"}` |
 | `exists` | `{"origin", "replaceable", "digest"}` for a skill of the catalog with the name, or null |

@@ -133,7 +133,7 @@ type Existing struct {
 	Digest      string `json:"digest,omitempty"`
 }
 
-// Preview is what an install would write and what the checks found.
+// Preview is what an install will write and what the checks found.
 // Installable is true when no problem blocks an install; a name that an
 // imported skill holds blocks it unless the install replaces it.
 type Preview struct {
