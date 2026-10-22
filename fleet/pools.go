@@ -82,7 +82,7 @@ func (p *platform) startPools(list []*pools.Pool, vals *pools.Values) {
 	}
 	for _, t := range p.f.templates {
 		for _, w := range pools.Probes([]*pools.Template{t})[0].Warnings() {
-			p.f.log.Warn("fleet: a worker template may not reach a host", "template", t.Name, "warning", w)
+			p.f.log.Warn("fleet: no egress rule of a worker template allows a host", "template", t.Name, "warning", w)
 		}
 	}
 	p.f.log.Info("fleet keeps the pools", "pools", strings.Join(names, ","), "templates", pools.TemplateNames(p.f.templates))

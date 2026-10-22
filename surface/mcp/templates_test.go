@@ -91,7 +91,7 @@ func TestAgentPutCreatesARuntimePool(t *testing.T) {
 	res := callTool(t, ctx, alice, toolAgentPut, map[string]any{"name": "planned", "dryRun": true})
 	var draft draftResult
 	structured(t, res, &draft)
-	if res.IsError || !strings.Contains(textOf(res), "Saving it would create the agent and its runtime pool planned from the template base, with 2 workers. Nothing is saved.") ||
+	if res.IsError || !strings.Contains(textOf(res), "A save creates the agent and its runtime pool planned from the template base, with 2 workers. Nothing is saved.") ||
 		draft.Pool == nil || draft.Pool.Wanted != 2 {
 		t.Fatalf("a dry run = %q", textOf(res))
 	}

@@ -242,7 +242,7 @@ type (
 		Agents []fleet.PoolAgent `json:"agents"`
 	}
 	// Pool is the runtime pool that agent_put created for a new agent, or
-	// would create in a dry run.
+	// the pool that a save creates, in a dry run.
 	agentResult struct {
 		View    string          `json:"view"`
 		Agent   fleet.PoolAgent `json:"agent"`
@@ -615,7 +615,7 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 		text := fmt.Sprintf("Checked the agent profile %s%s. Saving it would %s the agent. Nothing is saved.\n", d.Name, where, verb)
 		res := draftResult{View: viewDraft, Draft: d}
 		if planned, ok := fleet.PlannedPool(at); ok {
-			text = fmt.Sprintf("Checked the agent profile %s. Saving it would create the agent and its runtime pool %s from the template %s, with %d %s. Nothing is saved.\n", d.Name, planned.Name, planned.Template, planned.Wanted, workerWord(planned.Wanted))
+			text = fmt.Sprintf("Checked the agent profile %s. A save creates the agent and its runtime pool %s from the template %s, with %d %s. Nothing is saved.\n", d.Name, planned.Name, planned.Template, planned.Wanted, workerWord(planned.Wanted))
 			res.Pool = &planned
 		}
 		text += agentText(fleet.PoolAgent{AgentView: d.AgentView, Pool: pool})

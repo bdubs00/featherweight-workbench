@@ -37,7 +37,7 @@ func (m tokenMap) Challenge(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
-// callers: alice may create agents, bob has no role, and carol is an admin
+// callers: alice can create agents, bob has no role, and carol is an admin
 // of the front.
 var callers = tokenMap{
 	"alice": {Subject: "alice", Kind: fw.KindUser},
@@ -168,7 +168,7 @@ func decode[T any](t *testing.T, body string) T {
 }
 
 // The routes create, list, change, and delete a runtime pool, with the
-// checks of who may: the creators create, the owner of the agent and the
+// checks of who can: the creators create, the owner of the agent and the
 // admins change and delete, and a pool of the file changes in fw.yaml.
 func TestRoutes(t *testing.T) {
 	fr := newFront(t)

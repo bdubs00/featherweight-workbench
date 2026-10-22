@@ -11,7 +11,7 @@ package fleet
 // pool sets its replicas to 0, and the pass removes the entry once its
 // Tasks are gone. The functions CreatePool, PatchPool, and DeletePool
 // serve the routes /v1/pools and the MCP tools, with the checks of who
-// may.
+// can.
 
 import (
 	"context"

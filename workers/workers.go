@@ -4,7 +4,7 @@
 // front. It mounts the routes /v1/pools and /v1/templates on the native
 // surface (native.Extend) and adds the MCP tools pools_list, pool_put,
 // pool_delete, and templates_list (mcp.RegisterTools). The package fleet
-// keeps the pools, runs them, and decides who may change them; this
+// keeps the pools, runs them, and decides who can change them; this
 // package only carries the requests to it.
 package workers
 
