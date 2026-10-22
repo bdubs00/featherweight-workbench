@@ -168,7 +168,7 @@ The workbench changes no kernel code. It uses these hooks of the kernel:
 | `tools/builder` | the `propose_agent` tool |
 | `examples/agentgateway` | a fleet behind agentgateway |
 | `examples/pools` | a front that keeps a pool of three workers |
-| `examples/bossmode` | a front with the pool and the profile of the manager |
+| `examples/bossmode` | a front with the pool of the manager and the profiles of the manager and of the quick chat |
 
 ## License
 
