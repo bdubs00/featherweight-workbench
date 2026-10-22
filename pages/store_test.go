@@ -112,8 +112,9 @@ func TestConditions(t *testing.T) {
 	if _, err := s.Write(ctx, "a.md", "two", "alice", "", Hash("stale")); !errors.As(err, &e) || e.Hash != p.Hash || !strings.Contains(e.Reason, "read it again") {
 		t.Fatalf("a stale hash = %v", err)
 	}
-	// A hash in upper case matches.
-	mustWrite(t, s, "a.md", "two", strings.ToUpper(p.Hash))
+	// A hash in upper case matches, and so does a quoted or weak one.
+	two := mustWrite(t, s, "a.md", "two", strings.ToUpper(p.Hash))
+	mustWrite(t, s, "a.md", "two and a half", `W/"`+two.Hash+`"`)
 	mustWrite(t, s, "a.md", "three", IfExists)
 	if err := s.Delete(ctx, "a.md", "alice", p.Hash); !errors.Is(err, ErrConflict) {
 		t.Fatalf("Delete with a stale hash = %v", err)
@@ -131,7 +132,7 @@ func TestConditions(t *testing.T) {
 		t.Fatalf("a second Delete = %v", err)
 	}
 	h, err := s.History(ctx, "a.md")
-	if err != nil || len(h) != 4 || !h[0].Deleted {
+	if err != nil || len(h) != 5 || !h[0].Deleted {
 		t.Fatalf("History after Delete = %+v, %v", h, err)
 	}
 	// A removed page takes a new text as a new page.

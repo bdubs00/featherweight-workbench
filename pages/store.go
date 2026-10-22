@@ -510,14 +510,15 @@ func holds(p, ifHash string, exists bool, have string) error {
 	return nil
 }
 
-// normHash reads a condition: a hash in any case, or IfExists, or IfAbsent.
+// normHash reads a condition: IfExists, IfAbsent, or a hash in any case,
+// also quoted or weak as an ETag.
 func normHash(h string) string {
 	h = strings.TrimSpace(h)
 	switch h {
 	case IfAny, IfExists, IfAbsent:
 		return h
 	}
-	return strings.ToLower(h)
+	return strings.ToLower(strings.Trim(strings.TrimPrefix(h, "W/"), `"`))
 }
 
 // roomForOne refuses a new page when the wiki holds MaxPages pages. Two

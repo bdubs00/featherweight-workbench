@@ -107,7 +107,7 @@ func TestRoutes(t *testing.T) {
 		Index string     `json:"index"`
 	}
 	decodeJSON(t, out, &tree)
-	if resp.StatusCode != http.StatusOK || len(tree.Pages) != 1 || tree.Index != IndexPath {
+	if resp.StatusCode != http.StatusOK || len(tree.Pages) != 1 || tree.Index != IndexPath || tree.Pages[0].Path != "notes/plan.md" {
 		t.Fatalf("GET /v1/pages = %d %s", resp.StatusCode, out)
 	}
 	if resp, out = do(t, "GET", base+"/_index.md", "bob", "", "Accept", "text/markdown"); resp.StatusCode != http.StatusOK || !strings.Contains(out, "notes/plan.md") {
@@ -118,6 +118,9 @@ func TestRoutes(t *testing.T) {
 	}
 
 	// Paths and sizes that the wiki refuses.
+	if resp, _ = do(t, "PUT", base+"/notes/what%3F.md", "alice", "x"); resp.StatusCode != http.StatusCreated || resp.Header.Get("Location") != "/v1/pages/notes/what%3F.md" {
+		t.Fatalf("PUT of a path with a question mark = %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
 	for _, p := range []string{"notes/plan.txt", ".hidden.md", "a.md/b.md"} {
 		if resp, out = do(t, "PUT", base+"/"+p, "alice", "x"); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("PUT %s = %d %s", p, resp.StatusCode, out)

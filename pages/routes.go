@@ -13,6 +13,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -230,7 +231,7 @@ func (rt *routes) put(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", strconv.Quote(page.Hash))
 	status := http.StatusOK
 	if did == created {
-		w.Header().Set("Location", "/v1/pages/"+p)
+		w.Header().Set("Location", "/v1/pages/"+escapePath(p))
 		status = http.StatusCreated
 	}
 	native.WriteJSON(w, status, page.PageInfo)
@@ -294,6 +295,15 @@ func condition(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	return strings.Trim(strings.TrimPrefix(match, "W/"), `"`), true
+}
+
+// escapePath escapes each part of a page path for a URL.
+func escapePath(p string) string {
+	parts := strings.Split(p, "/")
+	for i, part := range parts {
+		parts[i] = url.PathEscape(part)
+	}
+	return strings.Join(parts, "/")
 }
 
 // matchesETag reports whether an If-None-Match header names the hash.
