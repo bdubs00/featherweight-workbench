@@ -11,6 +11,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/agents"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/pools"
+	"github.com/bdubs00/featherweight-workbench/skills"
 )
 
 // putAgent answers PUT /v1/agents/{name}. The body is an fw.AgentProfile,
@@ -82,6 +83,54 @@ func (s *server) putAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, status, v)
+}
+
+// AgentSkills is the answer of GET /v1/agents/{name}/skills. Allowlist is
+// the skills list of the profile as it is, null for every skill. Skills
+// holds the skills of the catalog of the front that the list allows, with
+// the matching of the kernel (section 20.2). Pool names the pool whose
+// workers run the profile, or is empty for a profile of this process.
+type AgentSkills struct {
+	Agent     string       `json:"agent"`
+	Pool      string       `json:"pool,omitempty"`
+	Allowlist []string     `json:"allowlist"`
+	Skills    []skills.Ref `json:"skills"`
+}
+
+// agentSkills answers GET /v1/agents/{name}/skills. The kernel serves the
+// view of an agent, GET /v1/agents/{name}, so the resolved skills of the
+// page come from this route beside it. With pools, the profile is the one
+// that the workers of the pool run, and ?pool= names the pool when several
+// pools run it; its skills resolve against the catalog of the front.
+func (s *server) agentSkills(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	pool := strings.TrimSpace(r.URL.Query().Get("pool"))
+	ctx := r.Context()
+	pa, found, err := fleet.PoolAgentNamed(ctx, s.a, name, pool)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	out := AgentSkills{Agent: name}
+	switch {
+	case found:
+		out.Pool, out.Allowlist = pa.Pool, pa.Skills
+	case pool != "" && fleet.Pooled(s.a):
+		s.fail(w, r, fmt.Errorf("%w: %s in the pool %s", fw.ErrProfileNotFound, name, pool))
+		return
+	case pool != "":
+		problem(w, r, http.StatusBadRequest, "this process keeps no pool, so leave out pool")
+		return
+	default:
+		v, err := view.Agent(ctx, s.a, name)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		out.Allowlist = v.Skills
+	}
+	out.Skills = skills.Allowed(s.a, out.Allowlist)
+	writeJSON(w, http.StatusOK, out)
 }
 
 // deleteAgent answers DELETE /v1/agents/{name} with 204. With pools,

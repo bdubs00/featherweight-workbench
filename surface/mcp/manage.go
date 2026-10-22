@@ -27,6 +27,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/manager"
 	"github.com/bdubs00/featherweight-workbench/pools"
+	"github.com/bdubs00/featherweight-workbench/skills"
 	"github.com/bdubs00/featherweight-workbench/teams"
 	"github.com/bdubs00/featherweight-workbench/titles"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -245,10 +246,17 @@ type (
 	// Pool is the runtime pool that agent_put created for a new agent, or
 	// the pool that a save creates, in a dry run.
 	agentResult struct {
-		View    string          `json:"view"`
-		Agent   fleet.PoolAgent `json:"agent"`
-		Created bool            `json:"created,omitempty"`
-		Pool    *pools.Status   `json:"pool,omitempty"`
+		View    string        `json:"view"`
+		Agent   agentDoc      `json:"agent"`
+		Created bool          `json:"created,omitempty"`
+		Pool    *pools.Status `json:"pool,omitempty"`
+	}
+	// agentDoc is one agent with ResolvedSkills, the skills of the catalog
+	// of the front that the allowlist of the profile allows (section
+	// 20.2). The field skills stays the allowlist of the profile.
+	agentDoc struct {
+		fleet.PoolAgent
+		ResolvedSkills []skills.Ref `json:"resolvedSkills"`
 	}
 	draftResult struct {
 		View  string        `json:"view"`
@@ -533,7 +541,15 @@ func (s *server) agentGet(ctx context.Context, _ *sdk.CallToolRequest, in agentN
 	if err != nil {
 		return failResult(err), nil, nil
 	}
-	return result(agentText(v), agentResult{View: viewAgent, Agent: v}), nil, nil
+	doc := s.agentDoc(v)
+	return result(agentText(v, doc.ResolvedSkills), agentResult{View: viewAgent, Agent: doc}), nil, nil
+}
+
+// agentDoc adds the resolved skills to an agent. A profile of a pool
+// resolves against the skills of the front too, because the front knows
+// no list of the skills of its workers (section 20.2).
+func (s *server) agentDoc(v fleet.PoolAgent) agentDoc {
+	return agentDoc{PoolAgent: v, ResolvedSkills: skills.Allowed(s.a, v.Skills)}
 }
 
 // agentNamed returns one profile as the caller sees it. With pools, it is
@@ -555,6 +571,32 @@ func (s *server) agentNamed(ctx context.Context, name, pool string) (fleet.PoolA
 	return fleet.PoolAgent{AgentView: v, Front: pooled}, err
 }
 
+// skillsText words the skills that an agent can load, from the catalog of
+// the front. For a profile of a pool it says where the workers find their
+// skills.
+func skillsText(refs []skills.Ref, pooled bool) string {
+	var b strings.Builder
+	if len(refs) == 0 {
+		b.WriteString("It can load no skill of the front.")
+	} else {
+		b.WriteString("It can load these skills of the front: ")
+		for i, r := range refs {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(r.Name)
+			if r.Origin != "" {
+				b.WriteString(" from " + r.Origin)
+			}
+		}
+		b.WriteString(".")
+	}
+	if pooled {
+		b.WriteString(" Its workers load the local skills that the pool ships and the skills of the servers of their own tools.mcp entries.")
+	}
+	return b.String() + "\n"
+}
+
 // byWhom says who wrote the overlay entry of a profile, and when.
 func byWhom(v fleet.PoolAgent) string {
 	var out string
@@ -568,13 +610,14 @@ func byWhom(v fleet.PoolAgent) string {
 }
 
 // agentText is a profile as text: the summary line, what the agent can do
-// in plain words, the policy of the workers of its pool, then the profile
-// as indented JSON.
-func agentText(v fleet.PoolAgent) string {
+// in plain words, the skills that it can load, the policy of the workers of
+// its pool, then the profile as indented JSON.
+func agentText(v fleet.PoolAgent, refs []skills.Ref) string {
 	head := agentLine(v)
 	if t := view.AbilityText(v.Abilities); t != "" {
 		head += t + "\n"
 	}
+	head += skillsText(refs, v.Pool != "")
 	if v.WorkerPolicy != nil {
 		head += "The workers of the pool decide each call by fw.policy of the pool, which the policy of the profile can only tighten: " + rulesText(*v.WorkerPolicy) + "\n"
 	}
@@ -619,7 +662,7 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 			text = fmt.Sprintf("Checked the agent profile %s. A save creates the agent and its runtime pool %s from the template %s, with %d %s. Nothing is saved.\n", d.Name, planned.Name, planned.Template, planned.Wanted, workerWord(planned.Wanted))
 			res.Pool = &planned
 		}
-		text += agentText(fleet.PoolAgent{AgentView: d.AgentView, Pool: pool})
+		text += agentText(fleet.PoolAgent{AgentView: d.AgentView, Pool: pool}, skills.Allowed(s.a, d.Skills))
 		return result(text, res), nil, nil
 	}
 	saved, created, err := agents.PutIn(ctx, s.a, at, p)
@@ -642,7 +685,8 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 	} else {
 		s.log.Info("mcp profile saved", "profile", v.Name, "created", created, "pool", pool, "createdPool", made, "principal", subjectOf(ctx))
 	}
-	res := agentResult{View: viewAgent, Agent: v, Created: created}
+	doc := s.agentDoc(v)
+	res := agentResult{View: viewAgent, Agent: doc, Created: created}
 	text := fmt.Sprintf("%s the agent profile %s.\n", verb, v.Name)
 	switch {
 	case made != "":
@@ -659,7 +703,7 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 			text += fmt.Sprintf("The pool %s runs the agent already, so workers changes nothing; pool_put changes the workers of a runtime pool.\n", pool)
 		}
 	}
-	return result(text+agentText(v), res), nil, nil
+	return result(text+agentText(v, doc.ResolvedSkills), res), nil, nil
 }
 
 // workerWord is worker or workers for n.
@@ -998,7 +1042,7 @@ func (s *server) dashboard(ctx context.Context, req *sdk.CallToolRequest, in das
 		}
 		out.Agent = &v.AgentView
 		b.WriteString("At a glance: " + out.Glance.Sentence + "\n\n")
-		b.WriteString(agentText(v))
+		b.WriteString(agentText(v, skills.Allowed(s.a, v.Skills)))
 	case viewRun:
 		ev, err := s.events(ctx, in.RunID, page{limit: defaultListLimit})
 		if err != nil {

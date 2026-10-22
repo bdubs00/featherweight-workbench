@@ -13,6 +13,7 @@
 #   https://idp.example.com           the OIDC issuer that signs the tokens of your people
 #   https://fleet.example.com/mcp     the audience of those tokens, as the front checks it
 #   the host names of the cluster     your bus, model proxy, front, ax API, and router
+#   the URLs of the marketplaces      the manifests or repositories of your skills, or no marketplaces
 #
 # Set the model. The pool names no model, and the front refuses a pool
 # without one, so nothing runs on a model that you did not choose. Set
@@ -62,6 +63,12 @@ workbench:
       accent: "#FF4D00"
       name: Example Ltd
       # logo: /etc/fw/logo.svg
+    # The marketplaces of skills that an admin imports from, after a
+    # preview (docs/ARCHITECTURE.md section 20.7). A manifest of JSON lists
+    # skills with their URLs; a repository lists each skills/<name>/SKILL.md.
+    marketplaces:
+      - {name: team, url: "https://skills.example.com/index.json"}
+      - {name: public, url: "https://github.com/example/skills"}
   fleet:
     atespaces: [default]
     egress: fw.events

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/skills"
 )
 
 // Bounds of a message.
@@ -71,12 +72,16 @@ func (x sender) party(member string) fw.MessageFrom {
 // message of a person alone: each delivery of the message is a pinned
 // follow-up (fw.WithMessagePinned), so the instruction stays in the
 // context of the members through every compaction. The tool bridge_post
-// does not take it.
+// does not take it. Skill makes the message a slash command of a person:
+// the front expands the skill of the catalog (skills.Prepare), and Text,
+// which is optional then, follows the skill (docs/ARCHITECTURE.md section
+// 20.3). A slash command is always pinned.
 type PostSpec struct {
-	Text    string   `json:"text"`
-	To      []string `json:"to,omitempty"`
-	ReplyTo *uint64  `json:"replyTo,omitempty"`
-	Pinned  bool     `json:"pinned,omitempty"`
+	Text    string          `json:"text"`
+	To      []string        `json:"to,omitempty"`
+	ReplyTo *uint64         `json:"replyTo,omitempty"`
+	Pinned  bool            `json:"pinned,omitempty"`
+	Skill   *skills.Command `json:"skill,omitempty"`
 }
 
 // delivery is one follow-up of a message to the newest run of a member.
@@ -88,7 +93,7 @@ type delivery struct {
 	run     *fw.Run
 	content string
 	from    fw.MessageFrom
-	pinned  bool
+	pinned  bool // a pinned message or a slash command
 }
 
 // header is the first line of a follow-up, which names the bridge, so a
@@ -123,9 +128,23 @@ func cannotTake(handle string, r *fw.Run) string {
 // it out. It returns the entry.
 func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) (Message, error) {
 	text := clean(spec.Text)
+	var cmd *skills.Expansion
+	if spec.Skill != nil {
+		if snd.handle != "" {
+			return Message{}, invalid("a run hands no skill to its teammates; a person sends a skill through the route")
+		}
+		if len(text) > maxTextBytes {
+			return Message{}, invalid("a message holds at most %d bytes", maxTextBytes)
+		}
+		x, err := skills.Prepare(s.a, *spec.Skill, text)
+		if err != nil {
+			return Message{}, skillError(err)
+		}
+		cmd, text = &x, x.Message
+	}
 	switch {
 	case text == "":
-		return Message{}, invalid("a message needs a text")
+		return Message{}, invalid("a message needs a text or a skill")
 	case len(text) > maxTextBytes:
 		return Message{}, invalid("a message holds at most %d bytes", maxTextBytes)
 	case len(spec.To) > maxTo:
@@ -172,11 +191,23 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 			return invalid("no entry %d to reply to", *spec.ReplyTo)
 		}
 		claim(rec, runs)
-		cut, isCut := cutText(text, entryTextBytes)
+		shown := text
+		if cmd != nil {
+			// The channel holds the line Skill and a summary, and the run
+			// holds the whole message.
+			shown = cmd.Summary
+		}
+		cut, isCut := cutText(shown, entryTextBytes)
 		msg = newMessage(snd.from(), cut)
-		msg.Seq, msg.At, msg.Cut, msg.ReplyTo, msg.Pinned = rec.alloc(), now, isCut, spec.ReplyTo, spec.Pinned
+		// A slash command is pinned, so its entry says so, and fanPlan
+		// pins each delivery of a pinned entry.
+		msg.Seq, msg.At, msg.Cut, msg.ReplyTo, msg.Pinned = rec.alloc(), now, isCut || cmd != nil, spec.ReplyTo, spec.Pinned || cmd != nil
 		if to != nil {
 			msg.To = to
+		}
+		if cmd != nil {
+			c := cmd.Command
+			msg.Skill = &c
 		}
 		lines, plan = fanPlan(rec, snd, msg, text, runs, now)
 		return nil
@@ -406,4 +437,25 @@ func (s *Store) attempt(j *job) {
 	}
 	s.log.Debug("bridges: a job failed and runs again", "job", j.name, "pause", j.pause, "error", err)
 	time.AfterFunc(j.pause, func() { s.submit(j) })
+}
+
+// skillError words an error of a slash command for the routes: an unknown
+// skill is not found, a skill that is not for people is an invalid
+// request, and a message over its bound is too large.
+func skillError(err error) error {
+	msg := err.Error()
+	for _, e := range []error{skills.ErrUnknown, skills.ErrNotInvocable, skills.ErrTooLarge, skills.ErrUnavailable} {
+		msg = strings.TrimPrefix(msg, e.Error()+": ")
+	}
+	switch {
+	case errors.Is(err, skills.ErrUnknown):
+		return fmt.Errorf("%w: %s", ErrNotFound, msg)
+	case errors.Is(err, skills.ErrNotInvocable):
+		return invalid("%s", msg)
+	case errors.Is(err, skills.ErrTooLarge):
+		return fmt.Errorf("%w: %s", ErrTooLarge, msg)
+	case errors.Is(err, skills.ErrUnavailable):
+		return fmt.Errorf("%w: %s", ErrUnavailable, msg)
+	}
+	return err
 }

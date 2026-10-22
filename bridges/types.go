@@ -12,6 +12,7 @@ import (
 
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/skills"
 )
 
 // States of a bridge.
@@ -190,8 +191,9 @@ type Item struct {
 // Message is one entry of the channel of a bridge. Page names the page of
 // the wiki that a system line is about, such as bridges/<id>/report.md, so
 // the page of bossmode links it without a link in the text. Pinned is true
-// for a message that a person pinned: each of its deliveries is a pinned
-// follow-up, which survives every compaction of the run that gets it.
+// for a message that a person pinned and for a slash command: each of its
+// deliveries is a pinned follow-up, which survives every compaction of the
+// run that gets it.
 type Message struct {
 	Seq       uint64              `json:"seq"`
 	At        time.Time           `json:"at"`
@@ -206,6 +208,10 @@ type Message struct {
 	Mirrors   *Mirror             `json:"mirrors"`
 	Reactions map[string][]string `json:"reactions"`
 	Decision  *Decision           `json:"decision"`
+	// Skill names the skill and the arguments of a slash command of a
+	// person. The text of the entry is then the line Skill and a summary,
+	// and the runs of the members hold the whole message.
+	Skill *skills.Command `json:"skill,omitempty"`
 }
 
 // From is the sender of an entry. A person has Name, the subject, and

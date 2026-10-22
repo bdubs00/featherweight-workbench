@@ -17,6 +17,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/manager"
+	"github.com/bdubs00/featherweight-workbench/skills"
 )
 
 // Block is the top-level key of fw.yaml that the workbench claims.
@@ -26,6 +27,8 @@ const Block = "workbench"
 const (
 	EnvEnabled = "FW_WORKBENCH_BOSSMODE_ENABLED"
 	EnvDir     = "FW_WORKBENCH_BOSSMODE_DIR"
+	// EnvMarketplaces sets the marketplaces of skills: name=url,name=url.
+	EnvMarketplaces = "FW_WORKBENCH_BOSSMODE_MARKETPLACES"
 	// EnvManager sets the key manager, which the package manager reads.
 	EnvManager = manager.EnvManager
 	// The variables of the theme of the page (Theme).
@@ -61,13 +64,16 @@ const (
 // is the profile name of the manager agent, from manager.Load. Empty means
 // no manager. Bossmode reads it for the settings of the page and for the
 // doctor line, and starts no run of it. Theme is the look of the page for
-// the deployment. Chat is the quick chat of the page.
+// the deployment. Chat is the quick chat of the page. Marketplaces lists
+// the marketplaces of skills that an admin imports from
+// (docs/ARCHITECTURE.md section 20.7).
 type Config struct {
-	Enabled bool   `yaml:"enabled"`
-	Dir     string `yaml:"dir"`
-	Theme   Theme  `yaml:"theme"`
-	Chat    Chat   `yaml:"chat"`
-	Manager string `yaml:"-"`
+	Enabled      bool                 `yaml:"enabled"`
+	Dir          string               `yaml:"dir"`
+	Theme        Theme                `yaml:"theme"`
+	Chat         Chat                 `yaml:"chat"`
+	Manager      string               `yaml:"-"`
+	Marketplaces []skills.Marketplace `yaml:"marketplaces"`
 }
 
 // Chat is the quick chat of the page (docs/ARCHITECTURE.md section 17.7):
@@ -126,6 +132,16 @@ func Load(cfg *fw.Config) (Config, error) {
 	}
 	if c.Chat, err = loadChat(c.Chat); err != nil {
 		return Config{}, err
+	}
+	if v, ok := lookup(EnvMarketplaces); ok {
+		list, err := skills.ParseMarketplaces(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("bossmode: %s: %w", EnvMarketplaces, err)
+		}
+		c.Marketplaces = list
+	}
+	if err := skills.CheckMarketplaces(c.Marketplaces); err != nil {
+		return Config{}, fmt.Errorf("bossmode: workbench.bossmode.%w", err)
 	}
 	if c.Manager, err = manager.Load(cfg); err != nil {
 		return Config{}, err

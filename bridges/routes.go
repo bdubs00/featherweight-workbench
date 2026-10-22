@@ -62,6 +62,10 @@ func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 		native.WriteProblem(w, r, http.StatusNotFound, detail(err))
 	case errors.Is(err, ErrConflict):
 		native.WriteProblem(w, r, http.StatusConflict, detail(err))
+	case errors.Is(err, ErrTooLarge):
+		native.WriteProblem(w, r, http.StatusRequestEntityTooLarge, detail(err))
+	case errors.Is(err, ErrUnavailable):
+		native.WriteProblem(w, r, http.StatusBadGateway, detail(err))
 	case errors.Is(err, fw.ErrInvalidRequest):
 		native.WriteProblem(w, r, http.StatusBadRequest, detail(err))
 	case errors.Is(err, fleet.ErrNoRoute):
@@ -77,7 +81,7 @@ func detail(err error) string {
 	s := err.Error()
 	for changed := true; changed; {
 		changed = false
-		for _, prefix := range []string{"bridges: not found: ", "bridges: conflict: ", "fw: invalid request: ", "bridges: ", "fleet: "} {
+		for _, prefix := range []string{"bridges: not found: ", "bridges: conflict: ", "bridges: too large: ", "bridges: unavailable: ", "fw: invalid request: ", "skills: ", "bridges: ", "fleet: "} {
 			if strings.HasPrefix(s, prefix) {
 				s, changed = strings.TrimPrefix(s, prefix), true
 			}
@@ -277,17 +281,41 @@ func (rt *routes) post(w http.ResponseWriter, r *http.Request) {
 	if !rt.k.Decode(w, r, &spec) {
 		return
 	}
-	p := fw.PrincipalFrom(r.Context())
-	snd := sender{subject: subjectOfPrincipal(p)}
-	if p != nil {
-		snd.display = p.Name
-	}
-	m, err := s.post(r.Context(), rec.ID, snd, spec)
+	m, err := s.postAs(r.Context(), rec.ID, spec)
 	if err != nil {
 		rt.fail(w, r, err)
 		return
 	}
 	native.WriteJSON(w, http.StatusCreated, m)
+}
+
+// Post posts a message of the caller in ctx to the channel of a bridge, as
+// POST /v1/bridges/{id}/messages does: the caller must be able to use the
+// bridge, and a spec with Skill makes the message a slash command. The
+// tool skill_send of the package bossmode posts through it. It returns an
+// error that wraps ErrNotFound for an unknown bridge or skill, ErrConflict
+// for a closed bridge, ErrTooLarge for a slash command over its bound, and
+// fw.ErrInvalidRequest or fw.ErrForbidden.
+func (s *Store) Post(ctx context.Context, id string, spec PostSpec) (Message, error) {
+	rec, err := s.load(ctx, id)
+	if err != nil {
+		return Message{}, err
+	}
+	return s.postAs(ctx, rec.ID, spec)
+}
+
+// Detail is the words of an error of the package without the names of the
+// packages and the kinds of error in front, for a tool result.
+func Detail(err error) string { return detail(err) }
+
+// postAs posts a message of the caller in ctx, a person.
+func (s *Store) postAs(ctx context.Context, id string, spec PostSpec) (Message, error) {
+	p := fw.PrincipalFrom(ctx)
+	snd := sender{subject: subjectOfPrincipal(p)}
+	if p != nil {
+		snd.display = p.Name
+	}
+	return s.post(ctx, id, snd, spec)
 }
 
 // react answers POST /v1/bridges/{id}/messages/{seq}/reactions with the

@@ -35,6 +35,8 @@ func extension(k *native.Kit) error {
 	k.Handle("GET /v1/bossmode", settingsRoute(k, c))
 	k.Handle("GET "+LogoPath, logoRoute(a))
 	k.Handle("GET /v1/bossmode/stream", streamRoute(a))
+	mountSkills(k)
+	mountImports(k)
 	return nil
 }
 
