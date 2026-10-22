@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"sync"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
@@ -145,6 +146,47 @@ func Check(ctx context.Context, a *fw.Agent, agent, action string) error {
 		return nil
 	}
 	return at.Authorize(ctx, action, agent)
+}
+
+// List returns the face of every agent that the caller in ctx can view
+// (fw.ActionAgentView): the profiles of this process and of the pools of
+// the fleet, sorted by name.
+func List(ctx context.Context, a *fw.Agent) ([]Face, error) {
+	s := Of(a)
+	if s == nil {
+		return nil, errors.New("faces: the faces are off in this process")
+	}
+	own, err := a.ListProfiles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("faces: list the agents: %w", err)
+	}
+	names := map[string]bool{}
+	for _, p := range own {
+		names[p.Name] = true
+	}
+	pooled, _, err := fleet.PoolAgents(ctx, a)
+	if err != nil {
+		return nil, fmt.Errorf("faces: list the agents of the pools: %w", err)
+	}
+	for _, pa := range pooled {
+		names[pa.Name] = true
+	}
+	list := make([]string, 0, len(names))
+	for name := range names {
+		if CheckAgent(name) == nil {
+			list = append(list, name)
+		}
+	}
+	sort.Strings(list)
+	out := make([]Face, 0, len(list))
+	for _, name := range list {
+		f, err := s.Get(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, nil
 }
 
 // localAgent reports whether the process runs the agent: a profile of it,

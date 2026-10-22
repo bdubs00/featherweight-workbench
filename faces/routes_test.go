@@ -118,7 +118,7 @@ func TestRoutes(t *testing.T) {
 	// Without a face, the identicon, with its hash.
 	resp, out := do(t, "GET", base+"/reviewer", "bob", "")
 	if resp.StatusCode != http.StatusOK || out != string(icon) || resp.Header.Get("Content-Type") != "image/svg+xml" ||
-		resp.Header.Get("ETag") != strconv.Quote(hashOf(icon)) || !strings.Contains(resp.Header.Get("Content-Security-Policy"), "default-src 'none'") ||
+		resp.Header.Get("ETag") != strconv.Quote(faceHash(icon, "", "")) || !strings.Contains(resp.Header.Get("Content-Security-Policy"), "default-src 'none'") ||
 		resp.Header.Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("GET = %d %v %s", resp.StatusCode, resp.Header, out)
 	}
@@ -129,7 +129,7 @@ func TestRoutes(t *testing.T) {
 	}
 	resp, out = do(t, "PUT", base+"/reviewer", "alice", fox, "Content-Type", "image/svg+xml")
 	var f Face
-	if err := json.Unmarshal([]byte(out), &f); err != nil || resp.StatusCode != http.StatusOK || !f.Stored || f.By != "alice" {
+	if err := json.Unmarshal([]byte(out), &f); err != nil || resp.StatusCode != http.StatusOK || !f.Custom || f.By != "alice" || f.Agent != "reviewer" {
 		t.Fatalf("PUT = %d %s", resp.StatusCode, out)
 	}
 	if resp, _ = do(t, "PUT", base+"/reviewer", "alice", strings.Repeat(" ", MaxSVGBytes+1)); resp.StatusCode != http.StatusRequestEntityTooLarge {
@@ -146,8 +146,12 @@ func TestRoutes(t *testing.T) {
 
 	// The display name and the tagline.
 	resp, out = do(t, "PATCH", base+"/reviewer", "alice", `{"displayName": "Reviewer Fox", "tagline": "Reads twice."}`, "Content-Type", "application/json")
-	if resp.StatusCode != http.StatusOK || !strings.Contains(out, `"displayName":"Reviewer Fox"`) {
+	var named Face
+	if err := json.Unmarshal([]byte(out), &named); err != nil || resp.StatusCode != http.StatusOK || named.DisplayName != "Reviewer Fox" || named.Hash == f.Hash || !named.Custom {
 		t.Fatalf("PATCH = %d %s", resp.StatusCode, out)
+	}
+	if resp, _ = do(t, "GET", base+"/reviewer", "bob", "", "If-None-Match", strconv.Quote(f.Hash)); resp.StatusCode != http.StatusOK || resp.Header.Get("ETag") != strconv.Quote(named.Hash) {
+		t.Fatalf("GET with the hash before the name = %d %s", resp.StatusCode, resp.Header.Get("ETag"))
 	}
 	if resp, out = do(t, "PATCH", base+"/reviewer", "alice", `{"displayName": "`+strings.Repeat("n", 65)+`"}`); resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, "64") {
 		t.Fatalf("PATCH of a long name = %d %s", resp.StatusCode, out)
@@ -181,9 +185,32 @@ func TestRoutes(t *testing.T) {
 		t.Fatalf("GET of a bad name = %d", resp.StatusCode)
 	}
 
+	// The list holds every agent that the caller can view.
+	resp, out = do(t, "GET", base, "bob", "")
+	var list struct {
+		Faces []map[string]any `json:"faces"`
+	}
+	if err := json.Unmarshal([]byte(out), &list); err != nil || resp.StatusCode != http.StatusOK || len(list.Faces) != 1 {
+		t.Fatalf("GET /v1/faces = %d %s", resp.StatusCode, out)
+	}
+	entry := list.Faces[0]
+	for _, key := range []string{"agent", "displayName", "tagline", "hash", "custom"} {
+		if _, ok := entry[key]; !ok {
+			t.Errorf("the entry lacks %s: %v", key, entry)
+		}
+	}
+	if entry["agent"] != "reviewer" || entry["custom"] != true || entry["hash"] != named.Hash {
+		t.Fatalf("the entry = %v", entry)
+	}
+	if resp, out = do(t, "GET", base, "carol", ""); resp.StatusCode != http.StatusOK || out != "{\"faces\":[]}\n" {
+		t.Fatalf("GET /v1/faces without a role = %d %q", resp.StatusCode, out)
+	}
+
 	// Back to the identicon.
-	if resp, _ = do(t, "DELETE", base+"/reviewer", "fleet", ""); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("DELETE = %d", resp.StatusCode)
+	resp, out = do(t, "DELETE", base+"/reviewer", "fleet", "")
+	var back Face
+	if err := json.Unmarshal([]byte(out), &back); err != nil || resp.StatusCode != http.StatusOK || back.Custom || back.DisplayName != "Reviewer Fox" {
+		t.Fatalf("DELETE = %d %s", resp.StatusCode, out)
 	}
 	if resp, out = do(t, "GET", base+"/reviewer", "bob", ""); out != string(icon) {
 		t.Fatalf("GET after DELETE = %d %s", resp.StatusCode, out)
@@ -264,7 +291,7 @@ func TestFacesPut(t *testing.T) {
 	if res.IsError || !strings.Contains(textOf(res), "GET /v1/faces/reviewer") {
 		t.Fatalf("a clean face = %s", textOf(res))
 	}
-	if f, _ := Of(a).Get(ctx, "reviewer"); !f.Stored || f.By != "agent:manager" {
+	if f, _ := Of(a).Get(ctx, "reviewer"); !f.Custom || f.By != "agent:manager" {
 		t.Fatalf("the face = %+v", f)
 	}
 	// An operator cannot set a face.

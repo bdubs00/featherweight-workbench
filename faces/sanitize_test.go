@@ -114,6 +114,20 @@ func TestSanitizeRefusesHostileFaces(t *testing.T) {
 		{"another encoding", `<?xml version="1.0" encoding="ISO-8859-1"?><svg ` + ns + `/>`, "not well-formed"},
 		{"too large", `<svg ` + ns + `>` + strings.Repeat(" ", MaxSVGBytes) + `</svg>`, "at most 32 KB"},
 		{"too deep", `<svg ` + ns + `>` + strings.Repeat("<g>", 40) + strings.Repeat("</g>", 40) + `</svg>`, "deep"},
+		// A comment, a CDATA section, or an element splits the text of a
+		// style; the rule reads the whole text.
+		{"style split by a comment", `<svg ` + ns + `><style>.a{beha<!---->vior:x}</style></svg>`, "behavior"},
+		{"style split by CDATA", `<svg ` + ns + `><style>.a{fill:ur<![CDATA[l(]]>#a)}</style></svg>`, "url("},
+		{"@import split by a comment", `<svg ` + ns + `><style>@im<!-- -->port 'x.css';</style></svg>`, "@import"},
+		{"style split by an element", `<svg ` + ns + `><style>beha<g/>vior:x</style></svg>`, "inside <style>"},
+		{"an element inside style", `<svg ` + ns + `><style><title>url(</title></style></svg>`, "inside <style>"},
+		// A presentation attribute is a CSS value.
+		{"fill with an escape", `<svg ` + ns + `><rect fill="\75 rl(#a)"/></svg>`, "backslash"},
+		{"mask with image-set(", `<svg ` + ns + `><rect mask="image-set('#a' 1x)"/></svg>`, "image-set("},
+		{"stroke with image(", `<svg ` + ns + `><rect stroke="image(x)"/></svg>`, "image("},
+		// A repeated attribute makes XML that is not well-formed.
+		{"a repeated attribute", `<svg ` + ns + `><rect fill="red" fill="blue"/></svg>`, "appears twice"},
+		{"xml:space twice", `<svg ` + ns + ` xmlns:x="http://www.w3.org/XML/1998/namespace" xml:space="preserve" x:space="default"/>`, "appears twice"},
 	}
 	for _, c := range cases {
 		out, err := Sanitize([]byte(c.in))

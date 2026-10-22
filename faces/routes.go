@@ -32,6 +32,7 @@ func mount(k *native.Kit) error {
 		return nil
 	}
 	rt := &routes{k: k, a: k.Agent()}
+	k.Handle("GET /v1/faces", rt.list)
 	k.Handle("GET /v1/faces/{agent}", rt.get)
 	k.Handle("PUT /v1/faces/{agent}", rt.put)
 	k.Handle("DELETE /v1/faces/{agent}", rt.remove)
@@ -70,12 +71,27 @@ func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
+// list answers GET /v1/faces with the face of every agent that the caller
+// can view, as {"faces": [...]}, without the SVGs.
+func (rt *routes) list(w http.ResponseWriter, r *http.Request) {
+	if Of(rt.a) == nil {
+		native.WriteProblem(w, r, http.StatusServiceUnavailable, "the faces are off in this process")
+		return
+	}
+	list, err := List(r.Context(), rt.a)
+	if err != nil {
+		rt.fail(w, r, err)
+		return
+	}
+	native.WriteJSON(w, http.StatusOK, map[string]any{"faces": list})
+}
+
 // get answers GET /v1/faces/{agent} with the face as image/svg+xml: the
 // stored face, else the identicon, with its hash in ETag. A caller that
 // cannot view the agent, and an agent that the fleet does not run, get the
 // identicon, which tells nothing about the agent. A client that accepts
-// application/json and not image/svg+xml gets the face without the SVG:
-// the hash, whether it is stored, the display name, and the tagline.
+// application/json and not image/svg+xml gets the entry of the face, as
+// GET /v1/faces lists it.
 func (rt *routes) get(w http.ResponseWriter, r *http.Request) {
 	s, agent, ok := rt.store(w, r)
 	if !ok {
@@ -108,10 +124,11 @@ func (rt *routes) get(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(f.SVG)
 }
 
-// put answers PUT /v1/faces/{agent}: the body is an SVG of at most 32 KB.
-// It needs the owner role on the agent (fw.ActionAgentEdit). A face that
-// the sanitizer refuses answers 422 with the reason, and the agent keeps
-// the face that it had. The answer is the face without the SVG.
+// put answers PUT /v1/faces/{agent}: the body is an SVG of at most 32 KB,
+// with Content-Type image/svg+xml. It needs the owner role on the agent
+// (fw.ActionAgentEdit). A face that the sanitizer refuses answers 422
+// with the reason in detail, and the agent keeps the face that it had.
+// The answer is the entry of the face.
 func (rt *routes) put(w http.ResponseWriter, r *http.Request) {
 	s, agent, ok := rt.store(w, r)
 	if !ok {
@@ -142,8 +159,8 @@ func (rt *routes) put(w http.ResponseWriter, r *http.Request) {
 	native.WriteJSON(w, http.StatusOK, f)
 }
 
-// remove answers DELETE /v1/faces/{agent} with 204: the agent has its
-// identicon again.
+// remove answers DELETE /v1/faces/{agent} with the entry of the face: the
+// agent has its identicon again.
 func (rt *routes) remove(w http.ResponseWriter, r *http.Request) {
 	s, agent, ok := rt.store(w, r)
 	if !ok {
@@ -154,12 +171,14 @@ func (rt *routes) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	by := writer(r.Context())
-	if err := s.Delete(r.Context(), agent, by); err != nil {
+	f, err := s.Delete(r.Context(), agent, by)
+	if err != nil {
 		rt.fail(w, r, err)
 		return
 	}
 	rt.a.Logger().Info("faces: face removed", "agent", agent, "by", by)
-	w.WriteHeader(http.StatusNoContent)
+	w.Header().Set("ETag", strconv.Quote(f.Hash))
+	native.WriteJSON(w, http.StatusOK, f)
 }
 
 // patchBody is the body of PATCH /v1/faces/{agent}. A field that is absent
@@ -169,8 +188,9 @@ type patchBody struct {
 	Tagline     *string `json:"tagline"`
 }
 
-// patch answers PATCH /v1/faces/{agent} with the face after the change of
-// its display name, at most 64 characters, and its tagline, at most 140.
+// patch answers PATCH /v1/faces/{agent} with the entry of the face after
+// the change of its display name, at most 64 characters, and its tagline,
+// at most 140.
 func (rt *routes) patch(w http.ResponseWriter, r *http.Request) {
 	s, agent, ok := rt.store(w, r)
 	if !ok {
@@ -189,6 +209,7 @@ func (rt *routes) patch(w http.ResponseWriter, r *http.Request) {
 		rt.fail(w, r, err)
 		return
 	}
+	w.Header().Set("ETag", strconv.Quote(f.Hash))
 	native.WriteJSON(w, http.StatusOK, f)
 }
 

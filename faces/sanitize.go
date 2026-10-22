@@ -70,10 +70,14 @@ var refusedElements = map[string]string{
 	"set":           "changes attributes at run time",
 }
 
-// keptAttrs are the attributes of a face: the presentation attributes, the
-// geometry of the kept elements, viewBox, width, height, id, class,
-// transform, and style under its rule.
+// keptAttrs are the attributes of a face: the presentation attributes
+// (cssAttrs), the geometry of the kept elements, viewBox, width, height,
+// id, class, transform, and style under its rule.
 var keptAttrs = map[string]bool{}
+
+// cssAttrs are the presentation attributes, which a browser reads as CSS
+// values.
+var cssAttrs = map[string]bool{}
 
 func init() {
 	for _, a := range strings.Fields(`
@@ -83,7 +87,11 @@ func init() {
 		letter-spacing mask opacity overflow paint-order shape-rendering stop-color stop-opacity
 		stroke stroke-dasharray stroke-dashoffset stroke-linecap stroke-linejoin stroke-miterlimit
 		stroke-opacity stroke-width text-anchor text-decoration text-rendering transform
-		transform-origin unicode-bidi vector-effect visibility word-spacing writing-mode
+		transform-origin unicode-bidi vector-effect visibility word-spacing writing-mode`) {
+		keptAttrs[a] = true
+		cssAttrs[a] = true
+	}
+	for _, a := range strings.Fields(`
 		viewBox width height x y x1 y1 x2 y2 cx cy r rx ry fx fy fr d points pathLength
 		dx dy rotate textLength lengthAdjust offset gradientUnits gradientTransform spreadMethod
 		clipPathUnits maskUnits maskContentUnits preserveAspectRatio id class style version lang`) {
@@ -117,6 +125,11 @@ func Sanitize(svg []byte) ([]byte, error) {
 	d.Strict = true
 	var out bytes.Buffer
 	var stack []string
+	// css gathers the whole text of the open style element. A comment and
+	// a CDATA section split the text into tokens, and the writer joins
+	// them, so the rule reads the text as the writer writes it, at the end
+	// of the element.
+	var css strings.Builder
 	elements, rootDone, seen := 0, false, false
 	for {
 		tok, err := d.Token()
@@ -149,9 +162,7 @@ func Sanitize(svg []byte) ([]byte, error) {
 				continue
 			}
 			if stack[len(stack)-1] == "style" {
-				if err := styleRule("the style element", string(t)); err != nil {
-					return nil, err
-				}
+				css.Write(t)
 			}
 			if err := xml.EscapeText(&out, t); err != nil {
 				return nil, refuse("the text of the face does not encode: %s", err.Error())
@@ -164,6 +175,9 @@ func Sanitize(svg []byte) ([]byte, error) {
 			}
 			if len(stack) == 0 && name != "svg" {
 				return nil, refuse("the root element is <%s>; a face starts with <svg>", name)
+			}
+			if len(stack) > 0 && stack[len(stack)-1] == "style" {
+				return nil, refuse("the element <%s> is inside <style>; a style element holds text alone", name)
 			}
 			if t.Name.Space != "" && t.Name.Space != svgNS {
 				return nil, refuse("the element <%s> is in the namespace %s; a face holds SVG elements only", name, t.Name.Space)
@@ -187,6 +201,7 @@ func Sanitize(svg []byte) ([]byte, error) {
 			if len(stack) == 0 {
 				out.WriteString(` xmlns="` + svgNS + `"`)
 			}
+			written := map[string]bool{}
 			for _, a := range t.Attr {
 				keep, err := checkAttr(name, a)
 				if err != nil {
@@ -195,6 +210,10 @@ func Sanitize(svg []byte) ([]byte, error) {
 				if keep == "" {
 					continue
 				}
+				if written[keep] {
+					return nil, refuse("the attribute %s of <%s> appears twice", keep, name)
+				}
+				written[keep] = true
 				out.WriteString(" " + keep + `="`)
 				if err := xml.EscapeText(&out, []byte(a.Value)); err != nil {
 					return nil, refuse("the attribute %s of <%s> does not encode: %s", keep, name, err.Error())
@@ -203,8 +222,16 @@ func Sanitize(svg []byte) ([]byte, error) {
 			}
 			out.WriteString(">")
 			stack = append(stack, name)
+			if name == "style" {
+				css.Reset()
+			}
 		case xml.EndElement:
 			name := stack[len(stack)-1]
+			if name == "style" {
+				if err := styleRule("the style element", css.String()); err != nil {
+					return nil, err
+				}
+			}
 			stack = stack[:len(stack)-1]
 			out.WriteString("</" + name + ">")
 			if len(stack) == 0 {
@@ -263,6 +290,12 @@ func checkAttr(el string, a xml.Attr) (string, error) {
 		return "", refuse("the attribute %s of <%s> is not allowed in a face; a face keeps the presentation attributes, the geometry of its shapes, viewBox, width, height, id, class, transform, and style", shown, el)
 	case local == "style":
 		return local, styleRule(fmt.Sprintf("the style attribute of <%s>", el), a.Value)
+	case cssAttrs[local]:
+		// A browser reads a presentation attribute as a CSS value, so the
+		// rule of a style holds for it too, beside url(#id).
+		if err := cssRule(fmt.Sprintf("the attribute %s of <%s>", shown, el), a.Value, true); err != nil {
+			return "", err
+		}
 	}
 	if strings.Contains(strings.ToLower(a.Value), "url(") {
 		if !refAttrs[local] {
@@ -278,12 +311,19 @@ func checkAttr(el string, a xml.Attr) (string, error) {
 // styleRule refuses a style that loads a resource or runs code: url(,
 // @import, expression(, another function that loads a resource, or a
 // backslash, which can spell any of them in an escape.
-func styleRule(what, css string) error {
+func styleRule(what, css string) error { return cssRule(what, css, false) }
+
+// cssRule is the rule of a style for a CSS text. With refs, url( stays
+// for the check of localRefs, as a presentation attribute needs it.
+func cssRule(what, css string, refs bool) error {
 	if strings.Contains(css, `\`) {
 		return refuse("%s holds a backslash; a style of a face has no escape", what)
 	}
 	lower := strings.ToLower(css)
 	for _, bad := range cssLoads {
+		if refs && bad == "url(" {
+			continue
+		}
 		if strings.Contains(lower, bad) {
 			return refuse("%s holds %s; a style of a face loads nothing", what, bad)
 		}

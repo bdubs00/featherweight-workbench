@@ -47,15 +47,18 @@ var (
 	ErrConflict = errors.New("faces: the face changed")
 )
 
-// Face is the face of an agent: the SVG, its hash, and the display name
-// and the tagline. Stored is false for the identicon, which the store
-// draws for an agent without a stored SVG.
+// Face is the face of an agent: the SVG, the display name, the tagline,
+// and the hash of the three, which changes when one of them changes.
+// Custom is false for the identicon, which the store draws for an agent
+// without a stored SVG. As JSON, a face is the entry of GET /v1/faces:
+// agent, displayName, tagline, hash, and custom, and by, at, and version
+// for an agent with an entry.
 type Face struct {
 	Agent       string    `json:"agent"`
+	DisplayName string    `json:"displayName"`
+	Tagline     string    `json:"tagline"`
 	Hash        string    `json:"hash"`
-	Stored      bool      `json:"stored"`
-	DisplayName string    `json:"displayName,omitempty"`
-	Tagline     string    `json:"tagline,omitempty"`
+	Custom      bool      `json:"custom"`
 	By          string    `json:"by,omitempty"`
 	At          time.Time `json:"at,omitzero"`
 	// Version is the revision of the entry in the store, zero for an
@@ -138,16 +141,31 @@ func decode(value []byte) (record, []byte, error) {
 func faceOf(agent string, rec record, svg []byte, rev uint64) Face {
 	f := Face{Agent: agent, DisplayName: rec.DisplayName, Tagline: rec.Tagline, By: rec.By, At: rec.At, Version: rev}
 	if len(svg) > 0 {
-		f.SVG, f.Hash, f.Stored = svg, rec.Hash, true
-		return f
+		f.SVG, f.Custom = svg, true
+	} else {
+		f.SVG = Identicon(agent)
 	}
-	f.SVG = Identicon(agent)
-	f.Hash = hashOf(f.SVG)
+	f.Hash = faceHash(f.SVG, f.DisplayName, f.Tagline)
 	return f
 }
 
+// faceHash is the hash of a face: the SHA-256 of the SVG, the display
+// name, and the tagline, with a zero byte between them, in hex.
+func faceHash(svg []byte, displayName, tagline string) string {
+	h := sha256.New()
+	h.Write(svg)
+	h.Write([]byte{0})
+	h.Write([]byte(displayName))
+	h.Write([]byte{0})
+	h.Write([]byte(tagline))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // Get returns the face of an agent: the stored SVG, else the identicon,
-// with the display name and the tagline.
+// with the display name and the tagline. The stored SVG passes the
+// sanitizer again on each read, so a value that something else wrote into
+// the bucket never reaches a browser: such a face, and an entry that does
+// not decode, read as the identicon, and the log says so.
 func (s *Store) Get(ctx context.Context, agent string) (Face, error) {
 	if err := CheckAgent(agent); err != nil {
 		return Face{}, err
@@ -161,7 +179,17 @@ func (s *Store) Get(ctx context.Context, agent string) (Face, error) {
 	}
 	rec, svg, err := decode(e.Value)
 	if err != nil {
-		return Face{}, err
+		s.log.Warn("faces: an entry does not decode; the agent reads as its identicon", "agent", agent, "error", err)
+		return faceOf(agent, record{}, nil, e.Revision), nil
+	}
+	if len(svg) > 0 {
+		clean, err := Sanitize(svg)
+		if err != nil {
+			s.log.Warn("faces: a stored face does not pass the sanitizer; the agent reads as its identicon", "agent", agent, "error", err)
+			svg = nil
+		} else {
+			svg = clean
+		}
 	}
 	return faceOf(agent, rec, svg, e.Revision), nil
 }
@@ -221,14 +249,13 @@ func (s *Store) Patch(ctx context.Context, agent string, displayName, tagline *s
 }
 
 // Delete removes the stored SVG of an agent, so the agent has its
-// identicon again. The display name and the tagline stay; an agent with
-// neither loses its entry.
-func (s *Store) Delete(ctx context.Context, agent, by string) error {
-	_, err := s.change(ctx, agent, by, func(rec *record, have []byte) []byte {
+// identicon again, and returns the face after the change. The display
+// name and the tagline stay; an agent with neither loses its entry.
+func (s *Store) Delete(ctx context.Context, agent, by string) (Face, error) {
+	return s.change(ctx, agent, by, func(rec *record, have []byte) []byte {
 		rec.Hash = ""
 		return nil
 	})
-	return err
 }
 
 // change applies f to the entry of an agent and writes the result at the
@@ -242,18 +269,20 @@ func (s *Store) change(ctx context.Context, agent, by string, f func(rec *record
 		var rec record
 		var have []byte
 		cur, err := s.b.Get(ctx, key)
-		exists := err == nil
+		exists, corrupt := err == nil, false
 		switch {
 		case exists:
 			if rec, have, err = decode(cur.Value); err != nil {
-				return Face{}, err
+				// A write repairs an entry that does not decode.
+				s.log.Warn("faces: an entry does not decode; the write replaces it", "agent", agent, "error", err)
+				rec, have, corrupt = record{}, nil, true
 			}
 		case !errors.Is(err, bucket.ErrNotFound):
 			return Face{}, fmt.Errorf("faces: read the face of %s: %w", agent, err)
 		}
 		before := rec
 		svg := f(&rec, have)
-		if exists && rec == before && bytes.Equal(svg, have) {
+		if exists && !corrupt && rec == before && bytes.Equal(svg, have) {
 			return faceOf(agent, rec, have, cur.Revision), nil
 		}
 		if len(svg) == 0 && rec.DisplayName == "" && rec.Tagline == "" {
