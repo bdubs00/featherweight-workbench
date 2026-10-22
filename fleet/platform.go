@@ -201,6 +201,12 @@ type platformRun struct {
 	// returns.
 	callID string
 	input  json.RawMessage
+	// decided holds the seq of each fw.approval.decided of the run that the
+	// view applied, and streamed is true once the view applied the
+	// fw.run.queued of the run from the stream, so it saw every decision
+	// after it (Decisions).
+	decided  []uint64
+	streamed bool
 }
 
 // addedUsage is the usage that one event added to a run.
@@ -745,6 +751,9 @@ func (p *platform) onEvent(e fw.Event) error {
 		r.run.Apply(e, p.prices)
 		r.track(e, before)
 		r.noteToolInput(e)
+		if e.Type == fw.EvApprovalDecided && len(r.decided) < maxDecided {
+			r.decided = append(r.decided, e.Seq)
+		}
 	case e.Type == fw.EvRunQueued && (!r.queued || kept > r.kept):
 		r.run.Apply(e, p.prices)
 	case (e.Type == fw.EvRunFinished || e.Type == fw.EvRunSuspended) && e.Seq > r.stateSeq:
@@ -758,7 +767,7 @@ func (p *platform) onEvent(e fw.Event) error {
 		p.ends.count(agentOf(r.run, e), name, e)
 	}
 	if e.Type == fw.EvRunQueued {
-		r.queued = true
+		r.queued, r.streamed = true, true
 		r.kept = max(r.kept, kept)
 	}
 	r.member, r.updated = name, now

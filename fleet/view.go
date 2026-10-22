@@ -179,6 +179,76 @@ func (f *Fleet) Runs(ctx context.Context) ([]*fw.Run, error) {
 // records for it.
 var _ BatchView = (*Fleet)(nil)
 
+// maxDecided bounds the decisions that the view keeps of one run.
+const maxDecided = 4096
+
+// AgentRuns lists the runs of the profile agent on the other members that
+// the caller in ctx can see and that started at since or later, newest
+// first, each with its member. It reads the whole view, not the cut
+// records of the members, as Batch does, so a member with many finished
+// runs counts each of them.
+func (f *Fleet) AgentRuns(ctx context.Context, agent string, since time.Time) ([]*fw.Run, error) {
+	var out []*fw.Run
+	if f.platform == nil {
+		return out, nil
+	}
+	for _, r := range f.platform.records(time.Now(), true) {
+		var runs []*fw.Run
+		for _, run := range r.rec.Runs {
+			if run.Agent == agent && !run.CreatedAt.Before(since) {
+				runs = append(runs, run)
+			}
+		}
+		if len(runs) == 0 {
+			continue
+		}
+		ok, _, err := f.allow(ctx, r.rec, runs, false)
+		if err != nil {
+			return nil, err
+		}
+		for i, run := range runs {
+			if ok[i] {
+				out = append(out, withMember(run, r.rec.Name))
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID > out[j].ID
+	})
+	return out, nil
+}
+
+// Decisions returns how many fw.approval.decided events of the run id of
+// another member the view applied from the egress stream, and whether the
+// count is whole: the view applied the fw.run.queued of the run from the
+// stream, so it saw every decision after it. A branch leaves out the
+// decisions that it kept from its source. A decision that the bus brings
+// after a later event of the run does not count, because the view applies
+// no such event. It returns 0 and false for a run that the view does not
+// hold, such as a run that it read from its Task alone.
+func (f *Fleet) Decisions(id string) (int, bool) {
+	p := f.platform
+	if p == nil {
+		return 0, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	r := p.runs[id]
+	if r == nil {
+		return 0, false
+	}
+	n := 0
+	for _, seq := range r.decided {
+		if seq > r.kept {
+			n++
+		}
+	}
+	return n, r.streamed && len(r.decided) < maxDecided
+}
+
 // Batch implements BatchView.
 func (f *Fleet) Batch(ctx context.Context, batch string) (BatchRuns, error) {
 	var out BatchRuns

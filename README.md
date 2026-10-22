@@ -81,7 +81,7 @@ Open `http://localhost:8080/ui` and paste the token. The listener serves the rou
 | `/v1/faces` | the faces of the agents: an SVG, else an identicon, with a display name and a tagline |
 | `/v1/bridges` | the bridges of bossmode: one job split into seats, with one channel for the agents and the operator |
 | `GET /v1/usage` | the usage of the runs, deprecated |
-| `/bossmode`, `GET /v1/bossmode`, `GET /v1/bossmode/stream` | the page of bossmode, its settings, and its stream of events, with `workbench.bossmode.enabled` |
+| `/bossmode`, `GET /v1/bossmode`, `GET /v1/bossmode/stream`, `GET /v1/bossmode/agents/{agent}/today` | the page of bossmode, its settings, its stream of events, and the numbers of the day of an agent, with `workbench.bossmode.enabled` |
 | `/v1/bossmode/skills`, `/v1/bossmode/marketplaces`, `POST /v1/bossmode/runs/{id}/skill` | the skills of the front, the slash command of a person, and the import of a skill by an admin, with `workbench.bossmode.enabled` |
 
 For a desktop client, run the MCP server over standard input and output:

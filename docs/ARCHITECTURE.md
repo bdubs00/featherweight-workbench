@@ -159,6 +159,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `GET /v1/bossmode` | The settings of the page of bossmode: the manager for the caller, the placement, the size of a roster, the theme of the deployment, the worker templates, and the quick chat (section 17.4). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/logo` | The logo of the theme, an SVG that passed the sanitizer or a PNG, with `ETag`, and 404 without a logo (section 17.4). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/stream` | The events of bossmode as server-sent events: the changes of the fleet, the entries and the seats of the bridges, the pages of the wiki, the faces, and the events of other packages that the caller can see, with `Last-Event-ID` to resume (section 17.3). With `workbench.bossmode.enabled`. |
+| `GET /v1/bossmode/agents/{agent}/today` | The numbers of the day of an agent for its profile pane: the runs that the caller can see and that started today in the time zone of the front, their cost with `partial`, and the decisions of people on them; 404 for an agent that the caller cannot view (section 17.8). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/skills` | The catalog of the skills of the front, each with the keys of a slash command (section 20.1). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/marketplaces` | The marketplaces of the configuration, each with the skills that it offers, for an admin (section 20.7.1). With `workbench.bossmode.enabled`. |
 | `POST /v1/bossmode/skills/preview` | Fetch and check a skill from `{"url"}`, `{"marketplace", "name"}`, `{"text"}`, or `{"files"}`, for an admin. It installs nothing (section 20.7.2). |
@@ -1675,7 +1676,7 @@ Bossmode reads the block `bossmode` under the key `workbench` of `fw.yaml` (sect
 
 | Key | Variable | Meaning | Default |
 |---|---|---|---|
-| `workbench.bossmode.enabled` | `FW_WORKBENCH_BOSSMODE_ENABLED` | Serves the page at `/bossmode`, the settings at `/v1/bossmode`, the stream at `/v1/bossmode/stream`, and the skills under `/v1/bossmode/skills` and `/v1/bossmode/runs/{id}/skill` with the tools of section 20. `on` or `off`. | off |
+| `workbench.bossmode.enabled` | `FW_WORKBENCH_BOSSMODE_ENABLED` | Serves the page at `/bossmode`, the settings at `/v1/bossmode`, the stream at `/v1/bossmode/stream`, the numbers of the day of an agent at `/v1/bossmode/agents/{agent}/today`, and the skills under `/v1/bossmode/skills` and `/v1/bossmode/runs/{id}/skill` with the tools of section 20. `on` or `off`. | off |
 | `workbench.bossmode.dir` | `FW_WORKBENCH_BOSSMODE_DIR` | The directory of the static files of the page: the `dist` directory of the build of `featherweight-bossmode`. Empty serves the copy that the binary embeds: the build of the page in `bossmode/static`, else the placeholder in `bossmode/placeholder` (sections 1.2 and 17.2). | empty |
 | `workbench.bossmode.manager` | `FW_WORKBENCH_BOSSMODE_MANAGER` | The profile name of the manager agent. The settings of the page, the bridges, the delegation checks, and the doctor lines read it. Empty means no manager. | empty |
 | `workbench.bossmode.theme.accent` | `FW_WORKBENCH_BOSSMODE_THEME_ACCENT` | The accent color of the page for this deployment, in hex: `#rgb`, `#rrggbb`, or `#rrggbbaa`. Empty means `#FF4D00`. | empty |
@@ -1839,6 +1840,23 @@ The quick chat is a conversation of one person with a general assistant, beside 
 - The page reads the answer as the model writes it from `GET /v1/runs/{id}/live` (the kernel architecture, sections 5.1 and 8.2). For a run on a Task, the request reaches the front, and the relay of the fleet forwards it to the Task and copies the stream back with a flush after each read (section 4.5). The live stream holds no replay, so the page reads the whole answer from the run object or the events when the stream closes.
 
 The profile is an ordinary profile of the pool that runs it. The example in `examples/bossmode` gives the pool of the manager a second profile, `chat`: a short system prompt for a general assistant, the tools `files`, `recall`, `memory`, `clock`, and the tools `front.pages_*` of the wiki, no model, and the memory scope `principal` of the pool, so the notes of the quick chat belong to one person. The pool names `agent: manager`, because a pool with two profiles takes the queue of one. The doctor line names the profile and the pool that runs it (section 17.6).
+
+### 17.8 The day of an agent
+
+The profile pane of the page shows what an agent did today. `GET /v1/bossmode/agents/{agent}/today`, behind the authentication of the native API, answers:
+
+```json
+{"agent": "migrator", "window": "today", "zone": "UTC", "since": "2026-10-22T00:00:00Z",
+ "runs": 12, "costUSD": 1.84, "partial": false, "decisions": 3, "decisionsPartial": false}
+```
+
+- The window is the calendar day of the front: `since` is midnight of the current day in `zone`, the time zone of `time.zone` of the front (the kernel architecture, section 5.8), `UTC` under ax unless `FW_TIME_ZONE` names one. The window is never the last 24 hours.
+- The runs are the runs of the profile that the caller can see and that started at `since` or later: the runs of this process, and the runs of the other members, as `GET /v1/fleet/runs` decides for the caller. Child runs count, each on its own. The front reads the whole view, not the records of section 4.2, so a member with more than 50 finished runs counts each of them. A run of a Task that left the view does not count. `runs` counts them.
+- `costUSD` sums the usage of the runs as the tool `batch` sums a job (`fleet.UsageSum`, section 4.9), at the prices of the workers. `partial` is true when a run has no usage that is final, such as a run that works, and when a run holds tokens without a price, whose cost is unknown.
+- `decisions` counts the events `fw.approval.decided` of the runs: the approvals and the questions that a person allowed, denied, or answered. For a run of this process, the front reads its ledger. For a run of another member, the view counts each such event that it applies from the egress stream (section 4.1). A branch leaves out the decisions that it kept from its source. `decisionsPartial` is true when the front cannot know every decision of a run: the view did not see the `fw.run.queued` of the run on the stream, because the front began to listen later, or the ledger of a run of this process did not read.
+- An agent that the caller cannot view, as a face decides (`faces.Check` with `agent.view`, section 16), and a name that names no agent answer 404. A decision point that does not answer gives 503.
+
+The front keeps no state for the route: each request reads the view and the ledger of this process. The package `bossmode` holds it (`bossmode.TodayOf`).
 
 ## 18. Bridges
 
