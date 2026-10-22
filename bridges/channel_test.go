@@ -2,10 +2,12 @@ package bridges
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // The record of a new bridge has the shape of the contract, and the
@@ -170,6 +172,75 @@ func TestReadMarksAndUnread(t *testing.T) {
 	}
 	if l := list("bob"); l[0].Unread != 1 {
 		t.Fatalf("bob after the decision = %+v", l[0])
+	}
+}
+
+// The unread count reads the newest 2000 entries and counts every entry
+// further back as unread. It stops at 2000 with unreadMore, so the page
+// shows 2000+, and the route and the tool bridge_list say so.
+func TestUnreadStopsAt2000(t *testing.T) {
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	url := serve(t, a)
+	it := open(t, url)
+	ctx := context.Background()
+	// Messages of an agent, unread for bob: 2,500 after the lines of the
+	// open.
+	var msgs []Message
+	if _, err := s.b.update(ctx, it.ID, func(rec *record) error {
+		msgs = msgs[:0]
+		for i := 0; i < 2500; i++ {
+			m := newMessage(From{Kind: KindAgent, Handle: "migrator-1", Run: "r1"}, fmt.Sprintf("status %d", i))
+			m.Seq, m.At = rec.alloc(), time.Now().UTC()
+			msgs = append(msgs, m)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.land(ctx, it.ID, msgs...)
+	list := func() Item {
+		t.Helper()
+		_, body := do(t, http.MethodGet, url+"/v1/bridges", "bob", "")
+		if !strings.Contains(body, `"unreadMore":`) {
+			t.Fatalf("the list has no unreadMore: %s", body)
+		}
+		var out struct {
+			Bridges []Item `json:"bridges"`
+		}
+		decodeJSON(t, body, &out)
+		return out.Bridges[0]
+	}
+	if got := list(); got.Unread != MaxUnread || !got.UnreadMore {
+		t.Fatalf("2,500 unread = %d, more %v", got.Unread, got.UnreadMore)
+	}
+	last := msgs[len(msgs)-1].Seq
+	do(t, http.MethodPut, url+"/v1/bridges/"+it.ID+"/read", "bob", fmt.Sprintf(`{"seq":%d}`, last-MaxUnread))
+	if got := list(); got.Unread != MaxUnread || got.UnreadMore {
+		t.Fatalf("2,000 unread = %d, more %v", got.Unread, got.UnreadMore)
+	}
+	do(t, http.MethodPut, url+"/v1/bridges/"+it.ID+"/read", "bob", fmt.Sprintf(`{"seq":%d}`, last-10))
+	if got := list(); got.Unread != 10 || got.UnreadMore {
+		t.Fatalf("10 unread = %d, more %v", got.Unread, got.UnreadMore)
+	}
+	// The tool bridge_list words the mark too.
+	it2 := open(t, url)
+	if _, err := s.b.update(ctx, it2.ID, func(rec *record) error {
+		msgs = msgs[:0]
+		for i := 0; i < 2100; i++ {
+			m := newMessage(From{Kind: KindAgent, Handle: "reviewer", Run: "r2"}, "x")
+			m.Seq, m.At = rec.alloc(), time.Now().UTC()
+			msgs = append(msgs, m)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.land(ctx, it2.ID, msgs...)
+	cs := connectMCP(t, a, "fleet")
+	res := callTool(t, cs, ToolList, map[string]any{}, metaOf("mgr-conv", "manager", "alice"))
+	if !strings.Contains(textOf(res), "2000+ unread") {
+		t.Fatalf("bridge_list = %s", textOf(res))
 	}
 }
 

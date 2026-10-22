@@ -150,7 +150,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `GET /v1/bossmode` | The settings of the page of bossmode: the manager for the caller, the placement, the size of a roster, and the theme of the deployment (section 17.4). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/logo` | The logo of the theme, an SVG that passed the sanitizer or a PNG, with `ETag`, and 404 without a logo (section 17.4). With `workbench.bossmode.enabled`. |
 | `GET /v1/bossmode/stream` | The events of bossmode as server-sent events: the changes of the fleet, the entries and the seats of the bridges, the pages of the wiki, the faces, and the events of other packages that the caller can see, with `Last-Event-ID` to resume (section 17.3). With `workbench.bossmode.enabled`. |
-| `GET /v1/bridges` | The bridges of the caller and of the teams of the caller, open first, each with `lastSeq`, `read`, `unread`, `memberCount`, and `needsYou` (section 18.10). |
+| `GET /v1/bridges` | The bridges of the caller and of the teams of the caller, open first, each with `lastSeq`, `read`, `unread`, `unreadMore`, `memberCount`, and `needsYou` (section 18.10). `unread` stops at 2,000, and `unreadMore` is then true. |
 | `POST /v1/bridges` | Open a bridge from `{"title", "goal", "placement", "members", "delegation", "caps"}` and seat its members. 201 with the record and its members. |
 | `GET /v1/bridges/{id}` | One bridge with the presence and the activity of each member and the usage of its runs. |
 | `PATCH /v1/bridges/{id}` | Change `title`, `delegation` and `caps` in part, and `state`: `closed` closes the bridge, and `open` opens it again. |
@@ -1746,7 +1746,7 @@ The channel holds one entry per message, under the key `<bridge>.<seq>`, with th
 
 A message of a person or an agent holds at most 64 KB. `GET /v1/bridges/{id}/messages` pages the channel as the transcript route pages a run (section 2.2): without `from` and `before` the page holds the last `limit` entries, `limit` is 50 by default and 500 at most, `before` reads back, `from` reads forward, `next` is the seq to read on from, `prev` is the value of `before` for the page in front and 0 at the first page, and `from` and `before` together answer 400. A seq without an entry, such as the seq of a write that a crash cut, is left out.
 
-The read mark of a person lives in the same bucket, under `<bridge>.read.<the SHA-256 of the subject>`, so no subject enters a key. `PUT /v1/bridges/{id}/read` moves it forward, and a smaller seq leaves it. A message of a person moves the mark of that person to the message. `unread` counts the entries after the mark that count for the caller: a message of a person or an agent other than the caller, and a card that waits for a decision. A message of the caller and a plain system line do not count. The count reads the channel from its newest entry back, at most 2,000 entries, and counts the entries further back as unread. Each process keeps the sender of each entry that it read, so a count reads an entry once.
+The read mark of a person lives in the same bucket, under `<bridge>.read.<the SHA-256 of the subject>`, so no subject enters a key. `PUT /v1/bridges/{id}/read` moves it forward, and a smaller seq leaves it. A message of a person moves the mark of that person to the message. `unread` counts the entries after the mark that count for the caller: a message of a person or an agent other than the caller, and a card that waits for a decision. A message of the caller and a plain system line do not count. The count reads the channel from its newest entry back, at most 2,000 entries, and counts every entry further back as unread. Past that window the count can therefore be too high, because a plain system line or a message of the caller further back counts too. `unread` stops at 2,000, and `unreadMore` is true when the count reached past 2,000, so the page can show "2000+". Each process keeps the sender of each entry that it read, so a count reads an entry once.
 
 ### 18.3 The placements
 
@@ -1840,7 +1840,7 @@ Every route needs the authentication of the native surface. A bridge is for its 
 
 | Method and path | Answer |
 |---|---|
-| `GET /v1/bridges` | `{"bridges": [...]}`: each record without `members`, with `lastSeq`, `read`, `unread`, `memberCount`, fired seats included, and `needsYou`, the members with the presence `needs-you` |
+| `GET /v1/bridges` | `{"bridges": [...]}`: each record without `members`, with `lastSeq`, `read`, `unread`, at most 2,000, `unreadMore`, true when the count reached past 2,000, `memberCount`, fired seats included, and `needsYou`, the members with the presence `needs-you`. Past its window of 2,000 entries, `unread` counts every entry as unread, so it can be too high (section 18.2). |
 | `POST /v1/bridges` | 201 with the record and its members. `delegation` and `caps` are partial. |
 | `GET /v1/bridges/{id}` | The record with its members and `usage` |
 | `PATCH /v1/bridges/{id}` | The record with its members |

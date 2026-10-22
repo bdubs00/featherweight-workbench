@@ -175,11 +175,13 @@ type Activity struct {
 
 // Item is a bridge as GET /v1/bridges lists it for one caller, and as the
 // other routes answer it with Members: the record and the counts of the
-// caller. Usage is set by GET /v1/bridges/{id} alone.
+// caller. Unread is at most MaxUnread, and UnreadMore is true when the
+// count reached past it. Usage is set by GET /v1/bridges/{id} alone.
 type Item struct {
 	Bridge
 	Read        uint64          `json:"read"`
 	Unread      int             `json:"unread"`
+	UnreadMore  bool            `json:"unreadMore"`
 	MemberCount int             `json:"memberCount"`
 	NeedsYou    int             `json:"needsYou"`
 	Usage       *fleet.UsageSum `json:"usage,omitempty"`

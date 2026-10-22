@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
@@ -406,7 +407,11 @@ func (t *toolSet) list(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s of %s.", plural(len(items), "open bridge", "open bridges"), meta.Principal)
 	for _, it := range items {
-		fmt.Fprintf(&b, "\n- %s %q: %s, %d unread, %d wait for the person", it.ID, it.Title, plural(it.MemberCount, "member", "members"), it.Unread, it.NeedsYou)
+		unread := strconv.Itoa(it.Unread)
+		if it.UnreadMore {
+			unread += "+"
+		}
+		fmt.Fprintf(&b, "\n- %s %q: %s, %s unread, %d wait for the person", it.ID, it.Title, plural(it.MemberCount, "member", "members"), unread, it.NeedsYou)
 	}
 	return mcp.Result(b.String(), listResult{Bridges: items}), nil, nil
 }

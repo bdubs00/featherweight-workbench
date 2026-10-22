@@ -104,7 +104,7 @@ func (s *Store) item(ctx context.Context, rec *record, subject string, members b
 	if err != nil {
 		return Item{}, err
 	}
-	unread, err := s.b.unread(fctx, rec, subject, read)
+	unread, more, err := s.b.unread(fctx, rec, subject, read)
 	if err != nil {
 		return Item{}, err
 	}
@@ -113,7 +113,7 @@ func (s *Store) item(ctx context.Context, rec *record, subject string, members b
 		return Item{}, err
 	}
 	ms := decorate(rec, runs, s.taskStates(fctx))
-	it := Item{Bridge: rec.public(), Read: read, Unread: unread, MemberCount: len(rec.Members), NeedsYou: needsYou(ms)}
+	it := Item{Bridge: rec.public(), Read: read, Unread: unread, UnreadMore: more, MemberCount: len(rec.Members), NeedsYou: needsYou(ms)}
 	it.Members = nil
 	if members {
 		it.Members = ms
