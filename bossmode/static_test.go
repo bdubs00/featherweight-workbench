@@ -15,6 +15,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/bridges"
 )
 
 // pageDir writes a built page into a directory inside a parent that also
@@ -173,7 +174,7 @@ func newFrontOff(t *testing.T) string {
 // run that the caller started, and the keys of the bridges.
 func TestSettings(t *testing.T) {
 	t.Setenv(EnvManager, "manager")
-	t.Setenv(EnvPlacement, "spawn")
+	t.Setenv(bridges.EnvPlacement, "spawn")
 	fr := newFront(t, nil)
 	fr.event(t, "ax:team/manager-0", "01MGR1", 1, fw.EvRunQueued, queued("ada", "manager"))
 	fr.event(t, "ax:team/manager-0", "01MGR2", 1, fw.EvRunQueued, queued("bob", "manager"))
@@ -182,7 +183,7 @@ func TestSettings(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &got) != nil {
 		t.Fatalf("settings: %d %s", resp.StatusCode, body)
 	}
-	if got.Manager == nil || *got.Manager != (Manager{Agent: "manager", Member: "team/manager-0", Run: "01MGR1"}) || got.Placement != "spawn" || got.MaxMembers != DefaultMaxMembers {
+	if got.Manager == nil || *got.Manager != (Manager{Agent: "manager", Member: "team/manager-0", Run: "01MGR1"}) || got.Placement != "spawn" || got.MaxMembers != bridges.DefaultMaxMembers {
 		t.Errorf("settings for ada = %s", body)
 	}
 	_, body = get(t, fr.url+"/v1/bossmode", "carol")

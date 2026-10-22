@@ -44,7 +44,7 @@ type worker struct {
 // the front acts as the token. The line reads the configuration alone: a
 // profile that the overlay of a pool adds does not count.
 func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duration) (bool, string) {
-	name, err := load(cfg)
+	name, err := Load(cfg)
 	if err != nil {
 		return false, "manager: " + strings.TrimPrefix(err.Error(), "manager: ")
 	}

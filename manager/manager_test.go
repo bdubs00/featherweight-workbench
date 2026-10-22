@@ -47,8 +47,13 @@ func TestProfileAndTheManagerRun(t *testing.T) {
 	if Profile(none) != "" || Profile(nil) != "" || (Actor{Agent: ""}).IsManager(none) {
 		t.Fatal("a configuration without a manager has one")
 	}
-	if _, err := load(withBlock(t, "bossmode: [1, 2]\n")); err == nil {
+	if _, err := Load(withBlock(t, "bossmode: [1, 2]\n")); err == nil {
 		t.Fatal("a block that does not decode loaded")
+	}
+	// A value that is no profile name is an error, and no manager.
+	t.Setenv(EnvManager, "two words")
+	if name, err := Load(cfg); err == nil || name != "" || !strings.Contains(err.Error(), "workbench.bossmode.manager") || Profile(cfg) != "" {
+		t.Fatalf("a manager that is no name = %q, %v", name, err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/manager"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,26 +27,26 @@ func withBlock(t *testing.T, text string) *fw.Config {
 	return cfg
 }
 
+// Load reads the block bossmode, and the manager through the package
+// manager, which reads that key alone; the variables win over the file.
 func TestLoad(t *testing.T) {
+	t.Setenv(EnvEnabled, "")
+	t.Setenv(EnvDir, "")
+	t.Setenv(EnvManager, "")
 	cfg := withBlock(t, "bossmode: {enabled: true, dir: /srv/page, manager: manager}\nbridges: {placement: spawn, maxMembers: 4}\n")
 	c, err := Load(cfg)
 	if err != nil || c != (Config{Enabled: true, Dir: "/srv/page", Manager: "manager"}) {
 		t.Fatalf("Load = %+v, %v", c, err)
 	}
-	if b := LoadBridges(cfg); b != (Bridges{Placement: "spawn", MaxMembers: 4}) {
-		t.Errorf("LoadBridges = %+v", b)
+	if m := manager.Profile(cfg); m != c.Manager {
+		t.Errorf("the manager of bossmode %q is not the manager of the package manager %q", c.Manager, m)
 	}
 	t.Setenv(EnvEnabled, "off")
 	t.Setenv(EnvDir, "/other")
 	t.Setenv(EnvManager, "boss")
-	t.Setenv(EnvPlacement, "sideways")
-	t.Setenv(EnvMaxMembers, "-3")
 	c, err = Load(cfg)
 	if err != nil || c != (Config{Dir: "/other", Manager: "boss"}) {
 		t.Errorf("Load with the variables = %+v, %v", c, err)
-	}
-	if b := LoadBridges(cfg); b != (Bridges{Placement: DefaultPlacement, MaxMembers: DefaultMaxMembers}) {
-		t.Errorf("LoadBridges with values that do not fit = %+v", b)
 	}
 	t.Setenv(EnvEnabled, "maybe")
 	if _, err := Load(cfg); err == nil || !strings.Contains(err.Error(), EnvEnabled) {

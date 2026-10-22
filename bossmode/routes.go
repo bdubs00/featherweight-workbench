@@ -11,6 +11,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 )
@@ -37,7 +38,7 @@ func extension(k *native.Kit) error {
 
 // Settings is the answer of GET /v1/bossmode: the manager, when the
 // configuration names one, and the keys of workbench.bridges that the page
-// reads.
+// reads, as the package bridges reads them (bridges.Load).
 type Settings struct {
 	Manager    *Manager `json:"manager"`
 	Placement  string   `json:"placement"`
@@ -60,7 +61,14 @@ type Manager struct {
 func settingsRoute(k *native.Kit, c Config) http.HandlerFunc {
 	a := k.Agent()
 	return func(w http.ResponseWriter, r *http.Request) {
-		b := LoadBridges(a.Config())
+		// The package bridges reads workbench.bridges. A block that does not
+		// load stops the start of the bridges, so a process that serves
+		// loads it.
+		b, err := bridges.Load(a.Config())
+		if err != nil {
+			k.Fail(w, r, err)
+			return
+		}
 		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers}
 		if c.Manager != "" {
 			m, err := managerOf(r.Context(), a, c.Manager)

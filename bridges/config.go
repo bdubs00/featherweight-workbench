@@ -2,8 +2,10 @@ package bridges
 
 // This file reads the configuration of the bridges: the block bridges under
 // the top-level key workbench of fw.yaml, which the package teams claims,
-// the variables FW_WORKBENCH_BRIDGES_*, which win over the file, and the
-// profile of the manager from workbench.bossmode.manager.
+// and the variables FW_WORKBENCH_BRIDGES_*, which win over the file. This
+// package is the one reader of the block: the settings of the page of
+// bossmode ask Load. The profile of the manager, workbench.bossmode.manager,
+// comes from the package manager (manager.Load), its one reader.
 
 import (
 	"fmt"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
+	"github.com/bdubs00/featherweight-workbench/manager"
 	"github.com/bdubs00/featherweight-workbench/teams"
 )
 
@@ -23,10 +26,9 @@ const (
 	EnvMaxMessages        = "FW_WORKBENCH_BRIDGES_MAX_MESSAGES"
 	EnvMaxFanoutPerMinute = "FW_WORKBENCH_BRIDGES_MAX_FANOUT_PER_MINUTE"
 	EnvMaxPairMessages    = "FW_WORKBENCH_BRIDGES_MAX_PAIR_MESSAGES"
-	// EnvManager names the profile of the manager. The block
-	// workbench.bossmode belongs to the package of bossmode; this package
-	// reads its key manager alone.
-	EnvManager = "FW_WORKBENCH_BOSSMODE_MANAGER"
+	// EnvManager names the profile of the manager. The package manager
+	// reads it with workbench.bossmode.manager (manager.Load).
+	EnvManager = manager.EnvManager
 )
 
 // Defaults and bounds of the configuration.
@@ -48,8 +50,8 @@ const (
 // Config configures the bridges. Placement is the default placement of a
 // new bridge, MaxMembers bounds the seats of a bridge, and the three caps
 // are the defaults of the caps of a new bridge. Manager is the profile of
-// the manager, from workbench.bossmode.manager, and empty means no
-// manager. No key names a model.
+// the manager, from workbench.bossmode.manager through manager.Load, and
+// empty means no manager. No key names a model.
 type Config struct {
 	Placement          string `yaml:"placement"`
 	MaxMembers         int    `yaml:"maxMembers"`
@@ -61,10 +63,7 @@ type Config struct {
 
 // block is the part of the workbench block that this package reads.
 type block struct {
-	Bridges  Config `yaml:"bridges"`
-	Bossmode struct {
-		Manager string `yaml:"manager"`
-	} `yaml:"bossmode"`
+	Bridges Config `yaml:"bridges"`
 }
 
 // Load reads the configuration of the bridges from the block and the
@@ -78,12 +77,13 @@ func Load(cfg *fw.Config) (Config, error) {
 		}
 	}
 	c := b.Bridges
-	c.Manager = strings.TrimSpace(b.Bossmode.Manager)
+	name, err := manager.Load(cfg)
+	if err != nil {
+		return Config{}, err
+	}
+	c.Manager = name
 	if v, ok := os.LookupEnv(EnvPlacement); ok && strings.TrimSpace(v) != "" {
 		c.Placement = v
-	}
-	if v, ok := os.LookupEnv(EnvManager); ok {
-		c.Manager = strings.TrimSpace(v)
 	}
 	for _, e := range []struct {
 		env string

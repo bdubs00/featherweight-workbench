@@ -40,8 +40,11 @@ func init() {
 	fw.RegisterExtension(Block)
 }
 
-// block is the part of the block workbench that this package reads. The
-// package bossmode owns the rest of workbench.bossmode.
+// block is the part of the block workbench that this package reads: the
+// key manager of workbench.bossmode. This package is the one reader of
+// that key, because it sits below the packages bridges and bossmode, which
+// ask it through Load. The package bossmode reads the other keys of
+// workbench.bossmode.
 type block struct {
 	Bossmode struct {
 		Manager string `yaml:"manager"`
@@ -50,24 +53,30 @@ type block struct {
 
 // Profile returns the profile of the manager: EnvManager when it is set,
 // else workbench.bossmode.manager, else "", which means no manager. A
-// block that does not decode gives "", and the doctor line names the
-// error.
+// block that does not decode, and a value that is not a profile name,
+// give "", and the doctor line names the error.
 func Profile(cfg *fw.Config) string {
-	name, _ := load(cfg)
+	name, _ := Load(cfg)
 	return name
 }
 
-// load is Profile with the error of a block that does not decode.
-func load(cfg *fw.Config) (string, error) {
+// Load is Profile with the error of a block that does not decode and of a
+// value that is not a profile name, such as a value with a space or a
+// slash. The packages bridges and bossmode read the profile of the manager
+// through it, so the key has one reader.
+func Load(cfg *fw.Config) (string, error) {
+	name := ""
 	if v, ok := os.LookupEnv(EnvManager); ok && strings.TrimSpace(v) != "" {
-		return strings.TrimSpace(v), nil
+		name = strings.TrimSpace(v)
+	} else if cfg != nil {
+		var b block
+		if _, err := cfg.Extension(Block, &b); err != nil {
+			return "", fmt.Errorf("manager: read workbench.bossmode.manager: %w", err)
+		}
+		name = strings.TrimSpace(b.Bossmode.Manager)
 	}
-	if cfg == nil {
-		return "", nil
+	if strings.ContainsAny(name, " \t\r\n/") {
+		return "", fmt.Errorf("manager: workbench.bossmode.manager (%s) %q is not a profile name", EnvManager, name)
 	}
-	var b block
-	if _, err := cfg.Extension(Block, &b); err != nil {
-		return "", fmt.Errorf("manager: read workbench.bossmode.manager: %w", err)
-	}
-	return strings.TrimSpace(b.Bossmode.Manager), nil
+	return name, nil
 }
