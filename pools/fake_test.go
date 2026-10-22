@@ -279,6 +279,7 @@ func testFront() Front {
 		Egress:      "fw.events",
 		Intake:      "fw.jobs",
 		EgressTypes: []string{fw.EvRunQueued, fw.EvRunFinished},
+		MaxBytes:    4096,
 		Bus:         fw.BusConfig{Driver: "nats", URL: "nats://nats.agents.svc.cluster.local:4222"},
 		AX:          fw.AXConfig{Server: "ax-server:8080", Router: "atenet-router"},
 		TokenEnv:    "FW_API_TOKEN",

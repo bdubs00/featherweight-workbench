@@ -343,3 +343,99 @@ func TestBoundInput(t *testing.T) {
 		t.Errorf("an input that does not decode gave %s", got)
 	}
 }
+
+// A worker of a pool publishes its tool calls with each string cut to
+// EgressMaxBytes, and the front words the activity of its run from the cut
+// input while the call runs.
+func TestWatchActivityFromACutStream(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "")
+	bus := fw.NewMemBus()
+	front := newMember(t, bus, "front", slowFront)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := front.f.Watch(ctx)
+	// A spy sees the call as the stream carries it.
+	onStream := make(chan fw.ToolRequestedData, 1)
+	stop, err := bus.Subscribe(ctx, "fw.events.>", func(e fw.Event) error {
+		var d fw.ToolRequestedData
+		if e.Type == fw.EvToolRequested && e.Decode(&d) == nil {
+			onStream <- d
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+
+	release := make(chan struct{})
+	bash := fw.NewTool(fw.ToolSpec{Name: "bash"}, func(ctx context.Context, _ json.RawMessage) (fw.ToolResult, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return fw.TextResult(strings.Repeat("out", 3000)), nil
+	})
+	command := "echo " + strings.Repeat("a", 10000)
+	calls := 0
+	model := fw.ModelFunc{StreamFn: func(context.Context, *fw.Request, func(fw.Delta)) (*fw.Response, error) {
+		calls++
+		if calls == 1 {
+			in, _ := json.Marshal(map[string]string{"command": command})
+			return &fw.Response{Content: []fw.Block{{Type: fw.BlockToolUse, ID: "call-1", Name: "bash", Input: in}}, StopReason: fw.StopToolUse}, nil
+		}
+		return &fw.Response{Content: []fw.Block{fw.Text("done")}, StopReason: fw.StopEndTurn}, nil
+	}}
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	cfg.Node = "box:9090"
+	cfg.Bus.Egress = "fw.events"
+	cfg.Bus.EgressTypes = EgressTypes
+	cfg.Bus.EgressMaxBytes = EgressMaxBytes
+	cfg.Agents = map[string]fw.AgentProfile{"default": {}}
+	worker, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(fw.NoAuthn{}), fw.WithModel(model),
+		fw.WithTools(bash), fw.WithLedger(fw.NewMemLedger()), fw.WithBus(bus), fw.WithLogger(quietLogger()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		c, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		worker.Close(c)
+	})
+	r, err := worker.Start(as("ada"), "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `Ran "echo ` + strings.Repeat("a", 74) + `…"`
+	deadline := time.After(10 * time.Second)
+	for found := false; !found; {
+		select {
+		case c := <-ch:
+			if c.Kind == ChangeRun && c.Run.ID == r.ID && c.Run.Activity != nil && c.Run.Activity.Tool == "bash" {
+				if c.Activity != want || ActivityPhrase(c.Run) != want {
+					t.Fatalf("activity = %q and %q, want %q", c.Activity, ActivityPhrase(c.Run), want)
+				}
+				found = true
+			}
+		case <-deadline:
+			t.Fatal("no change named the call of bash")
+		}
+	}
+	var sent map[string]string
+	if d := <-onStream; json.Unmarshal(d.Input, &sent) != nil || !strings.HasSuffix(sent["command"], " [cut 5909 of 10005 bytes]") {
+		t.Errorf("the stream carried the input %.80q...", d.Input)
+	}
+	in, kept := front.f.toolInput(r.ID, "call-1")
+	if !kept || len(in) > ActivityInputLimit || !json.Valid(in) {
+		t.Errorf("the view keeps %d bytes, kept %v: %.120s", len(in), kept, in)
+	}
+	close(release)
+	eventually(t, "the run ends on the front", func() bool {
+		got, err := front.f.Run(context.Background(), r.ID)
+		return err == nil && got.State == fw.StateCompleted && got.Activity == nil
+	})
+	if _, kept := front.f.toolInput(r.ID, "call-1"); kept {
+		t.Error("the view keeps the input after the run ended")
+	}
+}

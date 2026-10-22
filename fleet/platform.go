@@ -53,15 +53,26 @@ const fillRepairInterval = time.Minute
 
 // EgressTypes are the ledger event types that a worker publishes for the
 // view of the front: enough for the state, the title, the pending
-// approval, and the turns of a run, and nothing of its content. The usage
-// of a run comes from the totals that fw.run.finished and fw.run.suspended
-// carry, so fw.model.responded, which holds the content, stays out. A
-// worker sets bus.egressTypes to this list.
+// approval, the turns, the activity, and the reactions of a run. The
+// usage of a run comes from the totals that fw.run.finished and
+// fw.run.suspended carry, so fw.model.responded, which holds the content
+// of the model, stays out. fw.tool.requested and fw.tool.responded carry
+// the input and the output of each tool call for the activity of the run
+// (watch.go), each string cut to EgressMaxBytes. A worker sets
+// bus.egressTypes to this list.
 var EgressTypes = []string{
 	fw.EvRunQueued, fw.EvRunStarted, fw.EvRunResumed, fw.EvRunSuspended, fw.EvRunFinished,
 	fw.EvApprovalRequested, fw.EvApprovalDecided, fw.EvRunAnnotated, fw.EvTurnStarted, fw.EvMessageReceived,
 	fw.EvRunChild, fw.EvOutcomeEvaluated,
+	fw.EvToolRequested, fw.EvToolResponded, fw.EvTurnFinished, fw.EvRunReacted,
 }
+
+// EgressMaxBytes is bus.egressMaxBytes of a worker of a pool, unless the
+// pool sets it: the egress of the worker cuts each string value in the
+// data of a published event to this many bytes, with a note of the cut,
+// so the stream carries no whole tool input or output. The ledger of the
+// worker stays whole.
+const EgressMaxBytes = 4096
 
 // platform is the view of the members that the platforms know.
 type platform struct {

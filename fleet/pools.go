@@ -46,6 +46,7 @@ func LoadPools(cfg *fw.Config, fc Config) ([]*pools.Pool, error) {
 		Egress:      fc.Egress,
 		Intake:      fc.Intake,
 		EgressTypes: EgressTypes,
+		MaxBytes:    EgressMaxBytes,
 		Bus:         cfg.Bus,
 		AX:          cfg.AX,
 		TokenEnv:    tokenEnv,
