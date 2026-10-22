@@ -15,6 +15,11 @@
 # the front copies into each worker, and TICKETS_TOKEN, the token of the
 # ticket system. This file holds neither value.
 #
+# The template general below says what a worker is without its agent. An
+# operator creates an agent with workers from it while the front runs:
+# agent_put, or PUT /v1/agents/{name}, makes a runtime pool of two workers
+# for a new agent (docs/ARCHITECTURE.md section 14.10).
+#
 # Review a change before the front applies it:
 #   fw-workbench pools render -config fw.yaml
 
@@ -36,6 +41,42 @@ workbench:
     atespaces: [default]
     egress: fw.events
     intake: fw.jobs
+  templates:
+    # A new agent without a template of its own gets this one.
+    - name: general
+      default: true
+      # Raise the generation with each change of this template, as for a
+      # pool.
+      generation: 1
+      image: ghcr.io/bdubs00/featherweight-kernel@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      env:
+        - name: OPENAI_API_KEY
+          value: the-proxy-holds-the-key
+      egress:
+        rules:
+          - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}
+          - http: {hostnames: [model-proxy.models.svc.cluster.local], ports: [8080]}
+      resources:
+        requests: {cpu: 500m, memory: 1Gi}
+        limits: {cpu: "2", memory: 2Gi}
+      # The base configuration of the workers, with no agents: the profile
+      # of each runtime pool comes from the overlay of the pool.
+      fw:
+        model: openai/example-model
+        bus:
+          url: ws://nats.agents.svc.cluster.local:8080
+        providers:
+          openai:
+            baseUrl: http://model-proxy.models.svc.cluster.local:8080/v1
+            apiKeyEnv: OPENAI_API_KEY
+        tools:
+          builtin: [files, clock]
+        policy:
+          default: allow
+        # A person who creates an agent becomes its owner, so the front
+        # reads the runs of the workers with the static token as an admin.
+        access:
+          admins: ["kind:token"]
   pools:
     - name: triage
       replicas: 3

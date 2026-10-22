@@ -342,6 +342,7 @@ The fleet reads the block `fleet` under the key `workbench` of `fw.yaml`, which 
 | `workbench.fleet.suspendAfter` | `FW_WORKBENCH_FLEET_SUSPEND_AFTER` | How long a Task stays idle before the front suspends it, a duration such as `10m`, or `off` (section 4.12) | `10m` with atespaces, else off |
 | `workbench.fleet.wakeOnQueue` | `FW_WORKBENCH_FLEET_WAKE_ON_QUEUE` | Whether the front wakes the sleeping Tasks of a profile when jobs wait in its intake queue, `on` or `off` (section 4.13). It needs `atespaces` and `intake`. | on with atespaces and intake, else off |
 | `workbench.pools` | none | The pools of Tasks that the front keeps, each with its image, the configuration of its workers, and its replica count (section 14) | none |
+| `workbench.templates` | none | The worker templates: what a worker is, without its agent. A pool of the file can name one, and a person creates a runtime pool from one while the front runs (section 14.10). | none |
 
 A worker needs no key of this block: it sets `bus.driver`, `bus.url`, `bus.egress`, `bus.intake`, and `tokens.url` of the kernel. On a NATS bus, the front and the workers must name the same JetStream stream in `bus.options.stream`, `FW` by default, because the front reads the queues from it (section 4.13). The front names its sources:
 
@@ -1203,6 +1204,7 @@ Each entry of `workbench.pools` has these keys. A key that a pool does not know 
 | Key | Meaning | Default |
 |---|---|---|
 | `name` | The name of the pool. Its Tasks are `<name>-<index>`, and their Workspaces are `<name>-<index>-ws`. | required |
+| `template` | An entry of `workbench.templates`. The pool takes every key of the template that it does not set (section 14.10). | none |
 | `atespace` | The atespace of the Tasks. It must be one of `workbench.fleet.atespaces`. | the only atespace of the fleet |
 | `replicas` | The number of Tasks. With `0`, the front deletes every Task of the pool once the Task is idle. A Task that failed after it ran waits for a person (section 14.4). | required |
 | `image` | The worker image by digest, `<image>@sha256:<64 hex digits>`. Substrate pulls an actor image only by digest. | required |
@@ -1417,6 +1419,58 @@ Profiles. On a front with pools, `agent_put`, `agent_delete`, and `PUT` and `DEL
 `agents_list` and `agent_get` show the profiles that the workers of each pool run. Each has `pool`, `overlay` (`added`, `replaced`, or empty), `by` and `at` for an entry of the overlay, and `workerPolicy`, the policy of the workers with the rules of the overlay. A profile of the front carries `front`. The tools of the workers live in their Tasks, so a profile of a pool carries no abilities. The text of `agent_get` words the policy of the workers instead.
 
 Rules. Always allow on the approval card and `approve` with `rule` turn a pending approval of a worker into an allow rule of its pool. The rule is the name of the tool as the policy names it, such as `github.create_pull_request`, and for `bash` the whole tool, without a pattern. The pool is the pool whose Task runs the run. The caller needs the owner role on the profile of the run in that pool. The entry holds the agent, the run, the subject of the caller, the time, and the note, so a person sees why the rule exists, and the dry run names it. Before it writes anything, the front refuses a rule in these cases: the ask comes from a flag, such as `destructive`; the reason is no rule, such as a rerun after a resume; the policy of the profile asks too, which a rule of the pool cannot loosen; or the workers ask a control plane (`fw.policy.external`). The rule applies to every profile that the workers of the pool run. `POST /v1/runs/{id}/approvals/{approval}/rule` writes the rule for the page and decides nothing; the page allows the approval next. It answers 409 when no pool runs the run.
+
+### 14.10 Templates and runtime pools
+
+A pool of the file changes only when a person edits `fw.yaml` and restarts the front. A template lets the deployer say once what a worker is: the image, the egress, the variables, and the base configuration of the worker. An operator then creates a pool from a template while the front runs, also in the same step as a new agent, and never sees an image digest or an egress rule. Such a pool is a runtime pool. The front keeps it in a store that every replica shares, and each pass runs it as it runs a pool of the file.
+
+The templates. The block `workbench.templates` lists the templates. A key that a template does not know is an error, so a template sets no `replicas`, no `agent`, and no `intake`. Each entry has these keys:
+
+| Key | Meaning | Default |
+|---|---|---|
+| `name` | The name of the template, a lowercase name of letters, digits, and hyphens | required |
+| `default` | `true` makes this template the one that a new agent gets when its request names none. At most one template sets it. | `false` |
+| `atespace` | The atespace of the Tasks, as for a pool | the only atespace of the fleet |
+| `image` | The worker image by digest | required |
+| `generation` | A number of 0 or more that orders the configurations of the template. A pool from the template adds it to its own generation, so a deploy that raises it orders every pool of the template (section 14.5). | `0` |
+| `env`, `egress`, `resources`, `files` | As for a pool (section 14.1) | as for a pool |
+| `fw` | The base configuration of the workers: the model, the providers, the bus, the policy, and the tools. It names no `agents`. | none |
+
+The front checks each template at its start as a pool of one worker, as far as the checks of a pool apply without an agent (section 14.1). The check gives the template a profile with an access block that names an owner, because `agent_put` gives a new profile its creator as its owner (section 10). A problem stops the start, and the error names the key, for example `workbench.templates[0] (python): image "ghcr.io/example/fw:latest" has no digest`. Three rules differ from a pool:
+
+- A template without a model is valid. A pool from it refuses to render until the pool, the profile, or the template sets one, with the error of section 14.1. The front never adds a model.
+- `fw.agents` in a template is an error.
+- The static token must see the runs of an agent that a person creates from the template. Such an agent has an access block, so the template needs `kind:token` in `fw.access.admins`. Else the error says to add it.
+
+The front reads the variables that a template copies with `fromEnv` at its start, as for a pool (section 14.6).
+
+A pool of the file from a template. The key `template` of a pool names a template. The pool then takes every key of the template that it does not set:
+
+- `image`, `atespace`, and `egress` come from the template when the pool sets none.
+- The variables and the files of both go together. A variable of the pool replaces the variable of the template of the same name, and a file of the pool replaces the file of the same path.
+- Each of `requests.cpu`, `requests.memory`, `limits.cpu`, and `limits.memory` that the pool sets replaces the value of the template.
+- `fw` merges key by key, as the defaults of the front do, and the keys of the pool win. The pool names its agents in `fw.agents`.
+- The generation of the pool is its own plus the one of the template.
+
+The runtime pools. On a NATS bus, the runtime pools live in the key-value bucket `<stream>_POOLS`, where `<stream>` is `bus.options.stream`, `FW` by default. Each pool is the entry `pool.<name>`, with the name in base64url, and its value is the entry as JSON. On the bus `mem`, the store lives in the memory of the process, and another bus keeps no runtime pool. The front opens the store only when the configuration names a template. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_POOLS.>`. An entry has these fields:
+
+| Field | Meaning |
+|---|---|
+| `name` | The name of the pool and the prefix of its Tasks, as for a pool of the file |
+| `template` | The template that the pool renders from |
+| `agent` | The profile whose queue the workers take. The profile lives in the overlay of the pool (section 14.9). |
+| `replicas` | The number of Tasks, 0 to 64 |
+| `intake` | The queue of the workers, empty for the default `<workbench.fleet.intake>.<agent>` |
+| `revision` | Free text, as for a pool of the file |
+| `generation` | The count of the changes of the entry. The store sets 1 at the create and raises it with every change. |
+| `env` | The variables that the pool sets over its template, at most 32, each with `name` and a `value` of at most 4,096 bytes. A runtime pool copies no variable of the front, so it has no `fromEnv`. |
+| `resources` | The values of `requests` and `limits` that the pool sets over its template, each a quantity such as `500m`, `2`, or `1Gi` |
+| `by`, `at` | Who wrote the entry last, and when |
+| `deleting` | True after a person deleted the pool, until its Tasks are gone (below) |
+
+Every write is a compare-and-swap on the revision of the entry: the front reads the entry, changes it, and writes at the revision that it read. When another replica wrote in between, the bucket refuses the write, and the front reads again, up to eight times. So two replicas never lose a pool. The bucket keeps the last ten values of each entry with the delete marker. A pool that a person creates again under an old name starts one generation above the newest value that the bucket keeps of the old one.
+
+How a runtime pool renders. The front builds the pool from its template and its entry, as a pool of the file that names the template (above), with `env` and `resources` of the entry in the place of the keys of a pool. The profile of the agent comes from the overlay of the pool alone, so the pool renders no Task until the overlay holds that profile, and its state says so. The check of the model waits for the overlay too. The generation of the pool is the generation of its entry plus the one of its template. The marks of section 14.3 hold: each Task carries `FW_POOL` and `FW_POOL_SPEC`, the hash covers the rendered configuration with the overlay, and the marker `<name>-generation` holds the generation. `FW_POOL_BASE` is the hash of the template and the entry without the overlay. Every replica reads the entry from one store, so two replicas hold the same generation and the same configuration. A deploy that changes a template raises its `generation`, and the replica with the newer template wins, as section 14.5 says.
 
 ## 15. Pages
 

@@ -1,10 +1,12 @@
 // Package pools keeps sets of ax Tasks that run one agent profile
-// (docs/ARCHITECTURE.md section 13). A pool names the image, the fw
+// (docs/ARCHITECTURE.md section 14). A pool names the image, the fw
 // configuration of the workers, their environment, their egress, and the
 // number of Tasks. This package reads and checks the pools of the block
-// workbench.pools, renders the Workspace and the Task of each worker, and
-// reconciles the Tasks of a pool with the ax API. The fleet runs the
-// reconciler at every interval and shows the state of each pool.
+// workbench.pools and the worker templates of workbench.templates, builds
+// the runtime pools that people create from a template, renders the
+// Workspace and the Task of each worker, and reconciles the Tasks of a
+// pool with the ax API. The fleet runs the reconciler at every interval
+// and shows the state of each pool.
 package pools
 
 import (
@@ -83,8 +85,13 @@ const (
 // secret. Egress is spec.egress of each Task, Resources its resources,
 // and Files the extra files of its Workspace. FW is the fw.yaml of the
 // workers: the agents, the policy, the model, and the providers.
+//
+// Template names an entry of workbench.templates. The pool then takes
+// every key of the template that it does not set (Template.apply), and its
+// generation is its own plus the one of the template.
 type Pool struct {
 	Name       string           `yaml:"name"`
+	Template   string           `yaml:"template,omitempty"`
 	Atespace   string           `yaml:"atespace,omitempty"`
 	Replicas   *int             `yaml:"replicas"`
 	Image      string           `yaml:"image"`
@@ -109,6 +116,17 @@ type Pool struct {
 	warnings []string
 	front    Front   // what the pool took from the front, for a render with an overlay
 	overlay  Overlay // the overlay that WithOverlay merged, empty for the configuration alone
+
+	// label names the pool in an error in place of its position in
+	// workbench.pools: a template or a runtime pool. lenient leaves out
+	// the check of the model, for a template and for a runtime pool before
+	// its overlay gives it a profile. probe marks the pool with which Load
+	// checks a template. runtime is the entry of a runtime pool, nil for a
+	// pool of the file.
+	label   string
+	lenient bool
+	probe   bool
+	runtime *Runtime
 }
 
 // EnvVar is one variable of the workers. Exactly one of Value and FromEnv
@@ -163,12 +181,28 @@ func (p *Pool) baseHash() string {
 func (p *Pool) Warnings() []string { return p.warnings }
 
 // AgentAccess returns the access block of the profile of the pool in the
-// configuration of the workers, or nil.
+// configuration of the workers with the overlay, or nil.
 func (p *Pool) AgentAccess() *fw.Access {
-	if p.worker == nil {
+	return p.Profiles()[p.Agent].Access
+}
+
+// Source says where the pool comes from: SourceFile for an entry of
+// workbench.pools, SourceRuntime for a pool of the store of the front.
+func (p *Pool) Source() string {
+	if p.runtime != nil {
+		return SourceRuntime
+	}
+	return SourceFile
+}
+
+// Runtime returns the entry of a runtime pool, or nil for a pool of the
+// file.
+func (p *Pool) Runtime() *Runtime {
+	if p.runtime == nil {
 		return nil
 	}
-	return p.worker.Agents[p.Agent].Access
+	c := *p.runtime
+	return &c
 }
 
 // TaskName returns the name of the Task of the pool at index.
@@ -177,8 +211,12 @@ func (p *Pool) TaskName(index int) string { return p.Name + "-" + strconv.Itoa(i
 // WorkspaceName returns the name of the Workspace of the Task at index.
 func (p *Pool) WorkspaceName(index int) string { return p.TaskName(index) + "-ws" }
 
-// key names the pool in an error: its position and its name.
+// key names the pool in an error: its position and its name, or its
+// label.
 func (p *Pool) key() string {
+	if p.label != "" {
+		return p.label
+	}
 	if p.Name == "" {
 		return fmt.Sprintf("workbench.pools[%d]", p.index)
 	}
@@ -208,19 +246,38 @@ func FromEnv(list []*Pool) []string {
 // front, fills the defaults, renders the configuration of the workers, and
 // checks every value. It returns no pool and no error when the block
 // names none, and one error that lists every problem, each with its key
-// and what to set, when a value does not fit.
+// and what to set, when a value does not fit. It checks the templates of
+// workbench.templates too, because a pool can name one (LoadAll).
 func Load(cfg *fw.Config, front Front) ([]*Pool, error) {
+	list, _, err := LoadAll(cfg, front)
+	return list, err
+}
+
+// LoadAll is Load for the pools and the templates of the configuration of
+// the front. It checks each template as a pool of one worker, as far as
+// the checks of a pool apply without an agent, and gives a pool that names
+// a template every key of the template that the pool does not set.
+func LoadAll(cfg *fw.Config, front Front) ([]*Pool, []*Template, error) {
 	list, err := decode(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if len(list) == 0 {
-		return nil, nil
+	templates, err := decodeTemplates(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(list) == 0 && len(templates) == 0 {
+		return nil, nil, nil
 	}
 	if front.TokenEnv == "" {
 		front.TokenEnv = DefaultTokenEnv
 	}
-	problems := front.problems()
+	what := "workbench.pools"
+	if len(list) == 0 {
+		what = "workbench.templates"
+	}
+	problems := front.problems(what)
+	problems = append(problems, checkTemplates(templates, front)...)
 	names := map[string]int{}
 	for i, p := range list {
 		if p == nil {
@@ -233,71 +290,90 @@ func Load(cfg *fw.Config, front Front) ([]*Pool, error) {
 			problems = append(problems, fmt.Sprintf("%s has the name of workbench.pools[%d]; each pool needs a name of its own", p.key(), j))
 		}
 		names[p.Name] = i
+		if p.Template = strings.TrimSpace(p.Template); p.Template != "" {
+			t := TemplateNamed(templates, p.Template)
+			if t == nil {
+				problems = append(problems, fmt.Sprintf("%s: template %q is not in workbench.templates; %s", p.key(), p.Template, templateChoice(templates)))
+				continue
+			}
+			t.apply(p)
+		}
 		problems = append(problems, p.complete(front)...)
 	}
 	if len(problems) > 0 {
-		return nil, fmt.Errorf("pools: %s", strings.Join(problems, "; "))
+		return nil, nil, fmt.Errorf("pools: %s", strings.Join(problems, "; "))
 	}
-	return list, nil
+	return list, templates, nil
 }
 
 // decode reads workbench.pools strictly: a key that a pool does not know
 // is an error that names it. The block fw of a pool is free here and
 // checked as a configuration of fw later (complete).
 func decode(cfg *fw.Config) ([]*Pool, error) {
+	var out []*Pool
+	if err := decodeKey(cfg, key, &out, "workbench.pools is a list of pools, each with name, replicas, image, and fw"); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// decodeKey reads the key k of the block workbench into out strictly. A
+// configuration without the key leaves out as it is. shape says what the
+// key holds, for the error.
+func decodeKey(cfg *fw.Config, k string, out any, shape string) error {
 	if cfg == nil {
-		return nil, nil
+		return nil
 	}
 	n, ok := cfg.Extensions[block]
 	if !ok {
-		return nil, nil
+		return nil
 	}
 	root := &n
 	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
 		root = root.Content[0]
 	}
 	if root.Kind != yaml.MappingNode {
-		return nil, nil
+		return nil
 	}
 	var node *yaml.Node
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == key {
+		if root.Content[i].Value == k {
 			node = root.Content[i+1]
 		}
 	}
 	if node == nil || (node.Kind == yaml.ScalarNode && node.Tag == "!!null") {
-		return nil, nil
+		return nil
 	}
 	data, err := yaml.Marshal(node)
 	if err != nil {
-		return nil, fmt.Errorf("pools: read workbench.pools: %w", err)
+		return fmt.Errorf("pools: read workbench.%s: %w", k, err)
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
-	var out []*Pool
-	if err := dec.Decode(&out); err != nil {
-		return nil, fmt.Errorf("pools: workbench.pools is a list of pools, each with name, replicas, image, and fw: %w", err)
+	if err := dec.Decode(out); err != nil {
+		return fmt.Errorf("pools: %s: %w", shape, err)
 	}
-	return out, nil
+	return nil
 }
 
-// problems lists what the front lacks for any pool.
-func (f Front) problems() []string {
+// problems lists what the front lacks for any pool. what names the block
+// that needs it.
+func (f Front) problems(what string) []string {
 	var p []string
 	if len(f.Atespaces) == 0 {
-		p = append(p, "workbench.pools needs workbench.fleet.atespaces, the atespaces whose Tasks the front lists")
+		p = append(p, what+" needs workbench.fleet.atespaces, the atespaces whose Tasks the front lists")
 	}
 	if strings.TrimSpace(f.Egress) == "" {
-		p = append(p, "workbench.pools needs workbench.fleet.egress, the stream on which the front sees the runs of the workers")
+		p = append(p, what+" needs workbench.fleet.egress, the stream on which the front sees the runs of the workers")
 	}
 	if d := strings.TrimSpace(f.Bus.Driver); d == "" || d == "mem" {
-		p = append(p, "workbench.pools needs a bus that the workers share with the front; set bus.driver to nats or redis")
+		p = append(p, what+" needs a bus that the workers share with the front; set bus.driver to nats or redis")
 	}
 	if strings.TrimSpace(f.AX.Server) == "" {
-		p = append(p, "workbench.pools needs ax.server, the ax API that creates the Tasks")
+		p = append(p, what+" needs ax.server, the ax API that creates the Tasks")
 	}
 	if strings.TrimSpace(f.AX.Router) == "" {
-		p = append(p, "workbench.pools needs ax.router, the router through which the front asks a worker whether it works")
+		p = append(p, what+" needs ax.router, the router through which the front asks a worker whether it works")
 	}
 	return p
 }
@@ -561,7 +637,7 @@ func (p *Pool) render(front Front) []string {
 	case p.Agent != "" && !known:
 		add("agent %q is not a key of fw.agents", p.Agent)
 	}
-	if strings.TrimSpace(wc.Model) == "" && strings.TrimSpace(prof.Model) == "" {
+	if strings.TrimSpace(wc.Model) == "" && strings.TrimSpace(prof.Model) == "" && !p.lenient {
 		add("set fw.model, the provider/model selector of the workers, such as openai/<model>: a pool has no default model")
 	}
 	if !slices.Contains(wc.Auth.Modes(), "token") {
@@ -576,7 +652,10 @@ func (p *Pool) render(front Front) []string {
 	if strings.TrimSpace(wc.Bus.Driver) != strings.TrimSpace(front.Bus.Driver) {
 		add("fw.bus.driver %q is not the bus of the front, %q: the front sees the runs of a worker only on its own bus", wc.Bus.Driver, front.Bus.Driver)
 	}
-	if blind := tokenBlind(wc); len(blind) > 0 {
+	switch blind := tokenBlind(wc); {
+	case len(blind) > 0 && p.probe:
+		add("the static token cannot see the runs of an agent that a person creates from the template, because such an agent has an access block with its owner, so the front cannot tell that a worker is idle before it replaces or deletes it; add kind:token to fw.access.admins")
+	case len(blind) > 0:
 		add("the static token cannot see the runs of the agent %s, so the front cannot tell that a worker is idle before it replaces or deletes it; add kind:token to fw.access.admins", strings.Join(blind, ", "))
 	}
 	if p.Intake == "" && p.Agent != "" {

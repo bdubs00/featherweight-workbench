@@ -12,6 +12,7 @@ package pools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -182,13 +183,22 @@ func (p *Pool) Overlay() Overlay { return p.overlay }
 // merge also removes from fw.policy.ask the entries that name the same
 // tool as a rule; an ask by a glob, a flag, or a pattern still holds. The
 // copy is rendered and checked as Load renders a pool, and its hash covers
-// the merged fw.yaml. The pool itself does not change.
+// the merged fw.yaml. The pool itself does not change. A runtime pool
+// takes the profile of its agent from the overlay alone, so its overlay
+// must hold that profile, else the error wraps ErrNoProfile. The copy
+// checks the model, which a runtime pool before its overlay leaves out.
 func (p *Pool) WithOverlay(o Overlay) (*Pool, error) {
 	if p.worker == nil {
 		return nil, fmt.Errorf("pools: %s is not loaded", p.key())
 	}
+	if p.runtime != nil {
+		if _, ok := o.Profile(p.Agent); !ok {
+			return nil, fmt.Errorf("pools: the runtime pool %s waits for the profile %s, which agent_put with pool %s writes: %w", p.Name, p.Agent, p.Name, ErrNoProfile)
+		}
+	}
 	c := *p
 	c.overlay = o
+	c.lenient = false
 	c.base = p.baseHash()
 	merged, err := overlayFW(p.FW, o, p.worker.Agents)
 	if err != nil {
@@ -367,13 +377,21 @@ func escapeDollars(s string) string {
 	return b.String()
 }
 
+// ErrNoProfile means that the overlay of a runtime pool holds no profile of
+// the agent of the pool, so the pool has nothing to run yet.
+var ErrNoProfile = errors.New("the overlay holds no profile of the agent of the pool")
+
 // Profiles returns the profiles that the workers of the pool run, by name:
 // the profiles of fw.agents, with the profiles of the overlay as they were
-// written.
+// written. The agent of a runtime pool comes from the overlay alone: its
+// entry in fw.agents only holds the place of the profile.
 func (p *Pool) Profiles() map[string]fw.AgentProfile {
 	out := map[string]fw.AgentProfile{}
 	if p.worker != nil {
 		for name, prof := range p.worker.Agents {
+			if p.runtime != nil && name == p.Agent {
+				continue
+			}
 			prof.Name = name
 			out[name] = prof
 		}
