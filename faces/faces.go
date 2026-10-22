@@ -14,7 +14,8 @@
 // that the faces are off and serves nothing. It mounts the routes
 // /v1/faces/{agent} on the native surface (native.Extend) and adds the MCP
 // tool faces_put (mcp.RegisterTools). Status gives a line for
-// fw-workbench doctor.
+// fw-workbench doctor, and OnChange gives the live stream of bossmode each
+// change of a face.
 package faces
 
 import (
@@ -196,6 +197,36 @@ func localAgent(a *fw.Agent, agent string) bool {
 		return true
 	}
 	return agent == "default" && len(a.ProfileSet()) == 0
+}
+
+// hooks holds the functions that OnChange registers.
+var hooks struct {
+	mu     sync.Mutex
+	change []func(Face)
+}
+
+// OnChange registers a function that gets the face of an agent after each
+// change that the store wrote: a new SVG, a display name or a tagline, and
+// a removal of the SVG, after which the face is the identicon. A change
+// that changes nothing, and a refused SVG, call nothing. The package
+// bossmode registers one in init and sends each face to the page as the
+// event face, the entry of GET /v1/faces. The function runs on the
+// goroutine of the change, so it must not block. Each replica calls it for
+// the changes that it makes.
+func OnChange(fn func(Face)) {
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	hooks.change = append(hooks.change, fn)
+}
+
+// emitChange calls the OnChange hooks.
+func emitChange(f Face) {
+	hooks.mu.Lock()
+	list := append([]func(Face){}, hooks.change...)
+	hooks.mu.Unlock()
+	for _, fn := range list {
+		fn(f)
+	}
 }
 
 // writer names the writer of a change from the caller in ctx: agent:<the

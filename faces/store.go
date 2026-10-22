@@ -260,6 +260,7 @@ func (s *Store) Delete(ctx context.Context, agent, by string) (Face, error) {
 
 // change applies f to the entry of an agent and writes the result at the
 // revision that it read. An entry that holds nothing after f goes away.
+// After a write or a removal, it calls the OnChange hooks.
 func (s *Store) change(ctx context.Context, agent, by string, f func(rec *record, have []byte) []byte) (Face, error) {
 	if err := CheckAgent(agent); err != nil {
 		return Face{}, err
@@ -296,7 +297,9 @@ func (s *Store) change(ctx context.Context, agent, by string, f func(rec *record
 			if err != nil {
 				return Face{}, fmt.Errorf("faces: remove the face of %s: %w", agent, err)
 			}
-			return faceOf(agent, record{}, nil, 0), nil
+			f := faceOf(agent, record{}, nil, 0)
+			emitChange(f)
+			return f, nil
 		}
 		rec.By = oneLine(by, 256)
 		rec.At = s.now().UTC()
@@ -316,7 +319,9 @@ func (s *Store) change(ctx context.Context, agent, by string, f func(rec *record
 		if err != nil {
 			return Face{}, fmt.Errorf("faces: write the face of %s: %w", agent, err)
 		}
-		return faceOf(agent, rec, svg, rev), nil
+		f := faceOf(agent, rec, svg, rev)
+		emitChange(f)
+		return f, nil
 	}
 	return Face{}, fmt.Errorf("%w: other writers changed the face of %s %d times while this write tried; try again", ErrConflict, agent, writeAttempts)
 }

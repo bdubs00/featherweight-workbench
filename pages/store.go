@@ -421,6 +421,7 @@ func (s *Store) write(ctx context.Context, p, text, by, run, summary, ifHash str
 	}
 	if did != unchanged {
 		s.reindex(ctx)
+		emitChange(page.PageInfo, false)
 	}
 	return page, did, nil
 }
@@ -579,7 +580,7 @@ func (s *Store) roomForOne(ctx context.Context) error {
 // IfAbsent makes no sense for a removal and is invalid. by names the
 // remover for the log, because the bucket records a removal without a
 // value. The history of the page stays. After the removal, the store
-// writes the index.
+// writes the index and calls the OnChange hooks.
 func (s *Store) Delete(ctx context.Context, p, by, ifHash string) error {
 	if err := checkWritable(p); err != nil {
 		return err
@@ -620,6 +621,9 @@ func (s *Store) Delete(ctx context.Context, p, by, ifHash string) error {
 		s.forget(key)
 		s.log.Info("pages: page removed", "path", p, "by", by, "sha256", have.Hash, "size", have.Size)
 		s.reindex(ctx)
+		gone := have.PageInfo
+		gone.Path, gone.By, gone.Run, gone.At = p, oneLine(by, 256), "", s.now().UTC()
+		emitChange(gone, true)
 		return nil
 	}
 	return fail(ErrConflict, "other writers changed the page %s %d times while this removal tried; read it again and remove it again", p, writeAttempts)

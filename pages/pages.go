@@ -15,7 +15,8 @@
 // surface (native.Extend), adds the MCP tools pages_list, pages_read,
 // pages_write, pages_search, and pages_history (mcp.RegisterTools), and
 // reads workbench.pages and FW_WORKBENCH_PAGES_*. Status gives a line for
-// fw-workbench doctor. The verbs pages export and pages import of
+// fw-workbench doctor, and OnChange gives the live stream of bossmode each
+// change of a page. The verbs pages export and pages import of
 // fw-workbench copy the wiki to files and back (Export, Import).
 package pages
 
@@ -178,6 +179,37 @@ func Allowed(ctx context.Context, a *fw.Agent, write bool) error {
 		}
 	}
 	return fmt.Errorf("%w: %s the wiki needs the %s role on an agent of the fleet", fw.ErrForbidden, verb, role)
+}
+
+// hooks holds the functions that OnChange registers.
+var hooks struct {
+	mu     sync.Mutex
+	change []func(info PageInfo, deleted bool)
+}
+
+// OnChange registers a function that gets every page that a write created
+// or changed, and every page that a removal took away, with deleted true.
+// The info of a removed page is the page as it was, with the remover in
+// By and the time of the removal in At. A write that changes nothing calls
+// nothing, and neither does the index that the store writes after each
+// change (IndexPath). The package bossmode registers one in init and sends
+// each change to the page as the event page. The function runs on the
+// goroutine of the change, so it must not block. Each replica calls it for
+// the changes that it makes.
+func OnChange(fn func(info PageInfo, deleted bool)) {
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	hooks.change = append(hooks.change, fn)
+}
+
+// emitChange calls the OnChange hooks.
+func emitChange(info PageInfo, deleted bool) {
+	hooks.mu.Lock()
+	list := append([]func(PageInfo, bool){}, hooks.change...)
+	hooks.mu.Unlock()
+	for _, fn := range list {
+		fn(info, deleted)
+	}
 }
 
 // writer names the writer of a change from the caller in ctx: agent:<the
