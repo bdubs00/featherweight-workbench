@@ -240,7 +240,7 @@ type Decision struct {
 }
 
 // States of a decision. DecisionUnknown is the state of a card whose run
-// the front could not read after decisionTries tries: the run no longer
+// the front failed to read after decisionTries tries: the run no longer
 // waits for the card, and nobody can decide it on the page. A later read
 // that works writes the card again with its real state.
 const (
@@ -318,13 +318,13 @@ type runMark struct {
 	// message: at a limit of its budget, or for another reason.
 	Limit bool `json:"limit,omitempty"`
 	// Lost holds the cards of the run that show the state unknown, because
-	// the front could not read the run after decisionTries tries. The
+	// the front failed to read the run after decisionTries tries. The
 	// watch reads the run again for them, so a later read writes each one
 	// again with its real decision.
 	Lost []lostCard `json:"lost,omitempty"`
 }
 
-// lostCard is a card whose decision the front could not read: the
+// lostCard is a card whose decision the front failed to read: the
 // approval, the seq of the card, the seq of the run where the read
 // starts, and whether the card asks a question.
 type lostCard struct {

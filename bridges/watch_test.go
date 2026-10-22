@@ -301,7 +301,7 @@ func TestCardOfAnUnreadableRun(t *testing.T) {
 	msgs = channel(t, s, it.ID)
 	for run, seq := range seqOf {
 		c := msgs[seq-1]
-		if c.Decision.State != DecisionUnknown || !strings.Contains(c.Decision.Note, "could not read the run") || c.Decision.DecidedBy != "" || c.Decision.DecidedAt != nil || c.Decision.Effect == "" {
+		if c.Decision.State != DecisionUnknown || !strings.Contains(c.Decision.Note, "failed to read the run") || c.Decision.DecidedBy != "" || c.Decision.DecidedAt != nil || c.Decision.Effect == "" {
 			t.Fatalf("the card of %s after %d failed reads = %+v", run, decisionTries, c.Decision)
 		}
 		if hm := h.message(seq); len(hm) != 2 || hm[1].Decision.State != DecisionUnknown {
@@ -309,7 +309,7 @@ func TestCardOfAnUnreadableRun(t *testing.T) {
 		}
 	}
 	failed := withEvent(msgs, EventFailed)
-	if len(failed) != 2 || !strings.Contains(failed[0].Text, "could not read the run") || len(withEvent(msgs, EventDecided)) != 0 {
+	if len(failed) != 2 || !strings.Contains(failed[0].Text, "failed to read the run") || len(withEvent(msgs, EventDecided)) != 0 {
 		t.Fatalf("lines = %+v", failed)
 	}
 	if n := unread(); n != before-2 {

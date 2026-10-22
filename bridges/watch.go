@@ -411,7 +411,7 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 		l.Mirrors = &Mirror{Run: r.ID, Seq: 1, Type: fw.EvRunQueued}
 		add(l)
 	}
-	// A card that shows the state unknown, whose run the watch could read
+	// A card that shows the state unknown, whose run the watch read
 	// again: the real decision.
 	if len(mk.Lost) > 0 && len(lost) > 0 {
 		keep := make([]lostCard, 0, len(mk.Lost))
@@ -432,7 +432,7 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 		mk.Lost = keep
 	}
 	// A card whose decision landed, from any surface, or whose run the
-	// front could not read after decisionTries tries.
+	// front failed to read after decisionTries tries.
 	if mk.Pending != "" && (r.Pending == nil || r.Pending.ID != mk.Pending) && v != nil {
 		card, line := decidedCard(r.ID, seat, mk.Card, mk.Question, v)
 		if card != nil {
@@ -582,7 +582,7 @@ func alwaysOffered(r *fw.Run, d dashboard.Decision) bool {
 // decision, and the line that says who decided. question is true for a
 // card that asks a question. A card whose run no longer waits for it
 // without a decision, because the run ended or asked again, is written
-// again as denied, with no line. A card whose run the front could not
+// again as denied, with no line. A card whose run the front failed to
 // read after decisionTries tries is written again with the state unknown
 // and the note unknownNote, and the channel gets a line with the event
 // failed that says so.
@@ -607,7 +607,7 @@ func decidedCard(run, seat string, card uint64, question bool, v *verdict) (*Mes
 		now := time.Now().UTC()
 		return &Message{Seq: card, Decision: &Decision{State: DecisionDeny, DecidedAt: &now, Note: "The run no longer waits for this decision."}}, nil
 	}
-	line := system(EventFailed, fmt.Sprintf("%s no longer waits for its decision, and the front could not read the run, so it cannot tell who decided. The card shows the decision once the front reads the run again.", seat))
+	line := system(EventFailed, fmt.Sprintf("%s no longer waits for its decision, and the front failed to read the run, so it cannot tell who decided. The card shows the decision once the front reads the run again.", seat))
 	if card == 0 {
 		return nil, &line
 	}
@@ -615,7 +615,7 @@ func decidedCard(run, seat string, card uint64, question bool, v *verdict) (*Mes
 }
 
 // unknownNote is the note of a card with the state unknown.
-const unknownNote = "The front could not read the run, so it cannot tell whether anyone decided this card. Nobody can decide it here."
+const unknownNote = "The front failed to read the run, so it cannot tell whether anyone decided this card. Nobody can decide it here."
 
 // answerOf words the answer to a question: the value of a form with one
 // field, Yes or No for a boolean, the fields of a larger form, or the
