@@ -59,6 +59,8 @@ pools/                  the pools: the configuration, the rendered Tasks, and th
 sources/                the event sources: webhooks and polls that turn the events of
                         outside systems into runs (section 13)
 pages/                  the wiki of the fleet: pages of Markdown with a history (section 15)
+faces/                  the faces of the agents: an SVG, a display name, and a tagline,
+                        the sanitizer, and the identicon (section 16)
 internal/bucket/        the key-value bucket under the stores of the front: a bucket of the
                         NATS server of the bus, or the memory of the process
 tools/builder/          the tool propose_agent (section 6.4)
@@ -104,6 +106,10 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `DELETE /v1/pages/{path}` | Remove a page. Its history stays. |
 | `GET /v1/pages/{path}/history` | The versions of a page with who and when. |
 | `GET /v1/pages/search?q=` | The pages that hold every word of `q`, read up to 16 MB of text. |
+| `GET /v1/faces/{agent}` | The face of an agent as `image/svg+xml`: the stored face, else the identicon, with `ETag` (section 16.3). |
+| `PUT /v1/faces/{agent}` | Set the face: an SVG of at most 32 KB that passes the sanitizer. Needs `agent.edit` on the agent. |
+| `DELETE /v1/faces/{agent}` | Back to the identicon. |
+| `PATCH /v1/faces/{agent}` | Set `displayName`, at most 64 characters, and `tagline`, at most 140. |
 
 ### 2.1 Connections
 
@@ -524,6 +530,7 @@ The MCP server carries these management tools beside the work tools:
 | `disconnect` | Remove the grant of the caller for one service |
 | `pages_list`, `pages_read`, `pages_search`, `pages_history` | The wiki of the fleet: the pages, one page with its hash, a search by words, and the versions of a page (section 15.4) |
 | `pages_write` | Write a page of the wiki as a new version, with `ifHash` for a compare-and-swap. A run that writes through the token of the fleet is the writer `agent:<profile>` (section 15.4). |
+| `faces_put` | Set the face of an agent from the text of an SVG that passes the sanitizer, for the manager (section 16.4) |
 
 `run_events` refuses `from` and `before` together. Its result has `prev`, the value of `before` for the page in front. If the page starts at the first event, the result has no `prev`. For a run of another member, the server turns `before` into `from` and `limit` on the events route of that member. The sequence numbers of a run have no gaps, so the page is the same. With `compact` true, each tool output of the page keeps its first 200 characters, `size` holds the bytes of the output, and `cut` is true, so a poll of a busy run costs little. The page without `compact` holds the full outputs.
 
@@ -1424,3 +1431,45 @@ A value outside its bound stops the start, and the error names the key. `pages.S
 - Any other caller reads with the operator role on an agent of the process or of a pool of the fleet (`agent.run`), and writes with the owner role on one (`agent.edit`). The front asks the decision point of the process for its own agents, and it reads the roles on the agents of the pools as `agents_list` does (section 14.9). A refusal answers 403, or a tool result that names the role. When the decision point does not answer, the route answers 503, and the tool says to try again.
 - The text of a page is data that agents and people wrote. The tools and the index say so to every model that reads a page.
 - No text of a page enters a log line. A write logs the path, the writer, the version, the size, and the hash, and a removal logs the path, the remover, the size, and the hash.
+
+## 16. Faces
+
+A face is the picture, the display name, and the one-line tagline of an agent. The operator view shows it beside the work of the agent. The package `faces` keeps the faces. It is a service of the kernel (`fw.RegisterService`), mounts its routes on the native surface (`native.Extend`), and adds the tool `faces_put` to the MCP server (`mcp.RegisterTools`). Every agent has a face without a model call: an agent without a stored picture has an identicon. A person uploads an SVG, or asks the manager, which draws one and calls `faces_put`. The front keeps only an SVG that passes the sanitizer.
+
+### 16.1 The identicon
+
+The identicon is a pattern of five by five cells, symmetric about its middle column. The SHA-256 of the name of the agent sets the cells of the left three columns, and the right two columns mirror them. The hash also sets the hue of the cells, so two agents differ in pattern and in color. The same name always gives the same identicon. It is an SVG of about 1 KB with a `title` element that names the agent, and it passes the sanitizer as it is (`faces.Identicon`).
+
+### 16.2 The sanitizer
+
+`faces.Sanitize` parses the SVG with `encoding/xml` and writes the tree again from what the parser saw. The store holds only what the writer produced. A face that fails is refused with a reason that names the first element or attribute that offends. The sanitizer never cleans a face in silence.
+
+- It keeps these elements: `svg`, `g`, `path`, `circle`, `ellipse`, `rect`, `line`, `polyline`, `polygon`, `text`, `tspan`, `defs`, `linearGradient`, `radialGradient`, `stop`, `clipPath`, `mask`, `title`, and `desc`, each in the namespace of SVG. It also keeps `style`, under the rule of a style below, with the attribute `type`. Any other element is refused. `script`, `foreignObject`, `use`, `image`, `a`, `animate`, and `set` are refused with the reason that they run code, load a resource, link out, or change attributes at run time. An element in another namespace, such as `script` of XHTML, is refused too.
+- It keeps the presentation attributes, the geometry of the kept elements (such as `d`, `cx`, `points`, `offset`, and `gradientUnits`), `viewBox`, `width`, `height`, `id`, `class`, `transform`, `preserveAspectRatio`, `version`, `lang`, `xml:space`, `xml:lang`, and `style`. Any other attribute is refused. Every attribute whose name starts with `on`, in any case, such as `onload` and `onLoad`, is refused as an event attribute. Every `href`, in any namespace, such as `xlink:href`, is refused. An attribute in another namespace is refused.
+- `fill`, `stroke`, `clip-path`, and `mask` can name an element of the face itself with `url(#id)`, for a gradient, a clip path, or a mask. Any other `url(` is refused.
+- A `style` attribute or a `style` element with `url(`, `@import`, or `expression(`, in any case, is refused. So is a style with another function that loads a resource (`src(`, `image(`, `image-set(`, `cross-fade(`, `element(`), with `-moz-binding` or `behavior`, or with a backslash, which can spell any of them as a CSS escape. A character reference such as `&#117;` counts as the character, because the rule reads the value that the parser decoded.
+- A DOCTYPE or an entity declaration is refused, and so is a reference to an entity outside the five of XML. A processing instruction is refused. The XML declaration at the start passes, with the encoding UTF-8 only, and the writer leaves it out.
+- The writer leaves out the comments and the namespace declarations, and it writes `xmlns="http://www.w3.org/2000/svg"` on the root. The root is `svg`, and a face has one root. Text outside the root, a tree deeper than 32 elements, more than 2048 elements, more than 64 attributes on one element, and a face above 32 KB before or after the rewrite are refused.
+
+The rule is stricter than a browser needs for an image. The page shows a face as `<img src>` from a blob URL, and an image runs no script and loads nothing. The sanitizer makes a face safe also where it is opened on its own.
+
+### 16.3 The routes
+
+| Method and path | Purpose |
+|---|---|
+| `GET /v1/faces/{agent}` | The face as `image/svg+xml`, with its hash in `ETag`. `If-None-Match` with the hash answers 304. A client that accepts `application/json` and not `image/svg+xml` gets the face without the SVG: `agent`, `hash`, `stored`, `displayName`, `tagline`, `by`, `at`, and `version`. |
+| `PUT /v1/faces/{agent}` | The body is an SVG of at most 32 KB. A face that the sanitizer refuses answers 422 with the reason, and the agent keeps the face that it had. A larger body answers 413. The answer is the face without the SVG. |
+| `DELETE /v1/faces/{agent}` | Removes the stored SVG and answers 204, so the agent has its identicon again. The display name and the tagline stay. |
+| `PATCH /v1/faces/{agent}` | The body is `{"displayName": "...", "tagline": "..."}`, each one line of at most 64 and 140 characters. An absent field stays, and an empty one clears it. |
+
+The name of the agent holds 1 to 64 letters, digits, `-`, `_`, or `.`, as a profile name, else the route answers 400. `PUT`, `DELETE`, and `PATCH` need the owner role on the agent (`agent.edit`), decided in the place of the agent: this process or the pool that runs it (`fleet.PlaceOf`, section 14.9). The static token of the fleet can change every face. An agent that neither this process nor a pool runs answers 404. `GET` needs `agent.view` for the stored face. A caller without it, and an agent that the fleet does not run, get the identicon, which tells nothing about the agent. A face carries `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox` and `X-Content-Type-Options: nosniff`, so a face that a browser opens on its own loads nothing and runs nothing. The page serves a face as `<img src>` from a blob URL that it reads with the bearer token, and the policy of `/bossmode` allows no inline SVG from the API.
+
+### 16.4 The tool `faces_put`
+
+`faces_put` takes `agent` and `svg`, the text of the SVG, so the manager can draw a face and set it. Its title is "Set face". A worker whose `tools.mcp` entry marks the MCP server of the front `trusted` shows the title as the label of the button that allows a call (the kernel architecture, section 7.3). It is not read-only, and its `destructiveHint` is false, because the store keeps the last faces of the agent. The policy of the profile that calls it decides whether a person approves the call first. The manager asks, so the operator sees the face on the approval card before it lands. The tool checks the caller as `PUT` does. A face that the sanitizer refuses gives an error result with the reason, and the text says to fix the SVG and call again. The result holds the face and the SVG that the store keeps in `structuredContent`. A call of a run through the token records `agent:<profile>` as the writer (`mcp.CallRun`, section 3.1).
+
+### 16.5 The store
+
+On a NATS bus, the faces live in the key-value bucket `<stream>_FACES`. Each agent with a face, a display name, or a tagline is one entry, `face.<agent>` with the name in base64url. The value is one line of JSON with the display name, the tagline, the hash, the writer, and the time, a line break, and the SVG. The bucket keeps the last ten values of each entry. Each change reads the entry and writes at the revision that it read, so two replicas of the front never lose a change. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_FACES.>`. On the bus `mem`, the faces live in the memory of the process, and two processes share nothing. On another bus, the front logs once that the faces are off, mounts no route, and offers no tool.
+
+Other packages of the workbench use the faces through Go. `faces.Of(a)` returns the `*faces.Store` of an agent, or nil. The store has `Get(ctx, agent)`, which gives the identicon for an agent without a face, `Put(ctx, agent, svg, by)`, which sanitizes first, `Meta(ctx, agent, displayName, tagline, by)`, `Patch`, which leaves a nil value as it is, and `Delete(ctx, agent, by)`. A refused face is a `*faces.Refusal`, which is `faces.ErrRefused`. `faces.Check(ctx, a, agent, action)` decides an action on an agent as the routes do. `faces.Status(cfg)` gives one line for `fw-workbench doctor`. No key of the configuration sets the faces.
