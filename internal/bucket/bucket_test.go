@@ -206,3 +206,76 @@ func TestModify(t *testing.T) {
 		t.Fatalf("a function that returns nothing wrote: %v, %v", wrote, err)
 	}
 }
+
+// A bucket with a TTL forgets each value once it is older than the TTL,
+// and a key without values is gone from the keys.
+func TestMemTTL(t *testing.T) {
+	ctx := context.Background()
+	b := NewMem(Config{History: 2, TTL: time.Hour}).(*memBucket)
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	b.now = func() time.Time { return now }
+	r1, _ := b.Create(ctx, "old", []byte("1"))
+	now = now.Add(40 * time.Minute)
+	if _, err := b.Update(ctx, "old", []byte("2"), r1); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(30 * time.Minute)
+	if h, _ := b.History(ctx, "old"); len(h) != 1 || string(h[0].Value) != "2" {
+		t.Fatalf("History after the first value expired = %+v", h)
+	}
+	if _, err := b.Create(ctx, "young", []byte("y")); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(40 * time.Minute)
+	if _, err := b.Get(ctx, "old"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get of an expired key = %v", err)
+	}
+	if keys, _ := b.Keys(ctx); len(keys) != 1 || keys[0].Key != "young" {
+		t.Fatalf("Keys = %+v", keys)
+	}
+	if _, err := b.Create(ctx, "old", []byte("again")); err != nil {
+		t.Fatalf("Create of an expired key = %v", err)
+	}
+}
+
+// KeysUnder lists the keys under a first token, on every bucket, and a
+// bucket that does not exist yet has none.
+func TestKeysUnder(t *testing.T) {
+	js := natsJS(t)
+	for name, b := range map[string]Bucket{"mem": NewMem(testBucket), "nats": NewNATS(js, "FW_TEST", testBucket), "other": wrapped{NewMem(testBucket)}} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			if keys, err := KeysUnder(ctx, b, "a"); err != nil || len(keys) != 0 {
+				t.Fatalf("KeysUnder of an empty bucket = %v, %v", keys, err)
+			}
+			for _, k := range []string{"a.2", "a.1", "ab.1", "b.1", "a"} {
+				if _, err := b.Create(ctx, k, []byte("x")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if keys, err := KeysUnder(ctx, b, "a"); err != nil || !slices.Equal(keys, []string{"a.1", "a.2"}) {
+				t.Fatalf("KeysUnder = %v, %v", keys, err)
+			}
+		})
+	}
+}
+
+// wrapped is a bucket of another package, which lists its keys with Keys.
+type wrapped struct{ Bucket }
+
+func TestNATSTTL(t *testing.T) {
+	js := natsJS(t)
+	c := testBucket
+	c.TTL = time.Hour
+	b := NewNATS(js, "FW_TTL", c)
+	if _, err := b.Create(context.Background(), "k", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	kv, err := js.KeyValue(context.Background(), "FW_TTL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := kv.Status(context.Background()); err != nil || st.TTL() != time.Hour {
+		t.Fatalf("the TTL of the bucket = %v, %v", st.TTL(), err)
+	}
+}

@@ -12,7 +12,9 @@
 // first. Two replicas of the front therefore never lose a write: the loser
 // reads again and decides again. The bucket keeps the last values of each
 // key, up to its history, with the delete markers, so a store reads the
-// older versions of a record from the bucket itself.
+// older versions of a record from the bucket itself. A bucket with a TTL
+// forgets each value once it is older than the TTL, as a history of runs
+// needs.
 package bucket
 
 import (
@@ -106,6 +108,10 @@ type Config struct {
 	// MaxValue bounds one value in bytes. Zero leaves the bound of the
 	// server.
 	MaxValue int
+	// TTL is how long a value lives after its write. The bucket then
+	// forgets it, and a key whose values are all gone has no value. Zero
+	// keeps every value.
+	TTL time.Duration
 }
 
 // Stream returns the stream of the NATS bus of cfg: bus.options.stream,
@@ -278,6 +284,7 @@ func (b *natsBucket) open(ctx context.Context, write bool) (jetstream.KeyValue, 
 		Description:  b.cfg.Description,
 		History:      uint8(b.cfg.History),
 		MaxValueSize: int32(b.cfg.MaxValue),
+		TTL:          b.cfg.TTL,
 		Storage:      jetstream.FileStorage,
 	})
 	if err != nil {
@@ -476,6 +483,39 @@ func (b *natsBucket) Keys(ctx context.Context) ([]Entry, error) {
 	return out, nil
 }
 
+// keysUnder lists the keys under first with a filter of the server, so
+// the server sends those keys only.
+func (b *natsBucket) keysUnder(ctx context.Context, first string) ([]string, error) {
+	var out []string
+	err := b.read(ctx, func(kv jetstream.KeyValue) error {
+		w, err := kv.WatchFiltered(ctx, []string{first + ".>"}, jetstream.MetaOnly(), jetstream.IgnoreDeletes())
+		if err != nil {
+			return err
+		}
+		defer func() { _ = w.Stop() }()
+		for {
+			var e jetstream.KeyValueEntry
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case e = <-w.Updates():
+			}
+			if e == nil {
+				return nil
+			}
+			out = append(out, e.Key())
+		}
+	})
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("bucket: list the keys under %s of %s: %w", first, b.name, err)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // memBucket is a bucket in the memory of the process, for the bus mem.
 type memBucket struct {
 	cfg Config
@@ -496,8 +536,30 @@ func NewMem(c Config) Bucket {
 
 func (m *memBucket) Describe() string { return "the memory of this process" }
 
+// expire drops the entries of key that are older than the TTL of the
+// bucket, as the server drops its messages. The caller holds mu.
+func (m *memBucket) expire(key string) {
+	if m.cfg.TTL <= 0 {
+		return
+	}
+	cut := m.now().UTC().Add(-m.cfg.TTL)
+	list := m.keys[key]
+	i := 0
+	for i < len(list) && list[i].Created.Before(cut) {
+		i++
+	}
+	switch {
+	case i == 0:
+	case i == len(list):
+		delete(m.keys, key)
+	default:
+		m.keys[key] = slices.Clone(list[i:])
+	}
+}
+
 // last returns the newest entry of key. The caller holds mu.
 func (m *memBucket) last(key string) (Entry, bool) {
+	m.expire(key)
 	list := m.keys[key]
 	if len(list) == 0 {
 		return Entry{}, false
@@ -535,6 +597,7 @@ func (m *memBucket) Get(_ context.Context, key string) (Entry, error) {
 func (m *memBucket) At(_ context.Context, key string, rev uint64) (Entry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.expire(key)
 	for _, e := range m.keys[key] {
 		if e.Revision == rev && !e.Deleted {
 			return copyEntry(e), nil
@@ -580,6 +643,7 @@ func (m *memBucket) Delete(_ context.Context, key string, last uint64) error {
 func (m *memBucket) History(_ context.Context, key string) ([]Entry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.expire(key)
 	out := make([]Entry, 0, len(m.keys[key]))
 	for _, e := range m.keys[key] {
 		out = append(out, copyEntry(e))
@@ -600,8 +664,48 @@ func (m *memBucket) Keys(context.Context) ([]Entry, error) {
 	return out, nil
 }
 
+func (m *memBucket) keysUnder(ctx context.Context, first string) ([]string, error) {
+	keys, err := m.Keys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return under(keys, first), nil
+}
+
 func (m *memBucket) tooLarge(value []byte) bool {
 	return m.cfg.MaxValue > 0 && len(value) > m.cfg.MaxValue
+}
+
+// lister is a bucket that lists the keys under a first token itself.
+type lister interface {
+	keysUnder(ctx context.Context, first string) ([]string, error)
+}
+
+// KeysUnder returns the keys of b whose first token, the text before the
+// first dot, is first, sorted, without their values. A bucket of a NATS
+// server asks the server for those keys only, so a store that keeps the
+// entries of many records under one bucket reads the keys of one record.
+func KeysUnder(ctx context.Context, b Bucket, first string) ([]string, error) {
+	if l, ok := b.(lister); ok {
+		return l.keysUnder(ctx, first)
+	}
+	keys, err := b.Keys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return under(keys, first), nil
+}
+
+// under returns the keys of the entries that start with first and a dot.
+func under(keys []Entry, first string) []string {
+	var out []string
+	for _, e := range keys {
+		if strings.HasPrefix(e.Key, first+".") {
+			out = append(out, e.Key)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Modify reads the newest value of key, gives it to f, and writes what f
