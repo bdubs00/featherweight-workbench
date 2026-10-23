@@ -18,7 +18,9 @@ import (
 // with the optional key workers. A body that names another profile is
 // refused. A new profile answers 201, and a replaced one 200, both with
 // the saved profile. With ?dryRun=true, it checks the profile, saves
-// nothing, and answers 200 with an agents.Draft. With pools, the profile
+// nothing, and answers 200 with an agents.Draft; for a profile that workers
+// run, the draft also carries workerTools, the tools of the workers for a
+// profile that names none, and workerPolicy. With pools, the profile
 // goes to the pool whose workers run it, and ?pool= names the pool for a
 // profile that several pools run or that no pool runs yet. With worker
 // templates, a profile that no pool runs gets a runtime pool of its own
@@ -51,14 +53,19 @@ func (s *server) putAgent(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, err)
 			return
 		}
+		out := struct {
+			agents.Draft
+			Pool         *pools.Status `json:"pool,omitempty"`
+			WorkerTools  []string      `json:"workerTools,omitempty"`
+			WorkerPolicy *fw.Rules     `json:"workerPolicy,omitempty"`
+		}{Draft: d}
 		if planned, ok := fleet.PlannedPool(at); ok {
-			writeJSON(w, http.StatusOK, struct {
-				agents.Draft
-				Pool *pools.Status `json:"pool"`
-			}{d, &planned})
-			return
+			out.Pool = &planned
 		}
-		writeJSON(w, http.StatusOK, d)
+		if tools, policy, ok := fleet.WorkerOffer(at); ok {
+			out.WorkerTools, out.WorkerPolicy = tools, &policy
+		}
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 	v, created, err := agents.PutIn(r.Context(), s.a, at, p)

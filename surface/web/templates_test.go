@@ -25,10 +25,16 @@ templates:
     egress:
       hosts:
         - http://nats.agents.svc.cluster.local:8080
+        - http://ansible.agents.svc.cluster.local:8083
     fw:
       model: openai/some-model
       bus: {url: "ws://nats.agents.svc.cluster.local:8080"}
       access: {admins: ["kind:token"]}
+      tools:
+        builtin: [bash, files]
+        mcp:
+          - {name: ansible, endpoint: "http://ansible.agents.svc.cluster.local:8083/mcp"}
+      policy: {default: allow, ask: ["ansible.playbook: check=false"]}
 `
 
 // PUT /v1/agents/{name} of a new agent on a front with a default template
@@ -76,12 +82,19 @@ func TestPutAgentCreatesARuntimePool(t *testing.T) {
 
 	var draft struct {
 		agents.Draft
-		Pool *pools.Status `json:"pool"`
+		Pool         *pools.Status `json:"pool"`
+		WorkerTools  []string      `json:"workerTools"`
+		WorkerPolicy *fw.Rules     `json:"workerPolicy"`
 	}
 	resp, b := do(t, "PUT", srv.URL+"/v1/agents/writer?dryRun=true", `{"description":"Writes."}`, "Authorization", asAlice)
 	decodeJSON(t, resp, b, http.StatusOK, &draft)
 	if draft.Pool == nil || draft.Pool.Name != "writer" || draft.Pool.Wanted != 2 || draft.Exists {
 		t.Fatalf("a dry run = %s", b)
+	}
+	// The dry run says what the workers give the new agent, so the page can
+	// word it before the save.
+	if strings.Join(draft.WorkerTools, ",") != "bash,files,ansible.*" || draft.WorkerPolicy == nil || len(draft.WorkerPolicy.Ask) != 1 || draft.WorkerPolicy.Ask[0] != "ansible.playbook: check=false" {
+		t.Fatalf("a dry run offers tools %v and policy %+v", draft.WorkerTools, draft.WorkerPolicy)
 	}
 	if list, _ := store.List(ctx); len(list) != 0 {
 		t.Fatalf("a dry run made a pool: %+v", list)
