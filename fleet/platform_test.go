@@ -137,8 +137,9 @@ func TestPlatformSources(t *testing.T) {
 	bus := fw.NewMemBus()
 	ax := newFakeAX(t, map[string]map[string]string{"team": {"alpha": "Running", "beta": "Suspended", "gamma": "Running"}})
 	// beta sleeps since before the front started; its Workspace names the
-	// agents that it serves, so a person sees it.
-	ax.workspaces = map[string]string{"team/beta": "model: openai/x\nagents:\n  ops:\n    description: Runs commands.\n  scratch: {}\n"}
+	// agents that it serves, so a person sees it. The profile bootstrap of
+	// the kernel is not one of them.
+	ax.workspaces = map[string]string{"team/beta": "model: openai/x\nagents:\n  bootstrap: {}\n  ops:\n    description: Runs commands.\n  scratch: {}\n"}
 	gammaRun := &fw.Run{ID: "01GAMMA", Agent: "default", State: fw.StateCompleted, Principal: "bob", Seq: 9, CreatedAt: time.Now().Add(-time.Minute), UpdatedAt: time.Now()}
 	router := fakeRouter(t, "team/gamma", []*fw.Run{gammaRun})
 	front := newMember(t, bus, "front", func(cfg *fw.Config, fc *Config) {

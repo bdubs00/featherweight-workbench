@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bdubs00/featherweight-kernel/ax"
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/pools"
 	v1alpha1 "github.com/google/ax/pkg/apis/v1alpha1"
@@ -764,9 +765,11 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 }
 
 // serves records that the member serves a profile. The caller holds p.mu.
+// The kernel gives every Task the profile ax.BootstrapProfile for the goal
+// of its workspace; nobody seats it, so the view does not offer it.
 func (m *platformMember) serves(agent string) {
 	agent = strings.TrimSpace(agent)
-	if agent == "" {
+	if agent == "" || agent == ax.BootstrapProfile {
 		return
 	}
 	if m.agents == nil {
