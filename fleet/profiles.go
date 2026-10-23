@@ -71,9 +71,11 @@ func MergeOverlays(ctx context.Context, cfg *fw.Config, list []*pools.Pool) ([]*
 	// Without the routines, the dry run merges the rest and says so; the
 	// profiles then keep the routines of their configuration.
 	var problems []string
-	routines, err := OpenRoutines(ctx, cfg)
-	if err != nil {
-		problems = append(problems, strings.TrimPrefix(err.Error(), "fleet: ")+", so the output shows the profiles with the routines of their configuration")
+	var routines map[string][]fw.Routine
+	if Routines != nil {
+		if routines, err = Routines(ctx, nil, cfg); err != nil {
+			problems = append(problems, "the routines did not read ("+err.Error()+"), so the output shows the profiles with the routines of their configuration")
+		}
 	}
 	if store == nil {
 		// Without a store, a pool merges an empty overlay, which ships
@@ -114,18 +116,17 @@ func MergeOverlays(ctx context.Context, cfg *fw.Config, list []*pools.Pool) ([]*
 }
 
 // mergedPool reads the overlay of a pool and merges it into the pool, with
-// the skills of the front that the profiles of the pool allow. A front
-// without a store of the overlays merges an empty overlay.
+// the routines of the last pass and the skills of the front that the
+// profiles of the pool allow. A front without a store of the overlays
+// merges an empty overlay.
 func (f *Fleet) mergedPool(ctx context.Context, base *pools.Pool) (*pools.Pool, error) {
+	return f.mergedPoolWith(ctx, base, f.lastRoutines(ctx))
+}
+
+// mergedPoolWith is mergedPool with the routines that a pass read.
+func (f *Fleet) mergedPoolWith(ctx context.Context, base *pools.Pool, routines map[string][]fw.Routine) (*pools.Pool, error) {
 	ctx, cancel := context.WithTimeout(ctx, overlayTimeout)
 	defer cancel()
-	// A pass without the routines takes them away from every Task, so a
-	// store of the routines that does not answer holds the pool, as its
-	// overlay does.
-	routines, err := routinesOf(ctx, f.a)
-	if err != nil {
-		return nil, err
-	}
 	if f.overlays == nil {
 		merged, err := base.WithOverlay(withRoutines(pools.Overlay{}, routines))
 		if err != nil {

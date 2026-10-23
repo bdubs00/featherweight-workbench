@@ -105,6 +105,11 @@ type platform struct {
 	// read it (runtime.go).
 	merged map[string]*pools.Pool
 	rt     map[string]*runtimePool
+	// passRoutines holds the routines that the current pass read, and
+	// passRoutinesErr why it could not read them (routines.go). Only the
+	// goroutine of the passes uses them.
+	passRoutines    map[string][]fw.Routine
+	passRoutinesErr error
 	// shown holds the state of each member that the last member change
 	// named, by name, so a change goes out once, and quiet is the time
 	// without an event after which a member that only the stream knows is
@@ -820,6 +825,10 @@ func (p *platform) onEvent(e fw.Event) error {
 	case (e.Type == fw.EvRunFinished || e.Type == fw.EvRunSuspended) && e.Seq > r.stateSeq:
 		r.lateEnd(e, p.prices)
 	default:
+		// The view applies no other late event, and a tap still reads it:
+		// a bus can bring the comparison of a routine after the end of
+		// its run.
+		p.tapped(r, e)
 		return nil
 	}
 	if e.Type == fw.EvRunFinished {

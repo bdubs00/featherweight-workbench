@@ -12,6 +12,7 @@ package routines
 import (
 	"slices"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 )
@@ -67,9 +68,9 @@ type Band struct {
 	Agreed int     `json:"agreed"`
 }
 
-// Answer is the answer of the routine to one question in one run, beside
-// what the agent did.
-type Answer struct {
+// Compared is the answer of the routine to one question in one run,
+// beside what the agent did, with the probability of the chosen answer.
+type Compared struct {
 	Question    string  `json:"question"`
 	Said        string  `json:"said"`
 	Observed    string  `json:"observed"`
@@ -83,11 +84,11 @@ type Answer struct {
 // of the quality receipt of the run when one came (accepted, satisfied,
 // rejected, or unknown).
 type Disagreement struct {
-	Run          string    `json:"run"`
-	At           time.Time `json:"at"`
-	Input        string    `json:"input"`
-	Answers      []Answer  `json:"answers"`
-	Verification string    `json:"verification,omitempty"`
+	Run          string     `json:"run"`
+	At           time.Time  `json:"at"`
+	Input        string     `json:"input"`
+	Answers      []Compared `json:"answers"`
+	Verification string     `json:"verification,omitempty"`
 }
 
 // SentBack counts the runs that a quality receipt rejected: Applied those
@@ -126,18 +127,23 @@ type Evidence struct {
 }
 
 // mark is what the evidence counted of one run. Day is the day of the
-// decision, where every count of the run goes. Done names the compared
-// questions, and Answers holds them while no disagreement entry does.
+// decision, where every count of the run goes. Early is true while the
+// mark holds comparisons that came before the decision, which a bus can
+// deliver out of order: they count once the decision comes. Done names the
+// compared questions, and P and Answers hold the probabilities and the
+// answers while a comparison can still come.
 type mark struct {
 	Run      string             `json:"run"`
 	Day      string             `json:"day"`
 	At       time.Time          `json:"at"`
+	Early    bool               `json:"early,omitempty"`
 	Mode     string             `json:"mode,omitempty"`
 	Applies  bool               `json:"applies,omitempty"`
 	P        map[string]float64 `json:"p,omitempty"`
 	Applied  string             `json:"applied,omitempty"` // ok or failed
 	Done     []string           `json:"done,omitempty"`
-	Answers  []Answer           `json:"answers,omitempty"`
+	Answers  []Compared         `json:"answers,omitempty"`
+	Input    string             `json:"input,omitempty"`
 	Verdict  string             `json:"verdict,omitempty"` // agreed or disagreed
 	Verified string             `json:"verified,omitempty"`
 	Counted  bool               `json:"counted,omitempty"` // sentBack counted
@@ -147,13 +153,6 @@ type mark struct {
 const (
 	verdictAgreed    = "agreed"
 	verdictDisagreed = "disagreed"
-)
-
-// Modes of a decision, as the kernel records them.
-const (
-	modeShadow = fw.RoutineShadow
-	modeCanary = fw.RoutineCanary
-	modeLive   = fw.RoutineLive
 )
 
 // newEvidence returns empty evidence for a version.
@@ -183,28 +182,6 @@ func (ev *Evidence) public() *Evidence {
 	c := *ev
 	c.Marks = nil
 	return &c
-}
-
-// decision is a decision of a routine in a run (fw.routine.decided).
-// Probability holds, per question, the probability of the chosen answer.
-type decision struct {
-	mode        string
-	applies     bool
-	probability map[string]float64
-}
-
-// comparison is the comparison of one answer of a routine with what the
-// agent did (fw.routine.compared).
-type comparison struct {
-	question, said, observed string
-	agree                    bool
-}
-
-// shape is what the evidence needs of the body of a routine: the act of
-// each question, and the questions that the kernel compares.
-type shape struct {
-	act      map[string]float64
-	observed []string
 }
 
 // markOf returns the mark of a run, or nil.
@@ -258,44 +235,84 @@ func (ev *Evidence) count(d string, n int, field func(*Counts) *int) {
 	}
 }
 
-// decided applies a decision of the routine in the run at the time at. It
-// reports whether the evidence changed.
-func (ev *Evidence) decided(run string, at time.Time, d decision) bool {
-	if ev.markOf(run) != nil {
-		return false
-	}
-	day := at.UTC().Format(time.DateOnly)
-	m := mark{Run: run, Day: day, At: at.UTC(), Mode: d.mode, Applies: d.applies, P: d.probability}
-	ev.Marks = append(ev.Marks, m)
+// rehearsal reports whether a mode of a decision runs beside the agent.
+func rehearsal(mode string) bool { return mode == fw.RoutineShadow || mode == fw.RoutineCanary }
+
+// newMark adds the mark of a run decided at the time at.
+func (ev *Evidence) newMark(run string, at time.Time) *mark {
+	ev.Marks = append(ev.Marks, mark{Run: run, Day: at.UTC().Format(time.DateOnly), At: at.UTC()})
 	if len(ev.Marks) > maxMarks {
 		ev.Marks = slices.Clone(ev.Marks[len(ev.Marks)-maxMarks:])
 	}
-	rehearsal := d.mode == modeShadow || d.mode == modeCanary
-	if rehearsal {
-		ev.count(day, 1, func(c *Counts) *int { return &c.Decided })
+	return &ev.Marks[len(ev.Marks)-1]
+}
+
+// decided applies fw.routine.decided of the run at the time at, for the
+// routine r. The comparisons that came before it count now. It reports
+// whether the evidence changed.
+func (ev *Evidence) decided(run string, at time.Time, d fw.RoutineDecidedData, r fw.Routine) bool {
+	m := ev.markOf(run)
+	switch {
+	case m == nil:
+		m = ev.newMark(run, at)
+	case !m.Early:
+		return false
+	}
+	m.Early, m.Mode, m.Applies = false, d.Mode, d.Applies
+	m.Day, m.At = at.UTC().Format(time.DateOnly), at.UTC()
+	for q, a := range d.Answers {
+		if m.P == nil {
+			m.P = map[string]float64{}
+		}
+		m.P[q] = probabilityOf(a)
+	}
+	if rehearsal(d.Mode) {
+		ev.count(m.Day, 1, func(c *Counts) *int { return &c.Decided })
 	}
 	switch {
-	case !d.applies:
-		ev.count(day, 1, func(c *Counts) *int { return &c.Handed })
-	case rehearsal:
-		ev.count(day, 1, func(c *Counts) *int { return &c.Acted })
+	case !d.Applies:
+		ev.count(m.Day, 1, func(c *Counts) *int { return &c.Handed })
+	case rehearsal(d.Mode):
+		ev.count(m.Day, 1, func(c *Counts) *int { return &c.Acted })
 	}
+	early := m.Answers
+	m.Answers = nil
+	for _, a := range early {
+		a.Probability = m.P[a.Question]
+		ev.settle(m, a, r)
+	}
+	ev.trim(m, r)
 	return true
 }
 
-// applied applies the end of a live routine in the run. It reports whether
-// the evidence changed. A run without a mark counts on the day at.
-func (ev *Evidence) applied(run string, at time.Time, ok bool) bool {
+// probabilityOf is the probability of the chosen answer: of the option of
+// a choice or a score, and the larger of P(yes) and P(no) for a noul.
+func probabilityOf(a fw.Answer) float64 {
+	if a.Type == fw.QuestionNoul {
+		return max(a.Probability, 1-a.Probability)
+	}
+	if p, ok := a.Probabilities[a.Choice]; ok {
+		return p
+	}
+	return a.Probability
+}
+
+// applied applies fw.routine.applied of the run at the time at. A run
+// without a mark counts as a live decision on that day. It reports whether
+// the evidence changed.
+func (ev *Evidence) applied(run string, at time.Time, d fw.RoutineAppliedData) bool {
 	m := ev.markOf(run)
-	if m == nil {
-		ev.decided(run, at, decision{mode: modeLive, applies: true})
+	if m == nil || m.Early {
+		ev.decided(run, at, fw.RoutineDecidedData{Mode: fw.RoutineLive, Applies: true}, fw.Routine{})
 		m = ev.markOf(run)
 	}
 	if m.Applied != "" {
 		return false
 	}
-	if ok {
-		m.Applied = "ok"
+	if d.OK {
+		// A routine that completed gets no comparison, so the mark needs
+		// no probability any more.
+		m.Applied, m.P, m.Answers = "ok", nil, nil
 		ev.count(m.Day, 1, func(c *Counts) *int { return &c.Applied })
 	} else {
 		m.Applied = "failed"
@@ -305,25 +322,43 @@ func (ev *Evidence) applied(run string, at time.Time, ok bool) bool {
 	return true
 }
 
-// compared applies the comparison of one answer in the run, with the first
-// line of its input. A run without a decision counts nothing. It reports
-// whether the evidence changed.
-func (ev *Evidence) compared(run, input string, c comparison, s shape) bool {
+// compared applies fw.routine.compared of the run, for the routine r,
+// with the line of the run: its title, else the first line of its input.
+// A comparison that comes before its decision waits in the mark of the
+// run. It reports whether the evidence changed.
+func (ev *Evidence) compared(run, line string, at time.Time, d fw.RoutineComparedData, r fw.Routine) bool {
 	m := ev.markOf(run)
-	if m == nil || slices.Contains(m.Done, c.question) {
+	if m == nil {
+		m = ev.newMark(run, at)
+		m.Early = true
+	}
+	if slices.Contains(m.Done, d.Question) {
 		return false
 	}
-	m.Done = append(m.Done, c.question)
-	p, known := m.P[c.question]
-	a := Answer{Question: c.question, Said: c.said, Observed: c.observed, Agree: c.agree, Probability: p}
-	if known {
-		ev.band(c.question, p, c.agree, s.act[c.question])
-	}
-	if !m.Applies || (m.Mode != modeShadow && m.Mode != modeCanary) {
+	m.Done = append(m.Done, d.Question)
+	m.Input = cut(line, maxAnswerBytes)
+	a := Compared{Question: d.Question, Said: cut(d.Said, maxAnswerBytes), Observed: cut(d.Observed, maxAnswerBytes), Agree: d.Agree, Probability: m.P[d.Question]}
+	if m.Early {
+		m.Answers = append(m.Answers, a)
 		return true
 	}
+	ev.settle(m, a, r)
+	ev.trim(m, r)
+	return true
+}
+
+// settle counts one comparison of a run whose decision came: in the
+// reliability table of its question, and, for a run that the routine
+// would have acted on beside the agent, in the verdict of the run.
+func (ev *Evidence) settle(m *mark, a Compared, r fw.Routine) {
+	if _, known := m.P[a.Question]; known {
+		ev.band(a.Question, a.Probability, a.Agree, r.Questions[a.Question].Act)
+	}
+	if !m.Applies || !rehearsal(m.Mode) {
+		return
+	}
 	switch {
-	case !c.agree && m.Verdict != verdictDisagreed:
+	case !a.Agree && m.Verdict != verdictDisagreed:
 		if m.Verdict == verdictAgreed {
 			ev.count(m.Day, -1, func(c *Counts) *int { return &c.Agreed })
 			if m.Counted && m.Applied != "ok" {
@@ -334,7 +369,7 @@ func (ev *Evidence) compared(run, input string, c comparison, s shape) bool {
 		}
 		ev.count(m.Day, 1, func(c *Counts) *int { return &c.Disagreed })
 		m.Verdict = verdictDisagreed
-		d := Disagreement{Run: run, At: m.At, Input: input, Answers: append(m.Answers, a), Verification: m.Verified}
+		d := Disagreement{Run: m.Run, At: m.At, Input: m.Input, Answers: append(m.Answers, a), Verification: m.Verified}
 		m.Answers = nil
 		ev.Disagreements = append([]Disagreement{d}, ev.Disagreements...)
 		slices.SortStableFunc(ev.Disagreements, func(x, y Disagreement) int { return y.At.Compare(x.At) })
@@ -343,7 +378,7 @@ func (ev *Evidence) compared(run, input string, c comparison, s shape) bool {
 		}
 	case m.Verdict == verdictDisagreed:
 		for i := range ev.Disagreements {
-			if ev.Disagreements[i].Run == run {
+			if ev.Disagreements[i].Run == m.Run {
 				ev.Disagreements[i].Answers = append(ev.Disagreements[i].Answers, a)
 			}
 		}
@@ -355,12 +390,49 @@ func (ev *Evidence) compared(run, input string, c comparison, s shape) bool {
 		}
 		m.Answers = append(m.Answers, a)
 	}
-	if len(m.Done) >= len(s.observed) {
-		// Every compared question came: the answers of an agreed run are
-		// no longer needed.
-		m.Answers = nil
+}
+
+// trim drops what a mark no longer needs once every question of the
+// routine that the kernel compares came: the mark keeps what makes an
+// event count once, and no more.
+func (ev *Evidence) trim(m *mark, r fw.Routine) {
+	observed := 0
+	for _, q := range r.Questions {
+		if q.Observe != nil {
+			observed++
+		}
 	}
-	return true
+	if len(m.Done) >= observed {
+		m.P, m.Answers, m.Input = nil, nil, ""
+	}
+}
+
+// maxAnswerBytes bounds the answer of the routine and the answer of the
+// agent that the evidence keeps for one question.
+const maxAnswerBytes = 200
+
+// cut cuts s to n bytes at a rune.
+func cut(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// fit trims the oldest marks until the evidence encodes in at most limit
+// bytes, and returns the value. The counts stay: a trimmed mark only makes
+// a late event of its run count nothing.
+func (ev *Evidence) fit(limit int) ([]byte, error) {
+	for {
+		value, err := encode(ev)
+		if err != nil || len(value) <= limit || len(ev.Marks) == 0 {
+			return value, err
+		}
+		ev.Marks = slices.Clone(ev.Marks[max(1, len(ev.Marks)/8):])
+	}
 }
 
 // band counts one compared answer in the reliability table of its

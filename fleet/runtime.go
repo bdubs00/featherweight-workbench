@@ -190,7 +190,11 @@ func (p *platform) passRuntime(ctx context.Context, e pools.Stored, listed map[s
 		if !e.Deleting {
 			// A deleted pool wants no Task, so it needs no profile: it
 			// runs without its overlay until its Tasks are gone.
-			merged, err := p.f.mergedPool(ctx, base)
+			if p.passRoutinesErr != nil {
+				st = waiting(prev, base, p.reconciler.Values.Redact(fmt.Sprintf("the pool waits: %v", p.passRoutinesErr)))
+				break
+			}
+			merged, err := p.f.mergedPoolWith(ctx, base, p.passRoutines)
 			if err != nil {
 				st = waiting(prev, base, p.reconciler.Values.Redact(fmt.Sprintf("the pool waits: %v", strings.TrimPrefix(err.Error(), "pools: "))))
 				break

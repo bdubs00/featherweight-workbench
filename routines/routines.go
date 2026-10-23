@@ -42,8 +42,8 @@ func init() {
 	fw.RegisterService(Start)
 	native.Extend(mount)
 	mcp.RegisterTools(tools)
-	fleet.UseRoutines(reaching, reachingOfConfig)
-	fleet.Tap(tapped, fw.EvRoutineDecided, fw.EvRoutineApplied, fw.EvRoutineCompared, fw.EvRunAnnotated)
+	fleet.Routines = reaching
+	fleet.Tap(tapped, fw.EvRunQueued, fw.EvRoutineDecided, fw.EvRoutineApplied, fw.EvRunAnnotated, fw.EvRoutineCompared)
 }
 
 // bucketName follows the stream in the name of the bucket.
@@ -158,19 +158,27 @@ func Status(cfg *fw.Config) (bool, string) {
 	return true, fmt.Sprintf("routines: the routines live in %s; a rehearsing routine is ready after %d runs that it would have acted on, with %g of them agreed", where, c.ReadyAfter, c.ReadyAgreement)
 }
 
-// reaching is the source of the routines of the fleet (fleet.UseRoutines).
-// A process without routines gives none, and the profiles keep their own.
-func reaching(ctx context.Context, a *fw.Agent) (map[string][]fw.Routine, error) {
-	s := Of(a)
-	if s == nil {
+// errNotOpen means that the bus keeps the routines and the service of the
+// routines did not open them yet.
+var errNotOpen = errors.New("routines: the store of the routines is not open yet")
+
+// reaching reads the routines for the fleet (fleet.Routines). For the
+// agent a of the front, it reads the store of the agent. While the bus
+// keeps a store and the service has not opened it yet, it answers
+// errNotOpen, so a pass of the pools waits instead of rendering without
+// the routines and replacing every Task twice. A bus that keeps no store
+// gives none, and the profiles keep their own. Without an agent, for the
+// dry run, it reads the store of the configuration cfg once.
+func reaching(ctx context.Context, a *fw.Agent, cfg *fw.Config) (map[string][]fw.Routine, error) {
+	if a != nil {
+		if s := Of(a); s != nil {
+			return s.Reaching(ctx)
+		}
+		if _, on := bucket.Where(a.Config(), bucketConfig); on {
+			return nil, errNotOpen
+		}
 		return nil, nil
 	}
-	return s.Reaching(ctx)
-}
-
-// reachingOfConfig reads the routines of a configuration once, for the dry
-// run of the pools. A bus that keeps no store gives none.
-func reachingOfConfig(ctx context.Context, cfg *fw.Config) (map[string][]fw.Routine, error) {
 	s, closeFn, err := open(ctx, cfg, slog.New(slog.DiscardHandler), bucket.OpenOnce)
 	if errors.Is(err, bucket.ErrNoStore) {
 		return nil, nil

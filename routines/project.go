@@ -31,6 +31,11 @@ const (
 	// maxTouched is how many runs the projection remembers with the
 	// routines that decided in them, for the receipts that come later.
 	maxTouched = 16384
+	// maxWaiting is how many runs the projection holds events of while it
+	// does not know their agent yet, and maxWaitingEvents how many events
+	// of one run it holds.
+	maxWaiting       = 1024
+	maxWaitingEvents = 64
 )
 
 // projector applies the events of the stream to the evidence of a store.
@@ -43,10 +48,55 @@ type projector struct {
 	full    bool
 	touched map[string][]string // run id to the keys of the routines decided in it
 	order   []string            // the run ids of touched, oldest first
+
+	// waiting holds the events of the runs whose agent the view did not
+	// know yet, because the bus brought them before the start of the run.
+	// The goroutine of the projection alone uses it.
+	waiting      map[string][]fleet.RunEvent
+	waitingOrder []string
 }
 
 func newProjector(s *Store, log *slog.Logger) *projector {
-	return &projector{s: s, log: log, in: make(chan fleet.RunEvent, projectQueue), touched: map[string][]string{}}
+	return &projector{s: s, log: log, in: make(chan fleet.RunEvent, projectQueue), touched: map[string][]string{}, waiting: map[string][]fleet.RunEvent{}}
+}
+
+// known returns the events of a round with an agent: an event of a run
+// whose agent is not known yet waits, and the first event of the run with
+// its agent brings the waiting events along, before itself. The view
+// knows the agent from the start of the run, which the tap carries too.
+func (p *projector) known(batch []fleet.RunEvent) []fleet.RunEvent {
+	var out []fleet.RunEvent
+	for _, ev := range batch {
+		run := ev.Event.Subject
+		if ev.Agent == "" {
+			if _, ok := p.waiting[run]; !ok {
+				p.waitingOrder = append(p.waitingOrder, run)
+				if len(p.waitingOrder) > maxWaiting {
+					delete(p.waiting, p.waitingOrder[0])
+					p.waitingOrder = slices.Clone(p.waitingOrder[1:])
+				}
+			}
+			if len(p.waiting[run]) < maxWaitingEvents {
+				p.waiting[run] = append(p.waiting[run], ev)
+			}
+			continue
+		}
+		if held, ok := p.waiting[run]; ok {
+			delete(p.waiting, run)
+			p.waitingOrder = slices.DeleteFunc(p.waitingOrder, func(id string) bool { return id == run })
+			for _, h := range held {
+				h.Agent = ev.Agent
+				if h.Line == "" {
+					h.Line = ev.Line
+				}
+				out = append(out, h)
+			}
+		}
+		if ev.Event.Type != fw.EvRunQueued {
+			out = append(out, ev)
+		}
+	}
+	return out
 }
 
 // tapped is the function of fleet.Tap: it hands the event to the
@@ -121,15 +171,15 @@ func (p *projector) apply(ctx context.Context, batch []fleet.RunEvent) {
 		}
 		g.events = append(g.events, ev)
 	}
-	for _, ev := range batch {
-		if ev.Agent == "" || CheckAgent(ev.Agent) != nil {
+	for _, ev := range p.known(batch) {
+		if CheckAgent(ev.Agent) != nil {
 			continue
 		}
 		if ev.Event.Type == fw.EvRunAnnotated {
-			if verificationOf(ev.Event) == "" {
+			if fleet.Verification(ev.Event) == "" {
 				continue
 			}
-			for _, key := range p.routinesOfRun(ctx, ev) {
+			for _, key := range p.routinesOfRun(ev.Event.Subject) {
 				agent, name, _ := splitKey(key)
 				add(agent, name, ev)
 			}
@@ -171,25 +221,14 @@ func (p *projector) touch(run, key string) {
 }
 
 // routinesOfRun returns the keys of the routines that decided in the run
-// of a receipt. A run that this process did not see decide, such as one
-// from before its start, gives every routine of its agent, whose evidence
-// changes only when it holds a mark of the run.
-func (p *projector) routinesOfRun(ctx context.Context, ev fleet.RunEvent) []string {
+// of a quality observation. A run that this process did not see decide,
+// such as one from before its start, gives none, so an observation of a
+// run of no routine costs no read of the store. Another replica that saw
+// the decision counts it.
+func (p *projector) routinesOfRun(run string) []string {
 	p.mu.Lock()
-	keys, ok := p.touched[ev.Event.Subject]
-	p.mu.Unlock()
-	if ok {
-		return slices.Clone(keys)
-	}
-	list, err := p.s.List(ctx, ev.Agent)
-	if err != nil {
-		return nil
-	}
-	out := make([]string, 0, len(list))
-	for _, rec := range list {
-		out = append(out, keyOf(rec.Agent, rec.Name()))
-	}
-	return out
+	defer p.mu.Unlock()
+	return slices.Clone(p.touched[run])
 }
 
 // applyGroup applies the events of one routine to its evidence, as one
@@ -201,7 +240,7 @@ func (p *projector) applyGroup(ctx context.Context, g *group) error {
 	if err != nil {
 		return nil // a routine that the store does not hold, such as one of the configuration of a pool
 	}
-	version, sh := rec.Version(), shapeOf(rec.Routine)
+	version, body := rec.Version(), rec.Routine
 	ev, err := p.s.updateEvidence(ctx, g.agent, g.name, func(ev *Evidence) bool {
 		changed := false
 		switch {
@@ -216,7 +255,7 @@ func (p *projector) applyGroup(ctx context.Context, g *group) error {
 		for _, re := range g.events {
 			e := re.Event
 			if e.Type == fw.EvRunAnnotated {
-				changed = ev.verified(e.Subject, verificationOf(e)) || changed
+				changed = ev.verified(e.Subject, fleet.Verification(e)) || changed
 				continue
 			}
 			if _, v, _ := routineOf(e); v != version {
@@ -224,16 +263,19 @@ func (p *projector) applyGroup(ctx context.Context, g *group) error {
 			}
 			switch e.Type {
 			case fw.EvRoutineDecided:
-				if d, ok := decisionOf(e, g.name); ok {
-					changed = ev.decided(e.Subject, e.Time, d) || changed
+				var d fw.RoutineDecidedData
+				if e.Decode(&d) == nil {
+					changed = ev.decided(e.Subject, e.Time, d, body) || changed
 				}
 			case fw.EvRoutineApplied:
-				if ok, read := appliedOK(e); read {
-					changed = ev.applied(e.Subject, e.Time, ok) || changed
+				var d fw.RoutineAppliedData
+				if e.Decode(&d) == nil {
+					changed = ev.applied(e.Subject, e.Time, d) || changed
 				}
 			case fw.EvRoutineCompared:
-				if c, ok := comparisonOf(e, g.name); ok {
-					changed = ev.compared(e.Subject, re.Input, c, sh) || changed
+				var d fw.RoutineComparedData
+				if e.Decode(&d) == nil && d.Question != "" {
+					changed = ev.compared(e.Subject, re.Line, e.Time, d, body) || changed
 				}
 			}
 		}
@@ -252,15 +294,15 @@ func (p *projector) applyGroup(ctx context.Context, g *group) error {
 	return nil
 }
 
-// shapeOf returns what the evidence needs of the body of a routine.
-func shapeOf(r fw.Routine) shape {
-	sh := shape{act: map[string]float64{}}
-	for _, name := range r.QuestionNames() {
-		q := r.Questions[name]
-		sh.act[name] = q.Act
-		if q.Observe != nil {
-			sh.observed = append(sh.observed, name)
-		}
+// routineOf returns the routine and the version that an event of a
+// routine names.
+func routineOf(e fw.Event) (string, int, bool) {
+	var d struct {
+		Routine string `json:"routine"`
+		Version int    `json:"version"`
 	}
-	return sh
+	if e.Decode(&d) != nil || d.Routine == "" {
+		return "", 0, false
+	}
+	return d.Routine, d.Version, true
 }

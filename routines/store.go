@@ -507,7 +507,7 @@ func (s *Store) Put(ctx context.Context, req PutRequest) (Record, PutResult, err
 	}
 	body.Standing = ""
 	trial := body
-	trial.Standing, trial.Version = kernelShadow, 1
+	trial.Standing, trial.Version = fw.RoutineShadow, 1
 	if err := fw.CheckRoutines(nil, []fw.Routine{trial}); err != nil {
 		return Record{}, PutResult{}, fmt.Errorf("%w: %s", ErrInvalid, strings.TrimPrefix(strings.TrimPrefix(err.Error(), fw.ErrInvalidRequest.Error()+": "), "routines[0] ("+body.Name+")."))
 	}
@@ -753,7 +753,7 @@ func (s *Store) updateEvidence(ctx context.Context, agent, name string, f func(e
 			return nil, nil
 		}
 		ev.UpdatedAt = s.now().UTC()
-		value, err := encode(ev)
+		value, err := ev.fit(maxValue)
 		if err != nil {
 			return nil, err
 		}

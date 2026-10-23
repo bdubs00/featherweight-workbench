@@ -116,8 +116,20 @@ func put(ctx context.Context, a *fw.Agent, s *Store, agent, name string, in putB
 	by, note, _ := caller(ctx, in.Note)
 	return s.Put(ctx, PutRequest{
 		Agent: agent, Routine: body, Standing: in.Standing, Source: in.Source, Replay: in.Replay, By: by, Note: note,
-		Check: func(ctx context.Context, list []fw.Routine) error { return fleet.CheckRoutines(ctx, a, agent, list) },
+		Check: checkFor(a, agent),
 	})
+}
+
+// checkFor checks the routines that reach the profile of the agent with a
+// write: the pools that run the agent must accept them. When no pool runs
+// the agent, the kernel checked each body without the configuration of
+// the workers, which holds the models that answer the questions, and
+// nothing more is checked here.
+func checkFor(a *fw.Agent, agent string) func(context.Context, []fw.Routine) error {
+	return func(ctx context.Context, list []fw.Routine) error {
+		_, err := fleet.CheckRoutines(ctx, a, agent, list)
+		return err
+	}
 }
 
 // moveBody is the body of POST /v1/routines/{agent}/{name}/standing.
@@ -142,7 +154,7 @@ func move(ctx context.Context, a *fw.Agent, s *Store, agent, name string, in mov
 	by, note, person := caller(ctx, in.Note)
 	rec, moved, err := s.Move(ctx, MoveRequest{
 		Agent: agent, Name: name, To: strings.TrimSpace(in.Standing), Note: note, By: by, Person: person, Version: in.Version,
-		Check: func(ctx context.Context, list []fw.Routine) error { return fleet.CheckRoutines(ctx, a, agent, list) },
+		Check: checkFor(a, agent),
 	})
 	if err != nil || !moved {
 		return rec, moved, err

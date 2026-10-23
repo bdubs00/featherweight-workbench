@@ -72,7 +72,7 @@ func TestWithOverlayCarriesTheRoutines(t *testing.T) {
 	o.Routines["triage"] = []fw.Routine{{Name: "ask", Version: 1, Standing: fw.RoutineShadow, Decider: "clef",
 		Questions: map[string]fw.RoutineQuestion{"kind": {Question: fw.Question{Type: fw.QuestionNoul}, Act: 0.9}},
 		Steps:     []fw.RoutineStep{{Tool: "files", Input: "{}"}}}}
-	if _, err := base.WithOverlay(o); err == nil || !strings.Contains(err.Error(), "decider") {
+	if _, err := base.WithOverlay(o); err == nil || !strings.Contains(err.Error(), `no model answers questions under the name "clef"`) {
 		t.Fatalf("a routine with an unknown decider = %v", err)
 	}
 }

@@ -71,10 +71,7 @@ func Enqueue(ctx context.Context, a *fw.Agent, agent string, reqs []fw.RunReques
 	}()
 	// Each request carries the routines that the store holds now, so a
 	// Task that runs an older configuration runs them too.
-	routines, err := routinesOf(ctx, a)
-	if err != nil {
-		return queue, 0, err
-	}
+	routines := enqueueRoutines(ctx, a)
 	for i, req := range reqs {
 		req.Agent = strings.TrimSpace(agent)
 		// Only the store of the routines gives a run its routines, so a

@@ -2,12 +2,28 @@ package routines
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 )
+
+// decidedData is a decision of the routine of the helpdesk in a mode: type
+// is bug with the probability p, and beyond is no.
+func decidedData(mode string, applies bool, p float64) fw.RoutineDecidedData {
+	return fw.RoutineDecidedData{Routine: "acknowledge", Version: 1, Mode: mode, Applies: applies, Answers: map[string]fw.Answer{
+		"type":   {Type: fw.QuestionChoice, Choice: "bug", Probability: p, Probabilities: map[string]float64{"bug": p}},
+		"beyond": {Type: fw.QuestionNoul, Probability: 0.03},
+	}}
+}
+
+// comparedData compares one answer of the routine with what the agent did.
+func comparedData(question, said, observed string) fw.RoutineComparedData {
+	return fw.RoutineComparedData{Routine: "acknowledge", Version: 1, Mode: fw.RoutineShadow, Question: question, Said: said, Observed: observed, Agree: said == observed}
+}
 
 // The ready rule: enough runs that the routine would have acted on, a
 // share of them agreed, and no agreed run sent back.
@@ -45,18 +61,17 @@ func TestReadyRule(t *testing.T) {
 // band of its probability.
 func TestEvidenceCountsOnce(t *testing.T) {
 	ev := newEvidence(1)
-	sh := shapeOf(ack())
+	r := ack()
 	day := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
-	p := map[string]float64{"type": 0.91, "beyond": 0.97}
 	for range 2 {
-		ev.decided("01A", day, decision{mode: modeShadow, applies: true, probability: p})
-		ev.decided("01B", day, decision{mode: modeShadow, applies: true, probability: map[string]float64{"type": 0.86}})
-		ev.decided("01C", day, decision{mode: modeShadow, applies: false, probability: map[string]float64{"type": 0.4}})
-		ev.decided("01L", day.Add(24*time.Hour), decision{mode: modeLive, applies: true})
-		ev.applied("01L", day.Add(24*time.Hour), true)
-		ev.compared("01A", "Printer on floor 3 shows an error", comparison{question: "type", said: "bug", observed: "bug", agree: true}, sh)
-		ev.compared("01B", "VPN drops every hour", comparison{question: "type", said: "bug", observed: "access", agree: false}, sh)
-		ev.compared("01C", "Hello", comparison{question: "type", said: "other", observed: "bug", agree: false}, sh)
+		ev.decided("01A", day, decidedData(fw.RoutineShadow, true, 0.91), r)
+		ev.decided("01B", day, decidedData(fw.RoutineShadow, true, 0.86), r)
+		ev.decided("01C", day, decidedData(fw.RoutineShadow, false, 0.4), r)
+		ev.decided("01L", day.Add(24*time.Hour), fw.RoutineDecidedData{Mode: fw.RoutineLive, Applies: true}, r)
+		ev.applied("01L", day.Add(24*time.Hour), fw.RoutineAppliedData{OK: true})
+		ev.compared("01A", "Printer on floor 3 shows an error", day, comparedData("type", "bug", "bug"), r)
+		ev.compared("01B", "VPN drops every hour", day, comparedData("type", "bug", "access"), r)
+		ev.compared("01C", "Hello", day, comparedData("type", "other", "bug"), r)
 		ev.verified("01B", "accepted")
 		ev.verified("01A", "rejected")
 		ev.verified("01L", "rejected")
@@ -89,7 +104,11 @@ func TestEvidenceCountsOnce(t *testing.T) {
 
 	// A later disagreement of an agreed run moves it, also out of the
 	// agreed runs that came back.
-	ev.compared("01A", "Printer on floor 3 shows an error", comparison{question: "beyond", said: "no", observed: "yes", agree: false}, shape{act: sh.act, observed: []string{"type", "beyond"}})
+	both := ack()
+	beyond := both.Questions["beyond"]
+	beyond.Observe = &fw.Observe{Answer: "beyond: (yes|no)"}
+	both.Questions["beyond"] = beyond
+	ev.compared("01A", "Printer on floor 3 shows an error", day, comparedData("beyond", "no", "yes"), both)
 	if ev.Totals.Agreed != 0 || ev.Totals.Disagreed != 2 || ev.SentBack.Agreed != 0 || len(ev.Disagreements) != 2 {
 		t.Fatalf("after the late disagreement: totals %+v, sent back %+v, %d disagreements", ev.Totals, ev.SentBack, len(ev.Disagreements))
 	}
@@ -206,7 +225,7 @@ func TestTwoReplicasCountOnce(t *testing.T) {
 	ev := func(id string, seq uint64, typ string, data any) fleet.RunEvent {
 		e := fw.MustEvent(id, typ, data)
 		e.Seq, e.Time = seq, at
-		return fleet.RunEvent{Member: "team/alpha", Agent: "triage", Input: "#7 a ticket", Event: e}
+		return fleet.RunEvent{Agent: "triage", Line: "#7 a ticket", Event: e}
 	}
 	batch := []fleet.RunEvent{
 		ev("01X", 3, fw.EvRoutineDecided, fw.RoutineDecidedData{Routine: "acknowledge", Version: 1, Mode: fw.RoutineCanary, Applies: true,
@@ -249,5 +268,93 @@ func TestProjectionKeepsTheNewerVersion(t *testing.T) {
 	ev, _, _ := s.evidence(ctx, "triage", "acknowledge")
 	if ev.Version != 2 || ev.Totals.Handed != 7 || ev.Totals.Acted != 0 {
 		t.Fatalf("the evidence = version %d, %+v", ev.Version, ev.Totals)
+	}
+}
+
+// The evidence stays under the bound of an entry of the bucket: a mark
+// keeps its probabilities only while a comparison can still come, and the
+// oldest marks go until the value fits.
+func TestEvidenceFitsTheBucket(t *testing.T) {
+	ctx := context.Background()
+	s := memStore(Config{})
+	r := ack()
+	r.Questions = map[string]fw.RoutineQuestion{}
+	for i := range 10 {
+		r.Questions[fmt.Sprintf("question_number_%02d_of_routine", i)] = fw.RoutineQuestion{
+			Question: fw.Question{Type: fw.QuestionChoice, Criteria: map[string]any{"a": "A", "b": "B"}}, Act: 0.5,
+			Observe: &fw.Observe{Answer: `answer: ([a-z]+)`}}
+	}
+	if _, _, err := s.Put(ctx, PutRequest{Agent: "triage", Routine: r, Standing: Rehearsing}); err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("an answer of the agent that goes on ", 20)
+	at := time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC)
+	ev, err := s.updateEvidence(ctx, "triage", "acknowledge", func(ev *Evidence) bool {
+		ev.Version = 1
+		for i := range 1200 {
+			run := fmt.Sprintf("01RUN%05d", i)
+			d := fw.RoutineDecidedData{Mode: fw.RoutineShadow, Applies: true, Answers: map[string]fw.Answer{}}
+			for q := range r.Questions {
+				d.Answers[q] = fw.Answer{Type: fw.QuestionChoice, Choice: "a", Probability: 0.75}
+			}
+			ev.decided(run, at, d, r)
+			// Nine of ten questions come, so each mark keeps its
+			// probabilities and its answers.
+			for _, q := range r.QuestionNames()[:9] {
+				ev.compared(run, "#1 a ticket", at, comparedData(q, long, long), r)
+			}
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatalf("the write of a large evidence = %v", err)
+	}
+	value, _ := encode(ev)
+	if len(value) > maxValue || len(ev.Marks) == 0 || ev.Marks[len(ev.Marks)-1].Run != "01RUN01199" || ev.Totals.Agreed != 1200 {
+		t.Fatalf("the evidence holds %d bytes and %d marks, the newest %s, agreed %d", len(value), len(ev.Marks), ev.Marks[len(ev.Marks)-1].Run, ev.Totals.Agreed)
+	}
+	// The tenth question of the newest run comes, and its mark drops what
+	// it no longer needs.
+	ev, _ = s.updateEvidence(ctx, "triage", "acknowledge", func(ev *Evidence) bool {
+		return ev.compared("01RUN01199", "#1 a ticket", at, comparedData(r.QuestionNames()[9], "a", "a"), r)
+	})
+	if m := ev.markOf("01RUN01199"); m == nil || m.P != nil || m.Answers != nil || len(m.Done) != 10 {
+		t.Fatalf("the complete mark = %+v", m)
+	}
+}
+
+// A bus can bring the events of a run out of order: a comparison before
+// its decision, and both before the start of the run, whose agent the
+// view learns from that start. The projection counts the run once, as in
+// order.
+func TestProjectionOutOfOrder(t *testing.T) {
+	ctx := context.Background()
+	s := memStore(Config{})
+	if _, _, err := s.Put(ctx, PutRequest{Agent: "triage", Routine: ack(), Standing: Rehearsing}); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 23, 11, 0, 0, 0, time.UTC)
+	ev := func(id, agent string, typ string, data any) fleet.RunEvent {
+		e := fw.MustEvent(id, typ, data)
+		e.Time = at
+		return fleet.RunEvent{Agent: agent, Line: "#7 a ticket", Event: e}
+	}
+	p := newProjector(s, quiet())
+	// The first run: the comparison, then the decision, then the start,
+	// each in a round of its own.
+	p.apply(ctx, []fleet.RunEvent{ev("01A", "", fw.EvRoutineCompared, comparedData("type", "bug", "access"))})
+	p.apply(ctx, []fleet.RunEvent{ev("01A", "", fw.EvRoutineDecided, decidedData(fw.RoutineShadow, true, 0.9))})
+	p.apply(ctx, []fleet.RunEvent{ev("01A", "triage", fw.EvRunQueued, fw.RunQueuedData{Agent: "triage"})})
+	// The second run: the agent is known, and the comparison comes before
+	// the decision.
+	p.apply(ctx, []fleet.RunEvent{ev("01B", "triage", fw.EvRoutineCompared, comparedData("type", "bug", "bug"))})
+	p.apply(ctx, []fleet.RunEvent{ev("01B", "triage", fw.EvRoutineDecided, decidedData(fw.RoutineShadow, true, 0.9))})
+	rec, _ := s.Get(ctx, "triage", "acknowledge")
+	e := rec.Evidence
+	if e.Totals != (Counts{Decided: 2, Acted: 2, Agreed: 1, Disagreed: 1}) || len(e.Disagreements) != 1 || e.Disagreements[0].Run != "01A" || e.Disagreements[0].Input != "#7 a ticket" {
+		t.Fatalf("evidence = %+v, disagreements %+v", e.Totals, e.Disagreements)
+	}
+	if b := e.Questions["type"]; b[3].Runs != 2 || b[3].Agreed != 1 {
+		t.Fatalf("bands = %+v", b)
 	}
 }

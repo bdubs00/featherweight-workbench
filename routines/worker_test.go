@@ -2,7 +2,6 @@ package routines
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -25,31 +24,6 @@ func (sureDecider) Decide(_ context.Context, _ string, qs map[string]fw.Question
 		out.Answers[id] = fw.Answer{Type: q.Type, Choice: "bug", Probability: 0.92, Probabilities: map[string]float64{"bug": 0.92, "access": 0.05, "other": 0.03}}
 	}
 	return out, nil
-}
-
-// decideTool is the built-in tool decide for a worker without the
-// built-in tools: the same input and output over the decider of the agent.
-func decideTool() fw.Tool {
-	return fw.NewTool(fw.ToolSpec{Name: "decide", ReadOnly: true, Idempotent: true, Source: "builtin"}, func(ctx context.Context, in json.RawMessage) (fw.ToolResult, error) {
-		var v struct {
-			Decider   string                 `json:"decider"`
-			State     string                 `json:"state"`
-			Questions map[string]fw.Question `json:"questions"`
-		}
-		if err := json.Unmarshal(in, &v); err != nil {
-			return fw.ErrorResult(err.Error()), nil
-		}
-		d, err := fw.AgentFrom(ctx).DeciderNamed(ctx, v.Decider)
-		if err != nil {
-			return fw.ErrorResult(err.Error()), nil
-		}
-		res, err := d.Decide(ctx, v.State, v.Questions)
-		if err != nil {
-			return fw.ErrorResult(err.Error()), nil
-		}
-		b, _ := json.Marshal(res)
-		return fw.TextResult(string(b)), nil
-	})
 }
 
 // A worker kernel runs the routines that the store gives its profile: the
@@ -77,7 +51,7 @@ func TestWorkerRehearsalReachesTheEvidence(t *testing.T) {
 		return &fw.Response{Content: []fw.Block{fw.Text(`TRIAGE {"type": "type/bug"}`)}, StopReason: fw.StopEndTurn}, nil
 	}}
 	worker, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(fw.NoAuthn{}), fw.WithModel(model),
-		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fr.bus), fw.WithLogger(quiet()), fw.WithDecider("clef", sureDecider{}), fw.WithTools(decideTool()))
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fr.bus), fw.WithLogger(quiet()), fw.WithDecider("clef", sureDecider{}))
 	if err != nil {
 		t.Fatal(err)
 	}

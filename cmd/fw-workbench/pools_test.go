@@ -30,12 +30,12 @@ func TestPoolsRender(t *testing.T) {
 	// The front keeps an overlay for the pool, which the dry run merges.
 	store := pools.NewMemOverlays()
 	_ = store.PutProfile(context.Background(), "triage", pools.OverlayProfile{Profile: fw.AgentProfile{Name: "helper", Description: "Helps the triage."}, By: "alice"})
-	old, oldR, oldT := fleet.OpenOverlays, fleet.OpenRuntime, fleet.OpenRoutines
+	old, oldR, oldT := fleet.OpenOverlays, fleet.OpenRuntime, fleet.Routines
 	fleet.OpenOverlays = func(context.Context, *fw.Config, *slog.Logger) (pools.OverlayStore, func(), error) {
 		return store, nil, nil
 	}
 	// The store of the routines gives triage a rehearsing routine.
-	fleet.OpenRoutines = func(context.Context, *fw.Config) (map[string][]fw.Routine, error) {
+	fleet.Routines = func(context.Context, *fw.Agent, *fw.Config) (map[string][]fw.Routine, error) {
 		return map[string][]fw.Routine{"triage": {{Name: "close-duplicate", Version: 2, Standing: fw.RoutineShadow, Steps: []fw.RoutineStep{{Tool: "files", Input: "{}"}}}}}, nil
 	}
 	// The example offers a template, so the dry run reads the runtime
@@ -43,7 +43,7 @@ func TestPoolsRender(t *testing.T) {
 	fleet.OpenRuntime = func(context.Context, *fw.Config, *slog.Logger, bool) (*pools.Store, func(), error) {
 		return pools.NewStore(bucket.NewMem(pools.StoreBucket), nil), nil, nil
 	}
-	t.Cleanup(func() { fleet.OpenOverlays, fleet.OpenRuntime, fleet.OpenRoutines = old, oldR, oldT })
+	t.Cleanup(func() { fleet.OpenOverlays, fleet.OpenRuntime, fleet.Routines = old, oldR, oldT })
 	var out, errs strings.Builder
 	if code := runPools([]string{"render", path}, &out, &errs); code != 0 {
 		t.Fatalf("exit %d: %s", code, errs.String())
@@ -108,15 +108,15 @@ func TestPoolsRenderRuntime(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	oldO, oldR, oldT := fleet.OpenOverlays, fleet.OpenRuntime, fleet.OpenRoutines
+	oldO, oldR, oldT := fleet.OpenOverlays, fleet.OpenRuntime, fleet.Routines
 	fleet.OpenOverlays = func(context.Context, *fw.Config, *slog.Logger) (pools.OverlayStore, func(), error) {
 		return overlays, nil, nil
 	}
-	fleet.OpenRoutines = func(context.Context, *fw.Config) (map[string][]fw.Routine, error) { return nil, nil }
+	fleet.Routines = func(context.Context, *fw.Agent, *fw.Config) (map[string][]fw.Routine, error) { return nil, nil }
 	fleet.OpenRuntime = func(context.Context, *fw.Config, *slog.Logger, bool) (*pools.Store, func(), error) {
 		return store, nil, nil
 	}
-	t.Cleanup(func() { fleet.OpenOverlays, fleet.OpenRuntime, fleet.OpenRoutines = oldO, oldR, oldT })
+	t.Cleanup(func() { fleet.OpenOverlays, fleet.OpenRuntime, fleet.Routines = oldO, oldR, oldT })
 	var out, errs strings.Builder
 	if code := runPools([]string{"render", path}, &out, &errs); code != 0 {
 		t.Fatalf("exit %d: %s", code, errs.String())

@@ -163,13 +163,9 @@ func localFacts(ctx context.Context, a *fw.Agent, id string) runFacts {
 		case fw.EvApprovalDecided:
 			list = append(list, seen{seq: e.Seq, typ: e.Type, ok: true})
 		case fw.EvRoutineApplied:
-			ok, _ := appliedOK(e)
-			list = append(list, seen{seq: e.Seq, typ: e.Type, ok: ok})
+			list = append(list, seen{seq: e.Seq, typ: e.Type, ok: fleet.AppliedOK(e)})
 		case fw.EvRunAnnotated:
-			var d fw.QualityAnnotatedData
-			if e.Decode(&d) == nil && d.Quality != nil && d.Quality.Verification == "rejected" {
-				list = append(list, seen{seq: e.Seq, typ: e.Type, ok: true})
-			}
+			list = append(list, seen{seq: e.Seq, typ: e.Type, ok: fleet.Verification(e) == "rejected"})
 		}
 	}
 	for _, s := range list {

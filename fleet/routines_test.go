@@ -24,7 +24,7 @@ func (s *testRoutines) set(m map[string][]fw.Routine) {
 	s.m = m
 }
 
-func (s *testRoutines) get(context.Context, *fw.Agent) (map[string][]fw.Routine, error) {
+func (s *testRoutines) get(context.Context, *fw.Agent, *fw.Config) (map[string][]fw.Routine, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.m, nil
@@ -33,8 +33,9 @@ func (s *testRoutines) get(context.Context, *fw.Agent) (map[string][]fw.Routine,
 // useRoutines makes src the source of the routines for a test.
 func useRoutines(t *testing.T, src *testRoutines) {
 	t.Helper()
-	UseRoutines(src.get, func(context.Context, *fw.Config) (map[string][]fw.Routine, error) { return src.get(nil, nil) })
-	t.Cleanup(func() { UseRoutines(nil, nil) })
+	old := Routines
+	Routines = src.get
+	t.Cleanup(func() { Routines = old })
 }
 
 // plainRoutine is a routine without questions, at a version.
@@ -82,17 +83,17 @@ func TestRoutinesReachThePool(t *testing.T) {
 		return hashOf() != "" && hashOf() != old && strings.Contains(content(), "standing: live")
 	})
 
-	if err := CheckRoutines(ctx, front.a, "triage", []fw.Routine{plainRoutine(2, fw.RoutineShadow)}); err != nil {
-		t.Fatalf("a plain routine = %v", err)
+	if pooled, err := CheckRoutines(ctx, front.a, "triage", []fw.Routine{plainRoutine(2, fw.RoutineShadow)}); err != nil || !pooled {
+		t.Fatalf("a plain routine = %v, %v", pooled, err)
 	}
 	asks := plainRoutine(2, fw.RoutineShadow)
 	asks.Decider = "clef"
 	asks.Questions = map[string]fw.RoutineQuestion{"kind": {Question: fw.Question{Type: fw.QuestionNoul}, Act: 0.9}}
-	if err := CheckRoutines(ctx, front.a, "triage", []fw.Routine{asks}); err == nil || !strings.Contains(err.Error(), "the pool triage") || !strings.Contains(err.Error(), "decider") {
+	if _, err := CheckRoutines(ctx, front.a, "triage", []fw.Routine{asks}); err == nil || !strings.Contains(err.Error(), "the pool triage") || !strings.Contains(err.Error(), `no model answers questions under the name "clef"`) {
 		t.Fatalf("a routine with a decider that the workers lack = %v", err)
 	}
-	if err := CheckRoutines(ctx, front.a, "nobody", []fw.Routine{asks}); err != nil {
-		t.Fatalf("an agent of no pool = %v", err)
+	if pooled, err := CheckRoutines(ctx, front.a, "nobody", []fw.Routine{asks}); err != nil || pooled {
+		t.Fatalf("an agent of no pool = %v, %v", pooled, err)
 	}
 }
 
@@ -179,10 +180,18 @@ func TestTapAndOutcome(t *testing.T) {
 		byRoutine, sentBack, whole := m.f.Outcome("01TAP")
 		return byRoutine && sentBack && whole
 	})
+	// The line of a run is the title that its start names, when it names
+	// one.
+	stream(t, m.f, "01TITLED", []uint64{1, 2},
+		fw.MustEvent("", fw.EvRunQueued, fw.RunQueuedData{Agent: "default", Input: "A new ticket of the helpdesk.", Principal: "alice", Metadata: map[string]string{fw.MetaTitle: "#42 The printer is down"}}),
+		fw.MustEvent("", fw.EvRoutineApplied, fw.RoutineAppliedData{Routine: "close-duplicate", Version: 1, OK: false}))
 	mu.Lock()
 	defer mu.Unlock()
-	if len(seen) != 1 || seen[0].Agent != "default" || seen[0].Input != "#9 the first line" || seen[0].Event.Type != fw.EvRoutineApplied {
+	if len(seen) != 2 || seen[0].Agent != "default" || seen[0].Line != "#9 the first line" || seen[0].Event.Type != fw.EvRoutineApplied {
 		t.Fatalf("the tap = %+v", seen)
+	}
+	if seen[1].Line != "#42 The printer is down" {
+		t.Fatalf("the tap of a run with a title = %+v", seen[1])
 	}
 	if a, b, w := m.f.Outcome("01NONE"); a || b || w {
 		t.Fatal("an unknown run has marks")

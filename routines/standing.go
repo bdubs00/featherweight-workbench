@@ -20,14 +20,6 @@ const (
 	Retired    = "retired"
 )
 
-// Standings of a routine in a profile of the kernel. The kernel runs a
-// rehearsing routine beside the agent, without acting, as its standing
-// shadow.
-const (
-	kernelShadow = fw.RoutineShadow
-	kernelLive   = fw.RoutineLive
-)
-
 // moves holds the standings that each standing can move to.
 var moves = map[string][]string{
 	Proposed:   {Rehearsing, Retired},
@@ -70,9 +62,11 @@ func movesText(from string) string {
 func kernelStanding(s string) (string, bool) {
 	switch s {
 	case Rehearsing:
-		return kernelShadow, true
+		// The kernel runs a rehearsing routine beside the agent, without
+		// acting, as its standing shadow.
+		return fw.RoutineShadow, true
 	case Live:
-		return kernelLive, true
+		return fw.RoutineLive, true
 	}
 	return "", false
 }

@@ -31,12 +31,13 @@ import (
 // of the routines keeps (docs/ARCHITECTURE.md section 21.3), by agent, each
 // with the standing of the kernel: the front reads them from that store at
 // each pass, and the store of the overlay keeps none. An agent with an
-// entry, also an empty one, gets those routines in place of the routines
-// of its profile.
+// entry gets those routines in place of the routines of its profile. An
+// empty entry takes the routines of the profile away, and it leaves a
+// profile without routines as it is, so its hash stays.
 type Overlay struct {
 	Profiles []OverlayProfile        `json:"profiles,omitempty"`
 	Allow    []OverlayRule           `json:"allow,omitempty"`
-	Routines map[string][]fw.Routine `json:"routines,omitempty"`
+	Routines map[string][]fw.Routine `json:"-"`
 }
 
 // OverlayProfile is one profile of an overlay, with the subject that wrote
@@ -265,6 +266,9 @@ func overlayFW(base map[string]any, o Overlay, configured map[string]fw.AgentPro
 			if list, ok := o.Routines[e.Profile.Name]; ok {
 				e.Profile.Routines = list
 			}
+			if len(e.Profile.Routines) == 0 {
+				e.Profile.Routines = nil
+			}
 			m, err := profileMap(e.Profile, same)
 			if err != nil {
 				return nil, err
@@ -284,6 +288,11 @@ func overlayFW(base map[string]any, o Overlay, configured map[string]fw.AgentPro
 					continue // the pool does not run the agent
 				}
 				cur = map[string]any{} // a profile of the configuration with no key
+			}
+			if had, _ := cur["routines"].([]any); len(list) == 0 && len(had) == 0 {
+				// No routine, before and after: the profile stays as it
+				// is, so a first proposal replaces no Task.
+				continue
 			}
 			m := make(map[string]any, len(cur)+1)
 			for k, v := range cur {
@@ -382,6 +391,9 @@ func profileMap(p fw.AgentProfile, same *fw.AgentProfile) (map[string]any, error
 		return nil, fmt.Errorf("encode the profile %s: %w", p.Name, err)
 	}
 	delete(m, "name")
+	if len(p.Routines) == 0 {
+		delete(m, "routines")
+	}
 	if p.Skills != nil && len(p.Skills) == 0 {
 		m["skills"] = []any{}
 	}

@@ -19,16 +19,15 @@ import (
 // RunEvent carries, in bytes.
 const tapInputLimit = 200
 
-// RunEvent is one event of the egress stream that the view applied, with
-// what the view knows of its run: the member that holds the run, the
-// profile of the run, and the first line of its input, at most 200 bytes.
-// Agent and Input are empty while the view has not seen the start of the
-// run.
+// RunEvent is one event of the egress stream, with what the view knows of
+// its run: the profile of the run, and its line, the title that the start
+// of the run names (fw.MetaTitle), else the first line of its input, at
+// most 200 bytes. Agent and Line are empty
+// while the view has not seen the start of the run.
 type RunEvent struct {
-	Member string
-	Agent  string
-	Input  string
-	Event  fw.Event
+	Agent string
+	Line  string
+	Event fw.Event
 }
 
 // tap is one function that Tap registered, with its types.
@@ -43,14 +42,15 @@ var taps struct {
 }
 
 // Tap registers a function that gets each event of the types that the view
-// applies from the egress stream, with the agent of the fleet. A repeated
-// event and an event that arrives after a later event of its run do not
-// reach it, because the view applies neither. The function runs while the
-// view holds its lock, so it must not block and must not call the view;
-// it hands the event to a goroutine of its own. Every replica of the front
-// reads the stream, so every replica calls it for every event, and the
-// consumer must count each event once across replicas. The types must be
-// in EgressTypes, or the workers do not publish them.
+// reads from the egress stream, with the agent of the fleet: also a
+// repeated event and an event that arrives after a later event of its run,
+// which the view itself does not apply, because a bus can deliver the
+// events of a run out of order. The function runs while the view holds its
+// lock, so it must not block and must not call the view; it hands the
+// event to a goroutine of its own. Every replica of the front reads the
+// stream, so every replica calls it for every event, and the consumer must
+// count each event once, across replicas and repeats. A worker publishes a
+// type only when its pool lists it in bus.egressTypes.
 func Tap(fn func(a *fw.Agent, ev RunEvent), types ...string) {
 	set := make(map[string]bool, len(types))
 	for _, t := range types {
@@ -73,7 +73,11 @@ func (p *platform) tapped(r *platformRun, e fw.Event) {
 			continue
 		}
 		if ev == nil {
-			ev = &RunEvent{Member: r.member, Agent: r.run.Agent, Input: firstLine(r.run.Input, tapInputLimit), Event: e}
+			line := r.run.Metadata[fw.MetaTitle]
+			if strings.TrimSpace(line) == "" {
+				line = r.run.Input
+			}
+			ev = &RunEvent{Agent: r.run.Agent, Line: firstLine(line, tapInputLimit), Event: e}
 		}
 		t.fn(p.f.a, *ev)
 	}
@@ -96,23 +100,35 @@ func firstLine(s string, n int) string {
 	return s[:cut]
 }
 
-// mark notes what an applied event tells of the run for the summary of the
-// routines: fw.routine.applied with ok means that a routine completed the
-// run, and a quality receipt with the verification rejected means that the
-// world sent the run back.
-func (r *platformRun) mark(e fw.Event) {
-	switch e.Type {
-	case fw.EvRoutineApplied:
-		var d fw.RoutineAppliedData
-		if e.Decode(&d) == nil && d.OK {
-			r.byRoutine = true
-		}
-	case fw.EvRunAnnotated:
-		var d fw.QualityAnnotatedData
-		if e.Decode(&d) == nil && d.Quality != nil && d.Quality.Verification == "rejected" {
-			r.sentBack = true
-		}
+// AppliedOK reports whether an event is fw.routine.applied of a routine
+// that completed its run.
+func AppliedOK(e fw.Event) bool {
+	if e.Type != fw.EvRoutineApplied {
+		return false
 	}
+	var d fw.RoutineAppliedData
+	return e.Decode(&d) == nil && d.OK
+}
+
+// Verification returns the verification of the quality observation that
+// an event fw.run.annotated carries, such as accepted or rejected, or "".
+func Verification(e fw.Event) string {
+	if e.Type != fw.EvRunAnnotated {
+		return ""
+	}
+	var d fw.QualityAnnotatedData
+	if e.Decode(&d) != nil || d.Quality == nil {
+		return ""
+	}
+	return d.Quality.Verification
+}
+
+// mark notes what an applied event tells of the run for the summary of the
+// routines: a routine completed the run, or a quality observation sent the
+// run back.
+func (r *platformRun) mark(e fw.Event) {
+	r.byRoutine = r.byRoutine || AppliedOK(e)
+	r.sentBack = r.sentBack || Verification(e) == "rejected"
 }
 
 // Outcome returns what the view learned of the run id of another member

@@ -137,7 +137,7 @@ func TestStorePutVersions(t *testing.T) {
 	}
 	_, _ = s.updateEvidence(ctx, "triage", "acknowledge", func(ev *Evidence) bool {
 		ev.Version = 1
-		ev.decided("01A", time.Now(), decision{mode: modeShadow, applies: true})
+		ev.decided("01A", time.Now(), fw.RoutineDecidedData{Mode: fw.RoutineShadow, Applies: true}, ack())
 		return true
 	})
 	if _, res, err := s.Put(ctx, PutRequest{Agent: "triage", Routine: ack(), By: "alice"}); err != nil || res.Changed {
