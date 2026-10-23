@@ -2,12 +2,14 @@ package routines
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
 // sureDecider answers every question of a routine with one answer: bug
@@ -44,7 +46,7 @@ func TestWorkerRehearsalReachesTheEvidence(t *testing.T) {
 	cfg.Home = t.TempDir()
 	cfg.Node = alpha
 	cfg.Bus.Egress = "fw.events"
-	cfg.Bus.EgressTypes = fleet.EgressTypes
+	cfg.Bus.EgressTypes = append(slices.Clone(fleet.EgressTypes), pools.RoutineEventTypes...)
 	withClef(cfg)
 	cfg.Agents = map[string]fw.AgentProfile{"triage": {Routines: reach["triage"]}}
 	model := fw.ModelFunc{GenerateFn: func(context.Context, *fw.Request) (*fw.Response, error) {

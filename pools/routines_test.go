@@ -1,9 +1,13 @@
 package pools
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/bdubs00/featherweight-kernel/config"
 	"github.com/bdubs00/featherweight-kernel/fw"
 )
 
@@ -36,6 +40,9 @@ func TestWithOverlayCarriesTheRoutines(t *testing.T) {
 		t.Fatalf("the worker file does not escape the routines or holds an agent of no pool:\n%s", file)
 	}
 	wc := workerOf(t, merged)
+	if !slices.Contains(wc.Bus.EgressTypes, fw.EvRoutineCompared) || slices.Contains(workerOf(t, base).Bus.EgressTypes, fw.EvRoutineCompared) {
+		t.Fatalf("the events of the routines go out from a pool without routines, or not from one with them: %v", wc.Bus.EgressTypes)
+	}
 	got := wc.Agents["triage"].Routines
 	if len(got) != 1 || got[0].Name != "acknowledge" || got[0].Version != 2 || got[0].Standing != fw.RoutineShadow || wc.Agents["triage"].Description != "Sorts new tickets." {
 		t.Fatalf("the routines of triage = %+v in %+v", got, wc.Agents["triage"])
@@ -74,5 +81,58 @@ func TestWithOverlayCarriesTheRoutines(t *testing.T) {
 		Steps:     []fw.RoutineStep{{Tool: "files", Input: "{}"}}}}
 	if _, err := base.WithOverlay(o); err == nil || !strings.Contains(err.Error(), `no model answers questions under the name "clef"`) {
 		t.Fatalf("a routine with an unknown decider = %v", err)
+	}
+}
+
+// The worker loads its fw.yaml as the kernel does, with ${NAME} expanded,
+// and gets each text of a routine as the store holds it, a $ included.
+// An empty entry takes away the routines that the configuration of the
+// pool gives a profile, no entry keeps them, and a list replaces them.
+func TestRoutinesSurviveTheWorkerLoad(t *testing.T) {
+	withConfig := strings.Replace(fixture, "          tools: [files, tickets.search, tickets.create_ticket]\n",
+		"          tools: [files, tickets.search, tickets.create_ticket]\n"+
+			"          routines:\n"+
+			"            - {name: from-config, version: 1, standing: live, steps: [{tool: files, input: \"{}\"}]}\n", 1)
+	base := loadFixture(t, withConfig)[0]
+	load := func(p *Pool) *fw.Config {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "fw.yaml")
+		if err := os.WriteFile(path, []byte(p.files[0].Content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.Load(path)
+		if err != nil {
+			t.Fatalf("the worker cannot load its configuration: %v\n%s", err, p.files[0].Content)
+		}
+		return cfg
+	}
+	if r := load(base).Agents["triage"].Routines; len(r) != 1 || r[0].Name != "from-config" {
+		t.Fatalf("the routines of the configuration = %+v", r)
+	}
+	input := `{"body": "Costs $5, ${HOME}, $${0}, and $$", "number": {{ find .input "#(\\d+)$" }}}`
+	kept, err := base.WithOverlay(Overlay{Routines: map[string][]fw.Routine{"helper": {{Name: "x", Version: 1, Standing: fw.RoutineShadow, Steps: []fw.RoutineStep{{Tool: "files", Input: "{}"}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := load(kept).Agents["triage"].Routines; len(r) != 1 || r[0].Name != "from-config" {
+		t.Fatalf("an agent without an entry lost its routines: %+v", r)
+	}
+	replaced, err := base.WithOverlay(Overlay{Routines: map[string][]fw.Routine{"triage": {{Name: "dollars", Version: 2, Standing: fw.RoutineShadow, Steps: []fw.RoutineStep{{Tool: "files", Input: input}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := load(replaced).Agents["triage"].Routines
+	if len(r) != 1 || r[0].Name != "dollars" || r[0].Steps[0].Input != input {
+		t.Fatalf("the worker reads %+v, want the input %q", r, input)
+	}
+	empty, err := base.WithOverlay(Overlay{Routines: map[string][]fw.Routine{"triage": {}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := load(empty).Agents["triage"].Routines; len(r) != 0 {
+		t.Fatalf("an empty entry left %+v", r)
+	}
+	if empty.Hash() == base.Hash() {
+		t.Fatal("taking the routines away kept the hash")
 	}
 }

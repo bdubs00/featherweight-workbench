@@ -65,7 +65,6 @@ var EgressTypes = []string{
 	fw.EvApprovalRequested, fw.EvApprovalDecided, fw.EvRunAnnotated, fw.EvTurnStarted, fw.EvMessageReceived,
 	fw.EvRunChild, fw.EvOutcomeEvaluated,
 	fw.EvToolRequested, fw.EvToolResponded, fw.EvTurnFinished, fw.EvRunReacted,
-	fw.EvRoutineDecided, fw.EvRoutineApplied, fw.EvRoutineCompared,
 }
 
 // EgressMaxBytes is bus.egressMaxBytes of a worker of a pool, unless the
