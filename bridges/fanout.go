@@ -6,7 +6,9 @@ package bridges
 // message as a follow-up on the newest run of the member in the bridge,
 // with the sender in from (the kernel architecture, section 5.5). A member
 // whose run the fleet lost, and a member that nothing seats, get a new run
-// instead, which reads the channel first. The change of the record that
+// instead, which reads the channel first. The final answer of a member
+// fans out in the same way when its first words address members
+// (addressees), from the watch. The change of the record that
 // gives the message its seq also decides the deliveries and the seatings
 // under the caps, so two replicas never deliver past a cap, and the
 // replica that took the post delivers, so a message is delivered once. A
@@ -402,6 +404,63 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 		lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d deliveries a minute, and %s did not get message %d", rec.Caps.MaxFanoutPerMinute, strings.Join(minuteMissed, ", "), msg.Seq)))
 	}
 	return seqLines(rec, lines, now), plan, seats, inputs
+}
+
+// fanOut is what fanPlan decided for one message: the deliveries, and
+// the seats that the message seats on new runs with their inputs.
+type fanOut struct {
+	seq    uint64
+	plan   []delivery
+	seats  []Member
+	inputs map[string]string
+}
+
+// addressees reads the handles that the first words of the final answer
+// of a member address, such as "@reviewer please apply these fixes" or
+// "**@writer @operator:** done". It returns the handles in their order,
+// each once: the members that are not fired, other than the sender self,
+// and operator. An @ word that names no such handle is left out, and the
+// first word without an @ ends the list. member is true when the list
+// holds a member, so the answer reaches that member (docs/ARCHITECTURE.md
+// section 18.5).
+func addressees(rec *record, text, self string) (to []string, member bool) {
+	seen := map[string]bool{}
+	rest := text
+	for {
+		rest = strings.TrimLeft(rest, " \t\r\n*_>")
+		if !strings.HasPrefix(rest, "@") {
+			return to, member
+		}
+		rest = rest[1:]
+		n := 0
+		for n < len(rest) && handleByte(rest[n]) {
+			n++
+		}
+		word := strings.ToLower(rest[:n])
+		rest = strings.TrimLeft(rest[n:], ",:;*_")
+		h := word
+		if m := rec.member(h); m == nil && h != HandleOperator {
+			// A sentence can end right after the handle.
+			h = strings.TrimRight(h, ".")
+		}
+		if h == "" || seen[h] {
+			continue
+		}
+		seen[h] = true
+		if h == HandleOperator {
+			to = append(to, h)
+			continue
+		}
+		if m := rec.member(h); m != nil && !m.Fired && h != self {
+			to, member = append(to, h), true
+		}
+	}
+}
+
+// handleByte reports whether a byte can be part of a handle, in either
+// case, because a model can write the handle with a capital first.
+func handleByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-'
 }
 
 // seqLines gives lines their seqs and their time.

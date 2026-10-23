@@ -9,10 +9,11 @@ package bridges
 // event. Each fact gets one entry, never two: the record keeps a mark of
 // what the channel holds of each run, and the change of the record that
 // moves a mark also gives the seq of the entry, so of two replicas that
-// see the same fact one posts it. The watch reads the view at each change
-// of the fleet that can concern a bridge (follow), and every sweepEvery
-// beside them. Without a fleet that sends its changes, it reads the view
-// every pollEvery, two seconds.
+// see the same fact one posts it. A final answer whose first words address
+// members also fans out to them, in the same change. The watch reads the
+// view at each change of the fleet that can concern a bridge (follow), and
+// every sweepEvery beside them. Without a fleet that sends its changes, it
+// reads the view every pollEvery, two seconds.
 
 import (
 	"context"
@@ -242,8 +243,9 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 	now := s.now().UTC()
 	var lines []Message
 	var cards []Message // cards whose decision landed, written again
+	var fans []fanOut   // the answers that address a member
 	fresh, err := s.b.update(ctx, rec.ID, func(rec *record) error {
-		lines, cards = nil, nil
+		lines, cards, fans = nil, nil, nil
 		add := func(l Message) {
 			l.Seq, l.At = rec.alloc(), now
 			lines = append(lines, l)
@@ -254,7 +256,17 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 			if seat == "" {
 				continue
 			}
-			cards = append(cards, s.facts(ctx, rec, r, seat, ends[r.ID], verdicts[r.ID], lost[r.ID], add)...)
+			got, answer := s.facts(ctx, rec, r, seat, ends[r.ID], verdicts[r.ID], lost[r.ID], add)
+			cards = append(cards, got...)
+			if answer != nil {
+				// The answer fans out as a message of the member that
+				// addresses the same handles: the same caps, the same
+				// skips, and the whole text up to the bound of a message.
+				text, _ := cutText(ends[r.ID].output, maxTextBytes)
+				capLines, plan, seats, inputs := fanPlan(rec, sender{handle: seat, run: r.ID}, *answer, text, runs, now)
+				lines = append(lines, capLines...)
+				fans = append(fans, fanOut{seq: answer.Seq, plan: plan, seats: seats, inputs: inputs})
+			}
 		}
 		slept, marked := sleepLines(rec, runs, states, now, s.sleepHold)
 		for _, l := range slept {
@@ -283,6 +295,14 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 		}
 	}
 	s.land(ctx, fresh.ID, lines...)
+	for _, f := range fans {
+		for _, d := range f.plan {
+			s.submit(s.deliveryJob(d))
+		}
+		if len(f.seats) > 0 {
+			s.submit(s.seatJob(fresh, f.seats, f.inputs, f.seq))
+		}
+	}
 	s.reportCheck(ctx, fresh)
 	s.show(fresh, runs, states)
 	return runs
@@ -412,8 +432,10 @@ func (s *Store) findVerdict(ctx context.Context, r *fw.Run, approval string, fro
 // with add, which gives each line its seq, moves the mark, and returns the
 // cards whose decision landed. lost holds the decisions that the watch
 // read for the cards of the run that show the state unknown, by approval.
-// It runs inside the change of the record.
-func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, end *ending, v *verdict, lost map[string]*verdict, add func(Message)) (cards []Message) {
+// It also returns the answer of the run, with its seq, when the first
+// words of the answer address a member (addressees), so the caller fans
+// it out. It runs inside the change of the record.
+func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, end *ending, v *verdict, lost map[string]*verdict, add func(Message)) (cards []Message, answer *Message) {
 	mk := rec.mark(r.ID, seat)
 	task := ""
 	if m := rec.member(seat); m != nil {
@@ -493,7 +515,15 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 			text, cut := cutText(end.output, entryTextBytes)
 			l := newMessage(From{Kind: KindAgent, Handle: seat, Run: r.ID}, text)
 			l.Cut, l.Mirrors = cut, mirror
+			to, member := addressees(rec, end.output, seat)
+			if len(to) > 0 {
+				l.To = to
+			}
 			add(l)
+			if m := rec.member(seat); member && rec.State == StateOpen && (m == nil || !m.Fired) {
+				l.Seq = rec.LastSeq
+				answer = &l
+			}
 		case fw.OutcomeFailed:
 			l := system(EventFailed, fmt.Sprintf("%s failed: %s", seat, oneLine(orWords(end.err, "no error text"), 500)))
 			l.Mirrors = mirror
@@ -504,7 +534,7 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 			add(l)
 		}
 	}
-	return cards
+	return cards, answer
 }
 
 // orWords returns s, or the words w when s is empty.

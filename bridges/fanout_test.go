@@ -111,6 +111,97 @@ func TestFanOut(t *testing.T) {
 	_ = v
 }
 
+// finish ends the run of a seat with an answer, as its owner records it,
+// and lets the watch read the end.
+func finish(t *testing.T, s *Store, v *fakeView, fm *fakeMember, r *fw.Run, output string) {
+	t.Helper()
+	fm.mu.Lock()
+	evs := append([]fw.Event(nil), fm.events[r.ID]...)
+	fm.mu.Unlock()
+	if len(evs) == 0 {
+		evs = append(evs, ev(fw.EvRunQueued, nil))
+	} else {
+		evs = append(evs, ev(fw.EvMessageReceived, fw.MessageReceivedData{Role: fw.RoleUser, Content: []fw.Block{fw.Text("go on")}}))
+	}
+	fm.setEvents(r.ID, append(evs, ev(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: output}))...)
+	r.State, r.Seq = fw.StateCompleted, r.Seq+5
+	v.put(r)
+	s.poll(context.Background())
+}
+
+// A final answer whose first words address a teammate reaches that
+// teammate, whole, as a message of its member, and starts its next turn.
+// An answer that addresses nobody, or the people alone, reaches no member.
+func TestAnswerReachesTheAddressedTeammate(t *testing.T) {
+	s, v, fm, _, id := fanBridge(t, "")
+	fixes := "**@Migrator-1** please apply these six fixes:\n" + strings.Repeat("1. Quote the paths of the cron role.\n", 200) + "6. Run the tests again."
+	rev := workerRun("r-rev", id, "reviewer", "reviewer", fw.StateCompleted)
+	finish(t, s, v, fm, rev, fixes)
+	eventually(t, "the migrator gets the review", func() bool { return len(fm.find(http.MethodPost, pathMig)) == 1 })
+	d := fm.find(http.MethodPost, pathMig)[0]
+	from, _ := d.Body["from"].(map[string]any)
+	content, _ := d.Body["content"].(string)
+	if from["kind"] != fw.FromAgent || from["name"] != "reviewer" || from["run"] != "r-rev" || from["member"] != "migrator-1" {
+		t.Fatalf("from = %+v", from)
+	}
+	if !strings.HasPrefix(content, `[bridge "Migrate logrotate" `+id+`] @migrator-1 from reviewer: **@Migrator-1**`) || !strings.HasSuffix(content, "6. Run the tests again.") {
+		t.Fatalf("content = %.200q ... %q", content, content[max(0, len(content)-60):])
+	}
+	answers := 0
+	for _, m := range channel(t, s, id) {
+		if m.From.Kind == KindAgent && m.From.Handle == "reviewer" {
+			answers++
+			if len(m.To) != 1 || m.To[0] != "migrator-1" || !m.Cut || m.Mirrors == nil {
+				t.Fatalf("the answer in the channel = %+v", m)
+			}
+		}
+	}
+	if answers != 1 {
+		t.Fatalf("%d answers of the reviewer in the channel", answers)
+	}
+
+	// An answer without an address, and an answer to the people alone,
+	// reach nobody.
+	mig := workerRun("r-mig", id, "migrator-1", "migrator", fw.StateCompleted)
+	finish(t, s, v, fm, mig, "Applied the six fixes. The tests pass.")
+	rev2 := workerRun("r-rev", id, "reviewer", "reviewer", fw.StateCompleted)
+	rev2.Seq = rev.Seq
+	finish(t, s, v, fm, rev2, "@operator: the review is done, and @migrator-1 applied it.")
+	time.Sleep(50 * time.Millisecond)
+	if n, m := len(fm.find(http.MethodPost, pathRev)), len(fm.find(http.MethodPost, pathMig)); n != 0 || m != 1 {
+		t.Fatalf("deliveries: reviewer %d, migrator %d", n, m)
+	}
+	msgs := channel(t, s, id)
+	last := msgs[len(msgs)-1]
+	if last.From.Handle != "reviewer" || len(last.To) != 1 || last.To[0] != HandleOperator {
+		t.Fatalf("the answer to the people = %+v", last)
+	}
+}
+
+func TestAddressees(t *testing.T) {
+	rec := &record{Bridge: Bridge{Members: []Member{{Handle: "writer"}, {Handle: "reviewer"}, {Handle: "k8s.op"}, {Handle: "me"}, {Handle: "gone", Fired: true}}}}
+	for _, c := range []struct {
+		text, want string
+		member     bool
+	}{
+		{"@writer please fix it", "writer", true},
+		{"  **@Writer @operator:** done", "writer operator", true},
+		{"@writer, @reviewer: both of you", "writer reviewer", true},
+		{"> @k8s.op.", "k8s.op", true},
+		{"@operator done", "operator", false},
+		{"@gone @nobody @reviewer go", "reviewer", true},
+		{"@me myself", "", false},
+		{"Done, @writer.", "", false},
+		{"", "", false},
+	} {
+		// The sender is me, which never addresses itself.
+		to, member := addressees(rec, c.text, "me")
+		if strings.Join(to, " ") != c.want || member != c.member {
+			t.Errorf("addressees(%q) = %v, %v; want %q, %v", c.text, to, member, c.want, c.member)
+		}
+	}
+}
+
 // A seat whose newest run stopped at a limit gets nothing, and the channel
 // says so once for that run.
 func TestFanOutSkipsALimit(t *testing.T) {
