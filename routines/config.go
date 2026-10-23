@@ -17,6 +17,8 @@ import (
 
 // Variables that set the configuration. Each wins over the file.
 const (
+	// EnvEnabled turns the routines on or off.
+	EnvEnabled        = "FW_WORKBENCH_ROUTINES_ENABLED"
 	EnvReadyAfter     = "FW_WORKBENCH_ROUTINES_READY_AFTER"
 	EnvReadyAgreement = "FW_WORKBENCH_ROUTINES_READY_AGREEMENT"
 )
@@ -29,15 +31,22 @@ const (
 	MaxReadyAfter = 1000000
 )
 
-// Config configures the routines. A rehearsing routine is ready for a
-// sign-off when, over its current version, it would have acted on at least
-// ReadyAfter runs, it agreed with the agent on at least ReadyAgreement of
-// them, and no run where it agreed came back. A zero value takes the
-// default.
+// Config configures the routines. Enabled turns them on and off: nil means
+// on, where the bus keeps a store, and false turns off the store, the
+// routes, the tools, the evidence, and the routines that the store gives
+// the pools. The profiles of a pool then keep the routines of their own
+// configuration. A rehearsing routine is ready for a sign-off when, over
+// its current version, it would have acted on at least ReadyAfter runs, it
+// agreed with the agent on at least ReadyAgreement of them, and no run
+// where it agreed came back. A zero value takes the default.
 type Config struct {
+	Enabled        *bool   `yaml:"enabled"`
 	ReadyAfter     int     `yaml:"readyAfter"`
 	ReadyAgreement float64 `yaml:"readyAgreement"`
 }
+
+// On reports whether the configuration leaves the routines on.
+func (c Config) On() bool { return c.Enabled == nil || *c.Enabled }
 
 // block is the part of the workbench block that this package reads.
 type block struct {
@@ -55,6 +64,13 @@ func Load(cfg *fw.Config) (Config, error) {
 		}
 	}
 	c := b.Routines
+	if v := strings.TrimSpace(os.Getenv(EnvEnabled)); v != "" {
+		on, err := parseSwitch(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("routines: %s=%q is not on or off", EnvEnabled, v)
+		}
+		c.Enabled = &on
+	}
 	if v := strings.TrimSpace(os.Getenv(EnvReadyAfter)); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -86,4 +102,15 @@ func Load(cfg *fw.Config) (Config, error) {
 		return Config{}, fmt.Errorf("routines: %s", strings.Join(problems, "; "))
 	}
 	return c, nil
+}
+
+// parseSwitch reads on or off, also true, false, yes, no, 1, and 0.
+func parseSwitch(v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "true", "yes", "1":
+		return true, nil
+	case "off", "false", "no", "0":
+		return false, nil
+	}
+	return false, fmt.Errorf("routines: %q is not on or off", v)
 }

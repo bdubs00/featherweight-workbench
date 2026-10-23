@@ -62,6 +62,7 @@ const alpha = "ax:team/alpha"
 func newFront(t *testing.T, mut func(*fw.Config)) *front {
 	t.Helper()
 	t.Setenv("FW_ATESPACE", "")
+	t.Setenv(EnvEnabled, "")
 	t.Setenv(EnvReadyAfter, "")
 	t.Setenv(EnvReadyAgreement, "")
 	cfg := fw.DefaultConfig()
