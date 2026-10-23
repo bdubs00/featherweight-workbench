@@ -107,6 +107,37 @@ func TestPresenceOfASeatWithoutARun(t *testing.T) {
 	}
 }
 
+// A seat of a closed bridge rests. The watch stopped with the close, so a
+// seat whose newest run the view no longer holds is idle and not waiting,
+// and a seat without a run never started. A seat whose run the channel
+// called lost carries gone, so the page does not ask for the run.
+func TestPresenceOnAClosedBridge(t *testing.T) {
+	ran := Member{Handle: "writer", Agent: "docs", Task: "Write", Runs: []string{"r-old"}}
+	unseated := Member{Handle: "checker", Agent: "docs", Task: "Check", Runs: []string{}}
+	rec := &record{Bridge: Bridge{ID: "b", State: StateClosed, Placement: PlacementQueue, Members: []Member{ran, unseated}}}
+	if ms := decorate(rec, nil, nil); ms[0].Presence != PresenceIdle || ms[0].Gone || ms[1].Presence != PresenceNotStarted {
+		t.Errorf("closed: %s gone=%v and %s", ms[0].Presence, ms[0].Gone, ms[1].Presence)
+	}
+	// A run that the view holds still decides on a closed bridge.
+	if ms := decorate(rec, map[string]*fw.Run{"r-old": {ID: "r-old", State: fw.StateFailed}}, nil); ms[0].Presence != PresenceError {
+		t.Errorf("closed with a failed run: %s", ms[0].Presence)
+	}
+	// While the bridge is open, the same seats wait.
+	rec.State = StateOpen
+	if ms := decorate(rec, nil, nil); ms[0].Presence != PresenceWaiting || ms[0].Gone || ms[1].Presence != PresenceWaiting {
+		t.Errorf("open: %s gone=%v and %s", ms[0].Presence, ms[0].Gone, ms[1].Presence)
+	}
+	// Once the channel said that the run is lost, the seat is gone, on an
+	// open bridge and on a closed one.
+	rec.Seats = map[string]*seatMark{"writer": {Gone: "r-old"}}
+	for _, state := range []string{StateOpen, StateClosed} {
+		rec.State = state
+		if ms := decorate(rec, nil, nil); ms[0].Presence != PresenceError || !ms[0].Gone {
+			t.Errorf("%s, lost: %s gone=%v", state, ms[0].Presence, ms[0].Gone)
+		}
+	}
+}
+
 // A reaction records the person under its kind once, reaches the run of a
 // mirrored entry through its owner with by, and a heart writes the page of
 // the agent in the wiki.
