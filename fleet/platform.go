@@ -185,6 +185,11 @@ type platformMember struct {
 	blocked     string
 	statusAt    time.Time
 	runsBlocked bool
+	// created is when ax created the Task, as the Task list gives it. A
+	// Task of the same name with another time is another Task: a pool,
+	// another replica of the front, or a person deleted the Task and
+	// created it again between two reads of the list (poll).
+	created time.Time
 }
 
 // platformRun is one run of a member, projected from the stream.
@@ -376,10 +381,23 @@ func (p *platform) poll(ctx context.Context) {
 			}
 			name := atespace + "/" + taskName
 			seen[name] = true
+			created := createdOf(t)
 			m := p.members[name]
+			if m != nil && !m.created.IsZero() && !created.IsZero() && !created.Equal(m.created) {
+				// A new Task took the name between two reads of the list,
+				// such as a Task that a pool replaced. The runs of the old
+				// Task went with it, and the new Task holds none of them,
+				// so the view forgets the old Task as if it left the list,
+				// and reads the new one as a new member.
+				p.forgetMember(m, now)
+				m = nil
+			}
 			if m == nil {
 				m = &platformMember{name: name, url: "ax:" + name, atespace: atespace}
 				p.members[name] = m
+			}
+			if !created.IsZero() {
+				m.created = created
 			}
 			was, wasPhase := m.state, m.phase
 			m.phase = t.GetStatus().GetPhase()
@@ -408,13 +426,7 @@ func (p *platform) poll(ctx context.Context) {
 	p.mu.Lock()
 	for name, m := range p.members {
 		if m.atespace != "" && !seen[name] {
-			delete(p.members, name)
-			p.noteGone(m, now)
-			for id, r := range p.runs {
-				if r.member == name {
-					p.drop(id, r, now)
-				}
-			}
+			p.forgetMember(m, now)
 		}
 	}
 	p.mu.Unlock()
@@ -441,6 +453,29 @@ func (p *platform) poll(ctx context.Context) {
 	}
 	p.suspendIdle(ctx, now)
 	p.reconcilePools(ctx, listed, failed, now)
+}
+
+// forgetMember takes a Task out of the view with its runs: a Task that
+// left the list, or a Task that another Task of the same name replaced.
+// The caller holds p.mu.
+func (p *platform) forgetMember(m *platformMember, now time.Time) {
+	delete(p.members, m.name)
+	p.noteGone(m, now)
+	for id, r := range p.runs {
+		if r.member == m.name {
+			p.drop(id, r, now)
+		}
+	}
+}
+
+// createdOf returns when ax created a Task, or the zero time when the list
+// does not say.
+func createdOf(t *v1alpha1.Task) time.Time {
+	ts := t.GetMetadata().GetCreateTime()
+	if ts == nil {
+		return time.Time{}
+	}
+	return ts.AsTime()
 }
 
 // taskVar returns the value of a variable of a Task, or "".
@@ -671,10 +706,14 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 		m.serves(ag.Name)
 	}
 	if runsErr == nil {
-		// A run that only the index names, and that the Task does not hold,
-		// is gone: a new Task of the same name took the place of the one
-		// that held it. A run that the index gained after the read began
-		// can be younger than the read, so it stays.
+		// A run that the Task does not hold is gone: a new Task of the same
+		// name took the place of the one that held it. That holds for a run
+		// that only the index names, and for an open run that the stream
+		// gave the view before ax created this Task, whose final event the
+		// old Task never sent, so the view would hold it as open for good.
+		// A run that the view updated after the read began can be younger
+		// than the read, so it stays, and so does a finished run of the
+		// stream, which keeps its place in the lists until it expires.
 		held := make(map[string]bool, len(runs.Runs))
 		for _, r := range runs.Runs {
 			if r != nil {
@@ -682,9 +721,15 @@ func (p *platform) backfill(ctx context.Context, m *platformMember) {
 			}
 		}
 		for id, r := range p.runs {
-			if r.member == m.name && r.fromIndex && !held[id] && r.updated.Before(start) {
+			if r.member != m.name || held[id] || !r.updated.Before(start) {
+				continue
+			}
+			switch {
+			case r.fromIndex:
 				delete(p.runs, id)
 				p.forgetIndex(id, r)
+			case !r.run.State.Terminal() && !m.created.IsZero() && !r.run.CreatedAt.IsZero() && r.run.CreatedAt.Before(m.created):
+				p.drop(id, r, now)
 			}
 		}
 	}

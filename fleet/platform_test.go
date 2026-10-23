@@ -14,6 +14,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	v1alpha1 "github.com/google/ax/pkg/apis/v1alpha1"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // fakeAX lists Tasks per atespace with a phase each.
@@ -26,6 +27,7 @@ type fakeAX struct {
 	workspaces map[string]string            // atespace/task to the fw.yaml in its Workspace
 	suspended  []string                     // the Tasks that SuspendTask moved, in order
 	resumed    []string                     // the Tasks that ResumeTask moved, in order
+	created    map[string]time.Time         // atespace/task to the time ax created it, when a test sets one
 }
 
 func newFakeAX(t *testing.T, tasks map[string]map[string]string) *fakeAX {
@@ -48,6 +50,9 @@ func (f *fakeAX) ListTasks(_ context.Context, req *v1alpha1.ListTasksRequest) (*
 	var out []*v1alpha1.Task
 	for name, phase := range f.tasks[req.GetAtespace()] {
 		t := &v1alpha1.Task{Metadata: &v1alpha1.ObjectMeta{Name: name, Atespace: req.GetAtespace()}, Status: &v1alpha1.TaskStatus{Phase: phase}}
+		if at, ok := f.created[req.GetAtespace()+"/"+name]; ok {
+			t.Metadata.CreateTime = timestamppb.New(at)
+		}
 		if _, ok := f.workspaces[req.GetAtespace()+"/"+name]; ok {
 			t.Spec = &v1alpha1.TaskSpec{Workspaces: []*v1alpha1.WorkspaceRef{{Name: name + "-ws", Path: "/workspace"}}}
 		}

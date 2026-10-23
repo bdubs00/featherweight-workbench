@@ -25,6 +25,7 @@ type repairTask struct {
 	run         fw.Run
 	reads       int
 	fail        bool
+	none        bool // the Task holds no run, as a new Task of the same name
 	beforeReply func()
 }
 
@@ -36,7 +37,7 @@ func newRepairTask(t *testing.T) *repairTask {
 		case "/v1/runs":
 			x.mu.Lock()
 			x.reads++
-			run, fail, before := x.run, x.fail, x.beforeReply
+			run, fail, none, before := x.run, x.fail, x.none, x.beforeReply
 			x.beforeReply = nil
 			x.mu.Unlock()
 			if before != nil {
@@ -44,6 +45,10 @@ func newRepairTask(t *testing.T) *repairTask {
 			}
 			if fail {
 				http.Error(w, "retry", http.StatusServiceUnavailable)
+				return
+			}
+			if none {
+				_ = json.NewEncoder(w).Encode(map[string]any{"runs": []*fw.Run{}})
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"runs": []*fw.Run{&run}})
@@ -277,5 +282,67 @@ func TestPlatformRepairEligibility(t *testing.T) {
 		if p.needsFill(m, now.Add(fillRepairInterval)) {
 			t.Fatalf("periodic repair of %s run", state)
 		}
+	}
+}
+
+// A pool, another replica of the front, or a person can delete a Task and
+// create it again under the same name between two reads of the Task list,
+// as a roll of every pool does. The view must not keep the open runs of
+// the old Task on the new one: a run whose final event the old Task never
+// sent stays open for good, and the page then counts the worker as busy
+// and shows "waiting for a worker" while it runs idle. The new creation
+// time of the Task tells the new Task: the view forgets the old Task with
+// its runs and reads the new one, also when the phase never left Running.
+func TestPlatformForgetsTheRunsOfAReplacedTask(t *testing.T) {
+	ax := newFakeAX(t, map[string]map[string]string{"team": {"alpha": phaseRunning}})
+	first := time.Now().Add(-time.Hour).UTC()
+	ax.created = map[string]time.Time{"team/alpha": first}
+	task := newRepairTask(t)
+	task.run.State, task.run.CreatedAt = fw.StateInputRequired, first.Add(time.Minute)
+	p := repairFront(t, ax, task, "front")
+	ctx := context.Background()
+	p.poll(ctx)
+	assertRepairState(t, p, fw.StateInputRequired)
+	reads := task.count()
+
+	// The roll deletes alpha and creates it again; the list shows it as
+	// Running both times, and the new Task holds no run.
+	ax.mu.Lock()
+	ax.created["team/alpha"] = time.Now().UTC()
+	ax.mu.Unlock()
+	task.mu.Lock()
+	task.none = true
+	task.mu.Unlock()
+	p.poll(ctx)
+	p.mu.Lock()
+	r, m := p.runs["run"], p.members["team/alpha"]
+	p.mu.Unlock()
+	if r != nil {
+		t.Fatalf("the view keeps the open run of the replaced Task: %+v", r.run)
+	}
+	if m == nil || m.state != MemberLive || task.count() != reads+1 {
+		t.Fatalf("the new Task = %+v, reads %d after %d", m, task.count(), reads)
+	}
+	if got, err := p.f.Runs(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("runs = %+v, %v", got, err)
+	}
+	if ms, err := p.f.Members(ctx); err != nil || memberStates(ms)["team/alpha"] != MemberLive {
+		t.Fatalf("members = %+v, %v", ms, err)
+	}
+
+	// A read of the new Task drops an open run of the stream that is older
+	// than the Task, which the new Task does not hold.
+	p.mu.Lock()
+	p.runs["old"] = &platformRun{run: &fw.Run{ID: "old", Agent: "default", State: fw.StateRunning, CreatedAt: first}, member: "team/alpha", updated: time.Now().Add(-time.Minute), queued: true}
+	p.runs["young"] = &platformRun{run: &fw.Run{ID: "young", Agent: "default", State: fw.StateRunning, CreatedAt: time.Now().UTC()}, member: "team/alpha", updated: time.Now().Add(-time.Minute), queued: true}
+	p.members["team/alpha"].fillRead = time.Now().Add(-fillRepairInterval)
+	p.mu.Unlock()
+	p.poll(ctx)
+	p.mu.Lock()
+	_, old := p.runs["old"]
+	_, young := p.runs["young"]
+	p.mu.Unlock()
+	if old || !young {
+		t.Fatalf("after the read: old run kept %v, young run kept %v", old, young)
 	}
 }
