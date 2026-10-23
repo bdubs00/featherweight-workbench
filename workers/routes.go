@@ -1,8 +1,8 @@
 package workers
 
-// This file serves the pools and the templates on the native surface
-// (docs/ARCHITECTURE.md section 14.10), behind the authentication of the
-// native API.
+// This file serves the pools, the templates, and the orphan Tasks on the
+// native surface (docs/ARCHITECTURE.md section 14.10), behind the
+// authentication of the native API.
 
 import (
 	"errors"
@@ -33,6 +33,8 @@ func mount(k *native.Kit) error {
 	k.Handle("PATCH /v1/pools/{name}", rt.patch)
 	k.Handle("DELETE /v1/pools/{name}", rt.remove)
 	k.Handle("GET /v1/templates", rt.templates)
+	k.Handle("GET /v1/fleet/orphans", rt.orphans)
+	k.Handle("DELETE /v1/fleet/orphans", rt.removeOrphans)
 	return nil
 }
 
@@ -43,6 +45,10 @@ func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 		native.WriteProblem(w, r, http.StatusNotFound, cause(err))
 	case errors.Is(err, fleet.ErrPoolExists), errors.Is(err, fleet.ErrPoolConflict):
 		native.WriteProblem(w, r, http.StatusConflict, cause(err))
+	case errors.Is(err, fleet.ErrNoTaskList):
+		native.WriteProblem(w, r, http.StatusNotFound, cause(err))
+	case errors.Is(err, fleet.ErrTaskList):
+		native.WriteProblem(w, r, http.StatusBadGateway, cause(err))
 	default:
 		rt.k.Fail(w, r, err)
 	}
@@ -134,4 +140,28 @@ func (rt *routes) templates(w http.ResponseWriter, r *http.Request) {
 		list = []pools.TemplateInfo{}
 	}
 	native.WriteJSON(w, http.StatusOK, map[string]any{"templates": list})
+}
+
+// orphans answers GET /v1/fleet/orphans with {"orphans": [...]}: the child
+// Tasks whose parent Task is gone, each after the Tasks under it
+// (fleet.Orphans). It needs the admin role of the process.
+func (rt *routes) orphans(w http.ResponseWriter, r *http.Request) {
+	list, err := fleet.Orphans(r.Context(), rt.a)
+	if err != nil {
+		rt.fail(w, r, err)
+		return
+	}
+	native.WriteJSON(w, http.StatusOK, map[string]any{"orphans": list})
+}
+
+// removeOrphans answers DELETE /v1/fleet/orphans with 200 and the Tasks
+// that went and those whose delete failed (fleet.Removal). It needs the
+// admin role of the process.
+func (rt *routes) removeOrphans(w http.ResponseWriter, r *http.Request) {
+	out, err := fleet.RemoveOrphans(r.Context(), rt.a)
+	if err != nil {
+		rt.fail(w, r, err)
+		return
+	}
+	native.WriteJSON(w, http.StatusOK, out)
 }

@@ -253,6 +253,24 @@ func TestRoutes(t *testing.T) {
 	}
 }
 
+// The orphan Tasks are for the admins of the front alone: a person
+// without the role gets 403 for the list and for the removal, and an
+// admin passes the check and reaches the ax API, which does not answer in
+// this test.
+func TestOrphanRoutes(t *testing.T) {
+	fr := newFront(t)
+	for _, method := range []string{"GET", "DELETE"} {
+		for _, who := range []string{"alice", "bob"} {
+			if resp, body := do(t, method, fr.url+"/v1/fleet/orphans", who, ""); resp.StatusCode != http.StatusForbidden || !strings.Contains(body, "access.admins") {
+				t.Errorf("%s of %s = %d %s", method, who, resp.StatusCode, body)
+			}
+		}
+		if resp, body := do(t, method, fr.url+"/v1/fleet/orphans", "carol", ""); resp.StatusCode != http.StatusBadGateway || !strings.Contains(body, "the ax API did not give the Task list of the atespace team") {
+			t.Errorf("%s of carol = %d %s", method, resp.StatusCode, body)
+		}
+	}
+}
+
 func connect(t *testing.T, a *fw.Agent, token string) *sdk.ClientSession {
 	t.Helper()
 	h, err := mcp.Handler(a)
