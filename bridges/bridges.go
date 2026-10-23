@@ -132,6 +132,10 @@ type Store struct {
 	following atomic.Bool
 	polls     atomic.Int64
 
+	// startMu makes the starts of new manager runs of this replica go one
+	// at a time (newManager).
+	startMu sync.Mutex
+
 	// What this replica knows of the view, for the watch (watch.go).
 	mu       sync.Mutex
 	checked  map[string]uint64    // by run id: the seq of the run at its last read of the ends

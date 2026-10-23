@@ -348,10 +348,11 @@ type fakeMember struct {
 	fail   map[string]int        // by path: the 503 answers before a 200
 	status map[string]int        // by path: a fixed answer
 	detail map[string]string     // by path: the detail of the fixed answer
+	ids    map[string]string     // by idempotency key: the run that a start answers, else mgr-run-1
 }
 
 func newMember(t *testing.T) *fakeMember {
-	fm := &fakeMember{events: map[string][]fw.Event{}, fail: map[string]int{}, status: map[string]int{}, detail: map[string]string{}}
+	fm := &fakeMember{events: map[string][]fw.Event{}, fail: map[string]int{}, status: map[string]int{}, detail: map[string]string{}, ids: map[string]string{}}
 	fm.srv = httptest.NewServer(http.HandlerFunc(fm.serve))
 	t.Cleanup(fm.srv.Close)
 	return fm
@@ -381,13 +382,17 @@ func (fm *fakeMember) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	events := fm.events
+	id := fm.ids[r.Header.Get("Idempotency-Key")]
 	fm.mu.Unlock()
+	if id == "" {
+		id = "mgr-run-1"
+	}
 	w.Header().Set("Content-Type", "application/json")
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/runs/"), "/")
 	switch {
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/runs":
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(fw.Run{ID: "mgr-run-1", Agent: fmt.Sprint(body["agent"]), State: fw.StateQueued})
+		_ = json.NewEncoder(w).Encode(fw.Run{ID: id, Agent: fmt.Sprint(body["agent"]), State: fw.StateQueued})
 	case r.Method == http.MethodGet && len(parts) == 2 && parts[1] == "events":
 		fm.mu.Lock()
 		list := append([]fw.Event(nil), events[parts[0]]...)

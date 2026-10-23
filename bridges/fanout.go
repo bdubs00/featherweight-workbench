@@ -4,11 +4,13 @@ package bridges
 // fans each one out (docs/ARCHITECTURE.md section 18.5). The addressed
 // members, or every active member when a message names nobody, get the
 // message as a follow-up on the newest run of the member in the bridge,
-// with the sender in from (the kernel architecture, section 5.5). The
-// change of the record that gives the message its seq also decides the
-// deliveries under the caps, so two replicas never deliver past a cap, and
-// the replica that took the post delivers, so a message is delivered once.
-// A delivery runs on a bounded worker, never on the request of the poster,
+// with the sender in from (the kernel architecture, section 5.5). A member
+// whose run the fleet lost, and a member that nothing seats, get a new run
+// instead, which reads the channel first. The change of the record that
+// gives the message its seq also decides the deliveries and the seatings
+// under the caps, so two replicas never deliver past a cap, and the
+// replica that took the post delivers, so a message is delivered once. A
+// delivery runs on a bounded worker, never on the request of the poster,
 // and a delivery that fails is tried again with a pause that doubles.
 
 import (
@@ -85,15 +87,26 @@ type PostSpec struct {
 }
 
 // delivery is one follow-up of a message to the newest run of a member.
-// pinned makes the follow-up survive every compaction of the run.
+// pinned makes the follow-up survive every compaction of the run. A
+// delivery without a run waits for newest, the newest run of the member,
+// which the view did not hold when the message came (deferred).
 type delivery struct {
 	bridge  string
 	seq     uint64
 	handle  string
 	run     *fw.Run
+	newest  string
 	content string
 	from    fw.MessageFrom
 	pinned  bool // a pinned message or a slash command
+}
+
+// wakeInput is the input of the new run of a seat whose earlier run the
+// fleet lost, when a message seats it again. It sends the run to the
+// channel from the message seq on. The text of the message never becomes
+// the input, which has the authority of the operator.
+func wakeInput(seq uint64) string {
+	return fmt.Sprintf("The fleet lost your earlier run of this seat, so this is a new run on the same seat. Your task is in your instructions. Read the channel with bridge_read first: it holds your earlier work and the messages for you. Do not repeat work that the channel shows as done. Then answer the messages for you from entry %d on.", seq)
 }
 
 // header is the first line of a follow-up, which names the bridge, so a
@@ -171,8 +184,10 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 	var msg Message
 	var lines []Message
 	var plan []delivery
+	var seats []Member
+	var inputs map[string]string
 	rec, err := s.b.update(ctx, id, func(rec *record) error {
-		lines, plan = nil, nil
+		lines, plan, seats, inputs = nil, nil, nil, nil
 		if rec.State != StateOpen {
 			return fmt.Errorf("%w: the bridge %s is closed, so it takes no message", ErrConflict, id)
 		}
@@ -210,7 +225,7 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 			c := cmd.Command
 			msg.Skill = &c
 		}
-		lines, plan = fanPlan(rec, snd, msg, text, runs, now)
+		lines, plan, seats, inputs = fanPlan(rec, snd, msg, text, runs, now)
 		return nil
 	})
 	if err != nil {
@@ -221,20 +236,23 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 	for _, d := range plan {
 		s.submit(s.deliveryJob(d))
 	}
+	if len(seats) > 0 {
+		s.submit(s.seatJob(rec, seats, inputs, msg.Seq))
+	}
 	if snd.subject != "" {
 		if err := s.b.setRead(fctx, id, snd.subject, msg.Seq); err != nil {
 			s.log.Warn("bridges: move the read mark of the poster", "bridge", id, "error", err)
 		}
 	}
-	s.log.Info("bridges: a message reached the channel", "bridge", rec.ID, "seq", msg.Seq, "from", snd.name(), "deliveries", len(plan))
+	s.log.Info("bridges: a message reached the channel", "bridge", id, "seq", msg.Seq, "from", snd.name(), "deliveries", len(plan), "seatings", len(seats))
 	return msg, nil
 }
 
-// fanPlan decides the deliveries of a message under the caps of the
-// bridge, inside the change of the record that gives the message its seq,
-// and returns the system lines that the caps post, with their seqs. A cap
-// delivers nothing more, posts one line, and waits: the channel holds the
-// message in every case.
+// fanPlan decides the deliveries and the seatings of a message under the
+// caps of the bridge, inside the change of the record that gives the
+// message its seq, and returns the system lines that the caps post, with
+// their seqs. A cap delivers nothing more, posts one line, and waits: the
+// channel holds the message in every case.
 //
 //   - maxMessages counts the messages of people and agents. Past it, no
 //     message fans out until the operator raises the cap.
@@ -244,12 +262,32 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 //     last message of a person. Past it, the two get nothing more from
 //     each other until a person writes or the operator raises the cap.
 //
-// A member whose newest run failed gets nothing, and the channel says so
-// once for that run with the reason from the run (cannotTake). A member
-// without a run, whose job waits in the queue, gets nothing, and its
-// instructions tell it to read the channel first. A seat whose newest run
-// no worker of the fleet holds gets nothing too (goneLines).
-func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]*fw.Run, now time.Time) (lines []Message, plan []delivery) {
+// Each member gets the message by the state of its newest run:
+//
+//   - A run that the view holds gets a follow-up. A canceled run gets no
+//     message of an agent, because a person stopped it, and a message of
+//     a person starts a new turn of it.
+//   - A run that failed gets nothing, and the channel says so once for
+//     that run with the reason from the run (cannotTake).
+//   - A run that no worker of the fleet holds, as the channel said with
+//     the line lost (goneLines), gets nothing: the message seats the
+//     member again on a new run, whose input sends it to the channel
+//     (wakeInput).
+//   - A run that the view does not hold yet, while the channel did not
+//     say that the fleet lost it, gets a deferred delivery, which reads
+//     the record and the run again at each try (deferred).
+//   - A member without a run that something seats (willSeat) gets
+//     nothing, and its instructions tell it to read the channel first. A
+//     member without a run that nothing seats is seated by the message on
+//     a new run with its task.
+//
+// A seating counts as one delivery under the caps, and it moves the marks
+// Again and AgainAt of the seat as seatAgain does, so a second message
+// within seatAgainWait seats nothing more (seatingOut): the new run reads
+// the channel first. fanPlan returns the seats to seat with the input of
+// each new run by handle (inputOf), and the caller places them together
+// after the change (seatJob).
+func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]*fw.Run, now time.Time) (lines []Message, plan []delivery, seats []Member, inputs map[string]string) {
 	f := &rec.Fan
 	if snd.handle == "" {
 		// A message of a person ends every exchange between two agents.
@@ -261,7 +299,7 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 			f.Capped = true
 			lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d messages", rec.Caps.MaxMessages)))
 		}
-		return seqLines(rec, lines, now), nil
+		return seqLines(rec, lines, now), nil, nil, nil
 	}
 	var targets []*Member
 	if len(msg.To) > 0 {
@@ -287,19 +325,31 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 		if m.Handle == snd.handle {
 			continue // a message of a member to itself
 		}
-		r := runs[m.newest()]
-		if r == nil {
-			continue // the job waits in the queue; the channel holds the message
-		}
-		if r.State == fw.StateFailed {
+		newest := m.newest()
+		r := runs[newest]
+		sm := rec.Seats[m.Handle]
+		seat, input := false, ""
+		switch {
+		case newest == "":
+			if willSeat(rec, runs[managerRun(rec)]) || seatingOut(sm, *m, now) {
+				continue // its run comes and reads the channel first
+			}
+			seat = true
+		case r == nil && sm != nil && sm.Gone == newest:
+			if seatingOut(sm, *m, now) {
+				continue // a seating for the lost run went out, and its run reads the channel first
+			}
+			seat, input = true, wakeInput(msg.Seq)
+		case r == nil:
+			// The view does not hold the run yet: a deferred delivery.
+		case r.State == fw.StateFailed:
 			if mk := rec.mark(r.ID, m.Handle); !mk.Limit {
 				mk.Limit = true
 				lines = append(lines, system(EventCap, cannotTake(m.Handle, r)))
 			}
 			continue
-		}
-		if r.State == fw.StateCanceled {
-			continue // a message starts a canceled run again
+		case r.State == fw.StateCanceled && snd.handle != "":
+			continue // a person stopped the run, and only a person starts it again
 		}
 		pair := ""
 		if snd.handle != "" {
@@ -326,13 +376,30 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 			}
 			f.Pairs[pair]++
 		}
-		plan = append(plan, delivery{bridge: rec.ID, seq: msg.Seq, handle: m.Handle, run: r, content: head + text, from: snd.party(m.Handle), pinned: msg.Pinned})
+		if seat {
+			sm := rec.seat(m.Handle)
+			sm.Seatings++
+			sm.Again, sm.AgainAt = newest, &now
+			seats = append(seats, *m)
+			if input != "" {
+				if inputs == nil {
+					inputs = map[string]string{}
+				}
+				inputs[m.Handle] = input
+			}
+			continue
+		}
+		d := delivery{bridge: rec.ID, seq: msg.Seq, handle: m.Handle, run: r, content: head + text, from: snd.party(m.Handle), pinned: msg.Pinned}
+		if r == nil {
+			d.newest = newest
+		}
+		plan = append(plan, d)
 	}
 	if len(minuteMissed) > 0 && !f.MinuteCapped.Equal(minute) {
 		f.MinuteCapped = minute
 		lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d deliveries a minute, and %s did not get message %d", rec.Caps.MaxFanoutPerMinute, strings.Join(minuteMissed, ", "), msg.Seq)))
 	}
-	return seqLines(rec, lines, now), plan
+	return seqLines(rec, lines, now), plan, seats, inputs
 }
 
 // seqLines gives lines their seqs and their time.
@@ -375,16 +442,139 @@ type job struct {
 	pause time.Duration
 }
 
-// deliveryJob is the job of one delivery.
+// deliveryJob is the job of one delivery. A delivery without a run is
+// deferred: each try reads the record and the run again.
 func (s *Store) deliveryJob(d delivery) *job {
+	run := d.newest
+	do := func(ctx context.Context) error { return s.deferred(ctx, d) }
+	if d.run != nil {
+		run = d.run.ID
+		do = func(ctx context.Context) error { return s.send(ctx, d.run, d.content, d.from, d.pinned) }
+	}
 	return &job{
 		name: fmt.Sprintf("message %d of %s to %s", d.seq, d.bridge, d.handle),
-		do:   func(ctx context.Context) error { return s.send(ctx, d.run, d.content, d.from, d.pinned) },
+		do:   do,
 		fail: func(err error) {
-			s.log.Warn("bridges: a member did not get a message", "bridge", d.bridge, "seq", d.seq, "member", d.handle, "run", d.run.ID, "error", err)
+			s.log.Warn("bridges: a member did not get a message", "bridge", d.bridge, "seq", d.seq, "member", d.handle, "run", run, "error", err)
 			_ = s.postLines(s.ctx, d.bridge, system(EventFailed, fmt.Sprintf("%s did not get message %d: %s", d.handle, d.seq, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
 		},
 	}
+}
+
+// deferred tries a delivery whose run the view did not hold when the
+// message came. When the view holds the run now, the run gets the
+// follow-up, by the rules of fanPlan. When the channel said that the fleet
+// lost the run, the message seats the member again (seatLost). When the
+// seat has a newer run, which started after the message and reads the
+// channel first, or the seat is fired, nothing happens. Otherwise it fails
+// with an error that can go away, so the job tries again.
+func (s *Store) deferred(ctx context.Context, d delivery) error {
+	fctx := s.asFront(ctx)
+	rec, _, err := s.b.get(fctx, d.bridge)
+	if err != nil {
+		return err
+	}
+	m := rec.member(d.handle)
+	if m == nil || m.Fired || m.newest() != d.newest {
+		return nil
+	}
+	if r := s.runOf(fctx, d.newest); r != nil {
+		switch {
+		case r.State == fw.StateFailed:
+			s.cannotTakeLine(ctx, d.bridge, d.handle, r)
+			return nil
+		case r.State == fw.StateCanceled && d.from.Kind == fw.FromAgent:
+			return nil
+		}
+		return s.send(ctx, r, d.content, d.from, d.pinned)
+	}
+	if sm := rec.Seats[d.handle]; sm != nil && sm.Gone == d.newest {
+		s.seatLost(ctx, d.bridge, d.handle, d.newest, d.seq)
+		return nil
+	}
+	return fmt.Errorf("bridges: the view of the fleet does not hold the run %s", d.newest)
+}
+
+// cannotTakeLine posts the cap line of a member whose newest run failed
+// (cannotTake), once for that run, as fanPlan does.
+func (s *Store) cannotTakeLine(ctx context.Context, id, handle string, r *fw.Run) {
+	var lines []Message
+	_, err := s.b.update(ctx, id, func(rec *record) error {
+		lines = nil
+		mk := rec.mark(r.ID, handle)
+		if mk.Limit {
+			return errNoChange
+		}
+		mk.Limit = true
+		lines = seqLines(rec, []Message{system(EventCap, cannotTake(handle, r))}, s.now().UTC())
+		return nil
+	})
+	if err != nil {
+		s.log.Warn("bridges: a line did not reach the channel", "bridge", id, "error", err)
+		return
+	}
+	s.land(ctx, id, lines...)
+}
+
+// seatLost seats a member again for the message seq once the channel said
+// that the fleet lost its newest run lost, in a change of the record of
+// its own, as fanPlan seats it, unless a seating for that run went out
+// within seatAgainWait (seatingOut).
+func (s *Store) seatLost(ctx context.Context, id, handle, lost string, seq uint64) {
+	now := s.now().UTC()
+	seated := false
+	rec, err := s.b.update(ctx, id, func(rec *record) error {
+		seated = false
+		m := rec.member(handle)
+		if m == nil || m.Fired || m.newest() != lost || rec.Seats[handle] == nil || rec.Seats[handle].Gone != lost || seatingOut(rec.Seats[handle], *m, now) {
+			return errNoChange
+		}
+		sm := rec.seat(handle)
+		sm.Seatings++
+		sm.Again, sm.AgainAt = lost, &now
+		seated = true
+		return nil
+	})
+	if err != nil {
+		s.log.Warn("bridges: seat a member again for a message", "bridge", id, "member", handle, "error", err)
+		return
+	}
+	if seated {
+		s.placeAgain(ctx, rec, []Member{*rec.member(handle)}, map[string]string{handle: wakeInput(seq)})
+	}
+}
+
+// seatJob is the job that seats the members that a message seats on new
+// runs (fanPlan), together. It runs once: the change of the record that
+// decided the seatings moved the marks of the seats, so a seating that
+// fails gets its line and no second try.
+func (s *Store) seatJob(rec *record, seats []Member, inputs map[string]string, seq uint64) *job {
+	return &job{
+		name: fmt.Sprintf("the seatings of message %d of %s", seq, rec.ID),
+		do: func(ctx context.Context) error {
+			s.placeAgain(ctx, rec, seats, inputs)
+			return nil
+		},
+		fail: func(err error) { s.seatFailed(rec.ID, seats, err) },
+	}
+}
+
+// placeAgain places seats that the bridge seats again, and gives each
+// seat a line when the placement fails.
+func (s *Store) placeAgain(ctx context.Context, rec *record, seats []Member, inputs map[string]string) {
+	if err := s.place(ctx, rec, seats, inputs); err != nil {
+		s.seatFailed(rec.ID, seats, err)
+	}
+}
+
+// seatFailed posts the line of each seat that the front failed to seat
+// again.
+func (s *Store) seatFailed(id string, seats []Member, err error) {
+	lines := make([]Message, 0, len(seats))
+	for _, m := range seats {
+		lines = append(lines, system(EventFailed, fmt.Sprintf("The front failed to seat %s again: %s", m.Handle, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
+	}
+	_ = s.postLines(s.ctx, id, lines...)
 }
 
 // submit queues a job for the workers. A full queue fails the job at once.

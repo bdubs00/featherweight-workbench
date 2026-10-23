@@ -30,8 +30,9 @@ func presenceOf(t *testing.T, url, id string) map[string]string {
 // A seat whose newest run the fleet lost is not working once the view
 // settled. The channel says so once per seat, as after a pool replaced the
 // Task of the seats. A seat whose run finished first is idle, and a seat
-// whose run worked is in error. A view that has not settled yet changes
-// nothing, and a patch with its task seats the seat in error again.
+// whose run worked is in error. A view that has not settled yet posts
+// nothing, and the seat waits for its run there. A patch with its task
+// seats the seat in error again.
 func TestSeatThatLostItsRun(t *testing.T) {
 	a := newAgent(t, nil)
 	s := newStore(t, a, nil)
@@ -58,7 +59,7 @@ func TestSeatThatLostItsRun(t *testing.T) {
 	if got := withEvent(channel(t, s, it.ID), EventLost); len(got) != 0 {
 		t.Fatalf("a view that has not settled posted %+v", got)
 	}
-	if got := presenceOf(t, url, it.ID); got["migrator-1"] != PresenceWorking {
+	if got := presenceOf(t, url, it.ID); got["migrator-1"] != PresenceWaiting {
 		t.Fatalf("presence before the view settled = %v", got)
 	}
 	v.settle(true)

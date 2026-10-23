@@ -283,7 +283,7 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 			}
 		}
 	case PlacementSpawn:
-		run, err := s.startManager(ctx, rec, s.planOf(ctx, rec), "bridge:"+rec.ID+":manager")
+		run, err := s.startManager(ctx, rec, s.planOf(ctx, rec, rec.Members, nil), "bridge:"+rec.ID+":manager")
 		if err != nil {
 			return nil, err
 		}
@@ -296,10 +296,10 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 	}
 	s.land(ctx, rec.ID, opened)
 	for _, m := range rec.Members {
-		emitMember(rec.ID, Member{Handle: m.Handle, Agent: m.Agent, Pool: m.Pool, Task: m.Task, Runs: []string{}, Presence: PresenceWorking})
+		emitMember(rec.ID, Member{Handle: m.Handle, Agent: m.Agent, Pool: m.Pool, Task: m.Task, Runs: []string{}, Presence: PresenceWaiting})
 	}
 	if placement == PlacementQueue {
-		s.enqueue(ctx, rec, rec.Members)
+		s.enqueue(ctx, rec, rec.Members, nil)
 	}
 	s.log.Info("bridges: a bridge is open", "bridge", rec.ID, "placement", placement, "members", len(rec.Members), "operator", rec.Operator)
 	return rec, nil
@@ -341,14 +341,15 @@ func (s *Store) land(ctx context.Context, id string, msgs ...Message) {
 
 // enqueue puts one run request per seat on the queue of its agent, as the
 // operator, with the batch of the bridge, the seat in the metadata, and
-// the instructions of the bridge. A seat whose request does not reach the
-// queue gets a line in the channel.
-func (s *Store) enqueue(ctx context.Context, rec *record, seats []Member) {
+// the instructions of the bridge. inputs holds the input of the run of a
+// seat by handle (inputOf). A seat whose request does not reach the queue
+// gets a line in the channel.
+func (s *Store) enqueue(ctx context.Context, rec *record, seats []Member, inputs map[string]string) {
 	byAgent := map[string][]fw.RunRequest{}
 	var order []string
 	handles := map[string][]string{}
 	for _, m := range seats {
-		req := s.requestOf(ctx, rec, m)
+		req := s.requestOf(ctx, rec, m, inputOf(m, inputs))
 		if _, ok := byAgent[m.Agent]; !ok {
 			order = append(order, m.Agent)
 		}
@@ -368,12 +369,22 @@ func (s *Store) enqueue(ctx context.Context, rec *record, seats []Member) {
 	}
 }
 
-// requestOf is the run request of a seat on the queue of its agent.
-func (s *Store) requestOf(ctx context.Context, rec *record, m Member) fw.RunRequest {
+// inputOf is the input of a new run of a seat: its entry in inputs, by
+// handle, or else the task of the seat.
+func inputOf(m Member, inputs map[string]string) string {
+	if in := inputs[m.Handle]; in != "" {
+		return in
+	}
+	return m.Task
+}
+
+// requestOf is the run request of a seat on the queue of its agent, with
+// the input of the run.
+func (s *Store) requestOf(ctx context.Context, rec *record, m Member, input string) fw.RunRequest {
 	seat := rec.seat(m.Handle)
 	title := oneLine(m.Handle+": "+m.Task, maxTitleRunes)
 	req := fw.RunRequest{
-		Input:          m.Task,
+		Input:          input,
 		Instructions:   s.instructionsOf(ctx, rec, m),
 		Metadata:       map[string]string{fw.MetaBatch: BatchOf(rec.ID), MetaMember: m.Handle, fw.MetaTitle: title},
 		Principal:      rec.Operator,
@@ -504,14 +515,17 @@ func learnedPath(agent string) string { return "agents/" + agent + "/learned.md"
 
 // planSeat is one seat in the plan of a spawn bridge.
 type planSeat struct {
-	Handle, Agent, Task string
-	MaxTurns            int
-	Deadline            string
-	Instructions        string
+	Handle, Agent, Input string
+	MaxTurns             int
+	Deadline             string
+	Instructions         string
 }
 
-// planOf renders the plan of a spawn bridge for the manager.
-func (s *Store) planOf(ctx context.Context, rec *record) string {
+// planOf renders the plan of a spawn bridge for the manager, for the
+// seats that are not fired: every seat at the open, and the seats to seat
+// now for a new manager run (place). inputs holds the input of the run of
+// a seat by handle (inputOf).
+func (s *Store) planOf(ctx context.Context, rec *record, seats []Member, inputs map[string]string) string {
 	d := struct {
 		ID, Title, Goal, Operator string
 		Seats                     []planSeat
@@ -522,11 +536,11 @@ func (s *Store) planOf(ctx context.Context, rec *record) string {
 	if d.Goal == "" {
 		d.Goal = rec.Title
 	}
-	for _, m := range rec.Members {
+	for _, m := range seats {
 		if m.Fired {
 			continue
 		}
-		ps := planSeat{Handle: m.Handle, Agent: m.Agent, Task: oneLine(m.Task, maxTaskBytes), Instructions: s.instructionsOf(ctx, rec, m)}
+		ps := planSeat{Handle: m.Handle, Agent: m.Agent, Input: oneLine(inputOf(m, inputs), maxTaskBytes), Instructions: s.instructionsOf(ctx, rec, m)}
 		if b := rec.seat(m.Handle).Budget; b != nil {
 			ps.MaxTurns, ps.Deadline = b.MaxTurns, b.Deadline
 		}

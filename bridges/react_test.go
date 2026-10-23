@@ -30,7 +30,7 @@ func TestPresence(t *testing.T) {
 	}{
 		{"queued on a live Task", Member{}, []*fw.Run{run(fw.StateQueued)}, fleet.MemberLive, PresenceWorking},
 		{"running on a live Task", Member{}, []*fw.Run{run(fw.StateRunning)}, fleet.MemberLive, PresenceWorking},
-		{"a job that waits in the queue", Member{}, nil, "", PresenceWorking},
+		{"no run that the view holds", Member{}, nil, "", PresenceWaiting},
 		{"input-required", Member{}, []*fw.Run{run(fw.StateInputRequired)}, fleet.MemberLive, PresenceNeedsYou},
 		{"input-required on a Task that sleeps", Member{}, []*fw.Run{run(fw.StateInputRequired)}, fleet.MemberQuiet, PresenceNeedsYou},
 		{"finished on a live Task", Member{}, []*fw.Run{run(fw.StateCompleted)}, fleet.MemberLive, PresenceIdle},
@@ -48,6 +48,62 @@ func TestPresence(t *testing.T) {
 		if got := Presence(c.m, c.runs, c.task); got != c.want {
 			t.Errorf("%s: %s, want %s", c.name, got, c.want)
 		}
+	}
+}
+
+// A seat without a run waits when something seats it: the queue holds its
+// job, or the manager run of a spawn bridge works or is not in the view
+// yet. Nothing seats it once the manager run ended, also when the view no
+// longer holds that run and the channel holds its end, or when the bridge
+// has no manager run. Neither counts as needs-you.
+func TestPresenceOfASeatWithoutARun(t *testing.T) {
+	seat := Member{Handle: "migrator-1", Agent: "migrator", Task: "Migrate", Runs: []string{}}
+	queue := &record{Bridge: Bridge{ID: "b", Placement: PlacementQueue, Members: []Member{seat}}}
+	spawn := func(manager string, done uint64) *record {
+		rec := &record{Bridge: Bridge{ID: "b", Placement: PlacementSpawn, Members: []Member{seat}}}
+		if manager != "" {
+			rec.Manager = &Manager{Member: "default/manager-0", Run: manager}
+		}
+		if done > 0 {
+			rec.Marks = map[string]*runMark{manager: {Seat: HandleManager, Started: true, Done: done}}
+		}
+		return rec
+	}
+	held := func(state fw.RunState) map[string]*fw.Run {
+		return map[string]*fw.Run{"mgr": {ID: "mgr", State: state}}
+	}
+	cases := []struct {
+		name string
+		rec  *record
+		runs map[string]*fw.Run
+		want string
+	}{
+		{"a queue bridge", queue, nil, PresenceWaiting},
+		{"a manager run that works", spawn("mgr", 0), held(fw.StateRunning), PresenceWaiting},
+		{"a manager run that waits for an approval", spawn("mgr", 0), held(fw.StateInputRequired), PresenceWaiting},
+		{"a manager run that finished", spawn("mgr", 5), held(fw.StateCompleted), PresenceNotStarted},
+		{"a manager run that was canceled", spawn("mgr", 2), held(fw.StateCanceled), PresenceNotStarted},
+		{"a manager run that the view does not hold yet", spawn("mgr", 0), nil, PresenceWaiting},
+		{"a manager run that left the view after its end", spawn("mgr", 2), nil, PresenceNotStarted},
+		{"no manager run", spawn("", 0), nil, PresenceNotStarted},
+	}
+	for _, c := range cases {
+		ms := decorate(c.rec, c.runs, nil)
+		if got := ms[0].Presence; got != c.want || needsYou(ms) != 0 {
+			t.Errorf("%s: %s with %d needs-you, want %s", c.name, got, needsYou(ms), c.want)
+		}
+	}
+	// A fired seat stays fired, and a seat with a run takes the presence
+	// of its run.
+	fired := spawn("mgr", 2)
+	fired.Members[0].Fired = true
+	if got := decorate(fired, nil, nil)[0].Presence; got != PresenceFired {
+		t.Errorf("a fired seat: %s", got)
+	}
+	working := spawn("mgr", 2)
+	working.Members[0].Runs = []string{"r-mig"}
+	if got := decorate(working, map[string]*fw.Run{"r-mig": {ID: "r-mig", State: fw.StateRunning}}, nil)[0].Presence; got != PresenceWorking {
+		t.Errorf("a seat with a run: %s", got)
 	}
 }
 

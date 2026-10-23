@@ -2,8 +2,9 @@ package bridges
 
 // This file derives the presence of a member, the status light of the
 // roster (docs/ARCHITECTURE.md section 18.7), from the newest run of the
-// member in the bridge and the state of the Task that holds it. Nothing
-// stores a presence: the routes and the hooks compute it from the view.
+// member in the bridge and the state of the Task that holds it, and for a
+// seat without a run from the record of its bridge. Nothing stores a
+// presence: the routes and the hooks compute it from the view.
 
 import (
 	"strings"
@@ -14,28 +15,29 @@ import (
 )
 
 // Presence returns the presence of a member: PresenceWorking,
-// PresenceNeedsYou, PresenceIdle, PresenceAsleep, PresenceError, or
-// PresenceFired. runs holds the runs of the member in the bridge, in any
-// order; the newest one decides. taskState is the state of the Task that
-// holds the newest run: fleet.MemberLive, fleet.MemberQuiet,
-// fleet.MemberStopped, TaskBlocked, or "" when the view does not know the
-// Task, which counts as live.
+// PresenceNeedsYou, PresenceIdle, PresenceAsleep, PresenceError,
+// PresenceFired, or PresenceWaiting. runs holds the runs of the member in
+// the bridge, in any order; the newest one decides. taskState is the state
+// of the Task that holds the newest run: fleet.MemberLive,
+// fleet.MemberQuiet, fleet.MemberStopped, TaskBlocked, or "" when the view
+// does not know the Task, which counts as live.
 //
 // The rules, the first that holds wins:
 //
 //   - fired: the seat is fired.
+//   - waiting: the view holds no run of the member.
 //   - error: the newest run failed, or the Task is blocked or stopped.
 //   - needs-you: the newest run waits for an approval, an answer, or a
 //     connection, also on a Task that sleeps, because a decision wakes it.
 //   - asleep: the Task is quiet.
-//   - working: the newest run is queued, running, or suspended, or the
-//     member has no run yet because its job waits in the queue.
+//   - working: the newest run is queued, running, or suspended.
 //   - idle: the newest run finished, and the Task is live.
 //
-// The routes and the hooks apply one more rule first, from the record of
+// The routes and the hooks apply two more rules first, from the record of
 // the bridge (decorate): a seat whose newest run no worker of the fleet
 // holds, as the channel said with the line lost, is idle when the channel
-// holds an end of that run, and in error otherwise.
+// holds an end of that run, and in error otherwise; and a seat without a
+// run is waiting when something seats it, and not-started otherwise.
 func Presence(m Member, runs []*fw.Run, taskState string) string {
 	if m.Fired {
 		return PresenceFired
@@ -50,7 +52,7 @@ func Presence(m Member, runs []*fw.Run, taskState string) string {
 		}
 	}
 	if newest == nil {
-		return PresenceWorking
+		return PresenceWaiting
 	}
 	switch {
 	case newest.State == fw.StateFailed, taskState == TaskBlocked, taskState == fleet.MemberStopped, newest.Blocked != "":
@@ -110,8 +112,45 @@ func decorate(rec *record, runs map[string]*fw.Run, states map[string]string) []
 		if p, ok := gonePresence(rec, *m, runs); ok {
 			m.Presence, m.Activity = p, nil
 		}
+		if p, ok := unseatedPresence(rec, *m, runs); ok {
+			m.Presence = p
+		}
 	}
 	return out
+}
+
+// unseatedPresence is the presence of a seat that has no run yet: waiting
+// when something seats it (willSeat), and not-started otherwise. It
+// reports false for any other seat.
+func unseatedPresence(rec *record, m Member, runs map[string]*fw.Run) (string, bool) {
+	if m.Fired || len(m.Runs) > 0 {
+		return "", false
+	}
+	if willSeat(rec, runs[managerRun(rec)]) {
+		return PresenceWaiting, true
+	}
+	return PresenceNotStarted, true
+}
+
+// willSeat reports whether something seats a seat of the bridge that has
+// no run: the job of a queue bridge waits on the intake queue, or the
+// manager run of a spawn bridge works. mgr is that manager run as the view
+// holds it, or nil. A manager run that the view does not hold counts as
+// working until the channel holds an end of it, because the view can get
+// a new run late.
+func willSeat(rec *record, mgr *fw.Run) bool {
+	if rec.Placement == PlacementQueue {
+		return true
+	}
+	id := managerRun(rec)
+	switch {
+	case id == "":
+		return false
+	case mgr != nil:
+		return !mgr.State.Terminal()
+	}
+	mk := rec.Marks[id]
+	return mk == nil || mk.Done == 0
 }
 
 // gonePresence is the presence of a seat whose newest run no worker of

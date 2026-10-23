@@ -3,9 +3,11 @@ package bridges
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/fleet"
@@ -15,13 +17,14 @@ import (
 // queued captures the run requests that reach the intake queues.
 type queued struct {
 	mu   sync.Mutex
-	reqs map[string]fw.RunRequest // by the handle of the seat
+	reqs map[string]fw.RunRequest // by the handle of the seat: the last one
 	subs map[string]string        // by the handle: the queue
+	n    map[string]int           // by the handle: the requests
 }
 
 func captureQueues(t *testing.T, a *fw.Agent, queues ...string) *queued {
 	t.Helper()
-	q := &queued{reqs: map[string]fw.RunRequest{}, subs: map[string]string{}}
+	q := &queued{reqs: map[string]fw.RunRequest{}, subs: map[string]string{}, n: map[string]int{}}
 	for _, queue := range queues {
 		stop, err := a.Bus().Subscribe(context.Background(), queue, func(e fw.Event) error {
 			var req fw.RunRequest
@@ -32,6 +35,7 @@ func captureQueues(t *testing.T, a *fw.Agent, queues ...string) *queued {
 			defer q.mu.Unlock()
 			q.reqs[req.Metadata[MetaMember]] = req
 			q.subs[req.Metadata[MetaMember]] = queue
+			q.n[req.Metadata[MetaMember]]++
 			return nil
 		})
 		if err != nil {
@@ -47,6 +51,13 @@ func (q *queued) get(handle string) (fw.RunRequest, string, bool) {
 	defer q.mu.Unlock()
 	r, ok := q.reqs[handle]
 	return r, q.subs[handle], ok
+}
+
+// count returns how many requests of the seat reached a queue.
+func (q *queued) count(handle string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.n[handle]
 }
 
 // A queue bridge puts one request per seat on the queue of its agent, as
@@ -193,5 +204,187 @@ func TestSpawnSeating(t *testing.T) {
 	resp, body = do(t, http.MethodPost, url+"/v1/bridges", "alice", `{"title":"t","placement":"spawn","members":[{"handle":"a","agent":"migrator","task":"x"}]}`)
 	if resp.StatusCode != http.StatusConflict || !strings.Contains(body, "no Task of the fleet runs the manager profile manager") {
 		t.Fatalf("no manager Task = %d %s", resp.StatusCode, body)
+	}
+}
+
+// spawned is a spawn bridge of a migrator and a reviewer, opened as alice,
+// whose manager run mgr-run-1 waited for an approval of spawn_task and was
+// canceled before it seated anyone, as the channel says.
+type spawned struct {
+	s     *Store
+	v     *fakeView
+	fm    *fakeMember
+	clock *testClock
+	url   string
+	id    string
+	mgr   *fw.Run
+}
+
+func newSpawned(t *testing.T) *spawned {
+	t.Helper()
+	a := newAgent(t, nil)
+	t.Setenv(EnvManager, "manager")
+	x := &spawned{s: newStore(t, a, nil), clock: &testClock{}}
+	x.clock.set(time.Date(2026, 10, 22, 15, 0, 0, 0, time.UTC))
+	x.s.now = x.clock.now
+	x.v, x.fm = withFleet(t, a)
+	x.v.state("default/manager-0", fleet.MemberLive, "manager")
+	x.url = serve(t, a)
+	resp, body := do(t, http.MethodPost, x.url+"/v1/bridges", "alice", `{"title":"Migrate","placement":"spawn","members":[
+		{"handle":"migrator-1","agent":"migrator","task":"Migrate cron"},
+		{"handle":"reviewer","agent":"reviewer","task":"Review cron"}]}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("open = %d %s", resp.StatusCode, body)
+	}
+	var it Item
+	decodeJSON(t, body, &it)
+	x.id = it.ID
+	x.mgr = &fw.Run{ID: "mgr-run-1", Agent: "manager", Member: "default/manager-0", State: fw.StateInputRequired, Seq: 4,
+		Pending:  &fw.Approval{ID: "ap1", Tool: "spawn_task", Reason: "rule: ask spawn_task"},
+		Metadata: map[string]string{fw.MetaBatch: BatchOf(it.ID)}}
+	x.v.put(x.mgr)
+	x.s.poll(context.Background())
+	if got := presenceOf(t, x.url, x.id); got["migrator-1"] != PresenceWaiting || got["reviewer"] != PresenceWaiting {
+		t.Fatalf("presence while the manager run waits = %v", got)
+	}
+	x.fm.setEvents("mgr-run-1", ev(fw.EvRunQueued, nil), ev(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCanceled}))
+	x.mgr.State, x.mgr.Pending, x.mgr.Seq = fw.StateCanceled, nil, 2
+	x.v.put(x.mgr)
+	x.s.poll(context.Background())
+	if got := presenceOf(t, x.url, x.id); got["migrator-1"] != PresenceNotStarted || got["reviewer"] != PresenceNotStarted {
+		t.Fatalf("presence after the cancel = %v", got)
+	}
+	return x
+}
+
+// seatsOf returns the seats that the follow-ups to a manager run ask it to
+// seat, by handle, with the content of each.
+func (x *spawned) seatsOf(run string) map[string]string {
+	out := map[string]string{}
+	for _, f := range x.fm.find(http.MethodPost, "/v1/runs/"+run+"/messages") {
+		content, _ := f.Body["content"].(string)
+		for _, h := range []string{"migrator-1", "reviewer"} {
+			if strings.Contains(content, "Seat "+h+" with spawn_task") {
+				out[h] = content
+			}
+		}
+	}
+	return out
+}
+
+// A message to a seat that nothing seats, in a spawn bridge whose manager
+// run ended, seats it with its task: a follow-up to the manager run when
+// the view holds it, which starts a new turn of it. When the view no
+// longer holds the manager run, whose end the channel holds, the front
+// starts one new manager run with the plan of the seats to seat alone,
+// under a new idempotency key, and the watch claims its children.
+func TestMessageSeatsANotStartedSeat(t *testing.T) {
+	x := newSpawned(t)
+	ctx := context.Background()
+	do(t, http.MethodPost, x.url+"/v1/bridges/"+x.id+"/messages", "alice", `{"text":"Is there anything more we need to do here?"}`)
+	eventually(t, "the manager gets both seats", func() bool { return len(x.seatsOf("mgr-run-1")) == 2 })
+	for h, task := range map[string]string{"migrator-1": "Migrate cron", "reviewer": "Review cron"} {
+		if c := x.seatsOf("mgr-run-1")[h]; !strings.Contains(c, `the input "[seat `+h+`] `+task+`"`) || strings.Contains(c, "anything more") {
+			t.Fatalf("the follow-up for %s = %q", h, c)
+		}
+	}
+	// A second message within the wait seats nothing more.
+	do(t, http.MethodPost, x.url+"/v1/bridges/"+x.id+"/messages", "alice", `{"text":"Hello?"}`)
+	time.Sleep(50 * time.Millisecond)
+	if n := len(x.fm.find(http.MethodPost, "/v1/runs/mgr-run-1/messages")); n != 2 {
+		t.Fatalf("the manager got %d follow-ups", n)
+	}
+
+	// The view forgets the manager run. After the wait, a message to the
+	// reviewer starts a new manager run for the reviewer alone.
+	x.v.drop("mgr-run-1")
+	x.clock.set(x.clock.now().Add(seatAgainWait + time.Second))
+	x.fm.mu.Lock()
+	x.fm.ids["bridge:"+x.id+":manager:1"] = "mgr-run-2"
+	x.fm.mu.Unlock()
+	before, _, err := x.s.b.get(ctx, x.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	do(t, http.MethodPost, x.url+"/v1/bridges/"+x.id+"/messages", "alice", `{"text":"Start now.","to":["reviewer"]}`)
+	eventually(t, "a new manager run", func() bool { return len(x.fm.find(http.MethodPost, "/v1/runs")) == 2 })
+	st := x.fm.find(http.MethodPost, "/v1/runs")[1]
+	input, _ := st.Body["input"].(string)
+	if st.Idem != "bridge:"+x.id+":manager:1" || st.Body["agent"] != "manager" || st.Body["principal"] != "alice" || !strings.Contains(input, "\nSeat reviewer\n") || !strings.Contains(input, "[seat reviewer] Review cron") || strings.Contains(input, "Seat migrator-1") || strings.Contains(input, "[seat migrator-1]") {
+		t.Fatalf("the new manager run = %+v", st)
+	}
+	eventually(t, "the record names the new manager run", func() bool {
+		rec, _, _ := x.s.b.get(ctx, x.id)
+		return rec.Manager != nil && rec.Manager.Run == "mgr-run-2"
+	})
+	if got := presenceOf(t, x.url, x.id); got["reviewer"] != PresenceWaiting || got["migrator-1"] != PresenceWaiting {
+		t.Fatalf("presence while the new manager run starts = %v", got)
+	}
+	// A seating that read the record before the new manager run started,
+	// whose run the view does not hold yet, follows that run up instead of
+	// starting another.
+	if err := x.s.place(ctx, before, []Member{*before.member("migrator-1")}, nil); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the new manager run gets the seat", func() bool { return len(x.seatsOf("mgr-run-2")) == 1 })
+	if n := len(x.fm.find(http.MethodPost, "/v1/runs")); n != 2 {
+		t.Fatalf("%d manager runs started", n)
+	}
+	// The view gets the new manager run and its child, which takes its
+	// seat, and the channel mirrors the new manager run.
+	x.v.put(&fw.Run{ID: "mgr-run-2", Agent: "manager", Member: "default/manager-0", State: fw.StateRunning, Metadata: map[string]string{fw.MetaBatch: BatchOf(x.id)}})
+	x.v.put(&fw.Run{ID: "c-rev", Agent: "reviewer", Parent: "mgr-run-2", Member: "default/manager-0-c1", State: fw.StateRunning, Input: "[seat reviewer] Review cron", Metadata: map[string]string{fw.MetaBatch: BatchOf(x.id)}})
+	x.s.poll(ctx)
+	rec, _, _ := x.s.b.get(ctx, x.id)
+	if r := rec.member("reviewer").Runs; len(r) != 1 || r[0] != "c-rev" {
+		t.Fatalf("reviewer runs = %v", r)
+	}
+	if got := presenceOf(t, x.url, x.id); got["reviewer"] != PresenceWorking || got["migrator-1"] != PresenceWaiting {
+		t.Fatalf("presence with the new manager run = %v", got)
+	}
+	var started []string
+	for _, l := range withEvent(channel(t, x.s, x.id), EventStarted) {
+		started = append(started, l.Text)
+	}
+	sort.Strings(started)
+	if strings.Join(started, "|") != "The manager started|The manager started|reviewer started: Review cron" {
+		t.Fatalf("started lines = %q", started)
+	}
+}
+
+// The page seats a seat that nothing seats again with its task, as a
+// stopped one: the patch with the same task posts the line and starts its
+// run. A seat whose run comes gets nothing.
+func TestGiveTaskSeatsANotStartedSeat(t *testing.T) {
+	x := newSpawned(t)
+	resp, body := do(t, http.MethodPatch, x.url+"/v1/bridges/"+x.id+"/members/migrator-1", "alice", `{"task":"Migrate cron"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("seat again = %d %s", resp.StatusCode, body)
+	}
+	eventually(t, "the manager gets the seat", func() bool { return len(x.seatsOf("mgr-run-1")) == 1 })
+	if c := x.seatsOf("mgr-run-1")["migrator-1"]; !strings.Contains(c, `"[seat migrator-1] Migrate cron"`) {
+		t.Fatalf("the follow-up = %q", c)
+	}
+	if l := withEvent(channel(t, x.s, x.id), EventTask); len(l) != 1 || l[0].Text != "Alice seated migrator-1 again on its task: Migrate cron" {
+		t.Fatalf("task lines = %+v", l)
+	}
+	// A double click seats nothing more.
+	do(t, http.MethodPatch, x.url+"/v1/bridges/"+x.id+"/members/migrator-1", "alice", `{"task":"Migrate cron"}`)
+	time.Sleep(50 * time.Millisecond)
+	if n := len(x.fm.find(http.MethodPost, "/v1/runs/mgr-run-1/messages")); n != 1 || len(withEvent(channel(t, x.s, x.id), EventTask)) != 1 {
+		t.Fatalf("a double click: %d follow-ups, task lines %+v", n, withEvent(channel(t, x.s, x.id), EventTask))
+	}
+
+	// A seat of a queue bridge waits for its job: the same task changes
+	// nothing.
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	url := serve(t, a)
+	it := open(t, url)
+	q := captureQueues(t, a, "fw.jobs.reviewer")
+	do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID+"/members/reviewer", "alice", `{"task":"Review the migration"}`)
+	time.Sleep(50 * time.Millisecond)
+	if q.count("reviewer") != 0 || len(withEvent(channel(t, s, it.ID), EventTask)) != 0 {
+		t.Fatalf("a waiting seat: %d requests, task lines %+v", q.count("reviewer"), withEvent(channel(t, s, it.ID), EventTask))
 	}
 }

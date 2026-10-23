@@ -24,7 +24,7 @@ func TestRecordAndChannel(t *testing.T) {
 	if it.Delegation != (Delegation{Report: true}) || it.Caps != (Caps{MaxMessages: 2000, MaxFanoutPerMinute: 30, MaxPairMessages: 6}) {
 		t.Fatalf("delegation %+v caps %+v", it.Delegation, it.Caps)
 	}
-	if len(it.Members) != 2 || it.MemberCount != 2 || it.Members[0].Handle != "migrator-1" || it.Members[0].Presence != PresenceWorking || it.Members[0].Runs == nil {
+	if len(it.Members) != 2 || it.MemberCount != 2 || it.Members[0].Handle != "migrator-1" || it.Members[0].Presence != PresenceWaiting || it.Members[0].Runs == nil {
 		t.Fatalf("members = %+v", it.Members)
 	}
 	opened := channel(t, s, it.ID)

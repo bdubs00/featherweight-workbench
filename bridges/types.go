@@ -75,14 +75,17 @@ const (
 	EventLost = "lost"
 )
 
-// Presences of a member (Presence, section 18.7).
+// Presences of a member (Presence, section 18.7). A seat without a run is
+// waiting when something seats it, and not-started when nothing does.
 const (
-	PresenceWorking  = "working"
-	PresenceNeedsYou = "needs-you"
-	PresenceIdle     = "idle"
-	PresenceAsleep   = "asleep"
-	PresenceError    = "error"
-	PresenceFired    = "fired"
+	PresenceWorking    = "working"
+	PresenceNeedsYou   = "needs-you"
+	PresenceIdle       = "idle"
+	PresenceAsleep     = "asleep"
+	PresenceError      = "error"
+	PresenceFired      = "fired"
+	PresenceWaiting    = "waiting"
+	PresenceNotStarted = "not-started"
 )
 
 // TaskBlocked is the state of a Task that a storage failure blocked, for
@@ -284,6 +287,11 @@ type record struct {
 	Fan fanMark `json:"fan"`
 	// Report is the report that the close asked the manager for.
 	Report *reportMark `json:"report,omitempty"`
+	// ManagerStarts counts the manager runs that the front started after
+	// the open to seat members, because the view held no manager run
+	// (place); the idempotency key of the next one is
+	// bridge:<id>:manager:<n>.
+	ManagerStarts int `json:"managerStarts,omitempty"`
 }
 
 // seatMark is the bookkeeping of one seat.
@@ -303,13 +311,14 @@ type seatMark struct {
 	QuietAt *time.Time `json:"quietAt,omitempty"`
 	QuietOn string     `json:"quietOn,omitempty"`
 	// Again is the newest run of the seat when the bridge last seated it
-	// again, and AgainAt the time, so a second patch with the same task
-	// before a new run shows seats nothing more (giveTask).
+	// again, empty for a seat without a run, and AgainAt the time, so a
+	// second patch with the same task or a second message before a new run
+	// shows seats nothing more (seatingOut).
 	Again   string     `json:"again,omitempty"`
 	AgainAt *time.Time `json:"againAt,omitempty"`
 	// Gone is the newest run of the seat once the channel said that no
 	// worker of the fleet holds it (goneLines). The seat is then idle or
-	// in error, and a patch with its task seats it again.
+	// in error, and a message or a patch with its task seats it again.
 	Gone string `json:"gone,omitempty"`
 }
 

@@ -172,7 +172,9 @@ func (s *Store) addMember(ctx context.Context, id string, spec SeatSpec, by *fw.
 		}
 		rec.Members = append(rec.Members, Member{Handle: spec.Handle, Agent: spec.Agent, Pool: pool, Task: spec.Task, Runs: []string{}})
 		seat := rec.seat(spec.Handle)
-		seat.Seatings, seat.Budget = 1, spec.Budget
+		// The seating of the new seat counts for the guard of a message
+		// that comes before its run (seatingOut).
+		seat.Seatings, seat.Budget, seat.AgainAt = 1, spec.Budget, &now
 		line = system(EventJoined, fmt.Sprintf("%s added %s: %s", nameOf(by), spec.Handle, oneLine(spec.Task, 300)))
 		line.Seq, line.At = rec.alloc(), now
 		return nil
@@ -182,7 +184,7 @@ func (s *Store) addMember(ctx context.Context, id string, spec SeatSpec, by *fw.
 	}
 	s.land(ctx, id, line)
 	m := *rec.member(spec.Handle)
-	if err := s.place(ctx, rec, m); err != nil {
+	if err := s.place(ctx, rec, []Member{m}, nil); err != nil {
 		_ = s.postLines(ctx, id, system(EventFailed, fmt.Sprintf("The front failed to seat %s: %s", m.Handle, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
 	}
 	out := s.memberOf(ctx, rec, m.Handle)
@@ -190,41 +192,97 @@ func (s *Store) addMember(ctx context.Context, id string, spec SeatSpec, by *fw.
 	return out, nil
 }
 
-// place starts a run for a seat in the way of its bridge: a request on
-// the queue of its agent, or one follow-up to the manager run of a spawn
-// bridge that asks it to seat the member.
-func (s *Store) place(ctx context.Context, rec *record, m Member) error {
+// place starts a run for each seat in the way of its bridge: a request on
+// the queue of its agent, or in a spawn bridge one follow-up per seat to
+// the manager run that asks it to seat the member. A follow-up starts a
+// new turn of a manager run that finished. A spawn bridge whose manager
+// run the view does not hold gets a new manager run for the seats
+// (newManager). inputs holds the input of the run of a seat by handle
+// (inputOf).
+func (s *Store) place(ctx context.Context, rec *record, seats []Member, inputs map[string]string) error {
 	if rec.Placement == PlacementQueue {
-		s.enqueue(ctx, rec, []Member{m})
+		s.enqueue(ctx, rec, seats, inputs)
 		return nil
 	}
 	mgr := s.runOf(s.asFront(ctx), managerRun(rec))
 	if mgr == nil {
-		return fmt.Errorf("%w: the manager run of the bridge %s is gone, so nobody seats %s", ErrConflict, rec.ID, m.Handle)
+		r, err := s.newManager(ctx, rec, seats, inputs)
+		if r == nil {
+			return err
+		}
+		mgr = r
 	}
-	b := rec.seat(m.Handle).Budget
-	budget := ""
-	if b != nil && (b.MaxTurns > 0 || b.Deadline != "") {
-		budget = fmt.Sprintf(" Give it max_turns %d and deadline %q.", b.MaxTurns, b.Deadline)
-	}
-	text := fmt.Sprintf("Seat %s with spawn_task, with wait false: the agent %s, the input \"[seat %s] %s\", and the instructions between <<< and >>> word for word.%s Then end your turn with the run id of the child.\n<<<\n%s\n>>>",
-		m.Handle, m.Agent, m.Handle, oneLine(m.Task, maxTaskBytes), budget, s.instructionsOf(ctx, rec, m))
 	op := orOperator(rec.Operator)
-	content := header(rec, []string{HandleManager}, op) + text
-	s.submit(&job{
-		name: "the seat " + m.Handle + " of " + rec.ID + " to the manager",
-		do: func(ctx context.Context) error {
-			return s.send(ctx, mgr, content, fw.MessageFrom{Kind: fw.FromPerson, Name: op, Member: HandleManager}, false)
-		},
-		fail: func(err error) {
-			_ = s.postLines(s.ctx, rec.ID, system(EventFailed, fmt.Sprintf("The manager did not get the seat %s: %s", m.Handle, oneLine(err.Error(), 300))))
-		},
-	})
+	for _, m := range seats {
+		budget := ""
+		if sm := rec.Seats[m.Handle]; sm != nil && sm.Budget != nil && (sm.Budget.MaxTurns > 0 || sm.Budget.Deadline != "") {
+			budget = fmt.Sprintf(" Give it max_turns %d and deadline %q.", sm.Budget.MaxTurns, sm.Budget.Deadline)
+		}
+		text := fmt.Sprintf("Seat %s with spawn_task, with wait false: the agent %s, the input \"[seat %s] %s\", and the instructions between <<< and >>> word for word.%s Then end your turn with the run id of the child.\n<<<\n%s\n>>>",
+			m.Handle, m.Agent, m.Handle, oneLine(inputOf(m, inputs), maxTaskBytes), budget, s.instructionsOf(ctx, rec, m))
+		content := header(rec, []string{HandleManager}, op) + text
+		handle := m.Handle
+		s.submit(&job{
+			name: "the seat " + handle + " of " + rec.ID + " to the manager",
+			do: func(ctx context.Context) error {
+				return s.send(ctx, mgr, content, fw.MessageFrom{Kind: fw.FromPerson, Name: op, Member: HandleManager}, false)
+			},
+			fail: func(err error) {
+				_ = s.postLines(s.ctx, rec.ID, system(EventFailed, fmt.Sprintf("The manager did not get the seat %s: %s", handle, oneLine(err.Error(), 300))))
+			},
+		})
+	}
 	return nil
 }
 
-// seatAgain starts a new run for a seat whose newest run cannot go on. It
-// marks the newest run of the seat and the time, for the guard of giveTask.
+// newManager seats members of a spawn bridge whose manager run the view
+// does not hold. It reads the record again first, and the starts of this
+// replica go one at a time, so of two seatings at once the second one
+// finds the run that the first one started. A manager run that the watch
+// never saw, such as a run that started a moment ago, gets the follow-ups:
+// newManager returns it. Otherwise it starts one manager run with the plan
+// of these seats alone, under the idempotency key bridge:<id>:manager:<n>,
+// and makes it the manager run of the record, so the watch claims its
+// children by their parent and mirrors it. It returns nil then.
+func (s *Store) newManager(ctx context.Context, rec *record, seats []Member, inputs map[string]string) (*fw.Run, error) {
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+	fctx := s.asFront(ctx)
+	cur, _, err := s.b.get(fctx, rec.ID)
+	if err != nil {
+		return nil, err
+	}
+	if id := managerRun(cur); id != "" {
+		if r := s.runOf(fctx, id); r != nil {
+			return r, nil
+		}
+		if mk := cur.Marks[id]; mk == nil || !mk.Started {
+			return &fw.Run{ID: id, Member: cur.Manager.Member}, nil
+		}
+	}
+	n := 0
+	cur, err = s.b.update(ctx, rec.ID, func(rec *record) error {
+		rec.ManagerStarts++
+		n = rec.ManagerStarts
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	mgr, err := s.startManager(ctx, cur, s.planOf(ctx, cur, seats, inputs), fmt.Sprintf("bridge:%s:manager:%d", rec.ID, n))
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.b.update(ctx, rec.ID, func(rec *record) error {
+		rec.Manager = mgr
+		return nil
+	})
+	return nil, err
+}
+
+// seatAgain starts a new run for a seat whose newest run cannot go on, or
+// that nothing seats. It marks the newest run of the seat and the time,
+// for the guard of giveTask (seatingOut).
 func (s *Store) seatAgain(ctx context.Context, id, handle string) error {
 	now := s.now().UTC()
 	rec, err := s.b.update(ctx, id, func(rec *record) error {
@@ -240,7 +298,7 @@ func (s *Store) seatAgain(ctx context.Context, id, handle string) error {
 	if err != nil {
 		return err
 	}
-	return s.place(ctx, rec, *rec.member(handle))
+	return s.place(ctx, rec, []Member{*rec.member(handle)}, nil)
 }
 
 // fire takes a member off the bridge: it cancels the open runs of the
@@ -339,10 +397,10 @@ type MemberPatch struct {
 // patchMember mutes, unmutes, or gives a seat a task. A task that differs
 // from the task of the record changes the record and posts its line. Any
 // patch with a task then acts on the newest run of the seat (giveTask): a
-// seat whose newest run failed or was canceled gets a new run, also when
-// the text did not change, which is how the page seats a stopped member
-// again; a changed task reaches a run that can go on as a follow-up of the
-// person, and a seat that works gets no new run.
+// seat whose newest run failed or was canceled, or that nothing seats,
+// gets a new run, also when the text did not change, which is how the page
+// seats a stopped member again; a changed task reaches a run that can go
+// on as a follow-up of the person, and a seat that works gets no new run.
 func (s *Store) patchMember(ctx context.Context, id, handle string, p MemberPatch, by *fw.Principal) (Member, error) {
 	var task string
 	if p.Task != nil {
@@ -404,21 +462,23 @@ func (s *Store) patchMember(ctx context.Context, id, handle string, p MemberPatc
 // the new seating has no run in the view yet, seats nothing more, so a
 // double click starts one run, and a seating whose job never ran can be
 // tried again after the wait. A seat whose newest run no worker of the
-// fleet holds, as the channel said with the line lost, is seated again in
-// the same way. A changed task reaches any other run as a follow-up of the
-// person, and an unchanged one changes nothing. A seat without a run gets
-// nothing: its job waits in the queue, and the channel holds the line of
-// the task.
+// fleet holds, as the channel said with the line lost, and a seat without
+// a run that nothing seats (not-started) are seated again in the same way.
+// A changed task reaches any other run as a follow-up of the person, and
+// an unchanged one changes nothing. A seat without a run that something
+// seats gets nothing: its job waits in the queue, or the manager run seats
+// it, and the channel holds the line of the task.
 func (s *Store) giveTask(ctx context.Context, rec *record, m Member, by *fw.Principal, changed bool) {
-	r := s.runOf(s.asFront(ctx), m.newest())
+	fctx := s.asFront(ctx)
+	r := s.runOf(fctx, m.newest())
 	gone := r == nil && m.newest() != "" && rec.Seats[m.Handle] != nil && rec.Seats[m.Handle].Gone == m.newest()
-	if r == nil && !gone {
+	unseated := m.newest() == "" && !willSeat(rec, s.runOf(fctx, managerRun(rec)))
+	if r == nil && !gone && !unseated {
 		return
 	}
-	if gone || r.State == fw.StateFailed || r.State == fw.StateCanceled {
+	if gone || unseated || r.State == fw.StateFailed || r.State == fw.StateCanceled {
 		if !changed {
-			sm := rec.seat(m.Handle)
-			if sm.Again != "" && sm.Again == m.newest() && sm.AgainAt != nil && s.now().Sub(*sm.AgainAt) < seatAgainWait {
+			if seatingOut(rec.Seats[m.Handle], m, s.now()) {
 				return
 			}
 			_ = s.postLines(ctx, rec.ID, system(EventTask, fmt.Sprintf("%s seated %s again on its task: %s", nameOf(by), m.Handle, oneLine(m.Task, 300))))
@@ -436,9 +496,16 @@ func (s *Store) giveTask(ctx context.Context, rec *record, m Member, by *fw.Prin
 		content: header(rec, []string{m.Handle}, snd.name()) + "Your new task: " + m.Task, from: snd.party(m.Handle)}))
 }
 
-// seatAgainWait is how long a seating of a seat with the same task waits
-// for its run before the same patch seats the seat once more.
+// seatAgainWait is how long a seating of a seat waits for its run before
+// the same patch, or a message, seats the seat once more.
 const seatAgainWait = time.Minute
+
+// seatingOut reports whether a seating of the seat went out within
+// seatAgainWait for its newest run, or for no run when it has none, so its
+// new run comes and reads the channel first.
+func seatingOut(sm *seatMark, m Member, now time.Time) bool {
+	return sm != nil && sm.Again == m.newest() && sm.AgainAt != nil && now.Sub(*sm.AgainAt) < seatAgainWait
+}
 
 // subjectOfPrincipal is the subject of a principal, or "".
 func subjectOfPrincipal(p *fw.Principal) string {
