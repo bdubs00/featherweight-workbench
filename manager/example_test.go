@@ -103,7 +103,7 @@ func TestTheExampleIsAPoolOfTheFront(t *testing.T) {
 		t.Fatalf("policy = %+v", prof.Policy)
 	}
 	wantAsk := []string{"front.approve", "front.cancel", "front.run_budget", "front.enqueue", "front.run", "front.bridge_open",
-		"front.bridge_remove_member", "front.agent_put", "front.agent_delete", "front.faces_put"}
+		"front.bridge_remove_member", "front.agent_put", "front.agent_delete", "front.faces_put", "front.routine_standing"}
 	if !slices.Equal(prof.Policy.Ask, wantAsk) || slices.Contains(prof.Policy.Ask, "front.pages_write") {
 		t.Fatalf("ask = %v", prof.Policy.Ask)
 	}

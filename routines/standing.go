@@ -57,7 +57,7 @@ func movesText(from string) string {
 	list := moves[from]
 	switch len(list) {
 	case 0:
-		return "none, because a retired routine stays retired"
+		return "no standing, because a retired routine stays retired"
 	case 1:
 		return list[0]
 	}

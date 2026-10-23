@@ -72,7 +72,7 @@ type MoveError struct {
 }
 
 func (e *MoveError) Error() string {
-	return fmt.Sprintf("a %s routine cannot move to %s; it can move to %s", e.From, e.To, movesText(e.From))
+	return fmt.Sprintf("a %s routine cannot move to %s. It can move to %s", e.From, e.To, movesText(e.From))
 }
 
 // SignOff says who signed a routine off, and when.
