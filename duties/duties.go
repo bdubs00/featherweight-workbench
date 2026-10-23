@@ -33,6 +33,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -308,6 +309,7 @@ var hooks struct {
 	actions map[string]Action
 	looks   map[string]Looker
 	events  func(e *Event) []string
+	kinds   []string
 	notice  []func(ctx context.Context, a *fw.Agent, n Notice)
 	change  []func(name string)
 }
@@ -336,13 +338,37 @@ func RegisterLook(name string, fn Looker) {
 	hooks.looks[name] = fn
 }
 
-// RegisterEvents makes when.event available: check lists the problems of
-// an event of a duty, in words. The package that calls it also calls Fire
-// for each event of the fleet that a duty waits for.
-func RegisterEvents(check func(e *Event) []string) {
+// RegisterEvents makes when.event available for the kinds that the
+// package serves: check lists the problems of an event of a duty, in
+// words. The package that calls it also calls Fire for each event of the
+// fleet that a duty waits for.
+func RegisterEvents(kinds []string, check func(e *Event) []string) {
 	hooks.mu.Lock()
 	defer hooks.mu.Unlock()
 	hooks.events = check
+	hooks.kinds = append([]string(nil), kinds...)
+	slices.Sort(hooks.kinds)
+}
+
+// Offered returns what this front serves now: the kinds of event of
+// when.event, the actions of do, and the looks of checkFirst. Each list
+// is sorted. GET /v1/duties/options answers with it, and the page offers
+// no other choice.
+func Offered() (events, actions, looks []string) {
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	events = append([]string{}, hooks.kinds...)
+	actions = []string{ActionAsk}
+	for name := range hooks.actions {
+		actions = append(actions, name)
+	}
+	looks = []string{"http"}
+	for name := range hooks.looks {
+		looks = append(looks, name)
+	}
+	slices.Sort(actions)
+	slices.Sort(looks)
+	return events, slices.Compact(actions), slices.Compact(looks)
 }
 
 // OnNotice registers a function that gets each notice of a duty, after the

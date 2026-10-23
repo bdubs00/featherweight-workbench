@@ -2,6 +2,7 @@ package duties
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -149,5 +150,15 @@ func TestContractRecord(t *testing.T) {
 	var s schedule.Schedule = *d.When.Schedule
 	if s.Repeat != schedule.RepeatWeekdays {
 		t.Fatalf("schedule = %+v", s)
+	}
+}
+
+func TestOfferedNamesWhatIsRegistered(t *testing.T) {
+	events, actions, looks := Offered()
+	if !slices.Contains(actions, ActionAsk) || !slices.Contains(looks, "http") {
+		t.Fatalf("Offered() = %v, %v, %v; want ask and http always", events, actions, looks)
+	}
+	if !slices.IsSorted(events) || !slices.IsSorted(actions) || !slices.IsSorted(looks) {
+		t.Fatalf("Offered() = %v, %v, %v; want sorted lists", events, actions, looks)
 	}
 }
