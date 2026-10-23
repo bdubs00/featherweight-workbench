@@ -14,19 +14,25 @@ import (
 // cutMark ends a text that the record cut.
 const cutMark = "…"
 
-// pickRuns keeps every run that is not finished and the newest finished
-// runs, each cut to size. runs is newest first, and so is the result. The
-// second value counts the finished runs that it leaves out.
+// pickRuns keeps every run that is not finished, the newest FinishedRuns
+// finished runs that the lists show, and the newest HiddenFinishedRuns
+// finished runs that they leave out, each cut to size. runs is newest
+// first, and so is the result. The second value counts the finished runs
+// that it leaves out.
 func pickRuns(runs []*fw.Run) ([]*fw.Run, int) {
 	out := make([]*fw.Run, 0, len(runs))
-	finished, omitted := 0, 0
+	finished, hidden, omitted := 0, 0, 0
 	for _, r := range runs {
 		if r.State.Terminal() {
-			if finished >= FinishedRuns {
+			count, limit := &finished, FinishedRuns
+			if !Listed(r) {
+				count, limit = &hidden, HiddenFinishedRuns
+			}
+			if *count >= limit {
 				omitted++
 				continue
 			}
-			finished++
+			*count++
 		}
 		out = append(out, shorten(r))
 	}

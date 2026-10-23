@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
 func queued(principal, agent string) fw.RunQueuedData {
@@ -68,6 +69,37 @@ func TestStreamShowsWhatTheCallerSees(t *testing.T) {
 	}
 	if runs, members := runsOf(carol); len(runs) != 0 || members != 0 {
 		t.Errorf("carol got the runs %v and %d member events, want none", runs, members)
+	}
+}
+
+// A check run of a duty, and a run that the front starts for itself, are
+// no work of a person, so the stream leaves them out.
+func TestStreamLeavesOutTheRunsOfTheFront(t *testing.T) {
+	fr := newFront(t, nil)
+	ada := openStream(t, fr, "ada", "")
+	check := queued("ada", "default")
+	check.Metadata = map[string]string{fw.MetaKind: fw.RunKindCheck}
+	own := queued("ada", "default")
+	own.Metadata = map[string]string{fleet.MetaInternal: "duty-write-check:report"}
+	fr.event(t, "ax:team/alpha", "01CHECK", 1, fw.EvRunQueued, check)
+	fr.event(t, "ax:team/alpha", "01OWN", 1, fw.EvRunQueued, own)
+	fr.event(t, "ax:team/alpha", "01ADA", 1, fw.EvRunQueued, queued("ada", "default"))
+	mark(t, "front")
+	var runs []string
+	for _, f := range ada.until(t, "test.mark") {
+		if f.kind != KindRun {
+			continue
+		}
+		var r struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(f.data), &r); err != nil {
+			t.Fatal(err)
+		}
+		runs = append(runs, r.ID)
+	}
+	if strings.Join(runs, ",") != "01ADA" {
+		t.Fatalf("the stream sent the runs %v, want 01ADA alone", runs)
 	}
 }
 

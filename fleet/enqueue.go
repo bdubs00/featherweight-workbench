@@ -169,7 +169,9 @@ func EnqueueFor(ctx context.Context, a *fw.Agent, agent, pool string, reqs []fw.
 		// caller never sends a routine through a queue.
 		dropRoutines(&req)
 		inlineRoutines(&req, routines, req.Agent)
-		if strings.TrimSpace(req.Input) == "" && len(req.Files) == 0 {
+		// A check run reads its work from its check, as the kernel takes
+		// it, so its input can be empty.
+		if strings.TrimSpace(req.Input) == "" && len(req.Files) == 0 && req.Check == nil {
 			return queue, sent, fmt.Errorf("%w: the input of item %d is empty", fw.ErrInvalidRequest, i+1)
 		}
 		ev, err := fw.NewEvent("", EvRunRequest, req)

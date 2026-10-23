@@ -3,6 +3,7 @@ package dashboard
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -74,5 +75,36 @@ func TestPageHasTheFleet(t *testing.T) {
 		if !bytes.Contains(Page(), []byte(want)) {
 			t.Errorf("page lacks %q", want)
 		}
+	}
+}
+
+// The lists of runs leave out a check run of this process, and a check
+// run and a run of the front for itself of another member.
+func TestRunsLeaveOutTheRunsOfTheFront(t *testing.T) {
+	queue := fw.NewTool(fw.ToolSpec{Name: "queue", ReadOnly: true}, func(context.Context, json.RawMessage) (fw.ToolResult, error) {
+		return fw.TextResult(`{"items": []}`), nil
+	})
+	a := newAgent(t, fw.WithTools(queue))
+	ctx := context.Background()
+	check, err := a.Run(ctx, "", fw.WithCheck(fw.Check{Steps: []fw.CheckStep{{Tool: "queue"}}}))
+	if err != nil || check.Kind() != fw.RunKindCheck {
+		t.Fatalf("the check run = %+v, %v", check, err)
+	}
+	work, err := a.Run(ctx, "Write the report")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleet.Attach(a, stubFleet{runs: []*fw.Run{
+		{ID: "remote-check", Member: "team/w", Metadata: map[string]string{fw.MetaKind: fw.RunKindCheck}},
+		{ID: "remote-own", Member: "team/w", Metadata: map[string]string{fleet.MetaInternal: "duty-write-check:report"}},
+		{ID: "remote-work", Member: "team/w"},
+	}})
+	t.Cleanup(func() { fleet.Attach(a, nil) })
+	runs, err := Runs(ctx, a, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(runs); got != work.ID+",remote-work" && got != "remote-work,"+work.ID {
+		t.Fatalf("runs = %s", got)
 	}
 }

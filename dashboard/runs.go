@@ -26,10 +26,18 @@ const (
 // Runs lists the runs that the caller in ctx can view, newest first. With
 // the fleet on and the scope fleet, the default, the list holds the runs of
 // the other members too, each with its member. Member narrows the list to
-// one member, and the name of this process selects its own runs. It returns
-// an error that wraps fw.ErrInvalidRequest for an unknown scope, and for a
-// member when the fleet is off.
+// one member, and the name of this process selects its own runs. The list
+// leaves out the runs that the front starts for itself, such as the check
+// runs of the duties (fleet.Listed). It returns an error that wraps
+// fw.ErrInvalidRequest for an unknown scope, and for a member when the
+// fleet is off.
 func Runs(ctx context.Context, a *fw.Agent, scope, member string) ([]*fw.Run, error) {
+	runs, err := allRuns(ctx, a, scope, member)
+	return fleet.ListedOnly(runs), err
+}
+
+// allRuns is Runs with the runs that the front starts for itself.
+func allRuns(ctx context.Context, a *fw.Agent, scope, member string) ([]*fw.Run, error) {
 	scope = strings.ToLower(strings.TrimSpace(scope))
 	switch scope {
 	case "", ScopeFleet, ScopeLocal:
