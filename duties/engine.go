@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,12 +66,14 @@ const (
 // Trigger is what starts a duty once: its kind, one of the Start
 // constants, and Slot, the time of the schedule, else the moment of the
 // start. Event is the body of a call or of an event, for {event}. Person
-// names who ran the duty now.
+// names who ran the duty now. Chain is the depth of a start in a chain of
+// duties that events started, from 1, and 0 for any other start.
 type Trigger struct {
 	Kind   string
 	Slot   time.Time
 	Event  string
 	Person string
+	Chain  int
 }
 
 // Outcome is what a start did: the run that it put on the queue, the
@@ -348,6 +351,7 @@ func (s *Service) newEntry(start Trigger, now time.Time) entry {
 		ID:       id,
 		Event:    cut(start.Event, maxEventBytes),
 		Person:   start.Person,
+		Chain:    start.Chain,
 		By:       s.replica,
 		Updated:  now,
 	}
@@ -407,8 +411,12 @@ func (s *Service) begin(ctx context.Context, st *stored, start Trigger) (Outcome
 	}
 	capped := ""
 	if !ended(e.State) {
-		if spent, over := overCap(d, days, now); over {
-			capped = capWords(d, spent)
+		why, err := s.overCaps(ctx, d, days, now)
+		if err != nil {
+			return Outcome{}, err
+		}
+		if why != "" {
+			capped = why
 			e.State, e.Reason = StateSkipped, capped
 		}
 	}
@@ -488,6 +496,76 @@ func overCap(d *Duty, days map[string]day, now time.Time) (float64, bool) {
 // capWords says why a start skips at the daily cap.
 func capWords(d *Duty, spent float64) string {
 	return fmt.Sprintf("The duty spent $%.2f today, and its daily cap is $%.2f, so it skips until midnight, %s.", spent, d.Limits.PerDayUSD, schedule.ZoneWords(d.zone().String()))
+}
+
+// overCaps says why a duty does not start now at a daily cap, or "": the
+// cap of the duty (perDayUSD), the cap of its agent across its duties
+// (workbench.duties.caps.perAgentUSD), or the cap of the fleet across
+// every duty (workbench.duties.caps.fleetUSD). Today starts at midnight in
+// the time zone of the duty. An error means that the store did not answer.
+func (s *Service) overCaps(ctx context.Context, d *Duty, days map[string]day, now time.Time) (string, error) {
+	if spent, over := overCap(d, days, now); over {
+		return capWords(d, spent), nil
+	}
+	caps := s.cfg.Caps
+	if caps.PerAgentUSD <= 0 && caps.FleetUSD <= 0 {
+		return "", nil
+	}
+	loc := d.zone()
+	y, m, dd := now.In(loc).Date()
+	midnight := time.Date(y, m, dd, 0, 0, 0, 0, loc)
+	agent, fleet, err := s.spentSince(ctx, d.Agent, midnight, now)
+	if err != nil {
+		return "", err
+	}
+	zone := schedule.ZoneWords(loc.String())
+	if caps.PerAgentUSD > 0 && agent >= caps.PerAgentUSD {
+		return fmt.Sprintf("The duties of the agent %s spent $%.2f today, and the daily cap of an agent is $%.2f, so the duty skips until midnight, %s.", d.Agent, agent, caps.PerAgentUSD, zone), nil
+	}
+	if caps.FleetUSD > 0 && fleet >= caps.FleetUSD {
+		return fmt.Sprintf("The duties of the fleet spent $%.2f today, and the daily cap of the fleet is $%.2f, so the duty skips until midnight, %s.", fleet, caps.FleetUSD, zone), nil
+	}
+	return "", nil
+}
+
+// spentSince returns the cost of the starts since a moment: of the duties
+// of the agent, and of every duty. A start counts by its slot.
+func (s *Service) spentSince(ctx context.Context, agent string, since, now time.Time) (float64, float64, error) {
+	list, err := s.st.list(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	var mine, all float64
+	for _, st := range list {
+		loc := st.Duty.zone()
+		seen := map[string]bool{}
+		for t := since; ; t = t.Add(12 * time.Hour) {
+			if t.After(now) {
+				t = now
+			}
+			date := dateOf(t, loc)
+			if !seen[date] {
+				seen[date] = true
+				x, err := s.st.day(ctx, st.Duty.Name, date)
+				if err != nil {
+					return 0, 0, err
+				}
+				for _, e := range x.Entries {
+					if e.Slot.Before(since) {
+						continue
+					}
+					all += e.CostUSD
+					if st.Duty.Agent == agent {
+						mine += e.CostUSD
+					}
+				}
+			}
+			if !t.Before(now) {
+				break
+			}
+		}
+	}
+	return usd(mine), usd(all), nil
 }
 
 // capNotice tells the owner once a day that a duty reached its cap.
@@ -619,6 +697,7 @@ func (s *Service) queued(ctx context.Context, st *stored, date string, e entry, 
 	if wrote {
 		changed(st.Duty.Name)
 	}
+	s.log.Info("duties: a duty started a run", "duty", st.Duty.Name, "slot", e.Slot, "start", e.Start, "attempt", e.Attempt, "run", run)
 }
 
 // reasonOf words an error without the prefix of its package.
@@ -648,6 +727,9 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 	if e.Attempt > 1 {
 		md[MetaAttempt] = strconv.Itoa(e.Attempt)
 		key += "/" + strconv.Itoa(e.Attempt)
+	}
+	if e.Chain > 0 {
+		md[MetaChain] = strconv.Itoa(e.Chain)
 	}
 	principal, kind := "duty:"+d.Name, fw.KindWorkload
 	if d.RunAs == RunAsOwner && d.Owner != "" {
@@ -923,8 +1005,9 @@ func (s *Service) resume(ctx context.Context, st *stored, date string, e entry) 
 	if err != nil {
 		return false
 	}
-	if spent, over := overCap(d, days, now); over {
-		reason := capWords(d, spent)
+	if reason, err := s.overCaps(ctx, d, days, now); err != nil {
+		return false
+	} else if reason != "" {
 		if s.endEntry(ctx, st, date, e, []string{StateWaiting}, StateSkipped, reason) {
 			s.capNotice(ctx, st, dateOf(now, d.zone()), reason)
 		}
@@ -949,10 +1032,12 @@ func (s *Service) retry(ctx context.Context, st *stored, date string, e entry, n
 	if err != nil {
 		return
 	}
-	if spent, over := overCap(d, days, now); over {
-		reason := "The daily cap stopped the retry: " + capWords(d, spent)
+	if why, err := s.overCaps(ctx, d, days, now); err != nil {
+		return
+	} else if why != "" {
+		reason := "The daily cap stopped the retry: " + why
 		if s.endEntry(ctx, st, date, e, []string{StateRetrying}, StateFailed, reason) {
-			s.capNotice(ctx, st, dateOf(now, d.zone()), capWords(d, spent))
+			s.capNotice(ctx, st, dateOf(now, d.zone()), why)
 			after := e
 			after.State = StateFailed
 			s.failed(ctx, st, after, reason)
@@ -1081,7 +1166,9 @@ func (s *Service) settle(ctx context.Context, st *stored, date string, e entry, 
 		s.completed(ctx, d.Name)
 	case after.State == StateFailed:
 		s.failed(ctx, st, after, reason)
-	case after.State == string(fw.StateInputRequired) && !e.Asked:
+	case after.State == string(fw.StateInputRequired) && !e.Asked && !awayHandled():
+		// A package that handles whileAway tells of each question itself,
+		// with its tool and its reason (SetAwayHandler).
 		s.notify(ctx, st, Notice{Kind: NoticeNeedsYou, Run: after.Run, Slot: after.Slot, Reason: "A run of the duty waits for a person."})
 	}
 }
@@ -1090,7 +1177,7 @@ func (s *Service) settle(ctx context.Context, st *stored, date string, e entry, 
 // time of the last change.
 func sameEntry(a, b entry) bool {
 	a.Updated, b.Updated = time.Time{}, time.Time{}
-	return a == b
+	return reflect.DeepEqual(a, b)
 }
 
 // oneLine cuts a text to one line of at most n bytes.

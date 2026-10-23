@@ -122,7 +122,8 @@ type counters struct {
 // one of the State constants, CostUSD the cost of every attempt, Found the
 // items that the check found, Woke whether they woke the agent, Reason the
 // why in words, Start the kind of start, Attempt the attempt of the run,
-// and Title the title of the run.
+// Title the title of the run, and Decided the decisions about the
+// approvals and the questions of its run, oldest first.
 type RunEntry struct {
 	At      time.Time `json:"at"`
 	Slot    time.Time `json:"slot"`
@@ -135,7 +136,29 @@ type RunEntry struct {
 	Start   string    `json:"start,omitempty"`
 	Attempt int       `json:"attempt,omitempty"`
 	Title   string    `json:"title,omitempty"`
+	Decided []Decided `json:"decided,omitempty"`
 }
+
+// Decided is one decision about an approval or a question of the run of a
+// start: when, by whom (DecidedByManager, DecidedByTimeout, or the subject
+// of a person), the verdict (allow, deny, or cancel), the tool of the
+// call, and the reason in words.
+type Decided struct {
+	At      time.Time `json:"at"`
+	By      string    `json:"by"`
+	Verdict string    `json:"verdict"`
+	Tool    string    `json:"tool,omitempty"`
+	Reason  string    `json:"reason,omitempty"`
+}
+
+// Deciders of a decision that no person made.
+const (
+	DecidedByManager = "manager" // the front applied the verdict of the manager
+	DecidedByTimeout = "timeout" // nobody decided within whileAway.timeout
+)
+
+// maxDecided is the most decisions that one start keeps.
+const maxDecided = 20
 
 // States of a start. A start that works is starting, waiting, retrying,
 // or in a state of its run; the others have ended.
@@ -173,7 +196,9 @@ func working(state string) bool { return !ended(state) && state != StateWaiting 
 // hold the text of {found} and {event} while a retry can need them.
 // Person ran it now. By is the replica that started its last attempt.
 // Asked is true once the owner heard of a question of its run. RetryAt is
-// the time of the next attempt.
+// the time of the next attempt. Chain is the depth of a start in a chain
+// of duties that events started, for the metadata MetaChain of each
+// attempt.
 type entry struct {
 	RunEntry
 	ID        string    `json:"id"`
@@ -183,6 +208,7 @@ type entry struct {
 	Person    string    `json:"person,omitempty"`
 	By        string    `json:"by,omitempty"`
 	Asked     bool      `json:"asked,omitempty"`
+	Chain     int       `json:"chain,omitempty"`
 	RetryAt   time.Time `json:"retryAt,omitzero"`
 	Updated   time.Time `json:"updated"`
 }
@@ -544,6 +570,37 @@ func (s *Store) setEntry(ctx context.Context, name, date, id string, from []stri
 		return true
 	})
 	return out, wrote, err
+}
+
+// addDecided adds a decision to the start of a duty whose run is run, in
+// the newest of the dates that holds that start. It reports false when no
+// start of those dates has the run. A start keeps its newest maxDecided
+// decisions.
+func (s *Store) addDecided(ctx context.Context, name, run string, dates []string, d Decided) (bool, error) {
+	for i := len(dates) - 1; i >= 0; i-- {
+		wrote, err := s.modifyDay(ctx, name, dates[i], func(x *day) bool {
+			for j := range x.Entries {
+				e := &x.Entries[j]
+				if e.Run != run {
+					continue
+				}
+				e.Decided = append(e.Decided, d)
+				if over := len(e.Decided) - maxDecided; over > 0 {
+					e.Decided = slices.Delete(e.Decided, 0, over)
+				}
+				e.Updated = s.now().UTC()
+				return true
+			}
+			return false
+		})
+		if err != nil {
+			return false, err
+		}
+		if wrote {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // dates returns the dates of the history of a duty, oldest first.

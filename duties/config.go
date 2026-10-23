@@ -28,10 +28,21 @@ import (
 // it to; a webhook may name any variable of the list. CheckHosts lists
 // the hosts that a check may reach, as globs such as *.example.com. An
 // empty list lets a check reach any host on a public address, and never a
-// loopback, private, or link-local address.
+// loopback, private, or link-local address. Caps bounds what the duties
+// spend in a day across duties.
 type Config struct {
 	Secrets    []SecretRule `yaml:"secrets"`
 	CheckHosts []string     `yaml:"checkHosts"`
+	Caps       Caps         `yaml:"caps"`
+}
+
+// Caps are the daily caps across duties, in US dollars. PerAgentUSD bounds
+// the cost of the runs of the duties of one agent in a day, and FleetUSD
+// the cost of the runs of every duty in a day. 0 sets no such cap: each
+// duty still has its required budget and its own perDayUSD.
+type Caps struct {
+	PerAgentUSD float64 `yaml:"perAgentUSD"`
+	FleetUSD    float64 `yaml:"fleetUSD"`
 }
 
 // SecretRule allows a duty to name the variable Name, and a check to send
@@ -74,6 +85,12 @@ func LoadConfig(cfg *fw.Config) (Config, error) {
 		if _, err := path.Match(c.CheckHosts[i], "x"); err != nil || c.CheckHosts[i] == "" {
 			problems = append(problems, fmt.Sprintf("workbench.duties.checkHosts[%d] %q is not a host or a glob of hosts", i, h))
 		}
+	}
+	if c.Caps.PerAgentUSD < 0 {
+		problems = append(problems, fmt.Sprintf("workbench.duties.caps.perAgentUSD %v is below zero: write 0 for no cap", c.Caps.PerAgentUSD))
+	}
+	if c.Caps.FleetUSD < 0 {
+		problems = append(problems, fmt.Sprintf("workbench.duties.caps.fleetUSD %v is below zero: write 0 for no cap", c.Caps.FleetUSD))
 	}
 	if len(problems) > 0 {
 		return Config{}, fmt.Errorf("duties: %s", strings.Join(problems, "; "))
