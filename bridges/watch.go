@@ -262,7 +262,10 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 				// The answer fans out as a message of the member that
 				// addresses the same handles: the same caps, the same
 				// skips, and the whole text up to the bound of a message.
-				text, _ := cutText(ends[r.ID].output, maxTextBytes)
+				text := answer.Text
+				if answer.Cut {
+					text = answer.whole
+				}
 				capLines, plan, seats, inputs := fanPlan(rec, sender{handle: seat, run: r.ID}, *answer, text, runs, now)
 				lines = append(lines, capLines...)
 				fans = append(fans, fanOut{seq: answer.Seq, plan: plan, seats: seats, inputs: inputs})
@@ -515,6 +518,9 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 			text, cut := cutText(end.output, entryTextBytes)
 			l := newMessage(From{Kind: KindAgent, Handle: seat, Run: r.ID}, text)
 			l.Cut, l.Mirrors = cut, mirror
+			if cut {
+				l.whole, _ = cutText(end.output, maxTextBytes)
+			}
 			to, member := addressees(rec, end.output, seat)
 			if len(to) > 0 {
 				l.To = to

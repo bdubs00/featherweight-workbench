@@ -3,6 +3,7 @@ package bridges
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -118,6 +119,87 @@ func TestToolsOfASeat(t *testing.T) {
 		t.Fatalf("a person with _meta = %s", textOf(res))
 	}
 }
+
+// An agent reads every entry whole: a list shows the start of a long
+// entry and says how to read the rest, and bridge_read with seq returns
+// the whole text of a message of a person, of an agent, and of the answer
+// of a run. The answer of a run whose whole text the channel does not
+// keep, as from an older front, comes from the ledger of the run.
+func TestReadAWholeEntry(t *testing.T) {
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	v, fm := withFleet(t, a)
+	v.state("default/crew-0", fleet.MemberLive)
+	url := serve(t, a)
+	it := open(t, url)
+	ctx := context.Background()
+	v.put(workerRun("r-mig", it.ID, "migrator-1", "migrator", fw.StateRunning))
+	rev := workerRun("r-rev", it.ID, "reviewer", "reviewer", fw.StateCompleted)
+	v.put(rev)
+	s.poll(ctx)
+	cs := connectMCP(t, a, "fleet")
+	long := func(who string) string {
+		return strings.Repeat(who+" has a lot to say. ", 400) + "The end of " + who + "."
+	}
+	body, _ := json.Marshal(map[string]any{"text": long("alice"), "pinned": true})
+	if resp, out := do(t, http.MethodPost, url+"/v1/bridges/"+it.ID+"/messages", "alice", string(body)); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("post = %d %s", resp.StatusCode, out)
+	}
+	if res := callTool(t, cs, ToolPost, map[string]any{"text": long("migrator-1"), "to": []string{"reviewer"}}, metaOf("r-mig", "migrator", "")); res.IsError {
+		t.Fatalf("bridge_post = %s", textOf(res))
+	}
+	fm.setEvents("r-rev", ev(fw.EvRunQueued, nil), ev(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: long("reviewer")}))
+	rev.Seq = 9
+	v.put(rev)
+	s.poll(ctx)
+	seqs := map[string]uint64{}
+	for _, m := range channel(t, s, it.ID) {
+		if m.Cut {
+			seqs[orWords(m.From.Handle, m.From.Name)] = m.Seq
+		}
+	}
+	if len(seqs) != 3 {
+		t.Fatalf("cut entries = %v", seqs)
+	}
+	res := callTool(t, cs, ToolRead, map[string]any{}, metaOf("r-rev", "reviewer", ""))
+	for _, seq := range seqs {
+		if want := fmt.Sprintf("[Entry %d goes on. bridge_read with seq %d returns it whole.]", seq, seq); !strings.Contains(textOf(res), want) {
+			t.Fatalf("the list lacks %q:\n%.600s", want, textOf(res))
+		}
+	}
+	for who, seq := range seqs {
+		res := callTool(t, cs, ToolRead, map[string]any{"seq": seq}, metaOf("r-rev", "reviewer", ""))
+		if res.IsError || !strings.HasSuffix(textOf(res), long(who)) {
+			t.Fatalf("whole %s = %.200s ... %s", who, textOf(res), tail(textOf(res)))
+		}
+	}
+	// The channel loses the whole texts, as for an older front: the
+	// answer of the run comes from its ledger, and the message of the
+	// person says that the channel holds only its start.
+	for _, seq := range seqs {
+		e, err := s.b.channels.Get(ctx, wholeKey(it.ID, seq))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.b.channels.Delete(ctx, wholeKey(it.ID, seq), e.Revision); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res = callTool(t, cs, ToolRead, map[string]any{"seq": seqs["reviewer"]}, metaOf("r-rev", "reviewer", ""))
+	if !strings.HasSuffix(textOf(res), "The end of reviewer.") {
+		t.Fatalf("the answer from the ledger = %s", tail(textOf(res)))
+	}
+	res = callTool(t, cs, ToolRead, map[string]any{"seq": seqs["alice"]}, metaOf("r-rev", "reviewer", ""))
+	if !strings.HasSuffix(textOf(res), "[The channel holds only this start of the entry.]") {
+		t.Fatalf("a lost whole text = %s", tail(textOf(res)))
+	}
+	if res := callTool(t, cs, ToolRead, map[string]any{"seq": 999}, metaOf("r-rev", "reviewer", "")); !res.IsError {
+		t.Fatalf("an unknown entry = %s", textOf(res))
+	}
+}
+
+// tail is the end of a long text, for a message of a test.
+func tail(s string) string { return s[max(0, len(s)-120):] }
 
 // The manager opens a bridge as the person of its run, lists the bridges
 // of that person, and changes a bridge only as far as the operator

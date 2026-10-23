@@ -172,6 +172,28 @@ func (b *buckets) putEntry(ctx context.Context, id string, m Message) error {
 	return nil
 }
 
+// putWhole keeps the whole text of a cut entry, as plain bytes, so it
+// fits the bound of a value of the bucket up to maxTextBytes.
+func (b *buckets) putWhole(ctx context.Context, id string, seq uint64, text string) error {
+	if _, err := b.channels.Create(ctx, wholeKey(id, seq), []byte(text)); err != nil && !errors.Is(err, bucket.ErrConflict) {
+		return fmt.Errorf("bridges: write the whole text of entry %d of the bridge %s: %w", seq, id, err)
+	}
+	return nil
+}
+
+// whole reads the whole text of a cut entry. It reports false when the
+// channel holds none, such as for an entry of an older front.
+func (b *buckets) whole(ctx context.Context, id string, seq uint64) (string, bool, error) {
+	e, err := b.channels.Get(ctx, wholeKey(id, seq))
+	if errors.Is(err, bucket.ErrNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("bridges: read the whole text of entry %d of the bridge %s: %w", seq, id, err)
+	}
+	return string(e.Value), true, nil
+}
+
 // entry reads one entry with its revision. A seq without an entry, such
 // as the seq of a write that a crash cut, is ErrNotFound.
 func (b *buckets) entry(ctx context.Context, id string, seq uint64) (Message, uint64, error) {

@@ -327,10 +327,17 @@ func plural(n int, one, many string) string {
 }
 
 // land writes new entries of the channel, whose seqs a change of the
-// record gave, and calls the hook for each. A write that fails leaves a
-// gap in the channel, which a page reads past, and the log names it.
+// record gave, and calls the hook for each. The whole text of a cut entry
+// goes first, under a key of its own, so an agent that sees the entry can
+// read it whole. A write that fails leaves a gap in the channel, which a
+// page reads past, and the log names it.
 func (s *Store) land(ctx context.Context, id string, msgs ...Message) {
 	for _, m := range msgs {
+		if m.Cut && m.whole != "" {
+			if err := s.b.putWhole(s.asFront(ctx), id, m.Seq, m.whole); err != nil {
+				s.log.Warn("bridges: the whole text of an entry is lost", "bridge", id, "seq", m.Seq, "error", err)
+			}
+		}
 		if err := s.b.putEntry(s.asFront(ctx), id, m); err != nil {
 			s.log.Error("bridges: an entry of the channel is lost", "bridge", id, "seq", m.Seq, "error", err)
 			continue

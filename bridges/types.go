@@ -218,6 +218,11 @@ type Message struct {
 	// person. The text of the entry is then the line Skill and a summary,
 	// and the runs of the members hold the whole message.
 	Skill *skills.Command `json:"skill,omitempty"`
+
+	// whole is the whole text of an entry that the channel cuts, up to
+	// maxTextBytes. land keeps it under a key of its own (wholeKey), so
+	// bridge_read with seq returns the whole entry to an agent.
+	whole string
 }
 
 // From is the sender of an entry. A person has Name, the subject, and
@@ -496,6 +501,12 @@ func (r *record) public() Bridge {
 // seq in twelve digits, so the keys of one bridge sort by seq.
 func seqKey(id string, seq uint64) string {
 	return id + "." + leftPad(strconv.FormatUint(seq, 10), 12)
+}
+
+// wholeKey is the key of the whole text of a cut entry:
+// <bridge>.whole.<seq in twelve digits>.
+func wholeKey(id string, seq uint64) string {
+	return id + ".whole." + leftPad(strconv.FormatUint(seq, 10), 12)
 }
 
 func leftPad(s string, n int) string {

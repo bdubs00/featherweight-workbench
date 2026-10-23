@@ -222,6 +222,9 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 		// A slash command is pinned, so its entry says so, and fanPlan
 		// pins each delivery of a pinned entry.
 		msg.Seq, msg.At, msg.Cut, msg.ReplyTo, msg.Pinned = rec.alloc(), now, isCut || cmd != nil, spec.ReplyTo, spec.Pinned || cmd != nil
+		if msg.Cut {
+			msg.whole = text
+		}
 		if to != nil {
 			msg.To = to
 		}

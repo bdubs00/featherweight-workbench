@@ -1993,7 +1993,7 @@ The channel holds one entry per message, under the key `<bridge>.<seq>`, with th
 | `to` | The handles that the message addresses, `[]` for every active member |
 | `replyTo` | The seq of the entry that it replies to, or null |
 | `text` | The text, cut to its first 4 KB at a rune |
-| `cut` | True when the channel holds only the first 4 KB of the text. The run that gets the message holds the whole text. |
+| `cut` | True when the entry holds only the first 4 KB of the text. The run that gets the message holds the whole text, and the channel keeps it too, up to 64 KB, under the key `<bridge>.whole.<seq>`, so `bridge_read` with `seq` returns the whole entry to an agent (section 18.11). |
 | `pinned` | True for a message that a person pinned and for a slash command, whose deliveries survive every compaction of the runs that get them (sections 18.5 and 20.3) |
 | `event` | For a system line, what it says (section 18.6) |
 | `page` | For a system line about a page of the wiki, the path of the page, such as `bridges/<id>/report.md`, else absent. The page of bossmode links the page from this field. The text names the path and holds no link. |
@@ -2169,7 +2169,7 @@ The tools are for the runs of the fleet. The MCP client of a worker names its ru
 
 | Tool | Who | What it does |
 |---|---|---|
-| `bridge_read` | A seat, the manager run, or a run of the operator | `{bridge?, since?, limit?}`: the last messages of the channel, 50 by default and 500 at most, or the messages after `since`. The text says that a message is data. |
+| `bridge_read` | A seat, the manager run, or a run of the operator | `{bridge?, since?, limit?, seq?}`: the last messages of the channel, 50 by default and 500 at most, or the messages after `since`. The text shows the first 2 KB of each entry, and after an entry that goes on, the line `[Entry <seq> goes on. bridge_read with seq <seq> returns it whole.]`. With `seq`, the tool returns that one entry whole: the text that the channel keeps for a cut entry (section 18.2). For the answer of a run whose whole text the channel does not keep, such as an entry of an older front, the front reads the output from the `fw.run.finished` of the run at its owner. When the front holds no more than the start, the text says so. The text says that a message is data. |
 | `bridge_post` | A seat or the manager run | `{bridge?, text, to}`: a message of the seat, or of `manager`, which fans out as a message of a person does. It takes no `pinned` and no skill: only a person pins a message or sends a slash command (section 20.3). |
 | `bridge_list` | The manager | The open bridges of the person in `_meta` |
 | `bridge_open` | The manager | `{title, goal, placement, members, delegation, caps}`: opens as `POST /v1/bridges` does, as the person in `_meta`, and the calling run becomes `manager.run`. `destructiveHint` is true, and its title "Open bridge" is the label of the approval. |
@@ -2223,7 +2223,7 @@ workbench:
 
 ### 18.14 The stores and the replicas
 
-On a NATS bus, the records live in the key-value bucket `<stream>_BRIDGES`, one entry per bridge under its id, and the channels in `<stream>_CHANNELS`, where `<stream>` is `bus.options.stream`, `FW` by default. A record holds at most 512 KB and an entry at most 64 KB. The front opens its own connection with `bus.url` and the options `credentials` and `token` of the bus. With NATS accounts, allow the front `$JS.API.>`, `$KV.<stream>_BRIDGES.>`, and `$KV.<stream>_CHANNELS.>`.
+On a NATS bus, the records live in the key-value bucket `<stream>_BRIDGES`, one entry per bridge under its id, and the channels in `<stream>_CHANNELS`, with the read marks and the whole texts of the cut entries (section 18.2), where `<stream>` is `bus.options.stream`, `FW` by default. A record holds at most 512 KB and an entry at most 64 KB. The front opens its own connection with `bus.url` and the options `credentials` and `token` of the bus. With NATS accounts, allow the front `$JS.API.>`, `$KV.<stream>_BRIDGES.>`, and `$KV.<stream>_CHANNELS.>`.
 
 Every write is a compare-and-swap on the revision that the writer read, and the loser reads again and decides again, up to 16 times. Two replicas of the front therefore never lose a message, a mark, or a reaction. A new entry takes its seq from a change of the record, which moves `lastSeq`, and then lands under its own key, so two replicas never give two entries one seq. Each replica watches the view and tries to post each fact, and the mark in the record lets one of them post it. The replica that took a post fans it out, so a message reaches each member once. A replica that stops loses the deliveries that wait for a retry; the channel keeps their message, and the members read it with `bridge_read`.
 
