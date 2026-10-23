@@ -238,7 +238,7 @@ func (d *day) spent() float64 {
 	for _, e := range d.Entries {
 		sum += e.CostUSD
 	}
-	return sum
+	return usd(sum)
 }
 
 // seenKeys are the keys that the checks of a duty saw, with the time of

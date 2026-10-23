@@ -356,8 +356,9 @@ func OnNotice(fn func(ctx context.Context, a *fw.Agent, n Notice)) {
 }
 
 // OnChange registers a function that gets the name of a duty after each
-// change that this replica wrote to the duty or to its history. It runs on
-// the goroutine of the change, so it must not block.
+// change that this replica wrote to the duty or to its history, and ""
+// after a change of the switch that pauses every duty. It runs on the
+// goroutine of the change, so it must not block.
 func OnChange(fn func(name string)) {
 	hooks.mu.Lock()
 	defer hooks.mu.Unlock()

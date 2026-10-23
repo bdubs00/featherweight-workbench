@@ -642,3 +642,23 @@ func TestStartAndClose(t *testing.T) {
 		t.Fatalf("doctor = %v, %q", ok, line)
 	}
 }
+
+// A duty holds at most maxWorking starts that work at one time.
+func TestMaxWorking(t *testing.T) {
+	f := newFront(t, checkBlock, nil)
+	f.sec["HOOK_TOKEN"] = "tok"
+	f.put(t, "alice", hookDuty("burst"))
+	st, _ := f.s.st.get(context.Background(), "burst")
+	for i := range maxWorking + 2 {
+		out, err := f.s.begin(context.Background(), st, Trigger{Kind: StartCall, Slot: f.clock.Now(), Event: "x"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i < maxWorking && out.Run == "" {
+			t.Fatalf("start %d = %+v", i, out)
+		}
+		if i >= maxWorking && out.Skipped != "40 runs of the duty work now, the most at one time." {
+			t.Fatalf("start %d = %+v", i, out)
+		}
+	}
+}

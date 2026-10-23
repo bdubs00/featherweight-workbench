@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,7 +48,10 @@ const (
 	// first meets a duty.
 	seedDays = 7
 	// maxEventBytes bounds the text of {event} that a start keeps.
-	maxEventBytes = 8 << 10
+	maxEventBytes = 4 << 10
+	// maxWorking is the most starts of one duty that work at one time, so
+	// a burst of calls stays bounded, and so does the entry of its day.
+	maxWorking = 40
 )
 
 // Kinds of a start.
@@ -387,7 +391,9 @@ func (s *Service) begin(ctx context.Context, st *stored, start Trigger) (Outcome
 	if err != nil {
 		return Outcome{}, err
 	}
-	if open := lastWorking(days); open != nil {
+	if n := countWorking(days); n >= maxWorking {
+		e.State, e.Reason = StateSkipped, fmt.Sprintf("%d runs of the duty work now, the most at one time.", n)
+	} else if open := lastWorking(days); open != nil {
 		switch d.Limits.Overlap {
 		case OverlapSkip:
 			e.State, e.Reason = StateSkipped, fmt.Sprintf("The run of %s had not ended, and the overlap of the duty is skip.", slotWords(open.Slot, loc))
@@ -441,6 +447,19 @@ func lastWorking(days map[string]day) *entry {
 		}
 	}
 	return out
+}
+
+// countWorking counts the starts whose run works.
+func countWorking(days map[string]day) int {
+	n := 0
+	for _, d := range days {
+		for _, e := range d.Entries {
+			if working(e.State) {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // waits reports whether a start waits for a run that works.
@@ -983,6 +1002,10 @@ func find(runs map[string]*fw.Run, id string) (*fw.Run, float64) {
 	return r, cost
 }
 
+// usd rounds a cost to a millionth of a dollar, so a sum reads as a person
+// adds it.
+func usd(x float64) float64 { return math.Round(x*1e6) / 1e6 }
+
 // costOf returns the cost of a run and of the runs under it.
 func costOf(r *fw.Run) float64 {
 	if r.TreeUsage != nil {
@@ -1016,7 +1039,7 @@ func (s *Service) settle(ctx context.Context, st *stored, date string, e entry, 
 		}
 		before := *x
 		x.Run = r.ID
-		x.CostUSD = x.SpentUSD + cost
+		x.CostUSD = usd(x.SpentUSD + cost)
 		if r.Title != "" {
 			x.Title = r.Title
 		}
