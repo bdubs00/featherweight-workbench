@@ -172,6 +172,11 @@ func (s *Store) poll(ctx context.Context) {
 			delete(s.lostAt, id)
 		}
 	}
+	for id := range s.wholeAt {
+		if !live[id] {
+			delete(s.wholeAt, id)
+		}
+	}
 	s.mu.Unlock()
 }
 
@@ -209,12 +214,18 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 	ends := map[string]*ending{}
 	verdicts := map[string]*verdict{}
 	lost := map[string]map[string]*verdict{} // by run and approval: the decisions of lost cards
+	wholes := map[string]*fw.Approval{}      // by run: the whole call that the run waits for
 	for _, r := range runs {
 		seat := mirrored(rec, r)
 		if seat == "" {
 			continue
 		}
 		mk := rec.Marks[r.ID]
+		if s.needsWhole(r, mk) {
+			if p := s.readWhole(ctx, r); p != nil {
+				wholes[r.ID] = p
+			}
+		}
 		if mk != nil && mk.Pending != "" && (r.Pending == nil || r.Pending.ID != mk.Pending) {
 			if v := s.readVerdict(ctx, r, mk); v != nil {
 				verdicts[r.ID] = v
@@ -242,10 +253,11 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 	gone := s.goneSeats(rec, runs, settled)
 	now := s.now().UTC()
 	var lines []Message
-	var cards []Message // cards whose decision landed, written again
-	var fans []fanOut   // the answers that address a member
+	var cards []Message   // cards whose decision landed, written again
+	var repairs []Message // cards that get the whole input of their call
+	var fans []fanOut     // the answers that address a member
 	fresh, err := s.b.update(ctx, rec.ID, func(rec *record) error {
-		lines, cards, fans = nil, nil, nil
+		lines, cards, repairs, fans = nil, nil, nil, nil
 		add := func(l Message) {
 			l.Seq, l.At = rec.alloc(), now
 			lines = append(lines, l)
@@ -256,8 +268,9 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 			if seat == "" {
 				continue
 			}
-			got, answer := s.facts(ctx, rec, r, seat, ends[r.ID], verdicts[r.ID], lost[r.ID], add)
+			got, fixed, answer := s.facts(ctx, rec, r, seat, ends[r.ID], verdicts[r.ID], lost[r.ID], wholes[r.ID], add)
 			cards = append(cards, got...)
+			repairs = append(repairs, fixed...)
 			if answer != nil {
 				// The answer fans out as a message of the member that
 				// addresses the same handles: the same caps, the same
@@ -278,7 +291,7 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 		for _, l := range goneLines(rec, runs, gone) {
 			add(l)
 		}
-		if !changed && !marked && len(lines) == 0 && len(cards) == 0 {
+		if !changed && !marked && len(lines) == 0 && len(cards) == 0 && len(repairs) == 0 {
 			return errNoChange
 		}
 		return nil
@@ -289,6 +302,9 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 	}
 	for _, c := range cards {
 		s.rewriteCard(ctx, fresh.ID, c)
+	}
+	for _, c := range repairs {
+		s.repairCard(ctx, fresh.ID, c)
 	}
 	// A job of a fired seat that waited in the queue starts a run after
 	// the fire; the watch stops it.
@@ -435,10 +451,14 @@ func (s *Store) findVerdict(ctx context.Context, r *fw.Run, approval string, fro
 // with add, which gives each line its seq, moves the mark, and returns the
 // cards whose decision landed. lost holds the decisions that the watch
 // read for the cards of the run that show the state unknown, by approval.
-// It also returns the answer of the run, with its seq, when the first
-// words of the answer address a member (addressees), so the caller fans
-// it out. It runs inside the change of the record.
-func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, end *ending, v *verdict, lost map[string]*verdict, add func(Message)) (cards []Message, answer *Message) {
+// whole is the call that the run waits for as its owner holds it, when
+// the view holds its input cut or not at all (readWhole), or nil. A new
+// card takes it, and a card that holds the input of the view returns in
+// repairs with the whole input (repairCard). It also returns the answer
+// of the run, with its seq, when the first words of the answer address a
+// member (addressees), so the caller fans it out. It runs inside the
+// change of the record.
+func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, end *ending, v *verdict, lost map[string]*verdict, whole *fw.Approval, add func(Message)) (cards, repairs []Message, answer *Message) {
 	mk := rec.mark(r.ID, seat)
 	task := ""
 	if m := rec.member(seat); m != nil {
@@ -496,12 +516,20 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 		delete(s.tries, r.ID)
 		s.mu.Unlock()
 	}
-	// A new approval or question.
+	// A new approval or question. Its card carries the whole call, which
+	// the owner of the run holds when the view holds it cut (readWhole).
 	if r.State == fw.StateInputRequired && r.Pending != nil && mk.Pending == "" {
-		c := s.cardOf(ctx, r, seat)
+		c := s.cardOf(ctx, withWhole(r, whole), seat)
 		add(c)
 		mk.Pending, mk.AskSeq, mk.Card, mk.Question, mk.Tool = r.Pending.ID, r.Seq, rec.LastSeq, c.Decision.Question, c.Decision.Tool
+		mk.Thin = whole == nil && thin(r)
 		rec.Cards = append(rec.Cards, rec.LastSeq)
+	} else if mk.Pending != "" && mk.Thin && whole != nil && whole.ID == mk.Pending {
+		// A card that holds the input of the view gets the whole call.
+		c := s.cardOf(ctx, withWhole(r, whole), seat)
+		c.Seq = mk.Card
+		repairs = append(repairs, c)
+		mk.Thin = false
 	}
 	// A new end of the run.
 	if end != nil && end.seq > mk.Done {
@@ -540,7 +568,7 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 			add(l)
 		}
 	}
-	return cards, answer
+	return cards, repairs, answer
 }
 
 // orWords returns s, or the words w when s is empty.
@@ -562,6 +590,7 @@ func (s *Store) cardOf(ctx context.Context, r *fw.Run, seat string) Message {
 		d.Decision = dashboard.Decision{ID: r.Pending.ID, Tool: r.Pending.Tool, Label: "Allow", Reason: r.Pending.Reason, Input: r.Pending.Input}
 	}
 	d.Always = alwaysOffered(r, d.Decision)
+	d.Input = fitInput(d.Input, cardInputBytes)
 	event, text := EventNeedsYou, ""
 	switch p := d.Decision; {
 	case p.Connect != nil:

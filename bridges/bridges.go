@@ -87,6 +87,9 @@ const (
 	// lostEvery is the time between two reads of a run whose card shows
 	// the state unknown.
 	lostEvery = time.Minute
+	// wholeEvery is the time between two reads of the whole call of a card
+	// whose first read failed (wholeDue).
+	wholeEvery = 10 * time.Second
 	// sleepHold is how long the Task of a seat stays quiet, with no
 	// replica that sees it in another state, before the channel says that
 	// it went to sleep (sleepLines). A settled view also misses the newest
@@ -146,6 +149,7 @@ type Store struct {
 	checked  map[string]uint64    // by run id: the seq of the run at its last read of the ends
 	tries    map[string]int       // by run id: the reads of a decision that failed
 	lostAt   map[string]time.Time // by run id: the last read for the cards of the run that show unknown
+	wholeAt  map[string]time.Time // by run id: the last read of the whole call that the run waits for (wholeDue)
 	shown    map[string]string    // by bridge and handle: the presence and activity that a hook got
 	canceled map[string]bool      // by run id: the runs of fired seats that a cancel went to
 	missing  map[string]missing   // by bridge and handle: the newest run of a seat that a settled view did not hold
@@ -181,6 +185,7 @@ func New(a *fw.Agent, records, channels bucket.Bucket, cfg Config, log *slog.Log
 		checked:     map[string]uint64{},
 		tries:       map[string]int{},
 		lostAt:      map[string]time.Time{},
+		wholeAt:     map[string]time.Time{},
 		shown:       map[string]string{},
 		canceled:    map[string]bool{},
 		missing:     map[string]missing{},

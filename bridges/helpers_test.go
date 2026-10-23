@@ -382,10 +382,11 @@ type fakeMember struct {
 	status map[string]int        // by path: a fixed answer
 	detail map[string]string     // by path: the detail of the fixed answer
 	ids    map[string]string     // by idempotency key: the run that a start answers, else mgr-run-1
+	runs   map[string]*fw.Run    // by run id: the run object that GET /v1/runs/{id} answers
 }
 
 func newMember(t *testing.T) *fakeMember {
-	fm := &fakeMember{events: map[string][]fw.Event{}, fail: map[string]int{}, status: map[string]int{}, detail: map[string]string{}, ids: map[string]string{}}
+	fm := &fakeMember{events: map[string][]fw.Event{}, fail: map[string]int{}, status: map[string]int{}, detail: map[string]string{}, ids: map[string]string{}, runs: map[string]*fw.Run{}}
 	fm.srv = httptest.NewServer(http.HandlerFunc(fm.serve))
 	t.Cleanup(fm.srv.Close)
 	return fm
@@ -416,6 +417,7 @@ func (fm *fakeMember) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	events := fm.events
 	id := fm.ids[r.Header.Get("Idempotency-Key")]
+	owned := fm.runs[strings.TrimPrefix(r.URL.Path, "/v1/runs/")]
 	fm.mu.Unlock()
 	if id == "" {
 		id = "mgr-run-1"
@@ -423,6 +425,8 @@ func (fm *fakeMember) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/runs/"), "/")
 	switch {
+	case r.Method == http.MethodGet && owned != nil:
+		_ = json.NewEncoder(w).Encode(owned)
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/runs":
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(fw.Run{ID: id, Agent: fmt.Sprint(body["agent"]), State: fw.StateQueued})
@@ -452,6 +456,14 @@ func (fm *fakeMember) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		_ = json.NewEncoder(w).Encode(fw.Run{ID: parts[0]})
 	}
+}
+
+// own states the run object that the member answers on GET /v1/runs/{id}.
+func (fm *fakeMember) own(r *fw.Run) {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	c := *r
+	fm.runs[r.ID] = &c
 }
 
 // find returns the requests with the method and the path.

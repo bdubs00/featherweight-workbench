@@ -356,6 +356,11 @@ type runMark struct {
 	AskSeq   uint64 `json:"askSeq,omitempty"`
 	Question bool   `json:"question,omitempty"`
 	Tool     string `json:"tool,omitempty"`
+	// Thin is true while the card holds the input of the call as the view
+	// had it, cut or left out, because the read of the whole call from the
+	// owner failed. The watch reads it again and writes the card again
+	// with the whole input (repairCard).
+	Thin bool `json:"thin,omitempty"`
 	// Limit is true once the channel says that the run failed and takes no
 	// message: at a limit of its budget, or for another reason.
 	Limit bool `json:"limit,omitempty"`
