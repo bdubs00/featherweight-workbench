@@ -39,6 +39,7 @@ func mount(k *native.Kit) error {
 	k.Handle("GET /v1/bridges/{id}/messages", rt.messages)
 	k.Handle("POST /v1/bridges/{id}/messages", rt.post)
 	k.Handle("GET /v1/bridges/{id}/messages/{seq}", rt.entry)
+	k.Handle("GET /v1/bridges/{id}/pages", rt.pages)
 	k.Handle("POST /v1/bridges/{id}/messages/{seq}/reactions", rt.react)
 	k.Handle("POST /v1/bridges/{id}/members", rt.addMember)
 	k.Handle("DELETE /v1/bridges/{id}/members/{handle}", rt.fire)
@@ -259,6 +260,26 @@ func (rt *routes) entry(w http.ResponseWriter, r *http.Request) {
 	}
 	m.Text, m.Cut = text, !whole
 	native.WriteJSON(w, http.StatusOK, m)
+}
+
+// pages answers GET /v1/bridges/{id}/pages with the pages of the wiki that
+// belong to the work of the bridge (pagesOf). The caller needs the rule of
+// the bridge and the rule of the wiki.
+func (rt *routes) pages(w http.ResponseWriter, r *http.Request) {
+	s, rec, ok := rt.bridge(w, r)
+	if !ok {
+		return
+	}
+	if err := s.readsWiki(r.Context()); err != nil {
+		rt.fail(w, r, err)
+		return
+	}
+	list, err := s.pagesOf(r.Context(), rec)
+	if err != nil {
+		rt.fail(w, r, err)
+		return
+	}
+	native.WriteJSON(w, http.StatusOK, BridgePages{Bridge: rec.ID, Pages: list, Count: len(list)})
 }
 
 func (rt *routes) messages(w http.ResponseWriter, r *http.Request) {
