@@ -127,26 +127,39 @@ func (s secrets) get(_ context.Context, name string) (string, error) {
 	return "", fw.ErrSecretNotFound
 }
 
-// notices collects the notices of a test.
+// notices collects the notices of the tests, by agent.
 type notices struct {
 	mu   sync.Mutex
-	list []Notice
+	list map[*fw.Agent][]Notice
 }
 
-func (n *notices) add(_ context.Context, _ *fw.Agent, x Notice) {
+func (n *notices) add(_ context.Context, a *fw.Agent, x Notice) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.list = append(n.list, x)
+	if n.list == nil {
+		n.list = map[*fw.Agent][]Notice{}
+	}
+	n.list[a] = append(n.list[a], x)
 }
 
-func (n *notices) kinds(duty string) []string {
+// of returns the notices of a duty of an agent.
+func (n *notices) of(a *fw.Agent, duty string) []Notice {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	var out []string
-	for _, x := range n.list {
+	var out []Notice
+	for _, x := range n.list[a] {
 		if x.Duty == duty {
-			out = append(out, x.Kind)
+			out = append(out, x)
 		}
+	}
+	return out
+}
+
+// kinds returns the kinds of the notices of a duty of an agent.
+func (n *notices) kinds(a *fw.Agent, duty string) []string {
+	var out []string
+	for _, x := range n.of(a, duty) {
+		out = append(out, x.Kind)
 	}
 	return out
 }
@@ -211,6 +224,12 @@ func workbench(t *testing.T, block string) map[string]yaml.Node {
 
 func newFront(t *testing.T, block string, mut func(*fw.Config)) *front {
 	t.Helper()
+	return newFrontOn(t, fw.NewMemBus(), block, mut)
+}
+
+// newFrontOn is newFront on a bus that a test shares with its workers.
+func newFrontOn(t *testing.T, bus fw.Bus, block string, mut func(*fw.Config)) *front {
+	t.Helper()
 	t.Setenv(fleet.EnvIntake, "fw.jobs")
 	t.Setenv("FW_ATESPACE", "")
 	cfg := fw.DefaultConfig()
@@ -243,7 +262,7 @@ func newFront(t *testing.T, block string, mut func(*fw.Config)) *front {
 		fw.WithModel(fw.ModelFunc{GenerateFn: func(context.Context, *fw.Request) (*fw.Response, error) {
 			return &fw.Response{Content: []fw.Block{fw.Text("done")}, StopReason: fw.StopEndTurn}, nil
 		}}),
-		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithSurfaces(native.New()),
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(bus), fw.WithSurfaces(native.New()),
 		fw.WithServices(start), fw.WithLogger(quiet()))
 	if err != nil {
 		t.Fatalf("fw.New: %v", err)

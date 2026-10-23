@@ -28,10 +28,10 @@ var (
 	// or that no duty that the caller can view has the name. A route
 	// answers 404, so a caller learns nothing of a duty that it cannot
 	// view.
-	ErrHidden = errors.New("duties: no duty that you can view has the name")
+	ErrHidden = errors.New("duties: hidden")
 	// ErrReadOnly means that the duty is an entry of workbench.sources,
 	// which only fw.yaml changes.
-	ErrReadOnly = errors.New("duties: the duty is an entry of workbench.sources in fw.yaml, so it changes there")
+	ErrReadOnly = errors.New("duties: read-only")
 	// ErrUpstream means that an outside system failed, such as the
 	// address of a check in a test. A route answers 502.
 	ErrUpstream = errors.New("duties: an outside system failed")
@@ -161,14 +161,21 @@ func (s *Service) allowed(ctx context.Context, agent, action string) error {
 }
 
 // hidden returns ErrHidden with the name of the duty.
-func hidden(name string) error { return fmt.Errorf("%w: %s", ErrHidden, name) }
+func hidden(name string) error {
+	return fmt.Errorf("%w: no duty that you can view is named %s", ErrHidden, name)
+}
+
+// readOnly returns ErrReadOnly with the name of the duty.
+func readOnly(name string) error {
+	return fmt.Errorf("%w: the duty %s is an entry of workbench.sources in fw.yaml, so it changes there", ErrReadOnly, name)
+}
 
 // load reads a duty of the store for the caller in ctx, who needs the
 // action on its agent.
 func (s *Service) load(ctx context.Context, name, action string) (*stored, error) {
 	if s.fileOf(name) != nil {
 		if action != fw.ActionAgentView {
-			return nil, fmt.Errorf("%w: %s", ErrReadOnly, name)
+			return nil, readOnly(name)
 		}
 	}
 	st, err := s.st.get(ctx, name)
@@ -309,7 +316,7 @@ func (s *Service) Put(ctx context.Context, name string, body DutyBody, opt PutOp
 		return PutAnswer{}, &ProblemsError{Problems: []string{capital(err.Error()) + "."}}
 	}
 	if s.fileOf(name) != nil {
-		return PutAnswer{}, fmt.Errorf("%w: %s", ErrReadOnly, name)
+		return PutAnswer{}, readOnly(name)
 	}
 	old, err := s.st.get(ctx, name)
 	switch {
@@ -329,7 +336,7 @@ func (s *Service) Put(ctx context.Context, name string, body DutyBody, opt PutOp
 	if agent := strings.TrimSpace(d.Agent); agent != "" && (old == nil || agent != old.Duty.Agent) {
 		if err := s.allowed(ctx, agent, fw.ActionAgentEdit); err != nil {
 			if errors.Is(err, ErrHidden) {
-				return PutAnswer{}, fmt.Errorf("%w: the agent %s", ErrHidden, agent)
+				return PutAnswer{}, fmt.Errorf("%w: no agent that you can view is named %s", ErrHidden, agent)
 			}
 			return PutAnswer{}, err
 		}

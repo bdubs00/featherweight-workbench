@@ -75,9 +75,9 @@ const (
 // Errors of the store.
 var (
 	// ErrNotFound means that no duty has the name.
-	ErrNotFound = errors.New("duties: no duty has the name")
+	ErrNotFound = errors.New("duties: not found")
 	// ErrExists means that a duty of the name exists.
-	ErrExists = errors.New("duties: a duty has the name")
+	ErrExists = errors.New("duties: exists")
 	// ErrConflict means that the duty changed since the writer read it.
 	ErrConflict = errors.New("duties: the duty changed since it was read")
 )
@@ -280,7 +280,7 @@ func dateOf(t time.Time, loc *time.Location) string { return t.In(loc).Format(ti
 func (s *Store) get(ctx context.Context, name string) (*stored, error) {
 	e, err := s.duties.Get(ctx, dutyKey(name))
 	if errors.Is(err, bucket.ErrNotFound) {
-		return nil, fmt.Errorf("%w: %s", ErrNotFound, name)
+		return nil, fmt.Errorf("%w: no duty is named %s", ErrNotFound, name)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("duties: read the duty %s: %w", name, err)
@@ -332,7 +332,7 @@ func (s *Store) create(ctx context.Context, st *stored) error {
 	}
 	rev, err := s.duties.Create(ctx, dutyKey(st.Duty.Name), value)
 	if errors.Is(err, bucket.ErrConflict) {
-		return fmt.Errorf("%w: %s", ErrExists, st.Duty.Name)
+		return fmt.Errorf("%w: a duty is named %s already", ErrExists, st.Duty.Name)
 	}
 	if err != nil {
 		return fmt.Errorf("duties: write the duty %s: %w", st.Duty.Name, err)
@@ -383,7 +383,7 @@ func (s *Store) remove(ctx context.Context, name string, rev uint64) error {
 	err := s.duties.Delete(ctx, dutyKey(name), rev)
 	if errors.Is(err, bucket.ErrConflict) {
 		if _, gerr := s.get(ctx, name); errors.Is(gerr, ErrNotFound) {
-			return fmt.Errorf("%w: %s", ErrNotFound, name)
+			return fmt.Errorf("%w: no duty is named %s", ErrNotFound, name)
 		}
 		return fmt.Errorf("%w: the duty %s changed since the front read it; try again", ErrConflict, name)
 	}

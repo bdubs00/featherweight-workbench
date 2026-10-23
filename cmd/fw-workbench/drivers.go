@@ -15,6 +15,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/agents"
 	"github.com/bdubs00/featherweight-workbench/bossmode"
 	"github.com/bdubs00/featherweight-workbench/connections"
+	"github.com/bdubs00/featherweight-workbench/duties"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/manager"
 	"github.com/bdubs00/featherweight-workbench/sources"
@@ -61,6 +62,7 @@ func init() {
 	cli.RegisterDoctorCheck(connections.DoctorCheck)
 	cli.RegisterDoctorCheck(fleet.DoctorCheck)
 	cli.RegisterDoctorCheck(sources.DoctorCheck)
+	cli.RegisterDoctorCheck(duties.DoctorCheck)
 	cli.RegisterDoctorCheck(bossmode.DoctorCheck)
 	cli.RegisterDoctorCheck(manager.DoctorCheck)
 	// With workbench.access.external, a control plane decides who can do

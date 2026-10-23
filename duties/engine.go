@@ -330,12 +330,18 @@ func (s *Service) recent(ctx context.Context, name string, loc *time.Location, n
 	return days, dates, nil
 }
 
-// newEntry returns a start that a replica claims.
+// newEntry returns a start that a replica claims. The id of a time of the
+// schedule is the time, so two replicas claim the same id. Any other start
+// gets a random end to its id, so two starts at one moment differ.
 func (s *Service) newEntry(start Trigger, now time.Time) entry {
 	now = now.UTC()
+	id := start.Slot.UTC().Format(time.RFC3339Nano)
+	if start.Kind != StartSchedule {
+		id += "-" + strings.ToLower(fw.NewID()[20:])
+	}
 	return entry{
 		RunEntry: RunEntry{At: now, Slot: start.Slot.UTC(), State: StateStarting, Start: start.Kind, Attempt: 1},
-		ID:       start.Slot.UTC().Format(time.RFC3339Nano),
+		ID:       id,
 		Event:    cut(start.Event, maxEventBytes),
 		Person:   start.Person,
 		By:       s.replica,
@@ -607,9 +613,10 @@ func reasonOf(err error) string {
 
 // request returns the run request of a start: the message with its
 // placeholders filled, the budget, the principal, the metadata of the
-// duty, and the idempotency key duty/<name>/<time>, with the attempt
-// after it for a retry. The request names its run, so the front knows the
-// run at once.
+// duty, and the idempotency key duty/<name>/<id>, which is
+// duty/<name>/<time> for a time of the schedule, with the attempt after it
+// for a retry. The request names its run, so the front knows the run at
+// once.
 func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 	d := &st.Duty
 	slot := e.Slot.UTC().Format(time.RFC3339Nano)
@@ -618,7 +625,7 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 	if title := fw.TitleFrom(input); title != "" {
 		md[fw.MetaTitle] = title
 	}
-	key := "duty/" + d.Name + "/" + slot
+	key := "duty/" + d.Name + "/" + e.ID
 	if e.Attempt > 1 {
 		md[MetaAttempt] = strconv.Itoa(e.Attempt)
 		key += "/" + strconv.Itoa(e.Attempt)

@@ -268,7 +268,7 @@ func TestRetriesAndBreaker(t *testing.T) {
 	if !v.Paused || v.State.FailuresInRow != 3 || !strings.Contains(v.State.PausedReason, "3 runs failed in a row, so the duty paused itself. The last one: The run failed: the model refused again") {
 		t.Fatalf("after three failures = paused %v, %+v", v.Paused, v.State)
 	}
-	if k := allNotices.kinds("flaky"); !slices.Equal(k, []string{NoticeFailed, NoticeFailed, NoticeFailed, NoticePaused}) {
+	if k := allNotices.kinds(f.a, "flaky"); !slices.Equal(k, []string{NoticeFailed, NoticeFailed, NoticeFailed, NoticePaused}) {
 		t.Fatalf("notices = %v", k)
 	}
 	before := len(f.queue.list())
@@ -353,7 +353,7 @@ func TestDailyCap(t *testing.T) {
 	if n := len(f.queue.list()); n != 2 {
 		t.Fatalf("the duty started %d runs", n)
 	}
-	if k := allNotices.kinds("capped"); !slices.Equal(k, []string{NoticeCap}) {
+	if k := allNotices.kinds(f.a, "capped"); !slices.Equal(k, []string{NoticeCap}) {
 		t.Fatalf("notices = %v", k)
 	}
 	// The next day in New York starts again.
@@ -533,14 +533,7 @@ func TestNeedsYou(t *testing.T) {
 	f.pass(t)
 	f.clock.Add(time.Minute)
 	f.pass(t)
-	allNotices.mu.Lock()
-	var got []Notice
-	for _, n := range allNotices.list {
-		if n.Duty == "asks" {
-			got = append(got, n)
-		}
-	}
-	allNotices.mu.Unlock()
+	got := allNotices.of(f.a, "asks")
 	if len(got) != 1 || got[0].Kind != NoticeNeedsYou || !slices.Equal(got[0].Who, []string{"alice", "erin"}) {
 		t.Fatalf("notices = %+v", got)
 	}
@@ -611,5 +604,41 @@ func TestServiceOpens(t *testing.T) {
 	}
 	if _, _, err := bucket.Open(context.Background(), cfg, dutiesBucket, nil); err == nil {
 		t.Fatal("a store opened on redis")
+	}
+}
+
+// The service starts on the bus mem with its engine, and its close stops
+// the engine and detaches the duties.
+func TestStartAndClose(t *testing.T) {
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(fw.NoAuthn{}),
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithLogger(quiet()),
+		fw.WithModel(fw.ModelFunc{GenerateFn: func(context.Context, *fw.Request) (*fw.Response, error) {
+			return &fw.Response{Content: []fw.Block{fw.Text("done")}, StopReason: fw.StopEndTurn}, nil
+		}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close(context.Background())
+	c, err := Start(context.Background(), a)
+	if err != nil || c == nil || Of(a) == nil {
+		t.Fatalf("Start = %v, %v", c, err)
+	}
+	Of(a).wake()
+	if err := c.Close(); err != nil || Of(a) != nil {
+		t.Fatalf("Close = %v, %v", err, Of(a))
+	}
+	cfg.Bus.Driver = "redis"
+	if c, err := Start(context.Background(), a); err != nil || c != nil {
+		t.Fatalf("Start on redis = %v, %v", c, err)
+	}
+	ok, line := DoctorCheck(context.Background(), func() *fw.Config {
+		c := fw.DefaultConfig()
+		c.Extensions = workbench(t, "duties:\n  secrets: [{name: DUTY_SECRET_X, hosts: [api.example.com]}]\n")
+		return c
+	}(), fw.SecretsFunc(func(context.Context, string) (string, error) { return "", fw.ErrSecretNotFound }), time.Second)
+	if ok || !strings.Contains(line, "a duty may name DUTY_SECRET_X for api.example.com, but it holds no secret") {
+		t.Fatalf("doctor = %v, %q", ok, line)
 	}
 }

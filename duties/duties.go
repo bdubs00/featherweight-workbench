@@ -38,12 +38,16 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
+	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 )
 
 func init() {
 	fw.RegisterService(Start)
+	native.Extend(mount)
+	mcp.RegisterTools(tools)
 }
 
 // Keys of the metadata that a duty gives each run, beside fw.batch and
