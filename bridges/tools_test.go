@@ -49,6 +49,10 @@ func TestToolsAreListed(t *testing.T) {
 	if !tools[ToolRead].Annotations.ReadOnlyHint || tools[ToolPost].Annotations.ReadOnlyHint {
 		t.Fatal("the read-only hints are wrong")
 	}
+	// The manager reads the open bridges before it proposes or opens work.
+	if !strings.Contains(tools[ToolList].Description, "before you propose or open work") || !strings.Contains(tools[ToolOpen].Description, "Read the open bridges with bridge_list first") {
+		t.Fatalf("bridge_list = %q, bridge_open = %q", tools[ToolList].Description, tools[ToolOpen].Description)
+	}
 	// A run never pins a message: only a person does, on the route.
 	if schema, err := json.Marshal(tools[ToolPost].InputSchema); err != nil || strings.Contains(string(schema), "pinned") {
 		t.Fatalf("bridge_post takes pinned: %s %v", schema, err)
@@ -220,6 +224,10 @@ func TestToolsOfTheManager(t *testing.T) {
 	}
 	res := callTool(t, cs, ToolOpen, plan, metaOf("mgr-conv", "manager", "alice"))
 	if res.IsError {
+		t.Fatalf("open = %s", textOf(res))
+	}
+	// The result sends the person to the bridge and promises nothing.
+	if !strings.Contains(textOf(res), `follow the work in the bridge "Migrate nginx" on the page of bossmode`) || !strings.Contains(textOf(res), "do not promise a later report") {
 		t.Fatalf("open = %s", textOf(res))
 	}
 	var it Item

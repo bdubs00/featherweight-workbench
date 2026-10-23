@@ -111,7 +111,8 @@ func TestTheExampleIsAPoolOfTheFront(t *testing.T) {
 		t.Fatalf("budget = %+v", prof.Budget)
 	}
 	for _, line := range []string{"Read before you act", "Ask before you spend", "front.bridge_open", "front.pages_write",
-		"Name the person you act for", "Never claim that a run passed a check", "plain words"} {
+		"Name the person you act for", "Never claim that a run passed a check", "plain words",
+		"Read the open bridges with front.bridge_list before you propose or open work", "never promise to report back later"} {
 		if !strings.Contains(prof.System, line) {
 			t.Errorf("the system prompt has no %q", line)
 		}

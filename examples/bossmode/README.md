@@ -64,8 +64,12 @@ name the templates. Section 14.10 of the architecture has the rules.
 - The budget of one conversation: 400 turns, 8 hours of working time, and
   2000 tool calls.
 - A system prompt that says what a manager does and does not do. It reads
-  before it acts, and it asks before it spends. It opens a bridge only with
-  `front.bridge_open`. It writes its reports into the wiki, and it names the
+  before it acts, and it asks before it spends. It reads the open bridges
+  with `front.bridge_list` before it proposes or opens work, and builds on
+  a bridge that already does the work. It opens a bridge only with
+  `front.bridge_open`, and then it tells the operator to follow the bridge
+  on the page, because nothing wakes the manager when a bridge finishes,
+  so it never promises a later report. It writes its reports into the wiki, and it names the
   person it acts for. It answers in plain words. It never claims that a run
   passed a check that it did not see.
 

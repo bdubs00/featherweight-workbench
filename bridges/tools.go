@@ -165,14 +165,14 @@ func tools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolList,
 			Title:       "Bridges",
-			Description: "List the open bridges of the person of your run: each with its id, title, state, members, unread count, and the members that wait for the person.",
+			Description: "List the open bridges of the person of your run: each with its id, title, state, members, unread count, and the members that wait for the person. Call it before you propose or open work, so you build on a bridge that already does the work instead of opening a second one.",
 			InputSchema: json.RawMessage(listSchema),
 			Annotations: readOnly,
 		}, t.list),
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolOpen,
 			Title:       "Open bridge",
-			Description: "Open a bridge from a plan, as the person of your run: a title, a goal, and the seats, each with a handle, an agent, and a task. The bridge starts one run per seat, which spends from the budget of the pool of its agent, or of your run for the placement spawn. Read the fleet with agents_list and fleet first.",
+			Description: "Open a bridge from a plan, as the person of your run: a title, a goal, and the seats, each with a handle, an agent, and a task. The bridge starts one run per seat, which spends from the budget of the pool of its agent, or of your run for the placement spawn. Read the open bridges with bridge_list first, and do not open a bridge for work that an open bridge already does. Read the fleet with agents_list and fleet too.",
 			InputSchema: json.RawMessage(openSchema),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: &yes, OpenWorldHint: &no},
 		}, t.open),
@@ -496,7 +496,7 @@ func (t *toolSet) open(ctx context.Context, _ *sdk.CallToolRequest, in OpenSpec)
 	if err != nil {
 		return toolError(err), nil, nil
 	}
-	return mcp.Result(fmt.Sprintf("Opened the bridge %s %q for %s with %s, placement %s. Follow it with bridge_read (bridge %s).", rec.ID, rec.Title, s.personName(by.Subject, ""), plural(len(rec.Members), "member", "members"), rec.Placement, rec.ID), it), nil, nil
+	return mcp.Result(fmt.Sprintf("Opened the bridge %s %q for %s with %s, placement %s. Follow it with bridge_read (bridge %s). Tell the person that they follow the work in the bridge %q on the page of bossmode. Nothing wakes your run when the bridge finishes, so do not promise a later report.", rec.ID, rec.Title, s.personName(by.Subject, ""), plural(len(rec.Members), "member", "members"), rec.Placement, rec.ID, rec.Title), it), nil, nil
 }
 
 // delegated checks that the run of a call can change its bridge for the
