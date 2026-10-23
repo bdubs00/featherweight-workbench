@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/skills"
@@ -76,7 +77,9 @@ const (
 )
 
 // Presences of a member (Presence, section 18.7). A seat without a run is
-// waiting when something seats it, and not-started when nothing does.
+// waiting when something seats it, and not-started when nothing does. A
+// seat whose newest run stopped at a limit of its budget is limit: no
+// fault, and a person continues it with more room (section 18.9).
 const (
 	PresenceWorking    = "working"
 	PresenceNeedsYou   = "needs-you"
@@ -86,6 +89,7 @@ const (
 	PresenceFired      = "fired"
 	PresenceWaiting    = "waiting"
 	PresenceNotStarted = "not-started"
+	PresenceLimit      = "limit"
 )
 
 // TaskBlocked is the state of a Task that a storage failure blocked, for
@@ -141,11 +145,25 @@ type Delegation struct {
 	Report  bool `json:"report"`
 }
 
-// Caps bound the fan-out of a bridge (section 18.5).
+// Caps bound the fan-out of a bridge (section 18.5). MaxTurns bounds the
+// turns of every run of the bridge together, so the allowance that each
+// message gives a seat (grant) cannot spend without end. A record of an
+// older front has no MaxTurns, and DefaultMaxTurns holds for it
+// (turnCap).
 type Caps struct {
 	MaxMessages        int `json:"maxMessages"`
 	MaxFanoutPerMinute int `json:"maxFanoutPerMinute"`
 	MaxPairMessages    int `json:"maxPairMessages"`
+	MaxTurns           int `json:"maxTurns"`
+}
+
+// turnCap is the cap of the turns of a bridge: MaxTurns, or
+// DefaultMaxTurns for a record of an older front.
+func (c Caps) turnCap() int {
+	if c.MaxTurns > 0 {
+		return c.MaxTurns
+	}
+	return DefaultMaxTurns
 }
 
 // Member is one seat of a bridge. Runs lists the runs of the seat in the
@@ -191,7 +209,9 @@ type Activity struct {
 // Item is a bridge as GET /v1/bridges lists it for one caller, and as the
 // other routes answer it with Members: the record and the counts of the
 // caller. Unread is at most MaxUnread, and UnreadMore is true when the
-// count reached past it. Usage is set by GET /v1/bridges/{id} alone.
+// count reached past it. LastAt is the time of the newest entry of the
+// channel, for the freshness of a row of the list, and nil before the
+// first entry. Usage is set by GET /v1/bridges/{id} alone.
 type Item struct {
 	Bridge
 	Read        uint64          `json:"read"`
@@ -199,6 +219,7 @@ type Item struct {
 	UnreadMore  bool            `json:"unreadMore"`
 	MemberCount int             `json:"memberCount"`
 	NeedsYou    int             `json:"needsYou"`
+	LastAt      *time.Time      `json:"lastAt,omitempty"`
 	Usage       *fleet.UsageSum `json:"usage,omitempty"`
 }
 
@@ -343,6 +364,11 @@ type seatMark struct {
 	// question waiting (ask.go).
 	Ask     uint64 `json:"ask,omitempty"`
 	AskOpen bool   `json:"askOpen,omitempty"`
+	// Continued is the run that a person last continued after a stop at a
+	// limit (continueSeat), and ContinuedAt the time, so a second click
+	// before the run goes on gives it nothing more.
+	Continued   string     `json:"continued,omitempty"`
+	ContinuedAt *time.Time `json:"continuedAt,omitempty"`
 }
 
 // SeatBudget is the budget of one seat: the turns and the working time of
@@ -383,6 +409,16 @@ type runMark struct {
 	// watch reads the run again for them, so a later read writes each one
 	// again with its real decision.
 	Lost []lostCard `json:"lost,omitempty"`
+	// Allow is the allowance of a seat run for each message that it
+	// handles: the limits of the budget that the kernel resolved at its
+	// start, which count the whole run (allowanceOf). Grant is the limits
+	// that the front last gave the run with a follow-up (nextGrant).
+	Allow *fw.Budget `json:"allow,omitempty"`
+	Grant *fw.Budget `json:"grant,omitempty"`
+	// Posts holds the digests of the last texts that the run posted with
+	// bridge_post (postDigest), so a final answer that repeats one word
+	// for word does not reach the channel again.
+	Posts []string `json:"posts,omitempty"`
 }
 
 // lostCard is a card whose decision the front failed to read: the
@@ -410,8 +446,10 @@ type fanMark struct {
 	Count        int       `json:"count,omitempty"`
 	MinuteCapped time.Time `json:"minuteCapped,omitempty"`
 	// Capped is true once the channel says that the bridge reached
-	// maxMessages; a change of the caps clears it.
-	Capped bool `json:"capped,omitempty"`
+	// maxMessages; a change of the caps clears it. TurnsCapped is the
+	// same for maxTurns.
+	Capped      bool `json:"capped,omitempty"`
+	TurnsCapped bool `json:"turnsCapped,omitempty"`
 	// Pairs counts the messages between two agents since the last message
 	// of a person, by pairKey, and PairCapped names the pairs that the
 	// channel holds a cap line of.

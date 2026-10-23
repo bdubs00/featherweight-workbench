@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
@@ -62,9 +63,11 @@ type buckets struct {
 	summaries map[string]summary
 }
 
-// summary is what never changes of an entry.
+// summary is what never changes of an entry: the kind and the name of the
+// sender, and the time.
 type summary struct {
 	kind, name string
+	at         time.Time
 }
 
 // maxSummaries bounds the summaries that a process keeps.
@@ -252,7 +255,7 @@ func (b *buckets) remember(key string, m Message) {
 	if b.summaries == nil || len(b.summaries) >= maxSummaries {
 		b.summaries = map[string]summary{}
 	}
-	b.summaries[key] = summary{kind: m.From.Kind, name: m.From.Name}
+	b.summaries[key] = summary{kind: m.From.Kind, name: m.From.Name, at: m.At}
 }
 
 // summaryOf returns the summary of an entry, from memory or from the
@@ -272,7 +275,27 @@ func (b *buckets) summaryOf(ctx context.Context, id string, seq uint64) (summary
 	if err != nil {
 		return summary{}, false, err
 	}
-	return summary{kind: m.From.Kind, name: m.From.Name}, true, nil
+	return summary{kind: m.From.Kind, name: m.From.Name, at: m.At}, true, nil
+}
+
+// lastAtScan bounds the seqs that lastAt reads back from the newest one,
+// past the gaps of writes that a crash cut or that did not land yet.
+const lastAtScan = 8
+
+// lastAt returns the time of the newest entry of a channel, from the
+// summaries, which a count of the unread entries reads anyway. It reports
+// false for a channel without an entry.
+func (b *buckets) lastAt(ctx context.Context, rec *record) (time.Time, bool) {
+	for seq, n := rec.LastSeq, 0; seq > 0 && n < lastAtScan; seq, n = seq-1, n+1 {
+		s, ok, err := b.summaryOf(ctx, rec.ID, seq)
+		if err != nil {
+			return time.Time{}, false
+		}
+		if ok && !s.at.IsZero() {
+			return s.at, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // Bounds of a page of the channel.

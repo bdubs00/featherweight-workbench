@@ -339,16 +339,30 @@ func runPath(id, rest string) string { return "/v1/runs/" + url.PathEscape(id) +
 // survives every compaction of the run (fw.WithMessagePinned, and pinned
 // in the body of the route of the owner).
 func (s *Store) send(ctx context.Context, r *fw.Run, content string, from fw.MessageFrom, pinned bool) error {
+	return s.sendWith(ctx, r, content, from, pinned, nil)
+}
+
+// sendWith is send with new limits for the run: the kernel applies them
+// before the message (fw.WithSendBudget, and budget in the body of the
+// route of the owner), so the turn that the message starts has them. A
+// nil budget changes no limit.
+func (s *Store) sendWith(ctx context.Context, r *fw.Run, content string, from fw.MessageFrom, pinned bool, budget *fw.Budget) error {
 	if r.Member == "" {
 		opts := []fw.SendOption{fw.WithMessageFrom(from)}
 		if pinned {
 			opts = append(opts, fw.WithMessagePinned())
+		}
+		if budget != nil {
+			opts = append(opts, fw.WithSendBudget(*budget))
 		}
 		return s.a.Send(s.asFront(ctx), r.ID, fw.Message{Role: fw.RoleUser, Content: []fw.Block{fw.Text(content)}}, fw.OriginHTTP, opts...)
 	}
 	body := map[string]any{"content": content, "from": from}
 	if pinned {
 		body["pinned"] = true
+	}
+	if budget != nil {
+		body["budget"] = budget
 	}
 	return s.call(ctx, r.Member, http.MethodPost, runPath(r.ID, "/messages"), body, "", nil)
 }

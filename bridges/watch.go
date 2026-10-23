@@ -547,6 +547,11 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 				add(l)
 				break
 			}
+			if repeatsPost(mk, end.output) {
+				// The run posted this answer with bridge_post already, and
+				// that post reached its teammates.
+				break
+			}
 			text, cut := cutText(end.output, entryTextBytes)
 			l := newMessage(From{Kind: KindAgent, Handle: seat, Run: r.ID}, text)
 			l.Cut, l.Mirrors = cut, mirror
@@ -580,6 +585,21 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 		}
 	}
 	return cards, repairs, answer
+}
+
+// repeatsPost reports whether the answer of a run repeats, word for word,
+// a text that the run posted with bridge_post (postDigest).
+func repeatsPost(mk *runMark, output string) bool {
+	if len(mk.Posts) == 0 {
+		return false
+	}
+	d := postDigest(output)
+	for _, p := range mk.Posts {
+		if p == d {
+			return true
+		}
+	}
+	return false
 }
 
 // orWords returns s, or the words w when s is empty.

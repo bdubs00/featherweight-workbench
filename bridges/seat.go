@@ -87,6 +87,7 @@ type CapsPatch struct {
 	MaxMessages        *int `json:"maxMessages,omitempty"`
 	MaxFanoutPerMinute *int `json:"maxFanoutPerMinute,omitempty"`
 	MaxPairMessages    *int `json:"maxPairMessages,omitempty"`
+	MaxTurns           *int `json:"maxTurns,omitempty"`
 }
 
 // apply changes the delegation d.
@@ -118,6 +119,7 @@ func (p *CapsPatch) apply(c *Caps) {
 	set(&c.MaxMessages, p.MaxMessages)
 	set(&c.MaxFanoutPerMinute, p.MaxFanoutPerMinute)
 	set(&c.MaxPairMessages, p.MaxPairMessages)
+	set(&c.MaxTurns, p.MaxTurns)
 }
 
 // invalid is an error of a request that a route answers with 400.

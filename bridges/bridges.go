@@ -139,6 +139,12 @@ type Store struct {
 	// at a time (newManager).
 	startMu sync.Mutex
 
+	// sendLocks make the grant and the send of the follow-ups to one seat
+	// run go one at a time on this replica (sendSeat), so a follow-up that
+	// leaves later never gives the run the smaller limits of an earlier
+	// one. A run takes the lock of its hash.
+	sendLocks [64]sync.Mutex
+
 	// names holds the names of the people who called a route, by subject
 	// (learn).
 	namesMu sync.Mutex

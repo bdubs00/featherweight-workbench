@@ -36,9 +36,9 @@ const (
 const bridgeArg = `"bridge":{"type":"string","description":"The id of the bridge. Without it, the bridge of your run: the batch bridge:<id> of the run, or the one bridge that your run manages."}`
 
 const budgetSchema = `{"type":"object","properties":{
-	"maxTurns":{"type":"integer","minimum":1,"description":"The most turns of each run of the seat."},
-	"deadline":{"type":"string","description":"The longest working time of each run of the seat, a duration such as 30m."}
-},"description":"The budget of the runs of the seat."}`
+	"maxTurns":{"type":"integer","minimum":1,"description":"The most turns for each message that the seat handles: its task, and each later message."},
+	"deadline":{"type":"string","description":"The longest working time for each message that the seat handles, a duration such as 30m."}
+},"description":"The budget of the seat for each message that it handles. Each message gives the run of the seat this much more room, and the cap maxTurns of the bridge bounds all runs together."}`
 
 const seatSchema = `{"type":"object","properties":{
 	"handle":{"type":"string","description":"The handle of the seat: lower-case letters, digits, dots, dashes, and underscores, at most 32, such as migrator-1."},
@@ -79,7 +79,8 @@ const (
 		"caps":{"type":"object","properties":{
 			"maxMessages":{"type":"integer","minimum":1,"description":"The most messages that fan out."},
 			"maxFanoutPerMinute":{"type":"integer","minimum":1,"description":"The most deliveries in one minute."},
-			"maxPairMessages":{"type":"integer","minimum":1,"description":"The most messages between two agents without a message of a person."}
+			"maxPairMessages":{"type":"integer","minimum":1,"description":"The most messages between two agents without a message of a person."},
+			"maxTurns":{"type":"integer","minimum":1,"description":"The most turns of all runs of the bridge together. Past it nothing fans out."}
 		},"description":"The caps of the fan-out. A missing key takes the default."}
 	},"required":["title","members"]}`
 
