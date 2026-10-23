@@ -253,6 +253,7 @@ func entryOf(s fw.Skill, origin, uri string, log *slog.Logger) Entry {
 		return e
 	}
 	fm, _ := splitFrontMatter(text)
+	e.Description = descriptionOf(fm, e.Description)
 	m := parseMeta(fm)
 	for _, p := range m.problems {
 		log.Warn("skills: a key of the front matter does not fit, so it takes its default", "skill", s.Name, "problem", p)

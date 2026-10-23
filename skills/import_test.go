@@ -636,3 +636,47 @@ func TestImportNameAsTheKernelReadsIt(t *testing.T) {
 		t.Fatalf("install = %+v, %v", e, err)
 	}
 }
+
+// A description that is a YAML block scalar, folded or literal, with any
+// chomping, reads as its text on one line in the catalog, the index of a
+// marketplace, and the preview of an import, and not as the indicator
+// that the kernel reads.
+func TestBlockScalarDescription(t *testing.T) {
+	for _, c := range []struct{ fm, want string }{
+		{"name: a\ndescription: >\n  Use this skill when\n  you write Go.\n", "Use this skill when you write Go."},
+		{"name: a\ndescription: >-\n  Folded and\n  stripped.\n", "Folded and stripped."},
+		{"name: a\ndescription: >+\n  Folded and kept.\n\n", "Folded and kept."},
+		{"name: a\ndescription: |\n  Line one.\n  Line two.\n", "Line one. Line two."},
+		{"name: a\ndescription: |-\n  Literal, stripped.\n", "Literal, stripped."},
+		{"name: a\ndescription: |2+\n    Indented two.\n", "Indented two."},
+		{"name: a\ndescription: > # a comment\n  With a comment.\n", "With a comment."},
+		{"name: a\ndescription: A plain line.\n", "A plain line."},
+		{"name: a\ndescription: '>'\n", ">"},
+		{"name: a\ndescription: >\n  " + strings.Repeat("long ", 100) + "\n", strings.TrimSpace(fw.CutSkillDescription(strings.Repeat("long ", 100)))},
+	} {
+		if _, got := kernelMeta(c.fm); got != c.want {
+			t.Errorf("kernelMeta(%q) = %q, want %q", c.fm, got, c.want)
+		}
+	}
+
+	a, root, _ := newAgent(t)
+	writeSkill(t, root, "academy-guide", "---\nname: academy-guide\ndescription: >\n  Guides a learner\n  through the academy.\n---\nBody.\n", nil)
+	writeSkill(t, root, "nudge", "---\nname: nudge\ndescription: |-\n  Nudges toward\n  discernment.\n---\nBody.\n", nil)
+	for name, want := range map[string]string{"academy-guide": "Guides a learner through the academy.", "nudge": "Nudges toward discernment."} {
+		if e, ok := Named(a, name); !ok || e.Description != want {
+			t.Errorf("catalog %s = %q", name, e.Description)
+		}
+	}
+
+	h := newHost(t)
+	h.github(map[string]string{"skills/claude-api/SKILL.md": "---\nname: claude-api\ndescription: |-\n  Reference for the API.\n---\nBody.\n"})
+	im := newImporter(t, a, h, []Marketplace{{Name: "gh", URL: "https://gh.test/o/r"}})
+	list := im.Market().List(context.Background())
+	if len(list) != 1 || len(list[0].Skills) != 1 || list[0].Skills[0].Description != "Reference for the API." {
+		t.Fatalf("index = %+v", list)
+	}
+	p, err := im.Preview(context.Background(), Source{Text: "---\nname: discernment-nudge\ndescription: >-\n  Asks before\n  it acts.\n---\nBody.\n"})
+	if err != nil || p.Description != "Asks before it acts." || p.Entry.Description != "Asks before it acts." {
+		t.Fatalf("preview = %+v, %v", p, err)
+	}
+}

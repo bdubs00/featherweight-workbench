@@ -2411,7 +2411,7 @@ The catalog holds every skill that the front knows: the skills of the kernel (`f
 
 | Field | Value |
 |---|---|
-| `name`, `description` | The name and the description, as the kernel reads them from the front matter |
+| `name`, `description` | The name and the description, as the kernel reads them from the front matter, except for a description that is a YAML block scalar (see below) |
 | `origin` | The origin as `GET /v1/skills` of the kernel names it (`fw.Skill.OriginName`): `local` for a skill of a skills directory, and `mcp` for a skill of an MCP server. The catalog then names a skill with the marker of an import `imported` in the place of `local`. |
 | `server` | The name of the `tools.mcp` entry of a skill of an MCP server. Absent for any other skill. |
 | `uri` | The URI of `SKILL.md` that the kernel gives a skill of an MCP server, else the path of `SKILL.md` relative to its skills directory, such as `review/SKILL.md` |
@@ -2421,7 +2421,7 @@ The catalog holds every skill that the front knows: the skills of the kernel (`f
 | `arguments` | The named arguments in order, each `{"name", "description"}`, for the placeholders `$name` |
 | `files` | The other files of the skill directory, relative to it, without hidden files |
 
-The package reads the front matter of each `SKILL.md` with the YAML decoder. The kernel reads the name and the description, so the catalog and the system prompt agree on them. The catalog reads four more keys:
+The package reads the front matter of each `SKILL.md` with the YAML decoder. The kernel reads the name and the description, so the catalog and the system prompt agree on them. The kernel reads one `key: value` per line, so for a description that is a block scalar, folded (`>`) or literal (`|`), with an indentation digit, a chomping sign (`-` or `+`), or a comment, it reads the indicator alone, such as `>` or `|-`. For such a description, the catalog, the index of a marketplace, and the preview of an import read the description with the YAML decoder instead, keep it on one line, and cut it to the 300 bytes of the kernel (`fw.CutSkillDescription`). The system prompt of a run still shows what the kernel reads. The catalog reads four more keys:
 
 | Key | Field | Default | Takes |
 |---|---|---|---|

@@ -24,6 +24,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -693,11 +694,45 @@ func (im *Importer) check(files map[string][]byte, hint string) Preview {
 	return p
 }
 
-// kernelMeta reads the name and the description of a front matter as the
-// kernel reads them (fw.SkillFrontMatter).
+// kernelMeta reads the name of a front matter as the kernel reads it
+// (fw.SkillFrontMatter), and the description as the kernel reads it, or
+// as YAML reads it when the description is a block scalar (blockText).
 func kernelMeta(fm string) (name, description string) {
 	name, description = fw.SkillFrontMatter("---\n" + fm + "\n---\n")
-	return strings.TrimSpace(name), strings.TrimSpace(description)
+	return strings.TrimSpace(name), descriptionOf(fm, description)
+}
+
+// blockIndicator is the head of a YAML block scalar: | for a literal and
+// > for a folded one, with an indentation digit and a chomping sign, + or
+// -, in either order, and an optional comment.
+var blockIndicator = regexp.MustCompile(`^[|>](?:[1-9][+-]?|[+-][1-9]?)?(?:\s+#.*)?$`)
+
+// descriptionOf returns the description of a skill for the catalog, the
+// index of a marketplace, and the preview of an import. The kernel reads
+// one key: value per line, so for a block scalar, such as
+//
+//	description: >-
+//	  Use this skill when ...
+//
+// it reads the indicator alone. The front then reads the description with
+// the YAML decoder and keeps it on one line, cut to the bound of the
+// kernel (fw.CutSkillDescription), so it has the shape of a description
+// that the kernel reads. Any other description stays as the kernel read
+// it.
+func descriptionOf(fm, kernel string) string {
+	kernel = strings.TrimSpace(kernel)
+	if !blockIndicator.MatchString(kernel) || len(fm) > maxFrontMatter {
+		return kernel
+	}
+	var raw map[string]any
+	if yaml.Unmarshal([]byte(fm), &raw) != nil {
+		return kernel
+	}
+	d, ok := raw["description"].(string)
+	if !ok {
+		return kernel
+	}
+	return strings.TrimSpace(fw.CutSkillDescription(strings.Join(strings.Fields(d), " ")))
 }
 
 func bytesContain(b []byte, c byte) bool {
