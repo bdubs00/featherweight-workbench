@@ -1,6 +1,7 @@
 package sources
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -297,5 +298,45 @@ func TestTwoReplicasMakeOneRun(t *testing.T) {
 	a, b := statOf(t, fronts[0].a, "tickets"), statOf(t, fronts[1].a, "tickets")
 	if a.Accepted+b.Accepted != 1 || a.Duplicate+a.Busy+b.Duplicate+b.Busy != 17 {
 		t.Fatalf("stats = %+v %+v", a, b)
+	}
+}
+
+// TestWebhookFollowsThePoolOfItsAgent puts the runs of a source on the
+// queue of the pool that runs its agent, as the fleet places a job
+// (fleet.QueueFor), or of the pool that the source names, and the answer
+// and the doctor name them. A source whose pool does not run its agent
+// stops the start.
+func TestWebhookFollowsThePoolOfItsAgent(t *testing.T) {
+	bus := fw.NewMemBus()
+	worker := newWorker(t, bus, "fw.jobs.crew-default")
+	view := placeView{"default@": "fw.jobs.crew-default", "default@other": "fw.jobs.other"}
+	block := ticketsBlock + `
+  - name: alerts
+    agent: default
+    pool: other
+    auth: {mode: none}
+    key: "{{.id}}"
+`
+	sec := secrets("TICKETS_TOKEN", ticketsToken)
+	f, err := openFront(t, bus, block, sec, nil, attachView(view))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, body := post(t, f.url+"/v1/sources/tickets", ticketJSON(1, "2026-10-23T10:00:00Z"), "Authorization", "Bearer "+ticketsToken)
+	if ans := decodeAnswer(t, resp, body, http.StatusAccepted); ans.Queue != "fw.jobs.crew-default" || ans.Accepted != 1 {
+		t.Fatalf("answer = %+v", ans)
+	}
+	eventually(t, "the worker of the pool runs the event", func() bool { return len(runsOf(t, worker)) == 1 })
+	resp, body = post(t, f.url+"/v1/sources/alerts", `{"id": 7}`)
+	if ans := decodeAnswer(t, resp, body, http.StatusAccepted); ans.Queue != "fw.jobs.other" || ans.Accepted != 1 {
+		t.Fatalf("answer of the source with a pool = %+v", ans)
+	}
+	if ok, line := DoctorCheck(context.Background(), f.a.Config(), sec, 0); !ok || !strings.Contains(line, "alerts takes webhooks without a credential for default on the pool other") {
+		t.Fatalf("doctor = %v %q", ok, line)
+	}
+
+	block = strings.Replace(block, "pool: other", "pool: elsewhere", 1)
+	if _, err := openFront(t, fw.NewMemBus(), block, sec, nil, attachView(view)); err == nil || !strings.Contains(err.Error(), "workbench.sources.alerts") || !strings.Contains(err.Error(), "the pool elsewhere does not run the agent default") {
+		t.Fatalf("a source on a pool of another agent = %v", err)
 	}
 }

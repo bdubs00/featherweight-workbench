@@ -10,9 +10,9 @@ import (
 )
 
 // DoctorCheck is the line of fw doctor about the sources (cli.DoctorCheck):
-// none, or each source with its kind and its agent, and where the keys
-// live. A source whose secret is missing, or a bus that keeps no keys,
-// fails the check. cmd/fw-workbench registers it.
+// none, or each source with its kind, its agent, and its pool when it names
+// one, and where the keys live. A source whose secret is missing, or a bus
+// that keeps no keys, fails the check. cmd/fw-workbench registers it.
 func DoctorCheck(ctx context.Context, cfg *fw.Config, secrets fw.Secrets, _ time.Duration) (bool, string) {
 	list, err := Load(cfg)
 	if err != nil {
@@ -38,6 +38,9 @@ func DoctorCheck(ctx context.Context, cfg *fw.Config, secrets fw.Secrets, _ time
 		default:
 			line = fmt.Sprintf("%s takes webhooks with %s for %s", s.Name, s.Auth.Mode, s.Agent)
 			name = s.Auth.Secret
+		}
+		if s.Pool != "" {
+			line += " on the pool " + s.Pool
 		}
 		if _, err := secretOf(ctx, secrets, s.Name, "the secret", name); err != nil {
 			ok = false

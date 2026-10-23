@@ -27,7 +27,6 @@ import (
 	"github.com/bdubs00/featherweight-workbench/agents"
 	"github.com/bdubs00/featherweight-workbench/internal/behalf"
 	"github.com/bdubs00/featherweight-workbench/pools"
-	v1alpha1 "github.com/google/ax/pkg/apis/v1alpha1"
 )
 
 // overlayTimeout bounds one request to the store of the overlays.
@@ -252,7 +251,7 @@ func PlaceFor(ctx context.Context, a *fw.Agent, name, pool string, w *Workers) (
 	if want.Replicas != nil {
 		replicas = *want.Replicas
 	}
-	poolName, ok := runtimeName(name)
+	poolName, ok := pools.NameAfter(name)
 	if !ok {
 		return nil, fmt.Errorf("%w: the name %s cannot name a pool, which takes lowercase letters, digits, and hyphens; choose another name, or pass pool to add the profile to a pool", fw.ErrInvalidRequest, name)
 	}
@@ -275,23 +274,6 @@ func PlaceFor(ctx context.Context, a *fw.Agent, name, pool string, w *Workers) (
 		return nil, fmt.Errorf("fleet: read the overlay of the pool %s %s: %w", poolName, f.overlays.Describe(), err)
 	}
 	return &poolPlace{f: f, base: base, pool: base.WithRawOverlay(o), create: &e}, nil
-}
-
-// runtimeName returns the name of the runtime pool of an agent: the name
-// in lowercase, with a hyphen for each character that a pool name does not
-// take. It reports false when no such name fits.
-func runtimeName(agent string) (string, bool) {
-	b := []byte(strings.ToLower(agent))
-	for i, c := range b {
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9') {
-			b[i] = '-'
-		}
-	}
-	name := strings.Trim(string(b), "-")
-	if name == "" || v1alpha1.ValidateName(name) != nil {
-		return "", false
-	}
-	return name, true
 }
 
 // CreatedPool returns the name of the runtime pool that the Save of a place
@@ -401,19 +383,7 @@ func (f *Fleet) poolFor(list []*pools.Pool, name, pool string) (*pools.Pool, err
 		}
 		return nil, fmt.Errorf("%w: no pool is named %s; the pools are %s", fw.ErrInvalidRequest, pool, poolNames(list))
 	}
-	var by []*pools.Pool
-	for _, p := range list {
-		if p.Agent == name {
-			by = append(by, p)
-		}
-	}
-	if len(by) == 0 {
-		for _, p := range list {
-			if _, ok := f.platform.current(p).Profiles()[name]; ok {
-				by = append(by, p)
-			}
-		}
-	}
+	by := runners(list, name, func(p *pools.Pool) map[string]fw.AgentProfile { return f.platform.current(p).Profiles() })
 	switch len(by) {
 	case 0:
 		return nil, nil
@@ -421,6 +391,27 @@ func (f *Fleet) poolFor(list []*pools.Pool, name, pool string) (*pools.Pool, err
 		return by[0], nil
 	}
 	return nil, fmt.Errorf("%w: the pools %s run the agent %s; pass pool to name one", fw.ErrInvalidRequest, poolNames(by), name)
+}
+
+// runners returns the pools of list that run the profile name, as poolFor
+// picks among them: the pools whose agent is the profile, else the pools
+// whose profiles hold it, which profiles gives for each pool.
+func runners(list []*pools.Pool, name string, profiles func(*pools.Pool) map[string]fw.AgentProfile) []*pools.Pool {
+	var by []*pools.Pool
+	for _, p := range list {
+		if p.Agent == name {
+			by = append(by, p)
+		}
+	}
+	if len(by) > 0 {
+		return by
+	}
+	for _, p := range list {
+		if _, ok := profiles(p)[name]; ok {
+			by = append(by, p)
+		}
+	}
+	return by
 }
 
 // poolNames names the pools and their agents.

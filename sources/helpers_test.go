@@ -3,6 +3,7 @@ package sources
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -94,6 +95,17 @@ type front struct {
 // first.
 func newFront(t *testing.T, bus fw.Bus, block string, sec fw.Secrets, mut func(*fw.Config)) *front {
 	t.Helper()
+	f, err := openFront(t, bus, block, sec, mut)
+	if err != nil {
+		t.Fatalf("fw.New: %v", err)
+	}
+	return f
+}
+
+// openFront is newFront that returns the error of the start. The services
+// of before start ahead of the sources, as the fleet does.
+func openFront(t *testing.T, bus fw.Bus, block string, sec fw.Secrets, mut func(*fw.Config), before ...fw.Service) (*front, error) {
+	t.Helper()
 	cfg := config(t, block)
 	if mut != nil {
 		mut(cfg)
@@ -102,9 +114,9 @@ func newFront(t *testing.T, bus fw.Bus, block string, sec fw.Secrets, mut func(*
 	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(fw.NoAuthn{}), fw.WithModel(textModel("done")),
 		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(bus), fw.WithSecrets(sec),
 		fw.WithLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))),
-		fw.WithSurfaces(native.NewWith(extension)), fw.WithServices(Start))
+		fw.WithSurfaces(native.NewWith(extension)), fw.WithServices(append(before, Start)...))
 	if err != nil {
-		t.Fatalf("fw.New: %v", err)
+		return nil, err
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -117,7 +129,7 @@ func newFront(t *testing.T, bus fw.Bus, block string, sec fw.Secrets, mut func(*
 	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &front{a: a, s: of(a), url: srv.URL, logs: logs}
+	return &front{a: a, s: of(a), url: srv.URL, logs: logs}, nil
 }
 
 // newWorker is a bare kernel that takes the queue intake from the bus.
@@ -249,3 +261,45 @@ func (f fakeStore) Describe() string                                     { retur
 
 // swapStore replaces the store of a front.
 func swapStore(f *front, st store) { f.s.store = st }
+
+// placeView is a view of the fleet without members that places the jobs of
+// an agent as a fleet with pools does (fleet.QueueView). It holds the
+// intake of a pool by "<agent>@<pool>", and by "<agent>@" for the pool
+// that runs the agent.
+type placeView map[string]string
+
+func (v placeView) Name() string                                    { return "front" }
+func (v placeView) Members(context.Context) ([]fleet.Member, error) { return nil, nil }
+func (v placeView) Runs(context.Context) ([]*fw.Run, error)         { return nil, nil }
+func (v placeView) Run(context.Context, string) (*fw.Run, error) {
+	return nil, fw.ErrRunNotFound
+}
+
+func (v placeView) Forward(context.Context, string, *http.Request) (*http.Response, error) {
+	return nil, fleet.ErrNoRoute
+}
+
+func (v placeView) PoolQueue(_ context.Context, agent, pool string) (string, bool, error) {
+	queue, ok := v[agent+"@"+pool]
+	if !ok && pool != "" {
+		return "", false, fmt.Errorf("%w: the pool %s does not run the agent %s", fw.ErrInvalidRequest, pool, agent)
+	}
+	return queue, ok, nil
+}
+
+// attachView is a service that attaches the view v to the agent before
+// the sources start, as the fleet does.
+func attachView(v fleet.View) fw.Service {
+	return func(_ context.Context, a *fw.Agent) (io.Closer, error) {
+		fleet.Attach(a, v)
+		return detach{a}, nil
+	}
+}
+
+// detach detaches the view of an agent when the agent closes.
+type detach struct{ a *fw.Agent }
+
+func (d detach) Close() error {
+	fleet.Attach(d.a, nil)
+	return nil
+}

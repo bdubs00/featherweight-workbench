@@ -102,6 +102,45 @@ func TestQueueSeating(t *testing.T) {
 	}
 }
 
+// A seat of a queue bridge goes to the queue of its pool, as the fleet
+// places a job (fleet.QueueFor): the pool that the seat names, else the
+// pool that runs its agent. A seat on a pool that does not run its agent
+// reaches no queue, so the bridge does not open.
+func TestQueueSeatingFollowsThePool(t *testing.T) {
+	a := newAgent(t, nil)
+	newStore(t, a, nil)
+	v, _ := withFleet(t, a)
+	v.pool("migrator", "", "fw.jobs.crew-migrator")
+	v.pool("reviewer", "", "fw.jobs.reviewer")
+	v.pool("reviewer", "crew-reviewer", "fw.jobs.crew-reviewer")
+	url := serve(t, a)
+	q := captureQueues(t, a, "fw.jobs.crew-migrator", "fw.jobs.crew-reviewer", "fw.jobs.migrator", "fw.jobs.reviewer")
+	resp, body := do(t, http.MethodPost, url+"/v1/bridges", "alice", `{"title":"Migrate cron","goal":"Migrate and review.","members":[
+		{"handle":"migrator-1","agent":"migrator","task":"Migrate cron"},
+		{"handle":"reviewer","agent":"reviewer","pool":"crew-reviewer","task":"Review cron"},
+		{"handle":"second","agent":"reviewer","task":"Read it again"}]}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("open = %d %s", resp.StatusCode, body)
+	}
+	var it Item
+	decodeJSON(t, body, &it)
+	eventually(t, "every seat on a queue", func() bool {
+		_, _, ok1 := q.get("migrator-1")
+		_, _, ok2 := q.get("reviewer")
+		_, _, ok3 := q.get("second")
+		return ok1 && ok2 && ok3
+	})
+	for handle, want := range map[string]string{"migrator-1": "fw.jobs.crew-migrator", "reviewer": "fw.jobs.crew-reviewer", "second": "fw.jobs.reviewer"} {
+		if req, queue, _ := q.get(handle); queue != want || q.count(handle) != 1 || req.Metadata[fw.MetaBatch] != "bridge:"+it.ID {
+			t.Errorf("the seat %s went to %s (%d requests) with %v; want %s", handle, queue, q.count(handle), req.Metadata, want)
+		}
+	}
+	resp, body = do(t, http.MethodPost, url+"/v1/bridges", "alice", `{"title":"t","members":[{"handle":"a","agent":"migrator","pool":"crew-reviewer","task":"do it"}]}`)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "the seat a cannot reach a queue: the pool crew-reviewer does not run the agent migrator") {
+		t.Fatalf("a seat on a pool of another agent = %d %s", resp.StatusCode, body)
+	}
+}
+
 // A plan that does not fit, or a caller who cannot operate an agent of the
 // plan, opens nothing.
 func TestOpenRefusals(t *testing.T) {

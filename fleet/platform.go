@@ -353,7 +353,7 @@ func (p *platform) poll(ctx context.Context) {
 	var learn []*v1alpha1.Task
 	listed, failed := map[string][]*v1alpha1.Task{}, map[string]error{}
 	for _, atespace := range p.atespaces {
-		tasks, err := p.listTasks(ctx, client, atespace)
+		tasks, err := listTasks(ctx, client, atespace)
 		listed[atespace] = tasks
 		if err != nil {
 			failed[atespace] = err
@@ -454,21 +454,43 @@ func taskVar(t *v1alpha1.Task, name string) string {
 }
 
 // learn reads the profiles that a Task serves from the configuration file
-// in its Workspaces, once, when the Task first appears. A Task that sleeps
-// cannot be asked, and a read through the router would wake it, but its
-// Workspace is a resource of the ax API and costs nothing. The file is the
-// one that FW_CONFIG in the Task names, else .fw/fw.yaml in the first
-// Workspace, as the kernel reads it under ax. A Task without such a file
-// stays unknown until it runs.
+// in its Workspaces (configFile), once, when the Task first appears. A Task
+// that sleeps cannot be asked, and a read through the router would wake
+// it, but its Workspace is a resource of the ax API and costs nothing. A
+// Task without such a file stays unknown until it runs.
 func (p *platform) learn(ctx context.Context, client v1alpha1.AXClient, t *v1alpha1.Task) {
-	atespace, taskName := t.GetMetadata().GetAtespace(), t.GetMetadata().GetName()
-	name := atespace + "/" + taskName
-	config := ""
-	for _, e := range t.GetSpec().GetEnv() {
-		if e.GetName() == "FW_CONFIG" {
-			config = e.GetValue()
+	name := t.GetMetadata().GetAtespace() + "/" + t.GetMetadata().GetName()
+	path, content, err := configFile(ctx, client, t)
+	if err != nil {
+		p.f.log.Warn("fleet: read the Workspace of a Task", "member", name, "error", err)
+		return
+	}
+	if path == "" {
+		return
+	}
+	agents, err := agentsOf([]byte(content))
+	if err != nil {
+		p.f.log.Warn("fleet: read the agents of a Task from its Workspace", "member", name, "file", path, "error", err)
+		return
+	}
+	p.mu.Lock()
+	if m := p.members[name]; m != nil {
+		for _, ag := range agents {
+			m.serves(ag)
 		}
 	}
+	p.mu.Unlock()
+	p.f.log.Info("fleet: learned the agents of a Task from its Workspace", "member", name, "agents", strings.Join(agents, ","))
+}
+
+// configFile reads the configuration file of a Task from its Workspaces:
+// the file that FW_CONFIG in the Task names, else .fw/fw.yaml in the first
+// Workspace, as the kernel reads it under ax. It returns the path of the
+// file in its Workspace and its content, and an empty path when no
+// Workspace holds such a file. An error names the Workspace that did not
+// answer.
+func configFile(ctx context.Context, client v1alpha1.AXClient, t *v1alpha1.Task) (path, content string, err error) {
+	atespace, config := t.GetMetadata().GetAtespace(), taskVar(t, "FW_CONFIG")
 	for i, ref := range t.GetSpec().GetWorkspaces() {
 		want := ".fw/fw.yaml"
 		if config != "" {
@@ -484,29 +506,15 @@ func (p *platform) learn(ctx context.Context, client v1alpha1.AXClient, t *v1alp
 		ws, err := client.GetWorkspace(cctx, &v1alpha1.GetWorkspaceRequest{Atespace: atespace, Name: ref.GetName()})
 		cancel()
 		if err != nil {
-			p.f.log.Warn("fleet: read the Workspace of a Task", "member", name, "workspace", ref.GetName(), "error", err)
-			return
+			return "", "", fmt.Errorf("the Workspace %s: %w", ref.GetName(), err)
 		}
 		for _, f := range ws.GetSpec().GetFiles() {
-			if strings.TrimPrefix(f.GetPath(), "./") != want {
-				continue
+			if strings.TrimPrefix(f.GetPath(), "./") == want {
+				return f.GetPath(), f.GetContent(), nil
 			}
-			agents, err := agentsOf([]byte(f.GetContent()))
-			if err != nil {
-				p.f.log.Warn("fleet: read the agents of a Task from its Workspace", "member", name, "file", f.GetPath(), "error", err)
-				return
-			}
-			p.mu.Lock()
-			if m := p.members[name]; m != nil {
-				for _, ag := range agents {
-					m.serves(ag)
-				}
-			}
-			p.mu.Unlock()
-			p.f.log.Info("fleet: learned the agents of a Task from its Workspace", "member", name, "agents", strings.Join(agents, ","))
-			return
 		}
 	}
+	return "", "", nil
 }
 
 // agentsOf returns the names under the key agents of a configuration file,
@@ -527,7 +535,7 @@ func agentsOf(file []byte) ([]string, error) {
 }
 
 // listTasks reads every Task of an atespace, page by page.
-func (p *platform) listTasks(ctx context.Context, client v1alpha1.AXClient, atespace string) ([]*v1alpha1.Task, error) {
+func listTasks(ctx context.Context, client v1alpha1.AXClient, atespace string) ([]*v1alpha1.Task, error) {
 	var out []*v1alpha1.Task
 	for offset := int64(0); ; offset += listPage {
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)

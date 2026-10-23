@@ -302,3 +302,89 @@ func TestWriteHidesSecrets(t *testing.T) {
 		t.Fatalf("ParseWorkspaces = %+v, %v", ws, err)
 	}
 }
+
+// A pool that sets no intake takes a queue that no other pool takes by
+// default: the queue of its agent when the pool is named after the agent,
+// else a queue named after the pool, under the intake prefix of the front
+// or fw.jobs. An intake that the pool sets wins, and the worker reads the
+// intake of its pool.
+func TestLoadGivesEachPoolAQueueOfItsOwn(t *testing.T) {
+	front := testFront()
+	bare := testFront()
+	bare.Intake = ""
+	cases := []struct {
+		name    string
+		changes []string // pairs of old and new text of the fixture
+		front   Front
+		want    string
+	}{
+		{"named after its agent", nil, front, "fw.jobs.triage"},
+		{"named after another name", []string{"- name: triage", "- name: crew-triage"}, front, "fw.jobs.crew-triage"},
+		{"named after an agent that a pool name cannot hold", []string{"- name: triage", "- name: sort-tickets", "        triage:\n", "        sort_tickets:\n"}, front, "fw.jobs.sort_tickets"},
+		{"a front without an intake prefix", []string{"- name: triage", "- name: crew-triage"}, bare, "fw.jobs.crew-triage"},
+		{"an intake of its own", []string{"replicas: 3", "replicas: 3\n    intake: tickets.sort"}, front, "tickets.sort"},
+		{"an intake of its own on a pool named after another name", []string{"- name: triage", "- name: crew-triage", "replicas: 3", "replicas: 3\n    intake: fw.jobs.triage"}, front, "fw.jobs.triage"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			text := fixture
+			for i := 0; i+1 < len(c.changes); i += 2 {
+				text = strings.Replace(text, c.changes[i], c.changes[i+1], 1)
+			}
+			list, err := Load(configOf(t, text), c.front)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p := list[0]; p.Intake != c.want || workerFileOf(t, p).Bus.Intake != c.want {
+				t.Fatalf("the pool %s of %s takes %s, and its worker reads %s; want %s", p.Name, p.Agent, p.Intake, workerFileOf(t, p).Bus.Intake, c.want)
+			}
+		})
+	}
+	// A runtime pool that agent_put named after its agent takes the queue
+	// of the agent, and one that a person named otherwise a queue of its
+	// own.
+	_, templates := loadAll(t, templateFixture)
+	for _, c := range []struct{ name, agent, want string }{
+		{"helper", "helper", "fw.jobs.helper"},
+		{"helper-bot", "Helper_Bot", "fw.jobs.Helper_Bot"},
+		{"helpers", "helper", "fw.jobs.helpers"},
+	} {
+		e := runtimeEntry()
+		e.Name, e.Agent = c.name, c.agent
+		if p, err := FromRuntime(e, templates); err != nil || p.Intake != c.want {
+			t.Errorf("the runtime pool %s of %s = %v, %v; want %s", c.name, c.agent, p, err, c.want)
+		}
+	}
+}
+
+// NameAfter names a pool after an agent as agent_put names its runtime
+// pool, and reports false for an agent that no pool name fits.
+func TestNameAfter(t *testing.T) {
+	for agent, want := range map[string]string{"reviewer": "reviewer", "Helper_Bot": "helper-bot", "a.b": "a-b", "-x-": "x", "___": "", "": ""} {
+		if got, ok := NameAfter(agent); got != want || ok != (want != "") {
+			t.Errorf("NameAfter(%q) = %q, %v; want %q", agent, got, ok, want)
+		}
+	}
+}
+
+// Two pools on one intake take the jobs of each other, so Load refuses
+// them, unless both set that intake and so share the queue on purpose.
+func TestLoadRefusesASharedIntake(t *testing.T) {
+	second := strings.Replace(strings.TrimPrefix(fixture, "\npools:\n"), "- name: triage", "- name: crew-triage", 1)
+	if list, err := Load(configOf(t, fixture+second), testFront()); err != nil || list[0].Intake != "fw.jobs.triage" || list[1].Intake != "fw.jobs.crew-triage" {
+		t.Fatalf("two pools of one agent = %v, %v", list, err)
+	}
+	own := func(text string) string {
+		return strings.Replace(text, "replicas: 3", "replicas: 3\n    intake: fw.jobs.triage", 1)
+	}
+	_, err := Load(configOf(t, fixture+own(second)), testFront())
+	if err == nil || !strings.Contains(err.Error(), "workbench.pools[1] (crew-triage): the intake fw.jobs.triage is the intake of workbench.pools[0] (triage) too, so the workers of both pools would take the jobs of each other") {
+		t.Fatalf("Load of a shared intake = %v", err)
+	}
+	if _, err := Load(configOf(t, own(fixture)+second), testFront()); err != nil {
+		t.Fatalf("Load of an intake of its own = %v", err)
+	}
+	if list, err := Load(configOf(t, own(fixture)+own(second)), testFront()); err != nil || list[0].Intake != list[1].Intake {
+		t.Fatalf("Load of an intake that both pools set = %v, %v", list, err)
+	}
+}

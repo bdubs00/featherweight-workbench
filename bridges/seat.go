@@ -2,10 +2,10 @@ package bridges
 
 // This file opens a bridge and seats its members (docs/ARCHITECTURE.md
 // section 18.3). With the placement queue, the front puts one run request
-// per seat on the intake queue of the agent of the seat, as the operator,
-// through the publish that the MCP tool enqueue uses (fleet.Enqueue). With
-// the placement spawn, the front starts one run of the manager on the Task
-// of the manager, and the manager seats each member with spawn_task, so the
+// per seat on the queue of the pool of the seat, as the operator, through
+// the publish that the MCP tool enqueue uses (fleet.EnqueueFor). With the
+// placement spawn, the front starts one run of the manager on the Task of
+// the manager, and the manager seats each member with spawn_task, so the
 // seats are child runs of the manager run and carry its batch.
 
 import (
@@ -278,8 +278,8 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 	switch placement {
 	case PlacementQueue:
 		for _, m := range rec.Members {
-			if _, err := fleet.Queue(s.a.Config(), m.Agent); err != nil {
-				return nil, fmt.Errorf("%w: the seat %s cannot reach a queue: %s", fw.ErrInvalidRequest, m.Handle, strings.TrimPrefix(err.Error(), "fleet: "))
+			if _, err := fleet.QueueFor(s.asFront(ctx), s.a, m.Agent, m.Pool); err != nil {
+				return nil, fmt.Errorf("%w: the seat %s cannot reach a queue: %s", fw.ErrInvalidRequest, m.Handle, strings.TrimPrefix(strings.TrimPrefix(err.Error(), "fleet: "), fw.ErrInvalidRequest.Error()+": "))
 			}
 		}
 	case PlacementSpawn:
@@ -339,31 +339,34 @@ func (s *Store) land(ctx context.Context, id string, msgs ...Message) {
 	}
 }
 
-// enqueue puts one run request per seat on the queue of its agent, as the
-// operator, with the batch of the bridge, the seat in the metadata, and
-// the instructions of the bridge. inputs holds the input of the run of a
-// seat by handle (inputOf). A seat whose request does not reach the queue
-// gets a line in the channel.
+// enqueue puts one run request per seat on the queue of the pool of the
+// seat, as the operator, with the batch of the bridge, the seat in the
+// metadata, and the instructions of the bridge: the intake of its pool,
+// else the queue of its agent (fleet.QueueFor). inputs holds the input of
+// the run of a seat by handle (inputOf). A seat whose request does not
+// reach the queue gets a line in the channel.
 func (s *Store) enqueue(ctx context.Context, rec *record, seats []Member, inputs map[string]string) {
-	byAgent := map[string][]fw.RunRequest{}
-	var order []string
-	handles := map[string][]string{}
+	// The seats of one agent on one pool share a queue.
+	type place struct{ agent, pool string }
+	byPlace := map[place][]fw.RunRequest{}
+	var order []place
+	handles := map[place][]string{}
 	for _, m := range seats {
+		at := place{m.Agent, m.Pool}
 		req := s.requestOf(ctx, rec, m, inputOf(m, inputs))
-		if _, ok := byAgent[m.Agent]; !ok {
-			order = append(order, m.Agent)
+		if _, ok := byPlace[at]; !ok {
+			order = append(order, at)
 		}
-		byAgent[m.Agent] = append(byAgent[m.Agent], req)
-		handles[m.Agent] = append(handles[m.Agent], m.Handle)
+		byPlace[at] = append(byPlace[at], req)
+		handles[at] = append(handles[at], m.Handle)
 	}
-	for _, agent := range order {
-		reqs := byAgent[agent]
-		_, sent, err := fleet.Enqueue(s.asFront(ctx), s.a, agent, reqs)
+	for _, at := range order {
+		queue, sent, err := fleet.EnqueueFor(s.asFront(ctx), s.a, at.agent, at.pool, byPlace[at])
 		if err == nil {
 			continue
 		}
-		s.log.Warn("bridges: a seat did not reach its queue", "bridge", rec.ID, "agent", agent, "error", err)
-		for _, h := range handles[agent][sent:] {
+		s.log.Warn("bridges: a seat did not reach its queue", "bridge", rec.ID, "agent", at.agent, "pool", at.pool, "queue", queue, "error", err)
+		for _, h := range handles[at][sent:] {
 			s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The front failed to put the job of %s on its queue: %s", h, oneLine(strings.TrimPrefix(err.Error(), "fleet: "), 300))))
 		}
 	}
@@ -378,7 +381,7 @@ func inputOf(m Member, inputs map[string]string) string {
 	return m.Task
 }
 
-// requestOf is the run request of a seat on the queue of its agent, with
+// requestOf is the run request of a seat on the queue of its pool, with
 // the input of the run.
 func (s *Store) requestOf(ctx context.Context, rec *record, m Member, input string) fw.RunRequest {
 	seat := rec.seat(m.Handle)

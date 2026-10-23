@@ -3,9 +3,9 @@
 // workbench.sources in fw.yaml. A webhook source takes events on POST
 // /v1/sources/<name>, and a poll source reads an HTTP endpoint at an
 // interval. Each source renders its templates over each event into a run
-// request of its agent profile and puts it on the intake queue of that
-// profile through fleet.Enqueue, the path of the MCP tool enqueue, so the
-// fleet wakes the sleeping Tasks that serve the profile.
+// request of its agent profile and puts it on the queue of the pool that
+// runs that profile through fleet.EnqueueFor, the path of the MCP tool
+// enqueue, so the fleet wakes the sleeping Tasks that take the queue.
 //
 // The same event never makes a second run within the window of its
 // source. Before the publish, the source claims the key of the event in a
@@ -147,7 +147,10 @@ type Sources struct {
 	closeOnce sync.Once
 }
 
-// source is one running source.
+// source is one running source. queue is the queue of its jobs when the
+// sources started (fleet.QueueFor), whose dead letter the redrive reads.
+// moved is the queue that the last publish took, so the log names a move
+// to another queue once (noteQueue).
 type source struct {
 	cfg    Source
 	tpl    *templates
@@ -155,6 +158,9 @@ type source struct {
 	verify verifier // a webhook source
 	poll   *poller  // a poll source
 	count  counter
+
+	mu    sync.Mutex
+	moved string
 }
 
 // newSources builds the sources of an agent from a configuration that
@@ -171,7 +177,8 @@ func newSources(ctx context.Context, a *fw.Agent, list []Source, st store) (*Sou
 		if err != nil {
 			return nil, fmt.Errorf("sources: workbench.sources.%s: %w", c.Name, err)
 		}
-		queue, err := fleet.Queue(a.Config(), c.Agent)
+		// The fleet starts before the sources, so it knows the pools.
+		queue, err := fleet.QueueFor(ctx, a, c.Agent, c.Pool)
 		if err != nil {
 			return nil, fmt.Errorf("sources: workbench.sources.%s: %w", c.Name, err)
 		}
@@ -263,15 +270,39 @@ func (s *Sources) Stats() []Stat {
 	return out
 }
 
+// noteQueue logs once for each queue that a publish of src took in place
+// of the queue of the start of the sources: a pool that runs the agent of
+// the source came or went since. The redrive reads the dead letter of the
+// queue of the start until the front starts again.
+func (s *Sources) noteQueue(src *source, queue string) {
+	src.mu.Lock()
+	log := queue != src.queue && queue != src.moved
+	src.moved = queue
+	src.mu.Unlock()
+	if log {
+		s.log.Warn("sources: the jobs of a source go to another queue than at the start; the redrive reads the dead letter of the first queue until the front starts again",
+			"source", src.cfg.Name, "agent", src.cfg.Agent, "queue", queue, "start", src.queue)
+	}
+}
+
+// orQueue returns queue, else the queue of the start.
+func orQueue(queue, start string) string {
+	if queue != "" {
+		return queue
+	}
+	return start
+}
+
 // delivery is what one delivery of events did. Failed counts the events
 // that made no run because the store or the queue failed, and err is that
-// failure.
+// failure. queue is the queue that the publish took, empty without one.
 type delivery struct {
 	accepted   []rendered
 	duplicates []rendered
 	busy       []rendered
 	failed     int
 	err        error
+	queue      string
 }
 
 // deliver claims the key of each event, publishes a run request for each
@@ -319,7 +350,11 @@ func (s *Sources) deliver(ctx context.Context, src *source, items []rendered) de
 		for _, it := range claimed[start:stop] {
 			reqs = append(reqs, it.req)
 		}
-		_, sent, err := fleet.Enqueue(ctx, s.a, src.cfg.Agent, reqs)
+		queue, sent, err := fleet.EnqueueFor(ctx, s.a, src.cfg.Agent, src.cfg.Pool, reqs)
+		if queue != "" {
+			d.queue = queue
+			s.noteQueue(src, queue)
+		}
 		for j := start; j < start+sent; j++ {
 			d.accepted = append(d.accepted, claimed[j])
 			if ferr := s.store.Finish(end, tickets[j]); ferr != nil {
@@ -339,7 +374,7 @@ func (s *Sources) deliver(ctx context.Context, src *source, items []rendered) de
 			}
 			d.failed += len(claimed) - (start + sent)
 			if d.err == nil {
-				d.err = fmt.Errorf("sources: the queue %s did not take the run requests: %w", src.queue, err)
+				d.err = fmt.Errorf("sources: the queue %s did not take the run requests: %w", orQueue(queue, src.queue), err)
 			}
 			break
 		}
@@ -353,7 +388,7 @@ func (s *Sources) deliver(ctx context.Context, src *source, items []rendered) de
 		s.log.Warn("sources: events made no run", "source", src.cfg.Name, "failed", d.failed, "accepted", len(d.accepted), "error", d.err)
 	}
 	if len(d.accepted) > 0 || len(d.duplicates) > 0 || len(d.busy) > 0 {
-		s.log.Info("sources: events delivered", "source", src.cfg.Name, "queue", src.queue,
+		s.log.Info("sources: events delivered", "source", src.cfg.Name, "queue", orQueue(d.queue, src.queue),
 			"accepted", len(d.accepted), "duplicate", len(d.duplicates), "busy", len(d.busy))
 	}
 	return d

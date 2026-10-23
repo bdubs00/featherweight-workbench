@@ -160,6 +160,7 @@ func (s *Sources) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), deliverTimeout)
 	defer cancel()
 	d := s.deliver(ctx, src, items)
+	ans.Queue = orQueue(d.queue, src.queue)
 	for _, it := range d.accepted {
 		ans.Runs = append(ans.Runs, runReq{Event: it.index, Key: it.key, IdempotencyKey: it.req.IdempotencyKey, Title: it.req.Metadata[fw.MetaTitle]})
 	}

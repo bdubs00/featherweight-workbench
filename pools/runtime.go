@@ -16,6 +16,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/ax"
 	"github.com/bdubs00/featherweight-kernel/memory"
+	v1alpha1 "github.com/google/ax/pkg/apis/v1alpha1"
 )
 
 // Bounds of a runtime pool. A person sets the replicas and the overrides,
@@ -31,13 +32,14 @@ const (
 // Runtime is the entry of a runtime pool in the store of the front. Name
 // names the pool and its Tasks, as for a pool of the file. Template names
 // the entry of workbench.templates that the pool renders from, and Agent
-// the profile whose queue its workers take; the profile itself lives in
+// the profile whose jobs its workers take; the profile itself lives in
 // the overlay of the pool. Intake is the queue of the workers, empty for
-// the default of the front. Revision is free text that replaces every Task
-// when it changes. Generation orders the configurations of the pool: the
-// store sets it to 1 at the create and raises it with every change of what
-// the workers run, and the pool adds the generation of its template
-// (Template.apply). A change of Replicas or Deleting keeps it.
+// the default of a pool (defaultIntake). Revision is free text that
+// replaces every Task when it changes. Generation orders the
+// configurations of the pool: the store sets it to 1 at the create and
+// raises it with every change of what the workers run, and the pool adds
+// the generation of its template (Template.apply). A change of Replicas
+// or Deleting keeps it.
 //
 // Env holds the variables that the pool sets over its template, each with
 // a value: a runtime pool copies no variable of the front. Resources holds
@@ -64,6 +66,24 @@ type Runtime struct {
 type RuntimeEnv struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
+}
+
+// NameAfter returns the name of a pool named after the agent: the name of
+// the agent in lowercase, with a hyphen for each character that a pool name
+// does not take. agent_put names the runtime pool of a new agent so. It
+// reports false when no such name fits.
+func NameAfter(agent string) (string, bool) {
+	b := []byte(strings.ToLower(agent))
+	for i, c := range b {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9') {
+			b[i] = '-'
+		}
+	}
+	name := strings.Trim(string(b), "-")
+	if name == "" || v1alpha1.ValidateName(name) != nil {
+		return "", false
+	}
+	return name, true
 }
 
 // quantity matches a quantity of a resource, such as 500m, 2, or 1Gi.

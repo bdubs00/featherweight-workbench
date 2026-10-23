@@ -193,10 +193,10 @@ func (s *Store) addMember(ctx context.Context, id string, spec SeatSpec, by *fw.
 }
 
 // place starts a run for each seat in the way of its bridge: a request on
-// the queue of its agent, or in a spawn bridge one follow-up per seat to
-// the manager run that asks it to seat the member. A follow-up starts a
-// new turn of a manager run that finished. A spawn bridge whose manager
-// run the view does not hold gets a new manager run for the seats
+// the queue of its pool (enqueue), or in a spawn bridge one follow-up per
+// seat to the manager run that asks it to seat the member. A follow-up
+// starts a new turn of a manager run that finished. A spawn bridge whose
+// manager run the view does not hold gets a new manager run for the seats
 // (newManager). inputs holds the input of the run of a seat by handle
 // (inputOf).
 func (s *Store) place(ctx context.Context, rec *record, seats []Member, inputs map[string]string) error {

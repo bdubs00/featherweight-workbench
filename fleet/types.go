@@ -180,6 +180,20 @@ type PoolView interface {
 	Pools(ctx context.Context) ([]pools.Status, error)
 }
 
+// QueueView is a View that places the jobs of its pools (enqueue.go).
+// PoolQueue returns the intake of the pool whose workers take a job of the
+// profile agent: the pool of the name pool, else the pool that runs the
+// profile, the pool whose agent it is first. It reports false when pool is
+// empty and no pool runs the profile, so the job goes to the queue of the
+// profile (Queue). Whom the caller can see changes nothing: the place of a
+// job is the same for every caller.
+type QueueView interface {
+	PoolQueue(ctx context.Context, agent, pool string) (queue string, found bool, err error)
+}
+
+// The fleet places the jobs of its pools.
+var _ QueueView = (*Fleet)(nil)
+
 // BatchRuns is the answer of BatchView.Batch.
 //
 // Unknown counts the runs of the view that have no identity yet, because

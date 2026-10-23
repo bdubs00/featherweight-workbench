@@ -129,7 +129,9 @@ func (ft *fakeTasks) count(actor string) int {
 func TestSuspendIdleTasksAndWakeForJobs(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "team")
 	t.Setenv("FW_API_TOKEN", "fleet-secret")
-	// Enqueue reads the intake prefix from the configuration of the agent.
+	// Enqueue reads the intake prefix from the configuration of the agent,
+	// and the fleet of the test takes the same prefix, so a wake finds the
+	// Tasks of no pool that read <prefix>.<agent>.
 	t.Setenv(EnvIntake, "fw.jobs")
 	ctx := context.Background()
 	bus := fw.NewMemBus()
@@ -142,6 +144,7 @@ func TestSuspendIdleTasksAndWakeForJobs(t *testing.T) {
 	front := newMember(t, bus, "front", func(cfg *fw.Config, fc *Config) {
 		fc.Atespaces = []string{"team"}
 		fc.Egress = "fw.events"
+		fc.Intake = "fw.jobs"
 		fc.Interval = 100 * time.Millisecond
 		fc.SuspendAfter = &after
 		cfg.AX.Server = ax.addr
@@ -209,6 +212,7 @@ func TestWakeForTeachesTheFrontAboutUnknownTasks(t *testing.T) {
 	front := newMember(t, bus, "front", func(cfg *fw.Config, fc *Config) {
 		fc.Atespaces = []string{"team"}
 		fc.Egress = "fw.events"
+		fc.Intake = "fw.jobs"
 		fc.Interval = 100 * time.Millisecond
 		cfg.AX.Server = ax.addr
 		cfg.AX.Router = strings.TrimPrefix(tasks.srv.URL, "http://")

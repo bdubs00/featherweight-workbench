@@ -66,7 +66,9 @@ const (
 // HTTP endpoint at an interval. Any other source is a webhook that serves
 // POST /v1/sources/<name>.
 //
-// Agent names the profile, and so the queue "<workbench.fleet.intake>.<agent>".
+// Agent names the profile. Its jobs go to the intake of the pool that runs
+// it, else to the queue "<workbench.fleet.intake>.<agent>" (fleet.QueueFor).
+// Pool names that pool, for an agent that several pools run.
 // Items is a dotted path to the array of events in the body or in the
 // answer of the poll; empty means the body itself, one object or an array
 // of objects. Input, Title, Metadata, and Key are Go templates over one
@@ -77,6 +79,7 @@ const (
 type Source struct {
 	Name      string            `yaml:"name"`
 	Agent     string            `yaml:"agent"`
+	Pool      string            `yaml:"pool"`
 	Auth      Auth              `yaml:"auth"`
 	Poll      *Poll             `yaml:"poll"`
 	Items     string            `yaml:"items"`
@@ -188,7 +191,7 @@ func Load(cfg *fw.Config) ([]Source, error) {
 
 // withDefaults fills the defaults of one source.
 func withDefaults(s Source) Source {
-	s.Name, s.Agent = strings.TrimSpace(s.Name), strings.TrimSpace(s.Agent)
+	s.Name, s.Agent, s.Pool = strings.TrimSpace(s.Name), strings.TrimSpace(s.Agent), strings.TrimSpace(s.Pool)
 	s.Auth.Mode = strings.ToLower(strings.TrimSpace(s.Auth.Mode))
 	s.Auth.Secret, s.Auth.Header = strings.TrimSpace(s.Auth.Secret), strings.TrimSpace(s.Auth.Header)
 	if s.Auth.Mode == AuthHMAC && s.Auth.Header == "" {

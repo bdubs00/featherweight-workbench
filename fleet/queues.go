@@ -1,18 +1,20 @@
 package fleet
 
 // This file reads the intake queues of the workers (docs/ARCHITECTURE.md
-// section 4.13). A worker that runs the profile <agent> consumes the queue
-// "<intake>.<agent>" through one durable consumer that every worker of the
-// profile shares. At every interval the front reads, for each queue of a
-// profile that it knows, the jobs that no worker took yet and the jobs that
-// a worker holds and has not acknowledged, from the server of the bus. It
-// also counts the dead letters of each queue, the records that a worker
-// sends to "<queue>.dead" for a job that cannot start or that failed on its
-// last attempt. When jobs wait and no awake Task that takes the queue has
-// room, the front wakes the sleeping Tasks that take it, as it does after
-// its own enqueue (suspend.go): a Task of a pool takes the intake of its
-// pool alone, and a Task of no pool the queue of each profile that it
-// serves. The metrics of the front show the same numbers (metrics.go).
+// section 4.13). The workers of a pool consume the intake of their pool,
+// and a worker of no pool that runs the profile <agent> consumes the queue
+// "<intake>.<agent>", each queue through one durable consumer that its
+// workers share. At every interval the front reads, for the intake of each
+// pool and the queue of each profile that it knows, the jobs that no worker
+// took yet and the jobs that a worker holds and has not acknowledged, from
+// the server of the bus. It also counts the dead letters of each queue, the
+// records that a worker sends to "<queue>.dead" for a job that cannot start
+// or that failed on its last attempt. When jobs wait and no awake Task that
+// takes the queue has room, the front wakes the sleeping Tasks that take
+// it, as it does after its own enqueue (suspend.go): a Task of a pool takes
+// the intake of its pool alone, and a Task of no pool the queue of each
+// profile that it serves. The metrics of the front show the same numbers
+// (metrics.go).
 
 import (
 	"context"
@@ -22,6 +24,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
 // DeadSuffix ends the subject of the dead letters of a queue:
@@ -190,10 +193,10 @@ func (f *Fleet) queueLoop() {
 	}
 }
 
-// queueAgents lists the profiles whose queues the front reads: the
-// profiles of this process, which runs the same configuration as the
-// workers, and the profiles that the members of the view serve. A name
-// that cannot be a token of a subject is left out.
+// queueAgents lists the profiles whose queue <intake>.<agent> the front
+// reads: the profiles of this process, which runs the same configuration
+// as the workers of no pool, and the profiles that the members of the view
+// serve. A name that cannot be a token of a subject is left out.
 func (f *Fleet) queueAgents() []string {
 	set := map[string]bool{}
 	for _, p := range f.a.Profiles() {
@@ -218,14 +221,72 @@ func (f *Fleet) queueAgents() []string {
 	return out
 }
 
+// queueRef is a queue that the front reads, with the profile whose jobs it
+// holds.
+type queueRef struct{ queue, agent string }
+
+// queueList lists the queues that the front reads, by name: the intake of
+// each pool that the front keeps, with the agent of the pool, and the queue
+// <intake>.<agent> of each profile that it knows (queueAgents), which a
+// Task of no pool takes. A queue that both name holds the jobs of the agent
+// of its pool.
+func (f *Fleet) queueList() []queueRef {
+	agentOf := map[string]string{}
+	for _, ag := range f.queueAgents() {
+		agentOf[f.intake+"."+ag] = ag
+	}
+	if p := f.platform; p != nil {
+		p.mu.Lock()
+		for queue, ag := range p.poolQueues() {
+			agentOf[queue] = ag
+		}
+		p.mu.Unlock()
+	}
+	out := make([]queueRef, 0, len(agentOf))
+	for queue, ag := range agentOf {
+		out = append(out, queueRef{queue: queue, agent: ag})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].queue < out[j].queue })
+	return out
+}
+
+// poolQueues returns the agent of each pool that the front keeps, by the
+// intake of the pool: the pools of the file and the runtime pools of the
+// last pass, as intakes names them. Of two pools that share an intake on
+// purpose, the first names the agent. The caller holds p.mu.
+func (p *platform) poolQueues() map[string]string {
+	out := map[string]string{}
+	add := func(pl *pools.Pool) {
+		if _, ok := out[pl.Intake]; !ok && pl.Intake != "" && pl.Agent != "" {
+			out[pl.Intake] = pl.Agent
+		}
+	}
+	files := map[string]bool{}
+	for _, pl := range p.pools {
+		files[pl.Name] = true
+		add(pl)
+	}
+	names := make([]string, 0, len(p.rt))
+	for name := range p.rt {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if rt := p.rt[name]; !files[name] && rt.base != nil {
+			add(rt.base)
+		}
+	}
+	return out
+}
+
 // readQueues reads the queues once, keeps their state for the metrics and
 // the tool batch, and wakes the Tasks for the jobs that wait.
 func (f *Fleet) readQueues(ctx context.Context, now time.Time) {
 	q := f.queues
-	agents := f.queueAgents()
-	names := make([]string, len(agents))
-	for i, ag := range agents {
-		names[i] = f.intake + "." + ag
+	refs := f.queueList()
+	names := make([]string, len(refs))
+	for i, r := range refs {
+		names[i] = r.queue
 	}
 	f.subscribeDead(names)
 	var snap queueSnapshot
@@ -252,8 +313,9 @@ func (f *Fleet) readQueues(ctx context.Context, now time.Time) {
 	q.mu.Lock()
 	states := make([]queueState, 0, len(names))
 	next := make(map[string]queueState, len(names))
-	for i, name := range names {
-		st := queueState{queue: name, agent: agents[i]}
+	for _, r := range refs {
+		name := r.queue
+		st := queueState{queue: name, agent: r.agent}
 		if d, ok := depths[name]; ok {
 			st.depthKnown, st.consumer, st.pending, st.ackPending = true, d.consumer, d.pending, d.ackPending
 			st.deadStored = d.deadStored

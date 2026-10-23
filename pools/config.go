@@ -71,14 +71,16 @@ const (
 // atespace of the Tasks; it defaults to the only atespace of
 // workbench.fleet.atespaces. Replicas is the number of Tasks, and it has
 // no default. Image is the worker image by digest. Agent is the profile
-// of fw.agents whose queue the workers take; it defaults to the only
-// profile. Intake is that queue, "<workbench.fleet.intake>.<agent>" by
-// default. Revision is free text: a new value replaces every Task, for
-// example to start every worker again with a new Workspace. Generation
-// orders the configurations of the pool: a front never replaces a Task of
-// a higher generation than its own, so a replica with an older
-// configuration leaves the pool to the newer one. 0 keeps the order of
-// the hash alone.
+// of fw.agents whose jobs the workers take; it defaults to the only
+// profile. Intake is the queue of the workers. By default it is a queue of
+// the pool alone: "<workbench.fleet.intake>.<agent>" for a pool named after
+// its agent (NameAfter), such as a runtime pool of agent_put, and
+// "<workbench.fleet.intake>.<name>" for any other pool (defaultIntake).
+// Revision is free text: a new value replaces every Task, for example to
+// start every worker again with a new Workspace. Generation orders the
+// configurations of the pool: a front never replaces a Task of a higher
+// generation than its own, so a replica with an older configuration
+// leaves the pool to the newer one. 0 keeps the order of the hash alone.
 //
 // Env holds the variables of the workers, each with a value or with
 // FromEnv, the name of a variable of the front, so the file holds no
@@ -116,6 +118,10 @@ type Pool struct {
 	warnings []string
 	front    Front   // what the pool took from the front, for a render with an overlay
 	overlay  Overlay // the overlay that WithOverlay merged, empty for the configuration alone
+
+	// intakeSet is true when the configuration sets Intake, so the intake
+	// is no default (defaultIntake).
+	intakeSet bool
 
 	// label names the pool in an error in place of its position in
 	// workbench.pools: a template or a runtime pool. lenient leaves out
@@ -308,10 +314,47 @@ func LoadAll(cfg *fw.Config, front Front) ([]*Pool, []*Template, error) {
 		}
 		problems = append(problems, p.complete(front)...)
 	}
+	problems = append(problems, SharedIntakes(list)...)
 	if len(problems) > 0 {
 		return nil, nil, fmt.Errorf("pools: %s", strings.Join(problems, "; "))
 	}
 	return list, templates, nil
+}
+
+// SharedIntakes lists the pools of list whose intake is the intake of an
+// earlier pool of list. The workers of such pools take the jobs of each
+// other, so a job can reach a worker that runs another profile. Two pools
+// that both set the same intake share the queue on purpose, and that is no
+// problem. Load checks the pools of the file with it, and the doctor checks
+// them with the runtime pools.
+func SharedIntakes(list []*Pool) []string {
+	var problems []string
+	first := map[string]*Pool{}
+	for _, p := range list {
+		if p == nil || p.Intake == "" {
+			continue
+		}
+		q, ok := first[p.Intake]
+		if !ok {
+			first[p.Intake] = p
+			continue
+		}
+		if q.intakeSet && p.intakeSet {
+			continue
+		}
+		// A person sets no intake on a runtime pool, so the pool of the
+		// file takes another one.
+		fix := fmt.Sprintf("set intake to a queue of its own on one of them, or set intake %s on both to share the queue on purpose", p.Intake)
+		switch {
+		case p.runtime != nil && q.runtime == nil:
+			fix = "set intake to a queue of its own on " + q.key()
+		case q.runtime != nil && p.runtime == nil:
+			fix = "set intake to a queue of its own on " + p.key()
+		}
+		problems = append(problems, fmt.Sprintf("%s: the intake %s is the intake of %s too, so the workers of both pools would take the jobs of each other; %s",
+			p.key(), p.Intake, q.key(), fix))
+	}
+	return problems
 }
 
 // decode reads workbench.pools strictly: a key that a pool does not know
@@ -396,6 +439,7 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // its workers, and lists its problems.
 func (p *Pool) complete(front Front) []string {
 	p.front = front
+	p.intakeSet = strings.TrimSpace(p.Intake) != ""
 	var problems []string
 	add := func(format string, args ...any) {
 		problems = append(problems, p.key()+": "+fmt.Sprintf(format, args...))
@@ -666,15 +710,13 @@ func (p *Pool) render(front Front) []string {
 	case len(blind) > 0:
 		add("the static token cannot see the runs of the agent %s, so the front cannot tell that a worker is idle before it replaces or deletes it; add kind:token to fw.access.admins", strings.Join(blind, ", "))
 	}
-	if p.Intake == "" && p.Agent != "" {
-		prefix := strings.TrimSpace(front.Intake)
-		if prefix == "" {
-			prefix = DefaultIntake
-		}
-		p.Intake = prefix + "." + p.Agent
+	// The default intake holds the name of the pool, so a pool without a
+	// name, which complete refuses, has none.
+	if p.Intake == "" && p.Agent != "" && p.Name != "" {
+		p.Intake = defaultIntake(front.Intake, p.Name, p.Agent)
 	}
 	p.Intake = strings.TrimSpace(p.Intake)
-	if !subject(p.Intake) {
+	if p.Name != "" && !subject(p.Intake) {
 		add("intake %q is not a subject: it holds an empty token, a space, or a wildcard", p.Intake)
 	}
 	if len(problems) > 0 {
@@ -727,6 +769,23 @@ func tokenBlind(c *fw.Config) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// defaultIntake returns the intake of a pool that sets none, a queue that
+// no other pool takes by default: "<prefix>.<agent>" for a pool named
+// after its agent (NameAfter), such as a runtime pool of agent_put, and
+// "<prefix>.<pool>" for any other pool, such as the pool crew-reviewer of
+// the agent reviewer. The prefix is workbench.fleet.intake, else
+// DefaultIntake.
+func defaultIntake(prefix, pool, agent string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		prefix = DefaultIntake
+	}
+	if name, ok := NameAfter(agent); ok && name == pool {
+		return prefix + "." + agent
+	}
+	return prefix + "." + pool
 }
 
 // subject reports whether s is a subject without wildcards.

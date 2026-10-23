@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -11,7 +12,9 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
+	"github.com/bdubs00/featherweight-workbench/internal/bucket"
 	v1alpha1 "github.com/google/ax/pkg/apis/v1alpha1"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // fakeQueues stands for the server of a NATS bus: the consumers of the
@@ -424,9 +427,9 @@ func TestDoctorNamesTheQueues(t *testing.T) {
 }
 
 // intakeBlock is two pools that hold the profile reviewer with different
-// intakes: the pool crew-reviewer takes the queue of reviewer, and the
-// pool manager holds reviewer for its child Tasks and takes the queue of
-// the manager.
+// intakes: the pool crew-reviewer runs reviewer on the queue of the pool,
+// fw.jobs.crew-reviewer, and the pool manager holds reviewer for its child
+// Tasks and takes the queue of the manager, fw.jobs.manager.
 const intakeBlock = `
 pools:
   - name: crew-reviewer
@@ -456,12 +459,16 @@ pools:
         reviewer: {description: Reviews a change.}
 `
 
-// A job on the queue of reviewer wakes the Task of the pool whose intake
-// is that queue, and not the Task of the pool manager, which also holds
-// the profile, nor a child Task of the manager, which names the pool of
-// its parent. A Task of no pool that serves the profile wakes as before.
-// The wake after an enqueue and the wake on queue depth follow the same
-// rule, and so does the room of an awake Task.
+// A job for reviewer goes to the intake of the pool crew-reviewer, so the
+// wake after the enqueue reaches the Task of that pool alone: not the Task
+// of the pool manager, which also holds the profile, nor a child Task of
+// the manager, which names the pool of its parent, nor a Task of no pool
+// that serves reviewer, which reads fw.jobs.reviewer. The front reads the
+// intake of each pool beside the queue of each profile that it knows: the
+// jobs that wait on fw.jobs.crew-reviewer wake the Task of the pool, and
+// the jobs that others publish on fw.jobs.reviewer wake the Task of no
+// pool. The room of an awake Task, the job record, and the metrics follow
+// the same queues.
 func TestWakeFollowsTheIntakeOfThePool(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "team")
 	t.Setenv("FW_API_TOKEN", "fleet-secret")
@@ -470,6 +477,7 @@ func TestWakeFollowsTheIntakeOfThePool(t *testing.T) {
 	ctx := context.Background()
 	q := &fakeQueues{}
 	withBusServer(t, q, nil)
+	useIndex(t, bucket.NewMem(IndexBucket))
 	ax := newPoolAX(t)
 	tasks := newFakeTasks(t)
 	pooled := poolFront(t, ax, strings.TrimPrefix(tasks.srv.URL, "http://"), intakeBlock)
@@ -478,6 +486,8 @@ func TestWakeFollowsTheIntakeOfThePool(t *testing.T) {
 		fc.Intake, fc.WakeOnQueue = "fw.jobs", &on
 		pooled(cfg, fc)
 	})
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(NewCollector(front.a))
 	eventually(t, "both pools run their Task", func() bool {
 		a, b := ax.get("team", "crew-reviewer-0"), ax.get("team", "manager-0")
 		return a != nil && b != nil && a.Status.Phase == "Running" && b.Status.Phase == "Running"
@@ -518,9 +528,10 @@ func TestWakeFollowsTheIntakeOfThePool(t *testing.T) {
 		})
 	}
 	// An idle awake manager and its child have room for the queue of the
-	// manager, not for the queue of reviewer.
+	// manager, not for the queue of reviewer nor for the intake of the pool
+	// crew-reviewer.
 	sleep("team/crew-reviewer-0", "team/loner")
-	if room := front.f.platform.roomFor(time.Now(), front.f.interval, "fw.jobs"); !room["fw.jobs.manager"] || room["fw.jobs.reviewer"] {
+	if room := front.f.platform.roomFor(time.Now(), front.f.interval, "fw.jobs"); !room["fw.jobs.manager"] || room["fw.jobs.reviewer"] || room["fw.jobs.crew-reviewer"] {
 		t.Fatalf("the room of the awake manager = %v", room)
 	}
 	sleep(names...)
@@ -531,34 +542,62 @@ func TestWakeFollowsTheIntakeOfThePool(t *testing.T) {
 		}
 		return out
 	}
+	// woke checks that the Tasks of want, and no other Task, had one more
+	// status read after before.
+	woke := func(what string, before map[string]int, want ...string) {
+		t.Helper()
+		after := reads()
+		for _, n := range names {
+			if wanted := slices.Contains(want, n); (after[n] > before[n]) != wanted {
+				t.Fatalf("%s: %v before, %v after; want a wake of %v alone", what, before, after, want)
+			}
+		}
+	}
 	before := reads()
-	if _, sent, err := Enqueue(ctx, front.a, "reviewer", []fw.RunRequest{{Input: "review this"}}); err != nil || sent != 1 {
-		t.Fatalf("Enqueue = %d, %v", sent, err)
+	queue, sent, err := Enqueue(ctx, front.a, "reviewer", []fw.RunRequest{{Input: "review this", Principal: "ada", Metadata: map[string]string{fw.MetaBatch: "job-1"}}})
+	if err != nil || sent != 1 || queue != "fw.jobs.crew-reviewer" {
+		t.Fatalf("Enqueue = %s, %d, %v", queue, sent, err)
 	}
 	eventually(t, "the Task of the pool of the queue wakes", func() bool {
-		return tasks.count("team/crew-reviewer-0") == before["team/crew-reviewer-0"]+1 && tasks.count("team/loner") == before["team/loner"]+1
+		return tasks.count("team/crew-reviewer-0") == before["team/crew-reviewer-0"]+1
 	})
 	time.Sleep(200 * time.Millisecond)
-	after := reads()
-	if after["team/manager-0"] != before["team/manager-0"] || after["team/manager-0-01m5gvzyj4x8z8pw1gbxjryyb7"] != before["team/manager-0-01m5gvzyj4x8z8pw1gbxjryyb7"] || after["team/crew-reviewer-0"] != before["team/crew-reviewer-0"]+1 {
-		t.Fatalf("the wakes of one job: %v before, %v after", before, after)
+	woke("the wake after the enqueue", before, "team/crew-reviewer-0")
+	if rec, ok, _ := front.f.jobs.get(ctx, jobKey{batch: "job-1", subject: "ada"}); !ok || len(rec.Queues["fw.jobs.crew-reviewer"]) != 1 || len(rec.Queues) != 1 {
+		t.Fatalf("the job record = %+v, %v", rec, ok)
 	}
 
-	// The same job waits in the queue while every Task sleeps again: the
-	// wake on queue depth reaches the same Tasks once their hold is over.
+	// Jobs wait on the intake of the pool while every Task sleeps again:
+	// the front reads that queue, counts its jobs, and wakes the Task of
+	// the pool once its hold is over.
+	sleep(names...)
+	time.Sleep(holdIntervals * front.f.interval)
+	before = reads()
+	q.set(func(q *fakeQueues) {
+		q.pending = func(int) map[string]uint64 { return map[string]uint64{"fw.jobs.crew-reviewer": 2} }
+	})
+	eventually(t, "the queue of the pool wakes its Task", func() bool {
+		return tasks.count("team/crew-reviewer-0") > before["team/crew-reviewer-0"]
+	})
+	if got := gather(t, reg); got["fw_fleet_queue_pending{queue=fw.jobs.crew-reviewer}"] != 2 {
+		t.Fatalf("the metrics = %v", got)
+	}
+	q.set(func(q *fakeQueues) { q.pending = nil })
+	waitReads(t, q, 3)
+	woke("the wake on the intake of the pool", before, "team/crew-reviewer-0")
+
+	// Jobs that others publish on the queue of the profile wake the Task
+	// of no pool that reads it, and no Task of a pool.
 	sleep(names...)
 	time.Sleep(holdIntervals * front.f.interval)
 	before = reads()
 	q.set(func(q *fakeQueues) {
 		q.pending = func(int) map[string]uint64 { return map[string]uint64{"fw.jobs.reviewer": 1} }
 	})
-	eventually(t, "the queue wakes the Task of the pool of the queue", func() bool {
-		return tasks.count("team/crew-reviewer-0") > before["team/crew-reviewer-0"]
+	eventually(t, "the queue of the profile wakes the Task of no pool", func() bool {
+		return tasks.count("team/loner") > before["team/loner"]
 	})
 	q.set(func(q *fakeQueues) { q.pending = nil })
 	waitReads(t, q, 3)
-	after = reads()
-	if after["team/manager-0"] != before["team/manager-0"] || after["team/manager-0-01m5gvzyj4x8z8pw1gbxjryyb7"] != before["team/manager-0-01m5gvzyj4x8z8pw1gbxjryyb7"] {
-		t.Fatalf("the wakes on queue depth: %v before, %v after", before, after)
-	}
+	woke("the wake on the queue of the profile", before, "team/loner")
 }

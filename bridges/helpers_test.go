@@ -210,8 +210,8 @@ func eventually(t *testing.T, what string, cond func() bool) {
 }
 
 // fakeView is a view of the fleet that a test states: the runs of the
-// other members, the members, and a fake member that every forward
-// reaches.
+// other members, the members, the queues of the pools, and a fake member
+// that every forward reaches.
 type fakeView struct {
 	mu      sync.Mutex
 	runs    map[string]*fw.Run
@@ -220,6 +220,33 @@ type fakeView struct {
 	// settled is what Settled answers: whether the view holds every run of
 	// the fleet (fleet.SettledView).
 	settled bool
+	// queues holds the intake of a pool for the jobs of an agent, by
+	// "<agent>@<pool>", and by "<agent>@" for the pool that runs the agent
+	// (fleet.QueueView).
+	queues map[string]string
+}
+
+// PoolQueue places a job as the queues of the view say. A pool that they
+// do not name for the agent is an error, as on a fleet.
+func (v *fakeView) PoolQueue(_ context.Context, agent, pool string) (string, bool, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	queue, ok := v.queues[agent+"@"+pool]
+	if !ok && pool != "" {
+		return "", false, fmt.Errorf("%w: the pool %s does not run the agent %s", fw.ErrInvalidRequest, pool, agent)
+	}
+	return queue, ok, nil
+}
+
+// pool states that the pool takes the jobs of the agent on queue; an empty
+// pool states the pool that runs the agent.
+func (v *fakeView) pool(agent, pool, queue string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.queues == nil {
+		v.queues = map[string]string{}
+	}
+	v.queues[agent+"@"+pool] = queue
 }
 
 func (v *fakeView) Settled() bool {
