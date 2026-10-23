@@ -384,6 +384,66 @@ func TestAttachmentReachesLocalWorkspace(t *testing.T) {
 	}
 }
 
+// The bytes of a file reach the workspace of a seat run on another member:
+// the front streams the body through the forward of the fleet, and the
+// kernel of the member keeps the file under attachments/ with a reference
+// in its ledger, from the person who sent it.
+func TestAttachmentReachesARemoteWorkspace(t *testing.T) {
+	root := t.TempDir()
+	worker := newAgentWith(t, func(c *fw.Config) {
+		c.Tools.Files.Root = root
+		c.Access.Admins = append(c.Access.Admins, "kind:token")
+	}, fw.WithAuthn(tokenMap{fleetToken: {Subject: fw.KindToken, Kind: fw.KindToken}}))
+	ctx := context.Background()
+	r, err := worker.Start(ctx, "Review the roles", fw.AsAgent("reviewer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the run of the worker ends its turn", func() bool { got, _ := worker.Get(ctx, r.ID); return got != nil && got.State == fw.StateCompleted })
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	v := newView(serve(t, worker))
+	fleet.Attach(a, v)
+	t.Cleanup(func() { fleet.Attach(a, nil) })
+	v.state("default/crew-0", fleet.MemberLive, "migrator", "reviewer")
+	url := serve(t, a)
+	b := open(t, url)
+	v.put(workerRun(r.ID, b.ID, "reviewer", "reviewer", fw.StateCompleted))
+	s.poll(ctx)
+	data := bytes.Repeat([]byte("0123456789abcdef\x00\xff"), 120000) // 2.1 MB
+	body, _ := json.Marshal(PostSpec{Text: "The capture", To: []string{"reviewer"}, Files: []native.FileBody{{Name: "capture.bin", Data: data}}})
+	if resp, raw := do(t, http.MethodPost, url+"/v1/bridges/"+b.ID+"/messages", "alice", string(body)); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("post = %d %.300s", resp.StatusCode, raw)
+	}
+	var ref *fw.FileRef
+	var from *fw.MessageFrom
+	eventually(t, "the ledger of the worker holds the reference of the file", func() bool {
+		for e, err := range worker.Ledger().Read(ctx, r.ID, 0) {
+			if err != nil {
+				return false
+			}
+			var d fw.MessageReceivedData
+			if e.Type != fw.EvMessageReceived || e.Decode(&d) != nil {
+				continue
+			}
+			for _, block := range d.Content {
+				if block.Type == fw.BlockFile && block.File != nil && len(block.Data) == 0 {
+					ref, from = block.File, d.From
+				}
+			}
+		}
+		return ref != nil
+	})
+	if from == nil || from.Kind != fw.FromPerson || from.Name != "alice" || from.Member != "reviewer" || ref.Size != int64(len(data)) {
+		t.Fatalf("the message reached the worker as %+v with %+v", from, ref)
+	}
+	got, err := os.ReadFile(filepath.Join(root, ref.Path))
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("the bytes in the workspace of the worker = %d bytes, %v", len(got), err)
+	}
+	eventually(t, "the replica holds no bytes", func() bool { return s.held.Load() == 0 })
+}
+
 // The body of a follow-up with files streams the base64 of the shared
 // bytes: its length is the length that it reads, and the kernel decodes it
 // into the same fields and bytes.
