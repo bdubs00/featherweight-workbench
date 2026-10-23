@@ -65,35 +65,47 @@ func sameHost(req *http.Request, via []*http.Request) error {
 
 // fetch reads the answer of the endpoint.
 func (p *poller) fetch(ctx context.Context) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, p.timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url, nil)
+	body, err := get(ctx, p.client, p.url, p.header, p.value, p.timeout, maxAnswer)
 	if err != nil {
-		return nil, fmt.Errorf("sources: poll %s: %w", p.host, redact(err))
+		return nil, fmt.Errorf("sources: poll %s: %w", p.host, err)
+	}
+	return body, nil
+}
+
+// get reads the answer of an endpoint with one GET within timeout: at most
+// limit bytes of a 2xx answer. The credential value goes in header, or as
+// "Authorization: Bearer <value>" when header is empty, and no header
+// when value is empty. An error holds no address and no credential.
+func get(ctx context.Context, client *http.Client, rawURL, header, value string, timeout time.Duration, limit int) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, redact(err)
 	}
 	req.Header.Set("Accept", "application/json")
-	if p.value != "" {
-		if p.header == "" {
-			req.Header.Set("Authorization", "Bearer "+p.value)
+	if value != "" {
+		if header == "" {
+			req.Header.Set("Authorization", "Bearer "+value)
 		} else {
-			req.Header.Set(p.header, p.value)
+			req.Header.Set(header, value)
 		}
 	}
-	resp, err := p.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("sources: poll %s: %w", p.host, redact(err))
+		return nil, redact(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-		return nil, fmt.Errorf("sources: poll %s: the endpoint answered %d", p.host, resp.StatusCode)
+		return nil, fmt.Errorf("the endpoint answered %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
-		return nil, fmt.Errorf("sources: poll %s: read the answer: %w", p.host, redact(err))
+		return nil, fmt.Errorf("read the answer: %w", redact(err))
 	}
-	if len(body) > maxAnswer {
-		return nil, fmt.Errorf("sources: poll %s: the answer is larger than %d bytes", p.host, maxAnswer)
+	if len(body) > limit {
+		return nil, fmt.Errorf("the answer is larger than %d bytes", limit)
 	}
 	return body, nil
 }
