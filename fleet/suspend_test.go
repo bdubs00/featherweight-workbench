@@ -207,6 +207,69 @@ func TestSuspendIdleTasksAndWakeForJobs(t *testing.T) {
 	}
 }
 
+// A phase that the front sets itself reaches the watchers: the suspend of
+// an idle Task, and the resume after a wake through the router. The next
+// Task list finds the same phase and sends nothing, so without these
+// changes a stream never carried them, and a page kept a woken worker
+// asleep while its seat worked.
+func TestPhasesOfTheFrontReachTheWatchers(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "team")
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
+	t.Setenv(EnvIntake, "fw.jobs")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bus := fw.NewMemBus()
+	ax := newFakeAX(t, map[string]map[string]string{"team": {"alpha": "Running"}})
+	tasks := newFakeTasks(t)
+	long := time.Now().Add(-time.Hour)
+	tasks.set("team/alpha", view.Status{Idle: true, IdleSince: &long})
+	after := 300 * time.Millisecond
+	front := newMember(t, bus, "front", func(cfg *fw.Config, fc *Config) {
+		fc.Atespaces = []string{"team"}
+		fc.Egress = "fw.events"
+		fc.Intake = "fw.jobs"
+		fc.Interval = 100 * time.Millisecond
+		fc.SuspendAfter = &after
+		cfg.AX.Server = ax.addr
+		cfg.AX.Router = strings.TrimPrefix(tasks.srv.URL, "http://")
+	})
+	var mu sync.Mutex
+	var phases, states []string
+	changes := front.f.Watch(ctx)
+	go func() {
+		for c := range changes {
+			if c.Member != "team/alpha" {
+				continue
+			}
+			mu.Lock()
+			switch c.Kind {
+			case ChangeTask:
+				phases = append(phases, c.Phase)
+			case ChangeMember:
+				states = append(states, c.State)
+			}
+			mu.Unlock()
+		}
+	}()
+	last := func(list *[]string) string {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(*list) == 0 {
+			return ""
+		}
+		return (*list)[len(*list)-1]
+	}
+	eventually(t, "the idle Task is suspended", func() bool { return ax.phase("team", "alpha") == "Suspended" })
+	eventually(t, "the watchers get the phase Suspended", func() bool { return last(&phases) == "Suspended" })
+	eventually(t, "the watchers get the state quiet", func() bool { return last(&states) == MemberQuiet })
+	if _, sent, err := Enqueue(ctx, front.a, "reviewer", []fw.RunRequest{{Input: "review this"}}); err != nil || sent != 1 {
+		t.Fatalf("Enqueue = %d, %v", sent, err)
+	}
+	eventually(t, "the woken Task runs", func() bool { return ax.phase("team", "alpha") == "Running" })
+	eventually(t, "the watchers get the phase Running", func() bool { return last(&phases) == "Running" })
+	eventually(t, "the watchers get the state live", func() bool { return last(&states) == MemberLive })
+}
+
 // A Task that slept since before the front started has no known profiles,
 // so a job for a profile that no known Task serves wakes it once, and the
 // front learns what it serves.

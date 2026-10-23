@@ -150,7 +150,7 @@ func (p *platform) suspendIdle(ctx context.Context, now time.Time) {
 		// The phase follows the suspend, so a wake through the router
 		// before the next Task list makes the front resume the Task
 		// (resumed), as after any other suspend.
-		m.state, m.phase, m.seen = MemberQuiet, phaseSuspended, now
+		p.setPhase(m, phaseSuspended, now)
 		p.mu.Unlock()
 		p.f.log.Info("fleet: suspended an idle Task", "member", m.name, "idle", idleFor.Round(time.Second).String())
 	}
@@ -175,7 +175,7 @@ func (p *platform) suspendBlocked(ctx context.Context, client v1alpha1.AXClient,
 	m.blocked = reason
 	if err == nil {
 		// The phase follows the suspend, as for an idle Task.
-		m.state, m.phase, m.seen = MemberQuiet, phaseSuspended, now
+		p.setPhase(m, phaseSuspended, now)
 	}
 	p.mu.Unlock()
 	if err != nil {
@@ -335,6 +335,7 @@ func (p *platform) resumed(member string) {
 		m.filled = false
 	}
 	m.seen = now
+	p.noteMember(m, now)
 	if m.phase == phaseRunning || m.resuming {
 		p.mu.Unlock()
 		return
@@ -348,7 +349,7 @@ func (p *platform) resumed(member string) {
 		p.mu.Lock()
 		m.resuming = false
 		if err == nil {
-			m.phase = phaseRunning
+			p.setPhase(m, phaseRunning, time.Now())
 		}
 		p.mu.Unlock()
 		if err != nil {
@@ -357,4 +358,23 @@ func (p *platform) resumed(member string) {
 		}
 		p.f.log.Info("fleet: the phase of a woken Task follows", "member", m.name)
 	}()
+}
+
+// setPhase sets the phase of a Task that the front changed itself, with a
+// suspend or a resume on the ax API, and the state that the phase stands
+// for, and sends the changes to the watchers (noteTask, noteMember). The
+// next Task list then finds the same phase and sends nothing, so without
+// these changes a stream never carried the phase: a page kept a woken
+// worker asleep, and a seat that worked on it read asleep, until it read
+// the fleet again. The caller holds p.mu.
+func (p *platform) setPhase(m *platformMember, phase string, now time.Time) {
+	was := m.phase
+	m.phase, m.state, m.seen = phase, stateOfPhase(phase), now
+	if p.members[m.name] != m {
+		return // the member left the view, or a new Task took its name
+	}
+	if phase != was {
+		p.noteTask(m, now)
+	}
+	p.noteMember(m, now)
 }
