@@ -326,7 +326,7 @@ func (rt *routes) post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var spec PostSpec
-	if !rt.k.Decode(w, r, &spec) {
+	if !rt.k.DecodeFiles(w, r, &spec, func() int { return len(spec.Files) }) {
 		return
 	}
 	m, err := s.postAs(r.Context(), rec.ID, spec)

@@ -198,8 +198,9 @@ func (s *Store) grant(ctx context.Context, bridge, handle string, r *fw.Run) *fw
 // would fail the follow-up at once, so it gets none, and the channel says
 // once that it cannot take messages. The grant and the send of one run go
 // one at a time on this replica, so a follow-up that leaves later never
-// gives the run the smaller limits of an earlier one.
-func (s *Store) sendSeat(ctx context.Context, bridge, handle string, r *fw.Run, content string, from fw.MessageFrom, pinned bool) error {
+// gives the run the smaller limits of an earlier one. files go with the
+// follow-up when they are not nil.
+func (s *Store) sendSeat(ctx context.Context, bridge, handle string, r *fw.Run, content string, from fw.MessageFrom, pinned bool, files *upload) error {
 	mu := &s.sendLocks[lockOf(r.ID, len(s.sendLocks))]
 	mu.Lock()
 	defer mu.Unlock()
@@ -211,7 +212,7 @@ func (s *Store) sendSeat(ctx context.Context, bridge, handle string, r *fw.Run, 
 		s.cannotTakeLine(ctx, bridge, handle, r)
 		return nil
 	}
-	return s.sendWith(ctx, r, content, from, pinned, budget)
+	return s.sendWith(ctx, r, content, from, pinned, budget, files)
 }
 
 // lockOf is the index of the lock of a run among n.

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
@@ -273,7 +274,8 @@ func (s *Store) asToken(ctx context.Context) (context.Context, error) {
 
 // call sends a request to a member through the forward of the fleet, with
 // the static token, and decodes a JSON answer into out when out is not
-// nil.
+// nil. A body of files (filesBody) streams, and any other body goes as
+// JSON.
 func (s *Store) call(ctx context.Context, member, method, path string, body any, idem string, out any) error {
 	v := fleet.Of(s.a)
 	if v == nil {
@@ -286,7 +288,11 @@ func (s *Store) call(ctx context.Context, member, method, path string, body any,
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	var rd io.Reader = http.NoBody
-	if body != nil {
+	fb, streamed := body.(*filesBody)
+	switch {
+	case streamed:
+		rd = fb.Reader()
+	case body != nil:
 		b, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("bridges: encode the request for %s: %w", member, err)
@@ -296,6 +302,10 @@ func (s *Store) call(ctx context.Context, member, method, path string, body any,
 	req, err := http.NewRequestWithContext(ctx, method, path, rd)
 	if err != nil {
 		return fmt.Errorf("bridges: build the request for %s: %w", member, err)
+	}
+	if streamed {
+		req.ContentLength = fb.Len()
+		req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(fb.Reader()), nil }
 	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
@@ -339,14 +349,16 @@ func runPath(id, rest string) string { return "/v1/runs/" + url.PathEscape(id) +
 // survives every compaction of the run (fw.WithMessagePinned, and pinned
 // in the body of the route of the owner).
 func (s *Store) send(ctx context.Context, r *fw.Run, content string, from fw.MessageFrom, pinned bool) error {
-	return s.sendWith(ctx, r, content, from, pinned, nil)
+	return s.sendWith(ctx, r, content, from, pinned, nil, nil)
 }
 
 // sendWith is send with new limits for the run: the kernel applies them
 // before the message (fw.WithSendBudget, and budget in the body of the
 // route of the owner), so the turn that the message starts has them. A
-// nil budget changes no limit.
-func (s *Store) sendWith(ctx context.Context, r *fw.Run, content string, from fw.MessageFrom, pinned bool, budget *fw.Budget) error {
+// nil budget changes no limit. files go with the message: file blocks for
+// a run of the front itself, and files in the body of the route of the
+// owner, so the kernel of the run keeps them in its workspace.
+func (s *Store) sendWith(ctx context.Context, r *fw.Run, content string, from fw.MessageFrom, pinned bool, budget *fw.Budget, files *upload) error {
 	if r.Member == "" {
 		opts := []fw.SendOption{fw.WithMessageFrom(from)}
 		if pinned {
@@ -355,14 +367,26 @@ func (s *Store) sendWith(ctx context.Context, r *fw.Run, content string, from fw
 		if budget != nil {
 			opts = append(opts, fw.WithSendBudget(*budget))
 		}
-		return s.a.Send(s.asFront(ctx), r.ID, fw.Message{Role: fw.RoleUser, Content: []fw.Block{fw.Text(content)}}, fw.OriginHTTP, opts...)
+		blocks := []fw.Block{fw.Text(content)}
+		if files != nil {
+			blocks = append(blocks, native.Attachments(files.files)...)
+		}
+		return s.a.Send(s.asFront(ctx), r.ID, fw.Message{Role: fw.RoleUser, Content: blocks}, fw.OriginHTTP, opts...)
 	}
-	body := map[string]any{"content": content, "from": from}
+	fields := map[string]any{"content": content, "from": from}
 	if pinned {
-		body["pinned"] = true
+		fields["pinned"] = true
 	}
 	if budget != nil {
-		body["budget"] = budget
+		fields["budget"] = budget
+	}
+	var body any = fields
+	if files != nil {
+		fb, err := newFilesBody(fields, files.files)
+		if err != nil {
+			return fmt.Errorf("bridges: encode the request for %s: %w", r.Member, err)
+		}
+		body = fb
 	}
 	return s.call(ctx, r.Member, http.MethodPost, runPath(r.ID, "/messages"), body, "", nil)
 }

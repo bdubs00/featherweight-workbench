@@ -145,6 +145,10 @@ type Store struct {
 	// one. A run takes the lock of its hash.
 	sendLocks [64]sync.Mutex
 
+	// held counts the bytes of the files that the deliveries of this
+	// replica hold until their members have them (attach.go).
+	held atomic.Int64
+
 	// names holds the names of the people who called a route, by subject
 	// (learn).
 	namesMu sync.Mutex
