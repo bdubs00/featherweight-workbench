@@ -45,6 +45,17 @@ const (
 // forwards a request that carries it, so a loop cannot form.
 const HeaderVia = "Fw-Fleet-Via"
 
+// HeaderOnBehalfOf names the person that a request of the static token of
+// the fleet acts for, by the subject of the principal. The front sets it
+// when it acts for a person on another member (person.go): the front
+// decided the action for that person, and the request carries the static
+// token. The kernel of the member honors it from the static token alone
+// and records the person as the decider of an approval and as the person
+// of a message, a change of a budget, and a cancel. Forward sets it from
+// the context alone (WithOnBehalfOf), so the header of a caller never
+// reaches a member.
+const HeaderOnBehalfOf = "Fw-On-Behalf-Of"
+
 // States of a member in the view.
 const (
 	MemberLive    = "live"    // the Task runs, or an event arrived within QuietAfter intervals
@@ -130,9 +141,10 @@ type Member struct {
 // closes. req carries the method, the path under /v1 with its query, the
 // body, and the headers Accept, Content-Type, Idempotency-Key, and
 // Last-Event-ID. Forward sets the address, the credential from
-// fw.CredentialFrom(ctx), and HeaderVia. It returns ErrNoRoute when the
-// member is unknown, has no URL, or has a URL outside the forward globs,
-// and ErrNoCredential when ctx carries no bearer credential.
+// fw.CredentialFrom(ctx), HeaderVia, and HeaderOnBehalfOf from
+// OnBehalfOf(ctx). It returns ErrNoRoute when the member is unknown, has
+// no URL, or has a URL outside the forward globs, and ErrNoCredential when
+// ctx carries no bearer credential.
 type View interface {
 	Name() string
 	Members(ctx context.Context) ([]Member, error)
@@ -229,10 +241,13 @@ type BatchRuns struct {
 
 // Errors of the fleet. A surface answers ErrNoRoute with 502 and
 // ErrNoCredential with 403: the caller is authenticated here, but it
-// carries no credential that the owner can check.
+// carries no credential that the owner can check. ErrNoToken is 503: the
+// front holds no static token of the fleet, so it acts for no person on
+// another member until an operator sets the token.
 var (
 	ErrNoRoute      = errors.New("fleet: no route to the fleet member")
 	ErrNoCredential = errors.New("fleet: the request carries no bearer credential to forward")
+	ErrNoToken      = errors.New("fleet: the front holds no static token of the fleet")
 )
 
 // views ties a View to the agent that it serves. Start attaches the fleet

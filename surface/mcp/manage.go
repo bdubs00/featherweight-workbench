@@ -450,6 +450,8 @@ func explain(err error) string {
 		return "The agent is shutting down."
 	case errors.Is(err, fleet.ErrNoCredential):
 		return "Forbidden: this request carries no bearer credential, so it cannot act on a run of another fleet member. Connect with a bearer token."
+	case errors.Is(err, fleet.ErrNoToken):
+		return "Unavailable: " + strings.TrimPrefix(err.Error(), "fleet: ") + ". Until an operator sets it, the front acts for no person on another fleet member."
 	case errors.Is(err, fleet.ErrNoRoute):
 		return "No route: " + strings.TrimPrefix(err.Error(), "fw: ") + "."
 	}
@@ -921,7 +923,11 @@ func (s *server) events(ctx context.Context, id string, p page) (eventsResult, e
 			return eventsResult{}, ferr
 		}
 		if member != "" {
-			return s.remoteEvents(ctx, member, id, p)
+			mctx, err := fleet.ForRun(ctx, s.a, id, fw.ActionRunView)
+			if err != nil {
+				return eventsResult{}, err
+			}
+			return s.remoteEvents(mctx, member, id, p)
 		}
 	}
 	if err != nil {

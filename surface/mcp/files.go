@@ -17,6 +17,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/manager"
 )
 
@@ -80,7 +81,10 @@ func (s *server) runFile(ctx context.Context, req *sdk.CallToolRequest, in runFi
 			err = ferr
 		case member != "":
 			v = view.FileView{}
-			err = s.callMember(ctx, member, "GET", "/v1/runs/"+url.PathEscape(in.RunID)+"/files/"+escapePath(in.Path), nil, "", &v)
+			var mctx context.Context
+			if mctx, err = fleet.ForRun(ctx, s.a, in.RunID, fw.ActionRunView); err == nil {
+				err = s.callMember(mctx, member, "GET", "/v1/runs/"+url.PathEscape(in.RunID)+"/files/"+escapePath(in.Path), nil, "", &v)
+			}
 		}
 	}
 	switch {
@@ -152,7 +156,10 @@ func (s *server) runFileRaw(ctx context.Context, in runFileArgs) *sdk.CallToolRe
 			err = ferr
 		case member != "":
 			f = fw.RunFile{Path: strings.TrimPrefix(in.Path, "/")}
-			data, size, err = s.memberFile(ctx, member, in.RunID, in.Path)
+			var mctx context.Context
+			if mctx, err = fleet.ForRun(ctx, s.a, in.RunID, fw.ActionRunView); err == nil {
+				data, size, err = s.memberFile(mctx, member, in.RunID, in.Path)
+			}
 		}
 	}
 	switch {

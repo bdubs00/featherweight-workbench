@@ -141,6 +141,9 @@ type boss struct {
 // an agent views all of its runs, so each person has an agent of their own.
 func newBoss(t *testing.T, admins ...string) *boss {
 	t.Helper()
+	// The front holds the static token, which a person who calls with her
+	// own credential needs too.
+	t.Setenv("FW_API_TOKEN", "fleet-token")
 	var calls atomic.Int32
 	ocfg := testConfig(t)
 	ocfg.Access.Admins = []string{"kind:token"}
@@ -409,9 +412,11 @@ func TestOnBehalfEnqueuesAsThePerson(t *testing.T) {
 	}
 }
 
-// approve for a person decides as the token, with a note that names the
+// approve for a person decides for the person, with a note that names the
 // manager run and the person, on another member and on this process; the
-// front refuses a run that the person does not operate.
+// front refuses a run that the person does not operate. The request to
+// the owner carries the token and names the person, whom an owner that
+// knows fleet.HeaderOnBehalfOf records as the decider.
 func TestOnBehalfApproveNamesTheActor(t *testing.T) {
 	ctx := testCtx(t)
 	b := newBoss(t, "kind:token")
@@ -425,8 +430,11 @@ func TestOnBehalfApproveNamesTheActor(t *testing.T) {
 		t.Fatalf("approve = %s", textOf(res))
 	}
 	d := decided(t, b.owner, ra.ID)
-	if d.Decider != fw.KindToken || d.Note != "by manager run mgr-1 for alice: looks right" || d.Decision != "allow" {
+	if d.Note != "by manager run mgr-1 for alice: looks right" || d.Decision != "allow" {
 		t.Fatalf("the owner recorded %+v", d)
+	}
+	if h := b.view.lastForward(); h.Get("Authorization") != "Bearer fleet-token" || h.Get(fleet.HeaderOnBehalfOf) != "alice" {
+		t.Fatalf("the approval carries %q for %q", h.Get("Authorization"), h.Get(fleet.HeaderOnBehalfOf))
 	}
 	if !slices.Contains(b.view.checked(), "alice run.operate "+ra.ID) {
 		t.Fatalf("the view decided %v", b.view.checked())
@@ -438,14 +446,55 @@ func TestOnBehalfApproveNamesTheActor(t *testing.T) {
 	if r, _ := b.owner.Get(ctx, rb.ID); r.Pending == nil {
 		t.Fatal("the run of bob was decided")
 	}
-	// On this process, the decider and the note are the same.
+	// On this process, the decider is the person, and the note is the same.
 	res = metaCall(t, ctx, token, metaFor("alice"), toolApprove, map[string]any{"runId": la.ID, "approvalId": la.Pending.ID, "decision": "deny"})
 	if res.IsError {
 		t.Fatalf("approve here = %s", textOf(res))
 	}
-	if d := decided(t, b.front, la.ID); d.Decider != fw.KindToken || d.Note != "by manager run mgr-1 for alice" || d.Decision != "deny" {
+	if d := decided(t, b.front, la.ID); d.Decider != "alice" || d.Note != "by manager run mgr-1 for alice" || d.Decision != "deny" {
 		t.Fatalf("the front recorded %+v", d)
 	}
+}
+
+// Every request of an actor to another member, an action or a read, names
+// the person of the actor in fleet.HeaderOnBehalfOf, with the static token
+// as the credential: approve, send, run_budget, fork, cancel, and
+// run_status. A call of the token without a person names nobody. A person
+// who calls with her own credential gets the static token that names her
+// too, so her credential never leaves the front.
+func TestOnBehalfNamesThePersonToTheOwner(t *testing.T) {
+	ctx := testCtx(t)
+	b := newBoss(t, "kind:token")
+	ra := b.ownerRun(t, ctx, "alice", nil)
+	token := as(t, ctx, b.url, "fleet-token")
+	call := func(cs *sdk.ClientSession, meta sdk.Meta, name string, args map[string]any, auth, person string) {
+		t.Helper()
+		before := b.view.forwards()
+		if res := metaCall(t, ctx, cs, meta, name, args); res.IsError {
+			t.Fatalf("%s = %s", name, textOf(res))
+		}
+		after := b.view.forwards()
+		h := b.view.lastForward()
+		if after == before || h.Get("Authorization") != auth || h.Get(fleet.HeaderOnBehalfOf) != person {
+			t.Fatalf("%s: %d requests, the last carries %q for %q", name, after-before, h.Get("Authorization"), h.Get(fleet.HeaderOnBehalfOf))
+		}
+	}
+	call(token, metaFor("alice"), toolApprove, map[string]any{"runId": ra.ID, "approvalId": ra.Pending.ID, "decision": "allow"}, "Bearer fleet-token", "alice")
+	if _, err := b.owner.WaitFor(ctx, ra.ID, func(r *fw.Run) bool { return r.State.Terminal() }); err != nil {
+		t.Fatal(err)
+	}
+	call(token, metaFor("alice"), toolSend, map[string]any{"runId": ra.ID, "content": "once more"}, "Bearer fleet-token", "alice")
+	call(token, metaFor("alice"), toolRunBudget, map[string]any{"runId": ra.ID, "budget": map[string]any{"maxTurns": 50}}, "Bearer fleet-token", "alice")
+	call(token, metaFor("alice"), toolFork, map[string]any{"runId": ra.ID, "input": "another way"}, "Bearer fleet-token", "alice")
+	call(token, metaFor("alice"), toolCancel, map[string]any{"runId": ra.ID}, "Bearer fleet-token", "alice")
+	call(token, metaFor("alice"), toolRunStatus, map[string]any{"runId": ra.ID}, "Bearer fleet-token", "alice")
+	// Without a person, the token acts as itself.
+	noPerson := sdk.Meta{MetaRun: "mgr-1", MetaAgent: "manager"}
+	call(token, noPerson, toolRunStatus, map[string]any{"runId": ra.ID}, "Bearer fleet-token", "")
+	// A person who calls with her own credential is no actor, and the
+	// front decides and names her as for an actor.
+	alice := as(t, ctx, b.url, "alice-token")
+	call(alice, metaFor("bob"), toolRunStatus, map[string]any{"runId": ra.ID}, "Bearer fleet-token", "alice")
 }
 
 // queuedKind returns the kind of the person of a run, as fw.run.queued
@@ -488,7 +537,8 @@ func received(t *testing.T, a *fw.Agent, id string) []fw.MessageReceivedData {
 }
 
 // send for a person sends as the token, from the manager run, with a first
-// line that names the person, on another member and on this process.
+// line that names the person, on another member and on this process. The
+// request to another member names the person in fleet.HeaderOnBehalfOf.
 func TestOnBehalfSendNamesTheSender(t *testing.T) {
 	ctx := testCtx(t)
 	t.Setenv(manager.EnvManager, "manager")
@@ -511,7 +561,7 @@ func TestOnBehalfSendNamesTheSender(t *testing.T) {
 	}
 	token := as(t, ctx, b.url, "fleet-token")
 
-	check := func(a *fw.Agent, id string) {
+	check := func(a *fw.Agent, id string) fw.MessageReceivedData {
 		t.Helper()
 		msgs := received(t, a, id)
 		if len(msgs) == 0 {
@@ -519,21 +569,29 @@ func TestOnBehalfSendNamesTheSender(t *testing.T) {
 		}
 		m := msgs[len(msgs)-1]
 		want := fw.MessageFrom{Kind: fw.FromAgent, Name: "manager", Run: "mgr-1"}
-		if m.From == nil || *m.From != want || m.By != fw.KindToken {
+		if m.From == nil || *m.From != want {
 			t.Fatalf("the message of %s = %+v", id, m)
 		}
 		if text := fw.TextOf(m.Content); !strings.HasPrefix(text, "From the manager run mgr-1 for alice.\nalso check the logs") {
 			t.Fatalf("the text of %s = %q", id, text)
 		}
+		return m
 	}
 	if res := metaCall(t, ctx, token, metaFor("alice"), toolSend, map[string]any{"runId": ra.ID, "content": "also check the logs"}); res.IsError {
 		t.Fatalf("send = %s", textOf(res))
 	}
 	check(b.owner, ra.ID)
+	if h := b.view.lastForward(); h.Get("Authorization") != "Bearer fleet-token" || h.Get(fleet.HeaderOnBehalfOf) != "alice" {
+		t.Fatalf("the message carries %q for %q", h.Get("Authorization"), h.Get(fleet.HeaderOnBehalfOf))
+	}
 	if res := metaCall(t, ctx, token, metaFor("alice"), toolSend, map[string]any{"runId": la.ID, "content": "also check the logs"}); res.IsError {
 		t.Fatalf("send here = %s", textOf(res))
 	}
-	check(b.front, la.ID)
+	// A person cannot name the sender of a message, so on this process the
+	// message goes as the token.
+	if m := check(b.front, la.ID); m.By != fw.KindToken {
+		t.Fatalf("the message here is by %q", m.By)
+	}
 	// alice does not operate the run of bob here, though the token does.
 	if res := metaCall(t, ctx, token, metaFor("alice"), toolSend, map[string]any{"runId": lb.ID, "content": "hi"}); !res.IsError {
 		t.Fatalf("the token for alice sent to bob: %s", textOf(res))
@@ -634,8 +692,11 @@ func TestManagerNeedsTheDelegationOfABridge(t *testing.T) {
 	if res := approve(metaFor("alice"), seat); res.IsError {
 		t.Fatalf("approve with yes = %s", textOf(res))
 	}
-	if d := decided(t, b.owner, seat.ID); d.Decider != fw.KindToken || d.Note != "by manager run mgr-1 for alice" {
+	if d := decided(t, b.owner, seat.ID); d.Note != "by manager run mgr-1 for alice" {
 		t.Fatalf("the seat recorded %+v", d)
+	}
+	if h := b.view.lastForward(); h.Get(fleet.HeaderOnBehalfOf) != "alice" {
+		t.Fatalf("the approval names %q", h.Get(fleet.HeaderOnBehalfOf))
 	}
 	if res := metaCall(t, ctx, token, metaFor("alice"), toolCancel, map[string]any{"runId": seat.ID}); res.IsError {
 		t.Fatalf("cancel with yes = %s", textOf(res))

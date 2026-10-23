@@ -76,7 +76,7 @@ func TestRunFileReachesTheOwner(t *testing.T) {
 	writer := fw.NewTool(fw.ToolSpec{Name: "writer"}, func(ctx context.Context, _ json.RawMessage) (fw.ToolResult, error) {
 		return fw.TextResult("written"), fw.FilesFrom(ctx).WriteFile("docs/a b.md", []byte("remote text"))
 	})
-	owner := manageAgent(t, newScript(toolUse("c1", "writer", `{}`), endTurn("done")).model(),
+	owner := tokenOwner(t, newScript(toolUse("c1", "writer", `{}`), endTurn("done")).model(),
 		fw.WithFiles(ws), fw.WithTools(writer), fw.WithSurfaces(native.New()))
 	h, err := owner.Handler()
 	if err != nil {
@@ -94,6 +94,7 @@ func TestRunFileReachesTheOwner(t *testing.T) {
 	}}
 	fake.set(r)
 	viewer := attach(manageAgent(t, newScript().model()), fake)
+	fake.rules = viewer
 	cs := as(t, ctx, serveAgent(t, viewer, nil).URL, "bob-token")
 	res := callTool(t, ctx, cs, toolRunFile, map[string]any{"runId": r.ID, "path": "docs/a b.md"})
 	var v view.FileView
@@ -101,8 +102,8 @@ func TestRunFileReachesTheOwner(t *testing.T) {
 	if res.IsError || v.Text != "remote text" || v.Path != "docs/a b.md" {
 		t.Fatalf("remote run_file = %+v, %q", v, textOf(res))
 	}
-	if got := fake.lastForward().Get("Accept"); got != "application/json" {
-		t.Errorf("forwarded Accept = %q", got)
+	if h := fake.lastForward(); h.Get("Accept") != "application/json" || h.Get("Authorization") != "Bearer fleet-token" || h.Get(fleet.HeaderOnBehalfOf) != "bob" {
+		t.Errorf("forwarded headers = %v", h)
 	}
 }
 
@@ -220,7 +221,7 @@ func TestRunFileRawReachesTheOwner(t *testing.T) {
 		}
 		return fw.TextResult("written"), fw.FilesFrom(ctx).WriteFile("big.txt", bytes.Repeat([]byte("y"), maxRawBytes+10))
 	})
-	owner := manageAgent(t, newScript(toolUse("c1", "writer", `{}`), endTurn("done")).model(),
+	owner := tokenOwner(t, newScript(toolUse("c1", "writer", `{}`), endTurn("done")).model(),
 		fw.WithFiles(ws), fw.WithTools(writer), fw.WithSurfaces(native.New()))
 	h, err := owner.Handler()
 	if err != nil {
@@ -238,6 +239,7 @@ func TestRunFileRawReachesTheOwner(t *testing.T) {
 	}}
 	fake.set(r)
 	view := attach(manageAgent(t, newScript().model()), fake)
+	fake.rules = view
 	cs := as(t, ctx, serveAgent(t, view, nil).URL, "bob-token")
 
 	res := callTool(t, ctx, cs, toolRunFile, map[string]any{"runId": r.ID, "path": "img/a b.png", "raw": true})

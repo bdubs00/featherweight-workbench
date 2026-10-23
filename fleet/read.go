@@ -24,11 +24,15 @@ const maxReadBytes = 64 << 20
 // MemberError is an error answer of a member. It unwraps to the error of
 // the kernel that the status means, so a surface answers the caller with
 // the same status: 404 is fw.ErrRunNotFound, 403 is fw.ErrForbidden, and
-// 503 is fw.ErrAuthzUnavailable.
+// 503 is fw.ErrAuthzUnavailable. Token is true when the request carried
+// the static token for a person and the member refused it: the status is
+// then 403, and the detail words the refusal for an operator
+// (RefusedToken).
 type MemberError struct {
 	Member string
 	Status int
 	Detail string
+	Token  bool
 }
 
 func (e *MemberError) Error() string {
@@ -67,9 +71,11 @@ func errorOf(member string, status int, b []byte) *MemberError {
 	return &MemberError{Member: member, Status: status, Detail: detail}
 }
 
-// ReadJSON forwards a GET of path to a member with the credential of the
-// caller in ctx and decodes the JSON answer into out. An error answer is a
-// *MemberError.
+// ReadJSON forwards a GET of path to a member with the credential in ctx
+// and decodes the JSON answer into out. An error answer is a *MemberError.
+// When ctx carries the static token for a person (ForRun), a 401 or a 403
+// of the member is a 403 whose detail says that the worker refused the
+// token of the fleet (RefusedToken).
 func ReadJSON(ctx context.Context, v View, member, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, http.NoBody)
 	if err != nil {
@@ -86,7 +92,11 @@ func ReadJSON(ctx context.Context, v View, member, path string, out any) error {
 		return fmt.Errorf("fleet: read the answer of the member %s: %w", member, err)
 	}
 	if resp.StatusCode >= http.StatusMultipleChoices {
-		return errorOf(member, resp.StatusCode, b)
+		me := errorOf(member, resp.StatusCode, b)
+		if env := TokenEnvOf(ctx); env != "" && (me.Status == http.StatusUnauthorized || me.Status == http.StatusForbidden) {
+			me.Status, me.Detail, me.Token = http.StatusForbidden, RefusedToken(member, env, me.Status, me.Detail), true
+		}
+		return me
 	}
 	if err := json.Unmarshal(b, out); err != nil {
 		return fmt.Errorf("fleet: the answer of the member %s is not JSON: %w", member, err)

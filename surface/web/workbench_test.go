@@ -354,7 +354,7 @@ func TestBuilderAttachments(t *testing.T) {
 
 // A worker serves the native API of the kernel alone, so a fromRun of
 // another member reads the run and its events from that member, with the
-// credential of the caller, and the builder runs in the view.
+// static token that names the person, and the builder runs in the view.
 func TestBuilderReadsTheOwner(t *testing.T) {
 	p := newFleetPair(t, builderAccess)
 	// Only a completed run becomes an agent, so alice allows the call that
@@ -375,7 +375,7 @@ func TestBuilderReadsTheOwner(t *testing.T) {
 		t.Fatalf("forwarded %d requests, want the run and its events", len(h)-before)
 	}
 	for _, f := range h[before:] {
-		if f.Get("Authorization") != asAlice {
+		if f.Get("Authorization") != asToken || f.Get(fleet.HeaderOnBehalfOf) != "alice" {
 			t.Fatalf("forwarded = %v", f)
 		}
 	}

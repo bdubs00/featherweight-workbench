@@ -16,18 +16,21 @@ import (
 )
 
 func TestWithMemberJSON(t *testing.T) {
-	if got := string(withMemberJSON([]byte(`{"id":"r1","state":"running"}`), "m")); !strings.Contains(got, `"member":"m"`) {
+	if got := string(withMemberJSON([]byte(`{"id":"r1","state":"running"}`), "m", nil)); !strings.Contains(got, `"member":"m"`) || strings.Contains(got, `"can"`) {
 		t.Errorf("run = %s", got)
+	}
+	if got := string(withMemberJSON([]byte(`{"id":"r1","state":"running"}`), "m", &Can{View: true})); !strings.Contains(got, `"can":{"view":true,"operate":false}`) {
+		t.Errorf("run with can = %s", got)
 	}
 	var page struct {
 		Run    map[string]any `json:"run"`
 		Events []any          `json:"events"`
 	}
-	if err := json.Unmarshal(withMemberJSON([]byte(`{"run":{"id":"r1","state":"running"},"events":[]}`), "m"), &page); err != nil || page.Run["member"] != "m" || page.Events == nil {
+	if err := json.Unmarshal(withMemberJSON([]byte(`{"run":{"id":"r1","state":"running"},"events":[]}`), "m", nil), &page); err != nil || page.Run["member"] != "m" || page.Events == nil {
 		t.Errorf("page = %v, %v", page, err)
 	}
 	for _, in := range []string{`{"runs":[]}`, `[1,2]`, `not json`} {
-		if got := string(withMemberJSON([]byte(in), "m")); got != in {
+		if got := string(withMemberJSON([]byte(in), "m", nil)); got != in {
 			t.Errorf("%s became %s", in, got)
 		}
 	}
@@ -37,15 +40,18 @@ func TestWithMemberJSON(t *testing.T) {
 // the read wakes no Task. The answer carries the member and the texts of
 // the stream, not the texts of a record. The ledger, the writes, and every
 // read of a member that runs still go to the member through the router.
+// The caller is anonymous, a person, so the requests carry the static
+// token.
 func TestRelayAnswersFromTheViewWhileTheMemberSleeps(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "")
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
 	var mu sync.Mutex
 	var reached []string
 	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		reached = append(reached, r.Method+" "+r.URL.Path)
 		mu.Unlock()
-		if r.Header.Get(headerTargetActor) != "team/rev" || r.Header.Get("Authorization") != "Bearer tok" {
+		if r.Header.Get(headerTargetActor) != "team/rev" || r.Header.Get("Authorization") != "Bearer fleet-secret" || r.Header.Get(HeaderOnBehalfOf) != fw.KindAnonymous {
 			http.Error(w, "unexpected request", http.StatusBadRequest)
 			return
 		}

@@ -42,7 +42,9 @@ func streamRoute(a *fw.Agent) http.HandlerFunc {
 // only to a caller who can see it: an event of the fleet as the view
 // decides (fleet.Watcher.Visible), and an event of Publish as its Allow
 // decides. A process serves at most MaxStreams streams and answers 429
-// past that.
+// past that. The comment line ": connected" goes out at once after the
+// headers, so a proxy that holds an answer until its first bytes passes
+// the stream on at once.
 func (h *Hub) ServeStream(w http.ResponseWriter, r *http.Request) {
 	if !h.acquire() {
 		w.Header().Set("Retry-After", "10")
@@ -69,6 +71,10 @@ func (h *Hub) ServeStream(w http.ResponseWriter, r *http.Request) {
 		_ = rc.Flush()
 		return true
 	}
+	// A proxy such as Cloudflare holds an answer until its first bytes,
+	// for about 4 seconds, and a stream may send no event for a long time.
+	// The page skips a comment line.
+	_, _ = bw.WriteString(": connected\n\n")
 	if reset {
 		writeFrame(bw, cursor, KindReset, []byte("null"))
 	}

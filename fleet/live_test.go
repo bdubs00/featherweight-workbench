@@ -18,7 +18,9 @@ import (
 // The relay copies the live stream of a run of another member, GET
 // /v1/runs/{id}/live of the kernel, through Fleet.Forward as the member
 // writes it: the first event reaches the client while the member still
-// holds the second one back, so the relay flushes after each read.
+// holds the second one back, so the relay flushes after each read. The
+// caller is a person, anonymous without authentication, so the stream
+// comes with the static token for that person.
 func TestRelayStreamsLive(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "")
 	t.Setenv("FW_API_TOKEN", "fleet-secret")
@@ -33,7 +35,8 @@ func TestRelayStreamsLive(t *testing.T) {
 		case r.URL.Path == "/v1/runs" && r.Header.Get("Authorization") == "Bearer fleet-secret":
 			// The front reads the runs of the Task with the static token.
 			_ = json.NewEncoder(w).Encode(map[string]any{"runs": []*fw.Run{run}})
-		case r.URL.Path == "/v1/runs/r1/live" && r.Header.Get("Authorization") == "Bearer tok" && r.Header.Get(HeaderVia) == "front":
+		case r.URL.Path == "/v1/runs/r1/live" && r.Header.Get("Authorization") == "Bearer fleet-secret" &&
+			r.Header.Get(HeaderOnBehalfOf) == fw.KindAnonymous && r.Header.Get(HeaderVia) == "front":
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("X-Accel-Buffering", "no")

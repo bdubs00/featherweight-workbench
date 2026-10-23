@@ -32,6 +32,7 @@ func (m tokenMap) Challenge(w http.ResponseWriter, _ *http.Request) {
 var people = tokenMap{
 	"alice-token": {Subject: "alice", Name: "alice@example.com", Kind: fw.KindUser, Groups: []string{"platform"}},
 	"bob-token":   {Subject: "bob", Kind: fw.KindUser},
+	"fleet-token": {Subject: fw.KindToken, Kind: fw.KindToken},
 }
 
 // as connects a client as one of the people.
@@ -58,12 +59,21 @@ func structured(t *testing.T, res *sdk.CallToolResult, v any) {
 // a creator.
 func manageAgent(t *testing.T, m fw.Model, opts ...fw.Option) *fw.Agent {
 	t.Helper()
+	return manageAgentWith(t, m, nil, opts...)
+}
+
+// manageAgentWith is manageAgent with a change of the configuration.
+func manageAgentWith(t *testing.T, m fw.Model, mut func(*fw.Config), opts ...fw.Option) *fw.Agent {
+	t.Helper()
 	cfg := testConfig(t)
 	cfg.Access.Default = "closed"
 	cfg.Access.Creators = []string{"alice"}
 	// The profiles stand in for files under <home>/agents, so a person can
 	// change them. A profile that the configuration defines is locked.
 	cfg.FileProfiles = map[string]bool{"reviewer": true, "shared": true, "private": true}
+	if mut != nil {
+		mut(cfg)
+	}
 	base := []fw.Option{
 		fw.WithConfig(cfg),
 		fw.WithAuthn(people),

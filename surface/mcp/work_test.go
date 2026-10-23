@@ -292,6 +292,8 @@ func TestRunResultAndBuilderReadTheOwner(t *testing.T) {
 	fake.set(remote, other, &fw.Run{ID: "01GONE", Agent: "reviewer", State: fw.StateCompleted})
 	builderAccess := fw.WithProfile(fw.AgentProfile{Name: "default", Access: &fw.Access{Operators: []string{"alice"}}})
 	view := attach(manageAgent(t, newScript().model(), builderAccess), fake)
+	fake.rules = view
+	t.Setenv("FW_API_TOKEN", "fleet-token")
 	cs := as(t, ctx, serveAgent(t, view, nil).URL, "alice-token")
 
 	res := callTool(t, ctx, cs, toolRunResult, map[string]any{"runId": remote.ID})
@@ -300,7 +302,7 @@ func TestRunResultAndBuilderReadTheOwner(t *testing.T) {
 	if res.IsError || got.View != viewResult || got.Result.RunID != remote.ID || got.Result.Summary != "done there" || got.Result.Status != dashboard.StatusReady {
 		t.Fatalf("remote run_result = %+v: %s", got, textOf(res))
 	}
-	if path, _, auth := owner.last(); path != "GET /v1/runs/01REMOTE/events" || auth != "Bearer alice-token" {
+	if path, _, auth := owner.last(); path != "GET /v1/runs/01REMOTE/events" || auth != "Bearer fleet-token" {
 		t.Errorf("read %q with %q", path, auth)
 	}
 	res = callTool(t, ctx, cs, toolRunResult, map[string]any{"runId": "01GONE"})
