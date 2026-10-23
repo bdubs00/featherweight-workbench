@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"unicode"
@@ -39,8 +40,9 @@ type AttachedFile struct {
 }
 
 // describeFiles checks the files of a message and describes them for the
-// entry. The kernel of each recipient checks them again with the rules of
-// its workspace, such as tools.files.maxFileBytes.
+// entry. The post checks each file against tools.files.maxFileBytes of the
+// workers of each recipient (filesTooLarge), and the kernel of each
+// recipient checks them again with the rules of its workspace.
 func describeFiles(files []native.FileBody) ([]AttachedFile, error) {
 	if len(files) > fw.MaxAttachments {
 		return nil, invalid("a message holds at most %d files", fw.MaxAttachments)
@@ -144,6 +146,51 @@ func filesRefused(rec *record, msg Message, plan []delivery, runs map[string]*fw
 		return "a cap of the bridge holds the message back, so its files did not go out: raise the cap, or send them later"
 	}
 	return ""
+}
+
+// filesTooLarge says which file is larger than the workspace of a member
+// takes, or returns "": each delivery of plan goes to a run whose member
+// takes files of at most limits[run id] bytes (fleet.MaxFileBytes). The
+// kernel of the member would refuse such a file after the post, so post
+// refuses the whole message before it changes the record.
+func filesTooLarge(files []native.FileBody, plan []delivery, limits map[string]int64) string {
+	for _, f := range files {
+		var over []string
+		limit := int64(0)
+		for _, d := range plan {
+			if d.run == nil {
+				continue
+			}
+			max := limits[d.run.ID]
+			if max <= 0 {
+				max = fw.DefaultMaxFileBytes
+			}
+			if int64(len(f.Data)) > max && !slices.Contains(over, d.handle) {
+				over = append(over, d.handle)
+				if limit == 0 || max < limit {
+					limit = max
+				}
+			}
+		}
+		switch len(over) {
+		case 0:
+			continue
+		case 1:
+			return fmt.Sprintf("the file %q holds %s, and %s takes files of at most %s (tools.files.maxFileBytes of its workers): send a smaller file", f.Name, mibWords(int64(len(f.Data))), over[0], mibWords(limit))
+		default:
+			return fmt.Sprintf("the file %q holds %s, and %s take files of at most %s (tools.files.maxFileBytes of their workers): send a smaller file", f.Name, mibWords(int64(len(f.Data))), andList(over), mibWords(limit))
+		}
+	}
+	return ""
+}
+
+// mibWords writes a size in MiB, the unit of the limits of files, such as
+// 8 MiB or 9.3 MiB.
+func mibWords(n int64) string {
+	if n%(1<<20) == 0 {
+		return fmt.Sprintf("%d MiB", n>>20)
+	}
+	return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
 }
 
 // andList joins handles as a sentence does: a, a and b, or a, b, and c.

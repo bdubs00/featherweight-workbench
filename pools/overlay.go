@@ -485,6 +485,16 @@ func (p *Pool) Profiles() map[string]fw.AgentProfile {
 	return out
 }
 
+// MaxFileBytes returns tools.files.maxFileBytes of the workers: the most
+// bytes of one file that their workspace takes, an attachment included.
+// It is fw.DefaultMaxFileBytes when the configuration sets none.
+func (p *Pool) MaxFileBytes() int64 {
+	if p.worker != nil && p.worker.Tools.Files.MaxFileBytes > 0 {
+		return p.worker.Tools.Files.MaxFileBytes
+	}
+	return fw.DefaultMaxFileBytes
+}
+
 // Policy returns fw.policy of the workers, with the rules of the overlay.
 func (p *Pool) Policy() fw.PolicyConfig {
 	if p.worker == nil {

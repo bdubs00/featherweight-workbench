@@ -872,6 +872,58 @@ func AllowRule(ctx context.Context, a *fw.Agent, runID, approvalID, note string)
 	return base.Name, rule, nil
 }
 
+// MaxFileBytes returns, by run id, the most bytes of one file that the
+// workspace of the member of each run takes, an attachment included: the
+// tools.files.maxFileBytes of the workers of the pool of the member, of
+// this process for a run of this process, else fw.DefaultMaxFileBytes. A
+// child Task keeps the variables of its parent, so its FW_POOL names the
+// pool of its parent.
+func MaxFileBytes(ctx context.Context, a *fw.Agent, runs []*fw.Run) map[string]int64 {
+	out := make(map[string]int64, len(runs))
+	own := int64(fw.DefaultMaxFileBytes)
+	if c := a.Config(); c != nil && c.Tools.Files.MaxFileBytes > 0 {
+		own = c.Tools.Files.MaxFileBytes
+	}
+	f := fleetOf(a)
+	var list []*pools.Pool
+	if f != nil {
+		list = f.poolsNow(ctx)
+	}
+	for _, r := range runs {
+		if r == nil {
+			continue
+		}
+		out[r.ID] = fw.DefaultMaxFileBytes
+		switch {
+		case r.Member == "":
+			out[r.ID] = own
+		case f != nil:
+			if base := f.poolOfMember(list, r); base != nil {
+				out[r.ID] = f.platform.current(base).MaxFileBytes()
+			}
+		}
+	}
+	return out
+}
+
+// poolOfMember returns the pool of list whose Workspace the member of the
+// run r has: the pool that FW_POOL of its Task names, else poolOfRun.
+func (f *Fleet) poolOfMember(list []*pools.Pool, r *fw.Run) *pools.Pool {
+	p := f.platform
+	p.mu.Lock()
+	name := ""
+	if m := p.members[r.Member]; m != nil {
+		name = m.pool
+	}
+	p.mu.Unlock()
+	for _, pl := range list {
+		if name != "" && pl.Name == name {
+			return pl
+		}
+	}
+	return f.poolOfRun(list, r)
+}
+
 // poolOfRun returns the pool of list whose Task runs the run: the pool of
 // its member by the name of the Task, else the only pool of its agent.
 func (f *Fleet) poolOfRun(list []*pools.Pool, r *fw.Run) *pools.Pool {
