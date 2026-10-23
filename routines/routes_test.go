@@ -37,9 +37,6 @@ func TestRoutes(t *testing.T) {
 	base := fr.url + "/v1/routines"
 	one := base + "/triage/acknowledge"
 
-	if resp, _ := send(t, http.MethodGet, base, "alice", ""); resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("a list without an agent = %d", resp.StatusCode)
-	}
 	if resp, _ := send(t, http.MethodGet, base+"?agent=triage", "", ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("a list without a token = %d", resp.StatusCode)
 	}
@@ -118,6 +115,16 @@ func TestRoutes(t *testing.T) {
 	if resp, b := send(t, http.MethodPost, standing, "alice", `{"standing": "rehearsing", "note": "looks right"}`); resp.StatusCode != http.StatusOK || !strings.Contains(b, `"standing":"rehearsing"`) {
 		t.Fatalf("to rehearsing = %d %s", resp.StatusCode, b)
 	}
+	// A move to the standing that the routine has answers 200 and changes
+	// nothing: no new move, no new time.
+	_, before := send(t, http.MethodGet, one, "alice", "")
+	resp, b = send(t, http.MethodPost, standing, "alice", `{"standing": "rehearsing", "note": "again"}`)
+	var same, was map[string]any
+	decodeJSON(t, b, &same)
+	decodeJSON(t, before, &was)
+	if resp.StatusCode != http.StatusOK || len(same["history"].([]any)) != 2 || same["updatedAt"] != was["updatedAt"] {
+		t.Fatalf("a move to the same standing = %d %s", resp.StatusCode, b)
+	}
 	if resp, b := send(t, http.MethodPost, standing, "fleet", `{"standing": "live"}`); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("the static token signs off = %d %s", resp.StatusCode, b)
 	}
@@ -146,6 +153,59 @@ func TestRoutes(t *testing.T) {
 	h := rec["history"].([]any)
 	if len(h) != 3 || h[2].(map[string]any)["note"] != "the evidence is good" {
 		t.Fatalf("history = %v", h)
+	}
+}
+
+// Without agent, the list holds the routines of every agent that the
+// caller can view, the newest change first. An agent that the caller
+// cannot view, and an agent of the store that the fleet no longer runs,
+// stay out. A named agent that the caller cannot view answers 404.
+func TestListEveryAgent(t *testing.T) {
+	fr := newFront(t, nil)
+	ctx := context.Background()
+	r := fw.Routine{Steps: []fw.RoutineStep{{Tool: "files", Input: "{}"}}}
+	for _, c := range []struct{ agent, name string }{{"triage", "first"}, {"private", "secret"}, {"gone", "old"}, {"triage", "second"}} {
+		r.Name = c.name
+		if _, _, err := fr.s.Put(ctx, PutRequest{Agent: c.agent, Routine: r}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	names := func(who, query string) (int, []string) {
+		resp, b := send(t, http.MethodGet, fr.url+"/v1/routines"+query, who, "")
+		var list struct {
+			Routines []Record `json:"routines"`
+		}
+		if resp.StatusCode == http.StatusOK {
+			decodeJSON(t, b, &list)
+		}
+		var out []string
+		for _, rec := range list.Routines {
+			out = append(out, rec.Agent+"/"+rec.Name())
+		}
+		return resp.StatusCode, out
+	}
+	if code, got := names("alice", ""); code != http.StatusOK || !slices.Equal(got, []string{"triage/second", "triage/first"}) {
+		t.Fatalf("alice = %d %v", code, got)
+	}
+	if code, got := names("dave", ""); code != http.StatusOK || !slices.Equal(got, []string{"private/secret"}) {
+		t.Fatalf("dave = %d %v", code, got)
+	}
+	if code, got := names("carol", ""); code != http.StatusOK || len(got) != 0 {
+		t.Fatalf("carol = %d %v", code, got)
+	}
+	if code, got := names("fleet", ""); code != http.StatusOK || len(got) != 3 {
+		t.Fatalf("the static token = %d %v", code, got)
+	}
+	if code, got := names("bob", "?agent=triage"); code != http.StatusOK || len(got) != 2 {
+		t.Fatalf("bob for triage = %d %v", code, got)
+	}
+	if code, _ := names("alice", "?agent=private"); code != http.StatusNotFound {
+		t.Fatalf("alice for private = %d", code)
+	}
+	res := call(t, connectMCP(t, fr.a, "dave"), ToolList, map[string]any{})
+	if res.IsError || !strings.Contains(textOf(res), "private: secret") || strings.Contains(textOf(res), "triage") {
+		t.Fatalf("routines_list without agent = %s", textOf(res))
 	}
 }
 

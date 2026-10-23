@@ -346,13 +346,37 @@ func (s *Store) List(ctx context.Context, agent string) ([]Record, error) {
 			out = append(out, rec)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
-			return out[i].UpdatedAt.After(out[j].UpdatedAt)
-		}
-		return out[i].Name() < out[j].Name()
-	})
+	newestFirst(out)
 	return out, nil
+}
+
+// All returns the records of the routines of every agent, without
+// evidence, the newest change first.
+func (s *Store) All(ctx context.Context) ([]Record, error) {
+	all, err := s.records(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Record, 0, len(all))
+	for _, rec := range all {
+		out = append(out, rec)
+	}
+	newestFirst(out)
+	return out, nil
+}
+
+// newestFirst sorts records by their last change, newest first, then by
+// agent and name.
+func newestFirst(list []Record) {
+	sort.Slice(list, func(i, j int) bool {
+		if !list[i].UpdatedAt.Equal(list[j].UpdatedAt) {
+			return list[i].UpdatedAt.After(list[j].UpdatedAt)
+		}
+		if list[i].Agent != list[j].Agent {
+			return list[i].Agent < list[j].Agent
+		}
+		return list[i].Name() < list[j].Name()
+	})
 }
 
 // Reaching returns the routines that reach the profiles of the agents, by

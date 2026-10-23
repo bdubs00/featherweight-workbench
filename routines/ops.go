@@ -34,6 +34,44 @@ func allowed(ctx context.Context, a *fw.Agent, agent, action string) error {
 	return Check(ctx, a, agent, action)
 }
 
+// visible returns the routines of the agent for the caller in ctx, or of
+// every agent that the caller can view when agent is empty, the newest
+// change first. A named agent that the caller cannot view is ErrHidden. An
+// agent of the store that the caller cannot view, or that the fleet no
+// longer runs, is left out of the whole list.
+func visible(ctx context.Context, a *fw.Agent, s *Store, agent string) ([]Record, error) {
+	if agent != "" {
+		if err := allowed(ctx, a, agent, fw.ActionAgentView); err != nil {
+			return nil, err
+		}
+		return s.List(ctx, agent)
+	}
+	all, err := s.All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	out := []Record{}
+	for _, rec := range all {
+		ok, decided := seen[rec.Agent]
+		if !decided {
+			err := allowed(ctx, a, rec.Agent, fw.ActionAgentView)
+			switch {
+			case err == nil:
+				ok = true
+			case errors.Is(err, ErrHidden):
+			default:
+				return nil, err
+			}
+			seen[rec.Agent] = ok
+		}
+		if ok {
+			out = append(out, rec)
+		}
+	}
+	return out, nil
+}
+
 // putBody is the body of PUT /v1/routines/{agent}/{name} and the request of
 // a write. Standing is proposed or rehearsing for a new routine, and empty
 // or the standing of a routine that exists.

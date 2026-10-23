@@ -77,19 +77,12 @@ func agentParam(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return agent, true
 }
 
-// list answers GET /v1/routines?agent= with the routines of the agent,
-// without evidence, the newest change first.
+// list answers GET /v1/routines with the routines of every agent that the
+// caller can view, or with ?agent= the routines of that agent, without
+// evidence, the newest change first.
 func (rt *routes) list(w http.ResponseWriter, r *http.Request) {
 	ctx, _, _ := manager.OnBehalf(r.Context())
-	agent, ok := agentParam(w, r)
-	if !ok {
-		return
-	}
-	if err := allowed(ctx, rt.a, agent, fw.ActionAgentView); err != nil {
-		rt.fail(w, r, err)
-		return
-	}
-	list, err := Of(rt.a).List(ctx, agent)
+	list, err := visible(ctx, rt.a, Of(rt.a), strings.TrimSpace(r.URL.Query().Get("agent")))
 	if err != nil {
 		rt.fail(w, r, err)
 		return

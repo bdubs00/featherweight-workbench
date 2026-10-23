@@ -28,9 +28,9 @@ const (
 
 const (
 	listSchema = `{"type":"object","properties":{
-		"agent":{"type":"string","minLength":1,"maxLength":64,"description":"The name of the agent profile, such as triage."},
-		"name":{"type":"string","maxLength":64,"description":"One routine of the agent, with what its runs showed. Without it, every routine of the agent."}
-	},"required":["agent"]}`
+		"agent":{"type":"string","maxLength":64,"description":"The name of the agent profile, such as triage. Without it, the routines of every agent that you can view."},
+		"name":{"type":"string","maxLength":64,"description":"One routine of the agent, with what its runs showed. It needs agent."}
+	}}`
 
 	standingSchema = `{"type":"object","properties":{
 		"agent":{"type":"string","minLength":1,"maxLength":64,"description":"The name of the agent profile, such as triage."},
@@ -73,7 +73,7 @@ func tools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolList,
 			Title:       "List routines",
-			Description: "List the routines of an agent: each with its standing (proposed, rehearsing, live, paused, or retired), whether it is ready for a sign-off, its version, and its history. With name, one routine with what its runs showed: per day how many it would have acted on, agreed with the agent on, and handed to the agent, and the last runs where it disagreed.",
+			Description: "List the routines of an agent, or of every agent that you can view: each with its standing (proposed, rehearsing, live, paused, or retired), whether it is ready for a sign-off, its version, and its history. With name, one routine with what its runs showed: per day how many it would have acted on, agreed with the agent on, and handed to the agent, and the last runs where it disagreed.",
 			InputSchema: json.RawMessage(listSchema),
 			Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in listArgs) (*sdk.CallToolResult, any, error) {
@@ -116,28 +116,39 @@ func listTool(ctx context.Context, a *fw.Agent, in listArgs) *sdk.CallToolResult
 	if s == nil {
 		return mcp.ErrorResult("The routines are off in this process. They run on a front that serves, with the bus nats or mem.")
 	}
-	if err := allowed(ctx, a, in.Agent, fw.ActionAgentView); err != nil {
-		return mcp.ErrorResult(explain(err))
-	}
 	if in.Name != "" {
+		if in.Agent == "" {
+			return mcp.ErrorResult("Invalid request: name needs agent.")
+		}
+		if err := allowed(ctx, a, in.Agent, fw.ActionAgentView); err != nil {
+			return mcp.ErrorResult(explain(err))
+		}
 		rec, err := s.Get(ctx, in.Agent, in.Name)
 		if err != nil {
 			return mcp.ErrorResult(explain(err))
 		}
 		return mcp.Result(recordText(rec), listResult{Routines: []Record{rec}})
 	}
-	list, err := s.List(ctx, in.Agent)
+	list, err := visible(ctx, a, s, in.Agent)
 	if err != nil {
 		return mcp.ErrorResult(explain(err))
 	}
+	whose := "every agent that you can view"
+	if in.Agent != "" {
+		whose = in.Agent
+	}
 	if len(list) == 0 {
-		return mcp.Result(fmt.Sprintf("The agent %s has no routine.", in.Agent), listResult{Routines: list})
+		return mcp.Result("No routine of "+whose+".", listResult{Routines: list})
 	}
 	lines := make([]string, 0, len(list))
 	for _, rec := range list {
-		lines = append(lines, "- "+recordLine(rec))
+		line := recordLine(rec)
+		if in.Agent == "" {
+			line = rec.Agent + ": " + line
+		}
+		lines = append(lines, "- "+line)
 	}
-	text := fmt.Sprintf("The routines of %s, the newest change first:\n%s", in.Agent, strings.Join(lines, "\n"))
+	text := fmt.Sprintf("The routines of %s, the newest change first:\n%s", whose, strings.Join(lines, "\n"))
 	return mcp.Result(text, listResult{Routines: list})
 }
 

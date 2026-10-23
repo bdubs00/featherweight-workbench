@@ -2620,7 +2620,7 @@ These routes sit behind the authentication of the native API. Reading needs the 
 
 | Method and path | Purpose |
 |---|---|
-| `GET /v1/routines?agent=<name>` | `{"routines": [record...]}`, the records without evidence, the newest change first |
+| `GET /v1/routines` | `{"routines": [record...]}`, the records of the routines of every agent that the caller can view, without evidence, the newest change first. An agent of the store that the caller cannot view, or that the fleet no longer runs, stays out. `?agent=<name>` keeps the routines of that agent, and answers 404 for an agent that the caller cannot view. |
 | `GET /v1/routines/{agent}/{name}` | The record with `evidence` |
 | `PUT /v1/routines/{agent}/{name}` | Creates or replaces the body. The body is `{"routine", "standing", "source", "replay", "note"}`. `routine` is required, and its `name` is empty or the name of the path. `standing` is `proposed` or `rehearsing` for a new routine, and empty or the standing of a routine that exists. The answer is 201 with the record and `Location` for a new routine, else 200. |
 | `POST /v1/routines/{agent}/{name}/standing` | The body is `{"standing", "note"}`. The answer is 200 with the record, or 409 with the allowed moves. |
@@ -2698,7 +2698,7 @@ The summary follows the day of an agent (section 17.8). The runs are the runs of
 
 | Tool | Arguments | What it does |
 |---|---|---|
-| `routines_list` | `agent`, `name` | The routines of the agent as `{"routines": [record...]}`. With `name`, the one record with its evidence. Read-only. |
+| `routines_list` | `agent`, `name` | The routines of the agent as `{"routines": [record...]}`, and without `agent` those of every agent that the caller can view. With `agent` and `name`, the one record with its evidence. Read-only. |
 | `routine_standing` | `agent`, `name`, `standing`, `note` | Moves a routine as the route does, and answers `{"routine": record, "moved": true}`. Its `destructiveHint` is false. |
 
 The tools decide as the routes do. Each calls `manager.OnBehalf` at its start, so a run of the manager acts for its person (section 19). The policy of the profile that calls `routine_standing` decides whether a person approves the call first. The manager of `examples/bossmode` asks.
