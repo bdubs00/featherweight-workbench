@@ -1,6 +1,7 @@
 package bossmode
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	fwconfig "github.com/bdubs00/featherweight-kernel/config"
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
 // Load reads the quick chat from the block, and the variables win over
@@ -91,6 +93,43 @@ func TestSettingsChat(t *testing.T) {
 	_, body = get(t, fr.url+"/v1/bossmode", "ada")
 	if err := json.Unmarshal([]byte(body), &got); err != nil || got.Chat == nil || *got.Chat != (QuickChat{Agent: "chat", Member: "team/chat-0"}) {
 		t.Errorf("settings with a member = %s, %v", body, err)
+	}
+}
+
+// poolsView is a fleet view with members and pools and nothing else.
+type poolsView struct {
+	fleet.View
+	members []fleet.Member
+	pools   []pools.Status
+}
+
+func (v poolsView) Members(context.Context) ([]fleet.Member, error) { return v.members, nil }
+func (v poolsView) Pools(context.Context) ([]pools.Status, error)   { return v.pools, nil }
+
+// After a roll the Task of the pool manager is manager-1, and the child
+// Tasks that manager-0 spawned still list the profiles of the manager. The
+// quick chat, the agent of no pool, goes to the Task of the pool, not to
+// a child whose name sorts first.
+func TestChatMemberPrefersTheTaskOfAPool(t *testing.T) {
+	agents := []fleet.RecordAgent{{Name: "chat"}, {Name: "manager"}}
+	v := poolsView{
+		members: []fleet.Member{
+			{Name: "front", Self: true, Agents: agents},
+			{Name: "team/manager-0-01child", Agents: agents},
+			{Name: "team/manager-1", Agents: agents},
+		},
+		pools: []pools.Status{{Name: "manager", Atespace: "team", Agent: "manager", Tasks: []pools.TaskStatus{{Name: "manager-1", Phase: "Running"}}}},
+	}
+	if got, err := managerMember(t.Context(), v, "chat"); err != nil || got != "team/manager-1" {
+		t.Errorf("the member of the quick chat = %q, %v; want team/manager-1", got, err)
+	}
+	if got, err := managerMember(t.Context(), v, "manager"); err != nil || got != "team/manager-1" {
+		t.Errorf("the member of the manager = %q, %v; want team/manager-1", got, err)
+	}
+	// Without pools, the names decide, and the front comes last.
+	v.pools = nil
+	if got, err := managerMember(t.Context(), v, "chat"); err != nil || got != "team/manager-0-01child" {
+		t.Errorf("the member without pools = %q, %v; want team/manager-0-01child", got, err)
 	}
 }
 

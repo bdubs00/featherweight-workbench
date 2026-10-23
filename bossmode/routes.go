@@ -179,10 +179,16 @@ func chatOf(ctx context.Context, a *fw.Agent, c Chat) (*QuickChat, error) {
 // says: the settings pick the member of the manager and of the quick chat
 // this way.
 func managerMember(ctx context.Context, v fleet.View, agent string) (string, error) {
+	pooled := map[string]bool{}
 	if pv, ok := v.(fleet.PoolView); ok {
 		list, err := pv.Pools(ctx)
 		if err != nil {
 			return "", err
+		}
+		for _, p := range list {
+			for _, t := range p.Tasks {
+				pooled[p.Atespace+"/"+t.Name] = true
+			}
 		}
 		for _, p := range list {
 			if p.Agent != agent || len(p.Tasks) == 0 {
@@ -202,7 +208,15 @@ func managerMember(ctx context.Context, v fleet.View, agent string) (string, err
 	if err != nil {
 		return "", err
 	}
-	sort.Slice(members, func(i, j int) bool { return members[i].Name < members[j].Name })
+	// The Tasks of a pool come first. A Task outside every pool, such as a
+	// child Task that a manager spawned, lists the profiles of its parent,
+	// and after a roll it can sort before the new Task of the pool.
+	sort.Slice(members, func(i, j int) bool {
+		if pooled[members[i].Name] != pooled[members[j].Name] {
+			return pooled[members[i].Name]
+		}
+		return members[i].Name < members[j].Name
+	})
 	self := ""
 	for _, m := range members {
 		for _, ag := range m.Agents {
