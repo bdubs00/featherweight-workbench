@@ -494,8 +494,14 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 		return nil, true
 	}
 	// The member applies its own limit. A run or a message with files is
-	// the largest body that a route takes.
-	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, native.MaxFilesBodyBytes))
+	// the largest body that a route takes. A body of a known length takes
+	// one buffer of that length.
+	var buf bytes.Buffer
+	if r.ContentLength > 0 {
+		buf.Grow(int(min(r.ContentLength, native.MaxFilesBodyBytes)) + 1)
+	}
+	_, err := buf.ReadFrom(http.MaxBytesReader(w, r.Body, native.MaxFilesBodyBytes))
+	b := buf.Bytes()
 	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
@@ -540,41 +546,142 @@ func personBody(w http.ResponseWriter, r *http.Request, body []byte, p *fw.Princ
 		native.WriteProblem(w, r, status, detail)
 		return nil, "", false
 	}
-	out, err := json.Marshal(o)
-	if err != nil {
-		native.WriteProblem(w, r, http.StatusBadRequest, "the body is not valid: "+err.Error())
-		return nil, "", false
-	}
-	return out, agent, true
+	return o.bytes(), agent, true
 }
 
-// object is a body that holds one JSON object, by key.
-type object map[string]json.RawMessage
+// object is a body that holds one JSON object: its members in the order of
+// the body, each a part of the body, so a large value, such as the files of
+// a message, is never copied. take and set change the members, and bytes
+// writes the body again only when they did.
+type object struct {
+	body    []byte
+	members []objectMember
+	added   []objectMember
+	changed bool
+}
+
+// objectMember is one member of an object: its key, the part of the body
+// from its key to the end of its value, and its value. A member that
+// take removed is gone.
+type objectMember struct {
+	key   string
+	raw   []byte
+	value json.RawMessage
+	gone  bool
+}
 
 // parseObject reads a body that holds one JSON object. null is an empty
 // object, as the kernel reads it.
-func parseObject(b []byte) (object, error) {
-	var o object
-	if err := json.Unmarshal(b, &o); err != nil {
-		return nil, err
+func parseObject(b []byte) (*object, error) {
+	if !json.Valid(b) {
+		var probe map[string]json.RawMessage
+		if err := json.Unmarshal(b, &probe); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("the body is not JSON")
 	}
-	if o == nil {
-		o = object{}
+	o := &object{body: b}
+	i := skipSpace(b, 0)
+	switch {
+	case bytes.HasPrefix(b[i:], []byte("null")):
+		o.changed = true // the body becomes {}
+		return o, nil
+	case b[i] != '{':
+		return nil, errors.New("the body is not a JSON object")
 	}
-	return o, nil
+	i++
+	for {
+		i = skipSpace(b, i)
+		switch b[i] {
+		case '}':
+			return o, nil
+		case ',':
+			i = skipSpace(b, i+1)
+		}
+		start := i
+		i = skipString(b, i)
+		var key string
+		if err := json.Unmarshal(b[start:i], &key); err != nil {
+			return nil, err
+		}
+		i = skipSpace(b, skipSpace(b, i)+1) // the colon
+		from := i
+		i = skipValue(b, i)
+		o.members = append(o.members, objectMember{key: key, raw: b[start:i], value: b[from:i]})
+	}
+}
+
+// skipSpace returns the index of the first byte at or after i that is no
+// white space of JSON.
+func skipSpace(b []byte, i int) int {
+	for i < len(b) && (b[i] == ' ' || b[i] == '\t' || b[i] == '\r' || b[i] == '\n') {
+		i++
+	}
+	return i
+}
+
+// skipString returns the index after the JSON string that starts at i, in
+// a body that json.Valid accepted.
+func skipString(b []byte, i int) int {
+	for i++; i < len(b); i++ {
+		switch b[i] {
+		case '\\':
+			i++
+		case '"':
+			return i + 1
+		}
+	}
+	return i
+}
+
+// skipValue returns the index after the JSON value that starts at i, in a
+// body that json.Valid accepted.
+func skipValue(b []byte, i int) int {
+	switch b[i] {
+	case '"':
+		return skipString(b, i)
+	case '{', '[':
+		depth := 0
+		for i < len(b) {
+			switch b[i] {
+			case '"':
+				i = skipString(b, i)
+				continue
+			case '{', '[':
+				depth++
+			case '}', ']':
+				if depth--; depth == 0 {
+					return i + 1
+				}
+			}
+			i++
+		}
+		return i
+	}
+	for i < len(b) && !strings.ContainsRune(",}] \t\r\n", rune(b[i])) {
+		i++
+	}
+	return i
 }
 
 // take removes the field name from o under every key that names it
 // without regard to case, and returns its value, or nil when o holds no
 // such field. A field under two keys is an error: the kernel takes the
-// later key, and a map does not know which one that is.
-func (o object) take(name string) (json.RawMessage, error) {
+// later key, and the front refuses to guess which one the kernel matches.
+func (o *object) take(name string) (json.RawMessage, error) {
 	var v json.RawMessage
 	n := 0
-	for k, raw := range o {
-		if strings.EqualFold(k, name) {
-			v, n = raw, n+1
-			delete(o, k)
+	for i := range o.members {
+		if m := &o.members[i]; !m.gone && strings.EqualFold(m.key, name) {
+			v, n = m.value, n+1
+			m.gone, o.changed = true, true
+		}
+	}
+	for i := 0; i < len(o.added); i++ {
+		if strings.EqualFold(o.added[i].key, name) {
+			v, n = o.added[i].value, n+1
+			o.added = append(o.added[:i], o.added[i+1:]...)
+			i--
 		}
 	}
 	if n > 1 {
@@ -585,7 +692,7 @@ func (o object) take(name string) (json.RawMessage, error) {
 
 // text takes the field name from o as a string, "" when o holds no such
 // field or holds null.
-func (o object) text(name string) (string, error) {
+func (o *object) text(name string) (string, error) {
 	raw, err := o.take(name)
 	if err != nil || raw == nil {
 		return "", err
@@ -600,16 +707,39 @@ func (o object) text(name string) (string, error) {
 	return *s, nil
 }
 
-// set sets the field name of o to a string.
-func (o object) set(name, value string) {
+// set sets the field name of o to a string. The field must not be in o:
+// take it first.
+func (o *object) set(name, value string) {
+	key, _ := json.Marshal(name)
 	raw, _ := json.Marshal(value)
-	o[name] = raw
+	o.added = append(o.added, objectMember{key: name, raw: append(append(key, ':'), raw...), value: raw})
+	o.changed = true
+}
+
+// bytes returns the body: the body as the front read it when nothing
+// changed, else the members that stay and the members that set added.
+func (o *object) bytes() []byte {
+	if !o.changed {
+		return o.body
+	}
+	out := make([]byte, 0, len(o.body)+64)
+	out = append(out, '{')
+	for _, m := range append(slices.Clone(o.members), o.added...) {
+		if m.gone {
+			continue
+		}
+		if len(out) > 1 {
+			out = append(out, ',')
+		}
+		out = append(out, m.raw...)
+	}
+	return append(out, '}')
 }
 
 // forPerson applies the rules of personBody to the body of the route
 // pattern. It returns the agent that a start names, and the status and the
 // detail of a problem, or a status of 0.
-func (o object) forPerson(pattern string, p *fw.Principal) (agent string, status int, detail string) {
+func (o *object) forPerson(pattern string, p *fw.Principal) (agent string, status int, detail string) {
 	switch pattern {
 	case routeMessages:
 		from, err := o.take("from")

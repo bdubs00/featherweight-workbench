@@ -1,7 +1,9 @@
 package fleet
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -344,6 +346,47 @@ func TestRelayStartsARunForAPerson(t *testing.T) {
 	code, b = pf.do(t, http.MethodPost, "/v1/runs?member=team/rev", `{"agent":"team","input":"x","principal":"alice"}`, "fleet-secret")
 	if got := pf.last(t); code != http.StatusCreated || got.auth != "Bearer fleet-secret" || got.person != "" || got.body["principal"] != "alice" || got.body["principalKind"] != nil {
 		t.Fatalf("the start of the token = %d %s, %+v", code, b, got)
+	}
+}
+
+// The files of a person reach the member as the person sent them: a
+// follow-up without a sender goes on as the front read it, and a start
+// carries the files beside the person. A string that holds braces and
+// quotes hides no field, and neither does a key in an escape.
+func TestRelayKeepsTheFilesOfAPerson(t *testing.T) {
+	pf := newPersonFront(t)
+	data := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0, 255, 7}, 500000))
+	name := `a } { \" ].bin`
+	files := `"files":[{"name":"` + name + `","data":"` + data + `"}]`
+	check := func(what string, body map[string]any) {
+		t.Helper()
+		fs, _ := body["files"].([]any)
+		f, _ := fs[0].(map[string]any)
+		if len(fs) != 1 || f["data"] != data || f["name"] != `a } { " ].bin` {
+			t.Fatalf("%s: the files changed on the way: %d files", what, len(fs))
+		}
+	}
+	if code, b := pf.do(t, http.MethodPost, "/v1/runs/r1/messages", `{"content":"see } this {",`+files+`}`, "alice-token"); code != http.StatusAccepted {
+		t.Fatalf("a follow-up with files = %d %.200s", code, b)
+	}
+	got := pf.last(t)
+	check("a follow-up", got.body)
+	if got.body["content"] != "see } this {" || got.person != "alice" || len(got.body) != 2 {
+		t.Fatalf("the follow-up reached the member as %+v", got.body["content"])
+	}
+	if code, b := pf.do(t, http.MethodPost, "/v1/runs?member=team/rev", `{"agent":"team","input":"x",`+files+`,"Principal":"mallory"}`, "alice-token"); code != http.StatusCreated {
+		t.Fatalf("a start with files = %d %.200s", code, b)
+	}
+	got = pf.last(t)
+	check("a start", got.body)
+	if got.body["principal"] != "alice" || got.body["principalKind"] != fw.KindUser || got.body["Principal"] != nil || got.body["agent"] != "team" || len(got.body) != 5 {
+		t.Fatalf("the start reached the member as %v", got.body["principal"])
+	}
+	if code, b := pf.do(t, http.MethodPost, "/v1/runs/r1/messages", `{"content":"hi","\u0066rom":{"kind":"agent","name":"x"}}`, "alice-token"); code != http.StatusForbidden {
+		t.Fatalf("a sender under an escaped key = %d %s", code, b)
+	}
+	if code, b := pf.do(t, http.MethodPost, "/v1/runs/r1/messages", " {\n\t\"content\" : \"hi\" ,\n \"from\" : null } ", "alice-token"); code != http.StatusAccepted || len(pf.last(t).body) != 1 || pf.last(t).body["content"] != "hi" {
+		t.Fatalf("a body with white space and a null sender = %d %s, %+v", code, b, pf.last(t).body)
 	}
 }
 
