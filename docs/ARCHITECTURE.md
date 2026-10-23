@@ -1994,7 +1994,7 @@ The channel holds one entry per message, under the key `<bridge>.<seq>`, with th
 | `to` | The handles that the message addresses, `[]` for every active member |
 | `replyTo` | The seq of the entry that it replies to, or null |
 | `text` | The text, cut to its first 4 KB at a rune |
-| `cut` | True when the entry holds only the first 4 KB of the text. The run that gets the message holds the whole text, and the channel keeps it too, up to 64 KB, under the key `<bridge>.whole.<seq>`, so `bridge_read` with `seq` returns the whole entry to an agent (section 18.11). |
+| `cut` | True when the entry holds only the first 4 KB of the text. The run that gets the message holds the whole text, and the channel keeps it too, up to 64 KB, under the key `<bridge>.whole.<seq>`, so `bridge_read` with `seq` returns the whole entry to an agent (section 18.11), and `GET /v1/bridges/{id}/messages/{seq}` to the page (section 18.10). |
 | `pinned` | True for a message that a person pinned and for a slash command, whose deliveries survive every compaction of the runs that get them (sections 18.5 and 20.3) |
 | `event` | For a system line, what it says (section 18.6) |
 | `page` | For a system line about a page of the wiki, the path of the page, such as `bridges/<id>/report.md`, else absent. The page of bossmode links the page from this field. The text names the path and holds no link. |
@@ -2164,6 +2164,7 @@ Every route needs the authentication of the native surface. A bridge is for its 
 | `PATCH /v1/bridges/{id}` | The record with its members |
 | `PUT /v1/bridges/{id}/read` | 204 |
 | `GET /v1/bridges/{id}/messages` | `{"bridge", "messages", "next", "prev"}` |
+| `GET /v1/bridges/{id}/messages/{seq}` | One entry with its whole text: the entry as the channel holds it, with `text` the whole text up to 64 KB (section 18.2), and `cut` true only when the front holds no more than the start. 404 for an unknown entry, 400 for a seq that is no positive number. |
 | `POST /v1/bridges/{id}/messages` | 201 with the entry. With `skill`, a slash command (section 20.3): 404 for an unknown skill, 400 for a skill that is not for people, and 413 for a message over 64 KB. |
 | `POST /v1/bridges/{id}/messages/{seq}/reactions` | 200 with the entry |
 | `POST /v1/bridges/{id}/members` | 201 with the seat |

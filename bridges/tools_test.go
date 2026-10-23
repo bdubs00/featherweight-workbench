@@ -200,6 +200,27 @@ func TestReadAWholeEntry(t *testing.T) {
 	if res := callTool(t, cs, ToolRead, map[string]any{"seq": 999}, metaOf("r-rev", "reviewer", "")); !res.IsError {
 		t.Fatalf("an unknown entry = %s", textOf(res))
 	}
+
+	// The page reads one entry whole with GET /v1/bridges/{id}/messages/{seq}.
+	resp, out := do(t, http.MethodGet, url+"/v1/bridges/"+it.ID+"/messages/"+fmt.Sprint(seqs["reviewer"]), "alice", "")
+	var m Message
+	decodeJSON(t, out, &m)
+	if resp.StatusCode != http.StatusOK || m.Text != long("reviewer") || m.Cut || m.Seq != seqs["reviewer"] || m.From.Handle != "reviewer" {
+		t.Fatalf("GET of the answer = %d %.200s", resp.StatusCode, out)
+	}
+	resp, out = do(t, http.MethodGet, url+"/v1/bridges/"+it.ID+"/messages/"+fmt.Sprint(seqs["alice"]), "alice", "")
+	decodeJSON(t, out, &m)
+	if resp.StatusCode != http.StatusOK || !m.Cut || len(m.Text) > entryTextBytes {
+		t.Fatalf("GET of an entry whose whole text is lost = %d %.200s", resp.StatusCode, out)
+	}
+	for path, want := range map[string]int{"/messages/999": http.StatusNotFound, "/messages/0": http.StatusBadRequest, "/messages/x": http.StatusBadRequest} {
+		if resp, out := do(t, http.MethodGet, url+"/v1/bridges/"+it.ID+path, "alice", ""); resp.StatusCode != want {
+			t.Errorf("GET %s = %d %s", path, resp.StatusCode, out)
+		}
+	}
+	if resp, _ := do(t, http.MethodGet, url+"/v1/bridges/"+it.ID+"/messages/1", "carol", ""); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("carol reads an entry: %d", resp.StatusCode)
+	}
 }
 
 // tail is the end of a long text, for a message of a test.

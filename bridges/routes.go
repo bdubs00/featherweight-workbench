@@ -38,6 +38,7 @@ func mount(k *native.Kit) error {
 	k.Handle("PUT /v1/bridges/{id}/read", rt.read)
 	k.Handle("GET /v1/bridges/{id}/messages", rt.messages)
 	k.Handle("POST /v1/bridges/{id}/messages", rt.post)
+	k.Handle("GET /v1/bridges/{id}/messages/{seq}", rt.entry)
 	k.Handle("POST /v1/bridges/{id}/messages/{seq}/reactions", rt.react)
 	k.Handle("POST /v1/bridges/{id}/members", rt.addMember)
 	k.Handle("DELETE /v1/bridges/{id}/members/{handle}", rt.fire)
@@ -237,6 +238,29 @@ func (rt *routes) read(w http.ResponseWriter, r *http.Request) {
 
 // messages answers GET /v1/bridges/{id}/messages?before=&from=&limit= with
 // one page of the channel, as the transcript route pages a run.
+// entry answers GET /v1/bridges/{id}/messages/{seq} with one entry of the
+// channel and its whole text (wholeEntry): text holds the whole text, up
+// to 64 KB, and cut stays true only when the front holds no more than the
+// start of the entry. The page reads it to show a long entry whole.
+func (rt *routes) entry(w http.ResponseWriter, r *http.Request) {
+	s, rec, ok := rt.bridge(w, r)
+	if !ok {
+		return
+	}
+	seq, err := strconv.ParseUint(r.PathValue("seq"), 10, 64)
+	if err != nil || seq == 0 {
+		native.WriteProblem(w, r, http.StatusBadRequest, "the seq of an entry is a positive whole number")
+		return
+	}
+	m, text, whole, err := s.wholeEntry(r.Context(), rec, seq)
+	if err != nil {
+		rt.fail(w, r, err)
+		return
+	}
+	m.Text, m.Cut = text, !whole
+	native.WriteJSON(w, http.StatusOK, m)
+}
+
 func (rt *routes) messages(w http.ResponseWriter, r *http.Request) {
 	s, rec, ok := rt.bridge(w, r)
 	if !ok {
