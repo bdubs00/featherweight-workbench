@@ -331,6 +331,43 @@ func TestSearch(t *testing.T) {
 	}
 }
 
+// The snippet of a hit is plain words from the body: no front matter, no
+// heading that repeats the title, and no Markdown marks. A page whose body
+// does not hold the words gives its first line of prose.
+func TestExcerpt(t *testing.T) {
+	page := "---\ntitle: Blanks of the Proxmox pages\ntags: homelab, proxmox\n---\n# Blanks of the Proxmox pages\n\n" +
+		"This table lists each blank that a person must fill.\n\n| Blank | What it is |\n|---|---|\n| `<PVE_NODE>` | The **node** that runs new VMs |\n\n" +
+		"## Links\n\n- See [the Proxmox page](overview.md) and [the network](../network.md).\n"
+	cases := []struct{ q, want string }{
+		{"proxmox", "See the Proxmox page and the network."},
+		{"blanks", "This table lists each blank that a person must fill."},
+		{"homelab", "This table lists each blank that a person must fill."},
+		{"node", "<PVE_NODE> · The node that runs new VMs"},
+		{"links", "Links"},
+	}
+	for _, c := range cases {
+		hit, ok := match(PageInfo{Path: "homelab/proxmox/blanks.md", Title: "Blanks of the Proxmox pages"}, page, wordsOf(c.q))
+		if !ok || hit.Snippet != c.want {
+			t.Errorf("%s: %q, %v; want %q", c.q, hit.Snippet, ok, c.want)
+		}
+	}
+	// A cut inside a link keeps the words of the link.
+	long := strings.Repeat("word ", 30) + "[Homelab network](../../homelab/network.md), [Homelab inventory](../../homelab/inventory.md) and the needle" + strings.Repeat(" more", 60)
+	got := plain(snippet(long, strings.Index(long, "needle")))
+	if strings.Contains(got, "](") || strings.Contains(got, ".md)") || !strings.Contains(got, "needle") {
+		t.Errorf("a cut snippet = %q", got)
+	}
+	for in, want := range map[string]string{
+		"...ork.md), [Homelab inventory](../inventory.md) and more": "..., Homelab inventory and more",
+		"the start of [a link](../some/long/pa...":                  "the start of a link...",
+		"> a quote with `code`":                                     "a quote with code",
+	} {
+		if got := plain(in); got != want {
+			t.Errorf("plain(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestSnippet(t *testing.T) {
 	// The lower case of İ takes three bytes, not two, so an offset in the
 	// lower case text does not fit the text; the snippet still finds the
