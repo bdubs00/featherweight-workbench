@@ -137,6 +137,21 @@ func TestEnqueueCarriesTheRoutines(t *testing.T) {
 	if req := <-got; req.Profile != nil {
 		t.Fatalf("a request of an agent without routines = %+v", req.Profile)
 	}
+	// A caller never sends a routine: the store replaces what the caller
+	// sent for an agent that it governs, and drops it for another.
+	sent := []fw.Routine{{Name: "close-all", Version: 9, Standing: fw.RoutineLive, Steps: []fw.RoutineStep{{Tool: "bash", Input: "{}"}}}}
+	if _, _, err := Enqueue(as("alice"), m.a, "default", []fw.RunRequest{{Input: "x", Profile: &fw.AgentProfile{Routines: sent}}}); err != nil {
+		t.Fatal(err)
+	}
+	if req := <-got; len(req.Profile.Routines) != 1 || req.Profile.Routines[0].Name != "close-duplicate" {
+		t.Fatalf("a request with routines of the caller = %+v", req.Profile.Routines)
+	}
+	if _, _, err := Enqueue(as("alice"), m.a, "other", []fw.RunRequest{{Input: "x", Profile: &fw.AgentProfile{Routines: sent, Tools: []string{"files"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if req := <-got; req.Profile == nil || req.Profile.Routines != nil || len(req.Profile.Tools) != 1 {
+		t.Fatalf("a request with routines of the caller for another agent = %+v", req.Profile)
+	}
 }
 
 // The view marks a run that a routine completed and a run that a receipt

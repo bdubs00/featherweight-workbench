@@ -124,6 +124,17 @@ func withRoutines(o pools.Overlay, routines map[string][]fw.Routine) pools.Overl
 	return o
 }
 
+// dropRoutines removes the routines that a caller put in the inline
+// profile of a request.
+func dropRoutines(req *fw.RunRequest) {
+	if req.Profile == nil || req.Profile.Routines == nil {
+		return
+	}
+	p := *req.Profile
+	p.Routines = nil
+	req.Profile = &p
+}
+
 // inlineRoutines gives a run request of the agent the routines that the
 // store holds for it, in its inline profile, when the store holds any
 // record of the agent. The request keeps its inline profile otherwise.

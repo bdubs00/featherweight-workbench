@@ -236,12 +236,15 @@ func errLocked(name string) error {
 }
 
 // Normalize trims the profile: the name, the effort, the time zone, the
-// policy default, and the access entries. It refuses, with
+// policy default, and the access entries. It drops the routines, which
+// only the store of the routines gives a profile (package routines), so no
+// caller writes a routine through a profile. It refuses, with
 // fw.ErrInvalidRequest, a time zone that fw.LoadZone does not resolve and a
 // policy default that is not allow, ask, or deny. The kernel checks the
 // rest.
 func Normalize(p *fw.AgentProfile) error {
 	p.Name = strings.TrimSpace(p.Name)
+	p.Routines = nil
 	p.Effort = strings.ToLower(strings.TrimSpace(p.Effort))
 	p.Model = strings.TrimSpace(p.Model)
 	p.TimeZone = strings.TrimSpace(p.TimeZone)

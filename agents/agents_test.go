@@ -173,3 +173,25 @@ func TestFileStoreRoundTrip(t *testing.T) {
 		t.Error("a profile from a file is locked")
 	}
 }
+
+// Only the store of the routines gives a profile its routines: a put with
+// the static token or a person saves the profile without them, and so
+// does a dry run.
+func TestPutDropsRoutines(t *testing.T) {
+	store := useMemStore(t)
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	a := newAgent(t, cfg)
+	token := fw.WithPrincipal(context.Background(), &fw.Principal{Subject: fw.KindToken, Kind: fw.KindToken})
+	live := []fw.Routine{{Name: "close-all", Version: 1, Standing: fw.RoutineLive, Steps: []fw.RoutineStep{{Tool: "bash", Input: `{"command": "true"}`}}}}
+	if d, err := Preview(token, a, fw.AgentProfile{Name: "writer", Routines: live}); err != nil || d.Routines != nil {
+		t.Fatalf("Preview = %+v, %v", d.Routines, err)
+	}
+	if _, _, err := Put(token, a, fw.AgentProfile{Name: "writer", Routines: live}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := a.ProfileNamed("writer")
+	if p.Routines != nil || len(store.puts) != 1 || store.puts[0].Routines != nil {
+		t.Fatalf("the saved profile holds routines: %+v", p.Routines)
+	}
+}

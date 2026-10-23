@@ -125,13 +125,30 @@ func TestRoutes(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || len(same["history"].([]any)) != 2 || same["updatedAt"] != was["updatedAt"] {
 		t.Fatalf("a move to the same standing = %d %s", resp.StatusCode, b)
 	}
-	if resp, b := send(t, http.MethodPost, standing, "fleet", `{"standing": "live"}`); resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("the static token signs off = %d %s", resp.StatusCode, b)
+	// A person signs off: neither the static token nor a workload that
+	// owns the agent can.
+	for _, who := range []string{"fleet", "robot"} {
+		if resp, b := send(t, http.MethodPost, standing, who, `{"standing": "live"}`); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s signs off = %d %s", who, resp.StatusCode, b)
+		}
+	}
+	// A sign-off names the version that the person read; another version
+	// answers 409 with the version and the standing of the routine.
+	resp, b = send(t, http.MethodPost, standing, "alice", `{"standing": "live", "version": 1}`)
+	var vp struct {
+		Status   int    `json:"status"`
+		Detail   string `json:"detail"`
+		Standing string `json:"standing"`
+		Version  int    `json:"version"`
+	}
+	decodeJSON(t, b, &vp)
+	if resp.StatusCode != http.StatusConflict || vp.Version != 2 || vp.Standing != Rehearsing || vp.Detail != "the move names version 1, and the routine is at version 2 now. Read it again" {
+		t.Fatalf("a sign-off of an older version = %d %s", resp.StatusCode, b)
 	}
 	if resp, b := send(t, http.MethodPost, standing, "alice", `{"standing": "sideways"}`); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("an unknown standing = %d %s", resp.StatusCode, b)
 	}
-	resp, b = send(t, http.MethodPost, standing, "alice", `{"standing": "live", "note": "the evidence is good"}`)
+	resp, b = send(t, http.MethodPost, standing, "alice", `{"standing": "live", "note": "the evidence is good", "version": 2}`)
 	decodeJSON(t, b, &rec)
 	if resp.StatusCode != http.StatusOK || rec["standing"] != Live || rec["signedOff"].(map[string]any)["by"] != "alice" {
 		t.Fatalf("the sign-off = %d %s", resp.StatusCode, b)

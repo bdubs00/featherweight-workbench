@@ -22,8 +22,8 @@ import (
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-// people takes the bearer token as the subject of a person, and fleet as
-// the static token of the fleet.
+// people takes the bearer token as the subject of a person, fleet as the
+// static token of the fleet, and robot as a workload.
 type people struct{}
 
 func (people) Authenticate(r *http.Request) (*fw.Principal, error) {
@@ -31,8 +31,11 @@ func (people) Authenticate(r *http.Request) (*fw.Principal, error) {
 	if tok == "" || tok == r.Header.Get("Authorization") {
 		return nil, fw.ErrUnauthorized
 	}
-	if tok == "fleet" {
+	switch tok {
+	case "fleet":
 		return &fw.Principal{Subject: fw.KindToken, Kind: fw.KindToken}, nil
+	case "robot":
+		return &fw.Principal{Subject: "spiffe://lab/robot", Kind: fw.KindWorkload}, nil
 	}
 	return &fw.Principal{Subject: tok, Kind: fw.KindUser}, nil
 }
@@ -44,8 +47,8 @@ func (people) Challenge(w http.ResponseWriter, _ *http.Request) {
 
 // front is a process with the routines and the wiki in memory, a fleet
 // that reads the egress stream of the mem bus, and the native surface on
-// a test server. alice owns the agent triage and bob operates it; dave
-// owns private, which the others cannot see.
+// a test server. alice and the workload robot own the agent triage, and bob
+// operates it. dave owns private, which the others cannot see.
 type front struct {
 	a   *fw.Agent
 	bus *fw.MemBus
@@ -66,7 +69,7 @@ func newFront(t *testing.T, mut func(*fw.Config)) *front {
 	cfg.Access.Default = "closed"
 	cfg.Time.Zone = "UTC"
 	cfg.Agents = map[string]fw.AgentProfile{
-		"triage":  {Access: &fw.Access{Owners: []string{"alice"}, Operators: []string{"bob"}}},
+		"triage":  {Access: &fw.Access{Owners: []string{"alice", "spiffe://lab/robot"}, Operators: []string{"bob"}}},
 		"private": {Access: &fw.Access{Owners: []string{"dave"}}},
 	}
 	if mut != nil {

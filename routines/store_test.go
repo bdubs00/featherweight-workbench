@@ -167,8 +167,20 @@ func TestStorePutVersions(t *testing.T) {
 	if last.Standing != Rehearsing || last.Version != 3 || !strings.Contains(last.Note, "rehearses again") || !strings.Contains(last.Note, "a clearer answer") {
 		t.Fatalf("the move back = %+v", last)
 	}
-	// A body of another routine under this name, and a standing that the
-	// write does not change.
+	// A paused routine can go live with one move, so its new body
+	// rehearses first too.
+	if _, _, err := s.Move(ctx, MoveRequest{Agent: "triage", Name: "acknowledge", To: Live, By: "ada", Person: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Move(ctx, MoveRequest{Agent: "triage", Name: "acknowledge", To: Paused, By: "ada"}); err != nil {
+		t.Fatal(err)
+	}
+	changed.Answer = "TRIAGE type {{ .type }}"
+	rec, res, err = s.Put(ctx, PutRequest{Agent: "triage", Routine: changed, By: "alice"})
+	if err != nil || !res.Back || rec.Standing != Rehearsing || rec.Version() != 4 || rec.SignedOff != nil {
+		t.Fatalf("a new body of a paused routine = %+v, %+v, %v", rec, res, err)
+	}
+	// A write of a routine that exists names no other standing.
 	if _, _, err := s.Put(ctx, PutRequest{Agent: "triage", Routine: changed, Standing: Live}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("a standing in a write of a routine that exists = %v", err)
 	}
@@ -176,7 +188,7 @@ func TestStorePutVersions(t *testing.T) {
 	b, _ := json.Marshal(rec)
 	var raw map[string]map[string]any
 	_ = json.Unmarshal(b, &raw)
-	if _, ok := raw["routine"]["standing"]; ok || raw["routine"]["version"] != float64(3) || raw["routine"]["name"] != "acknowledge" {
+	if _, ok := raw["routine"]["standing"]; ok || raw["routine"]["version"] != float64(4) || raw["routine"]["name"] != "acknowledge" {
 		t.Fatalf("the JSON of the record = %s", b)
 	}
 }

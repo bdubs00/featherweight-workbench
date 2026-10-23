@@ -75,6 +75,18 @@ func (e *MoveError) Error() string {
 	return fmt.Sprintf("a %s routine cannot move to %s. It can move to %s", e.From, e.To, movesText(e.From))
 }
 
+// VersionError is a move that names a version of the body other than the
+// version of the record, so the person decided on a body that changed
+// since. Version and Standing are those of the record.
+type VersionError struct {
+	Want, Version int
+	Standing      string
+}
+
+func (e *VersionError) Error() string {
+	return fmt.Sprintf("the move names version %d, and the routine is at version %d now. Read it again", e.Want, e.Version)
+}
+
 // SignOff says who signed a routine off, and when.
 type SignOff struct {
 	By string    `json:"by"`
@@ -543,7 +555,9 @@ func (s *Store) Put(ctx context.Context, req PutRequest) (Record, PutResult, err
 				body.Version = cur.Version() + 1
 				rec.Routine, rec.Ready = body, false
 				res.Changed = true
-				if cur.Standing == Live {
+				if cur.Standing == Live || cur.Standing == Paused {
+					// A paused routine can go live with one move, so its
+					// new version rehearses first too.
 					rec.Standing, rec.SignedOff, res.Back = Rehearsing, nil, true
 					rec.History = append(slices.Clone(cur.History), Move{At: now, By: req.By, Standing: Rehearsing, Note: joinNote("a new version rehearses again", note), Version: body.Version})
 				}
@@ -594,9 +608,12 @@ func (s *Store) Put(ctx context.Context, req PutRequest) (Record, PutResult, err
 	return Record{}, PutResult{}, fmt.Errorf("%w: other writers changed the routine %s of %s %d times while this write tried; try again", ErrConflict, body.Name, req.Agent, writeAttempts)
 }
 
-// MoveRequest is a move of a routine to another standing.
+// MoveRequest is a move of a routine to another standing. Version, when
+// it is not zero, is the version of the body that the caller read: a
+// record of another version refuses the move with a *VersionError.
 type MoveRequest struct {
 	Agent, Name, To, Note, By string
+	Version                   int
 	// Person is true when a person makes the move, not the process or the
 	// static token alone. A move to live needs a person.
 	Person bool
@@ -625,6 +642,9 @@ func (s *Store) Move(ctx context.Context, req MoveRequest) (Record, bool, error)
 		cur, rev, err := s.get(ctx, req.Agent, req.Name)
 		if err != nil {
 			return Record{}, false, err
+		}
+		if req.Version != 0 && req.Version != cur.Version() {
+			return Record{}, false, &VersionError{Want: req.Version, Version: cur.Version(), Standing: cur.Standing}
 		}
 		if cur.Standing == req.To {
 			return cur, false, nil

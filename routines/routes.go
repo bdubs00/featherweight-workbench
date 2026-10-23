@@ -44,10 +44,27 @@ type moveProblem struct {
 	Allowed  []string `json:"allowed"`
 }
 
+// versionProblem is the problem document of a move of another version,
+// with the version and the standing of the record.
+type versionProblem struct {
+	native.Problem
+	Standing string `json:"standing"`
+	Version  int    `json:"version"`
+}
+
 // fail maps an error of the routines to a problem document.
 func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var me *MoveError
+	var ve *VersionError
 	switch {
+	case errors.As(err, &ve):
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(versionProblem{
+			Problem:  native.Problem{Type: "about:blank", Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict, Detail: ve.Error(), Instance: r.URL.Path},
+			Standing: ve.Standing,
+			Version:  ve.Version,
+		})
 	case errors.As(err, &me):
 		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(http.StatusConflict)

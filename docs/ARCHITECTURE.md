@@ -2564,7 +2564,7 @@ The name of a routine holds 1 to 64 of `a-z`, `0-9`, and `-`, as the kernel says
 
 The kernel checks each body as it checks the routines of a profile (`fw.CheckRoutines`), without the models that answer its questions, which the configuration of the workers names. The pools check those when the routine reaches a profile (section 21.3). A body that the kernel refuses answers 400 with the first problem.
 
-A body changes only through `PUT`. A body that differs from the body that the store holds gets the next version, `ready` goes false, and the evidence starts again. A live routine whose body changes goes back to `rehearsing`, with a move in its history, because a new version rehearses again. A write of the body that the store holds already changes nothing. A retired routine takes no new body.
+A body changes only through `PUT`. A body that differs from the body that the store holds gets the next version, `ready` goes false, and the evidence starts again. A live or paused routine whose body changes goes back to `rehearsing`, with a move in its history, and loses `signedOff`, because a new version rehearses again. A paused routine can go live with one move, so a new body of it rehearses first too. Only the store gives a profile its routines: `agent_put`, `PUT /v1/agents/{name}`, and a run request on a queue drop the routines that a caller sends. A write of the body that the store holds already changes nothing. A retired routine takes no new body.
 
 Every write is a compare-and-swap on the revision of the entry, up to eight times, so two replicas of the front never lose a write. The bucket keeps the last ten values of each entry. The front opens its own connection with `bus.url` and the options `credentials` and `token` of the bus. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_ROUTINES.>`. On the bus `mem`, the routines live in the process, and two processes share nothing. On another bus, the front logs once that the routines are off, mounts no route, and offers no tool.
 
@@ -2580,7 +2580,7 @@ Other packages use the routines through Go. `routines.Of(a)` returns the `*routi
 | `paused` | no | `rehearsing`, `live` |
 | `retired` | no | nothing |
 
-A move that the table forbids answers 409 with the standing and the allowed moves. A move to the standing that a routine has changes nothing and answers 200. Every move records who made it, when, the note, and the version in `history`. A move to `live` sets `signedOff`, and it needs a person: the process and the static token alone cannot sign a routine off, and they get 403. A run of the manager signs off for the person of the run (section 19.2), and the note of the move names the run, as `by manager run 01K... for ada`. A routine that leaves `rehearsing` is not ready. A routine that comes back to `rehearsing` is ready when its evidence passes the rule.
+A move that the table forbids answers 409 with the standing and the allowed moves. A move to the standing that a routine has changes nothing and answers 200. Every move records who made it, when, the note, and the version in `history`. A move to `live` sets `signedOff`, and it needs a person: a user of the issuer or the local user of the process. The process itself, the static token alone, a workload, and an anonymous caller cannot sign a routine off, and they get 403. A move can name `version`, the version of the body that the caller read. When the routine is at another version, the move answers 409 with the version and the standing that the routine has, so a sign-off holds for the body that the person read. A run of the manager signs off for the person of the run (section 19.2), and the note of the move names the run, as `by manager run 01K... for ada`. A routine that leaves `rehearsing` is not ready. A routine that comes back to `rehearsing` is ready when its evidence passes the rule.
 
 A new routine starts `proposed`. A caller who may edit the agent can start it `rehearsing`. It never starts in another standing.
 
@@ -2623,7 +2623,7 @@ These routes sit behind the authentication of the native API. Reading needs the 
 | `GET /v1/routines` | `{"routines": [record...]}`, the records of the routines of every agent that the caller can view, without evidence, the newest change first. An agent of the store that the caller cannot view, or that the fleet no longer runs, stays out. `?agent=<name>` keeps the routines of that agent, and answers 404 for an agent that the caller cannot view. |
 | `GET /v1/routines/{agent}/{name}` | The record with `evidence` |
 | `PUT /v1/routines/{agent}/{name}` | Creates or replaces the body. The body is `{"routine", "standing", "source", "replay", "note"}`. `routine` is required, and its `name` is empty or the name of the path. `standing` is `proposed` or `rehearsing` for a new routine, and empty or the standing of a routine that exists. The answer is 201 with the record and `Location` for a new routine, else 200. |
-| `POST /v1/routines/{agent}/{name}/standing` | The body is `{"standing", "note"}`. The answer is 200 with the record, or 409 with the allowed moves. |
+| `POST /v1/routines/{agent}/{name}/standing` | The body is `{"standing", "note", "version"}`, and `version` is optional. The answer is 200 with the record, or 409 with the allowed moves or with the version of the routine. |
 | `GET /v1/routines/summary?agent=<name>&days=7` | The week of the agent (below). `days` is 1 to 90, 7 by default. |
 
 A record, as `GET /v1/routines/{agent}/{name}` answers it:
@@ -2680,6 +2680,15 @@ A move that the table forbids:
  "detail": "a proposed routine cannot move to live. It can move to rehearsing or retired",
  "instance": "/v1/routines/triage/acknowledge-a-new-ticket/standing",
  "standing": "proposed", "allowed": ["rehearsing", "retired"]}
+```
+
+A move that names a version that the routine no longer has:
+
+```json
+{"type": "about:blank", "title": "Conflict", "status": 409,
+ "detail": "the move names version 3, and the routine is at version 4 now. Read it again",
+ "instance": "/v1/routines/triage/acknowledge-a-new-ticket/standing",
+ "standing": "rehearsing", "version": 4}
 ```
 
 The summary follows the day of an agent (section 17.8). The runs are the runs of the agent that the caller can see and that started at `since` or later, child runs included: `since` is midnight `days` - 1 days before today, in the zone of the front.

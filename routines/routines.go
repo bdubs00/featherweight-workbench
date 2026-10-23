@@ -226,12 +226,13 @@ func emitChange(agent, name string) {
 
 // caller names who acts in ctx, after manager.OnBehalf: the subject of the
 // principal, else fw-workbench for the process itself. person is true for
-// a principal that is not the static token. note adds the actor, such as
+// a person only: a user of the issuer or the local user of the process,
+// never the static token, a workload, or an anonymous caller. note adds the actor, such as
 // "by manager run 01K... for ada", to the note of a run of the fleet.
 func caller(ctx context.Context, note string) (by, fullNote string, person bool) {
 	by, fullNote = "fw-workbench", note
 	if p := fw.PrincipalFrom(ctx); p != nil && p.Subject != "" {
-		by, person = p.Subject, p.Kind != fw.KindToken
+		by, person = p.Subject, p.Kind == fw.KindUser || p.Kind == fw.KindLocal
 	}
 	if act, ok := manager.ActorFrom(ctx); ok {
 		fullNote = act.Note(note)

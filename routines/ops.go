@@ -121,9 +121,11 @@ func put(ctx context.Context, a *fw.Agent, s *Store, agent, name string, in putB
 }
 
 // moveBody is the body of POST /v1/routines/{agent}/{name}/standing.
+// Version is optional: the version of the body that the caller read.
 type moveBody struct {
 	Standing string `json:"standing"`
 	Note     string `json:"note,omitempty"`
+	Version  int    `json:"version,omitempty"`
 }
 
 // move moves a routine to another standing for the caller in ctx, which
@@ -139,7 +141,7 @@ func move(ctx context.Context, a *fw.Agent, s *Store, agent, name string, in mov
 	}
 	by, note, person := caller(ctx, in.Note)
 	rec, moved, err := s.Move(ctx, MoveRequest{
-		Agent: agent, Name: name, To: strings.TrimSpace(in.Standing), Note: note, By: by, Person: person,
+		Agent: agent, Name: name, To: strings.TrimSpace(in.Standing), Note: note, By: by, Person: person, Version: in.Version,
 		Check: func(ctx context.Context, list []fw.Routine) error { return fleet.CheckRoutines(ctx, a, agent, list) },
 	})
 	if err != nil || !moved {

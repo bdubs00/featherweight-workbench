@@ -204,7 +204,12 @@ func (p *projector) applyGroup(ctx context.Context, g *group) error {
 	version, sh := rec.Version(), shapeOf(rec.Routine)
 	ev, err := p.s.updateEvidence(ctx, g.agent, g.name, func(ev *Evidence) bool {
 		changed := false
-		if ev.Version != version {
+		switch {
+		case ev.Version > version:
+			// A newer version started after the read of the record, so
+			// these events belong to an older one.
+			return false
+		case ev.Version < version:
 			*ev = *newEvidence(version)
 			changed = true
 		}

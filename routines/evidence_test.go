@@ -223,3 +223,31 @@ func TestTwoReplicasCountOnce(t *testing.T) {
 		t.Fatalf("totals = %+v", rec.Evidence.Totals)
 	}
 }
+
+// The projection never moves the evidence back to an older version: a
+// group that read the record before a new version started its evidence
+// leaves that evidence as it is.
+func TestProjectionKeepsTheNewerVersion(t *testing.T) {
+	ctx := context.Background()
+	s := memStore(Config{})
+	if _, _, err := s.Put(ctx, PutRequest{Agent: "triage", Routine: ack(), Standing: Rehearsing}); err != nil {
+		t.Fatal(err)
+	}
+	// The evidence of version 2 started, as a write of a new body does,
+	// after the projection read the record at version 1.
+	_, _ = s.updateEvidence(ctx, "triage", "acknowledge", func(ev *Evidence) bool {
+		*ev = *newEvidence(2)
+		ev.Totals.Handed = 7
+		return true
+	})
+	e := fw.MustEvent("01OLD", fw.EvRoutineDecided, fw.RoutineDecidedData{Routine: "acknowledge", Version: 1, Mode: fw.RoutineShadow, Applies: true})
+	e.Time = time.Now()
+	g := &group{agent: "triage", name: "acknowledge", events: []fleet.RunEvent{{Agent: "triage", Event: e}}}
+	if err := newProjector(s, quiet()).applyGroup(ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	ev, _, _ := s.evidence(ctx, "triage", "acknowledge")
+	if ev.Version != 2 || ev.Totals.Handed != 7 || ev.Totals.Acted != 0 {
+		t.Fatalf("the evidence = version %d, %+v", ev.Version, ev.Totals)
+	}
+}

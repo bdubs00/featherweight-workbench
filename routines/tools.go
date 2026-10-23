@@ -36,7 +36,8 @@ const (
 		"agent":{"type":"string","minLength":1,"maxLength":64,"description":"The name of the agent profile, such as triage."},
 		"name":{"type":"string","minLength":1,"maxLength":64,"description":"The name of the routine, such as acknowledge-a-new-ticket."},
 		"standing":{"type":"string","enum":["rehearsing","live","paused","retired"],"description":"The new standing. rehearsing runs the routine beside the agent without acting. live signs it off, so it acts on its own. paused stops it. retired ends it for good."},
-		"note":{"type":"string","maxLength":512,"description":"One line that says why, for the history of the routine."}
+		"note":{"type":"string","maxLength":512,"description":"One line that says why, for the history of the routine, at most 512 bytes."},
+		"version":{"type":"integer","minimum":1,"description":"The version of the routine that you read. The move fails when the routine changed since."}
 	},"required":["agent","name","standing"]}`
 )
 
@@ -50,6 +51,7 @@ type (
 		Name     string `json:"name"`
 		Standing string `json:"standing"`
 		Note     string `json:"note,omitempty"`
+		Version  int    `json:"version,omitempty"`
 	}
 	listResult struct {
 		Routines []Record `json:"routines"`
@@ -94,7 +96,10 @@ func tools(s *mcp.Server) []mcp.Tool {
 // explain words an error of the routines for a tool result.
 func explain(err error) string {
 	var me *MoveError
+	var ve *VersionError
 	switch {
+	case errors.As(err, &ve):
+		return "Conflict: " + ve.Error() + " with routines_list."
 	case errors.As(err, &me):
 		return "Conflict: " + me.Error() + "."
 	case errors.Is(err, ErrHidden):
@@ -159,7 +164,7 @@ func standingTool(ctx context.Context, a *fw.Agent, in standingArgs) *sdk.CallTo
 	if s == nil {
 		return mcp.ErrorResult("The routines are off in this process. They run on a front that serves, with the bus nats or mem.")
 	}
-	rec, moved, err := move(ctx, a, s, in.Agent, in.Name, moveBody{Standing: in.Standing, Note: in.Note})
+	rec, moved, err := move(ctx, a, s, in.Agent, in.Name, moveBody{Standing: in.Standing, Note: in.Note, Version: in.Version})
 	if err != nil {
 		return mcp.ErrorResult(explain(err))
 	}
