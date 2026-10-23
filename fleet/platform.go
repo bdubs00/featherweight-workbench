@@ -108,6 +108,11 @@ type platform struct {
 	// read it (runtime.go).
 	merged map[string]*pools.Pool
 	rt     map[string]*runtimePool
+	// passRoutines holds the routines that the current pass read, and
+	// passRoutinesErr why it could not read them (routines.go). Only the
+	// goroutine of the passes uses them.
+	passRoutines    map[string][]fw.Routine
+	passRoutinesErr error
 	// shown holds the state of each member that the last member change
 	// named, by name, so a change goes out once, and quiet is the time
 	// without an event after which a member that only the stream knows is
@@ -224,6 +229,10 @@ type platformRun struct {
 	// after it (Decisions).
 	decided  []uint64
 	streamed bool
+	// byRoutine is true once a routine completed the run, and sentBack once
+	// a quality receipt sent it back (tap.go).
+	byRoutine bool
+	sentBack  bool
 	// idx is what the index of the runs holds of the run (index.go).
 	// fromIndex is true while the view knows the run from the index alone:
 	// no event and no read of its member confirmed it since the view
@@ -878,6 +887,7 @@ func (p *platform) onEvent(e fw.Event) error {
 		r.run.Apply(e, p.prices)
 		r.track(e, before)
 		r.noteToolInput(e)
+		r.mark(e)
 		if e.Type == fw.EvApprovalDecided && len(r.decided) < maxDecided {
 			r.decided = append(r.decided, e.Seq)
 		}
@@ -886,6 +896,10 @@ func (p *platform) onEvent(e fw.Event) error {
 	case (e.Type == fw.EvRunFinished || e.Type == fw.EvRunSuspended) && e.Seq > r.stateSeq:
 		r.lateEnd(e, p.prices)
 	default:
+		// The view applies no other late event, and a tap still reads it:
+		// a bus can bring the comparison of a routine after the end of
+		// its run.
+		p.tapped(r, e)
 		return nil
 	}
 	if e.Type == fw.EvRunFinished {
@@ -913,6 +927,7 @@ func (p *platform) onEvent(e fw.Event) error {
 		}
 	}
 	p.noteRun(e.Subject, r, now)
+	p.tapped(r, e)
 	return nil
 }
 

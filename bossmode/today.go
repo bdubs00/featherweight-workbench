@@ -7,7 +7,6 @@ package bossmode
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -85,72 +84,18 @@ func TodayOf(ctx context.Context, a *fw.Agent, agent string) (Today, error) {
 	now := a.Clock().Now().In(loc)
 	since := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	out := Today{Agent: agent, Window: WindowToday, Zone: zone, Since: since}
-	local, err := a.List(ctx)
+	runs, err := fleet.RunsSince(ctx, a, agent, since)
 	if err != nil {
 		return Today{}, err
-	}
-	var runs []*fw.Run
-	for _, r := range local {
-		if r.Agent == agent && !r.CreatedAt.Before(since) {
-			runs = append(runs, r)
-		}
-	}
-	f, _ := fleet.Of(a).(*fleet.Fleet)
-	if f != nil {
-		remote, err := f.AgentRuns(ctx, agent, since)
-		if err != nil {
-			return Today{}, err
-		}
-		runs = append(runs, remote...)
 	}
 	var sum fleet.UsageSum
 	for _, r := range runs {
 		sum.Add(r)
-		n, whole := 0, false
-		if r.Member == "" {
-			n, whole = localDecisions(ctx, a, r.ID)
-		} else if f != nil {
-			n, whole = f.Decisions(r.ID)
-		}
-		out.Decisions += n
-		out.DecisionsPartial = out.DecisionsPartial || !whole
+		facts := fleet.FactsOf(ctx, a, r)
+		out.Decisions += facts.Decisions
+		out.DecisionsPartial = out.DecisionsPartial || !facts.Whole
 	}
 	out.Runs, out.CostUSD = len(runs), sum.CostUSD
 	out.Partial = sum.Missing > 0 || sum.Final < sum.Reported || sum.UnpricedTokens > 0
 	return out, nil
-}
-
-// localDecisions counts the fw.approval.decided events in the ledger of a
-// run of this process, after the events that a branch kept from its
-// source, and reports whether the ledger read whole.
-func localDecisions(ctx context.Context, a *fw.Agent, id string) (int, bool) {
-	var decided []uint64
-	var kept uint64
-	whole := true
-	for e, err := range a.Ledger().Read(ctx, id, 0) {
-		if err != nil {
-			whole = false
-			break
-		}
-		switch e.Type {
-		case fw.EvRunQueued:
-			// The kept events of a branch come first, and its own
-			// fw.run.queued names how many.
-			var d struct {
-				Kept uint64 `json:"kept"`
-			}
-			if json.Unmarshal(e.Data, &d) == nil && d.Kept > kept {
-				kept = d.Kept
-			}
-		case fw.EvApprovalDecided:
-			decided = append(decided, e.Seq)
-		}
-	}
-	n := 0
-	for _, seq := range decided {
-		if seq > kept {
-			n++
-		}
-	}
-	return n, whole
 }

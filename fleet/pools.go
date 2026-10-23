@@ -127,6 +127,11 @@ func (p *platform) reconcilePools(ctx context.Context, listed map[string][]*v1al
 		return
 	}
 	entries, rerr := p.f.runtimeList(ctx)
+	// A pass without the routines takes them away from every Task, so a
+	// store of the routines that does not answer, or that is not open
+	// yet, holds every pool, as an overlay does.
+	routines, rterr := p.f.readRoutines(ctx)
+	p.passRoutines, p.passRoutinesErr = routines, rterr
 	shadow := map[string]pools.Stored{}
 	for _, e := range entries {
 		shadow[e.Name] = e
@@ -141,7 +146,9 @@ func (p *platform) reconcilePools(ctx context.Context, listed map[string][]*v1al
 		}
 		if err := failed[pool.Atespace]; err != nil {
 			wait(fmt.Sprintf("the front could not list the Tasks of the atespace %s, so the pool waits: %v", pool.Atespace, err))
-		} else if merged, err := p.f.mergedPool(ctx, pool); err != nil {
+		} else if rterr != nil {
+			wait(fmt.Sprintf("the pool waits: %v", rterr))
+		} else if merged, err := p.f.mergedPoolWith(ctx, pool, routines); err != nil {
 			// A pass without the overlay takes the profiles and the
 			// rules of the overlay away from every Task, so the pool waits.
 			wait(fmt.Sprintf("the pool waits: %v", err))

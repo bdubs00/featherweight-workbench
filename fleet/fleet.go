@@ -120,6 +120,9 @@ type Fleet struct {
 	jobs        *jobBook
 	closeServer func()
 
+	// The routines of the last pass (routines.go).
+	routines routineCache
+
 	// The store of the overlays of the pools (profiles.go), nil when the
 	// pools run their configuration alone, and its end.
 	overlays      pools.OverlayStore

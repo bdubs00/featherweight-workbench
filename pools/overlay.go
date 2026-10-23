@@ -27,10 +27,17 @@ import (
 // Overlay is what the front adds to the block fw of a pool. Profiles are
 // added to fw.agents or replace the profile of the same name there, sorted
 // by name. Allow holds the rules that the merge adds to fw.policy.allow,
-// sorted by rule.
+// sorted by rule. Routines holds the routines of each agent that the store
+// of the routines keeps (docs/ARCHITECTURE.md section 21.3), by agent, each
+// with the standing of the kernel: the front reads them from that store at
+// each pass, and the store of the overlay keeps none. An agent with an
+// entry gets those routines in place of the routines of its profile. An
+// empty entry takes the routines of the profile away, and it leaves a
+// profile without routines as it is, so its hash stays.
 type Overlay struct {
-	Profiles []OverlayProfile `json:"profiles,omitempty"`
-	Allow    []OverlayRule    `json:"allow,omitempty"`
+	Profiles []OverlayProfile        `json:"profiles,omitempty"`
+	Allow    []OverlayRule           `json:"allow,omitempty"`
+	Routines map[string][]fw.Routine `json:"-"`
 }
 
 // OverlayProfile is one profile of an overlay, with the subject that wrote
@@ -56,7 +63,9 @@ type OverlayRule struct {
 }
 
 // Empty reports whether the overlay adds nothing.
-func (o Overlay) Empty() bool { return len(o.Profiles) == 0 && len(o.Allow) == 0 }
+func (o Overlay) Empty() bool {
+	return len(o.Profiles) == 0 && len(o.Allow) == 0 && len(o.Routines) == 0
+}
 
 // Profile returns the profile of that name in the overlay.
 func (o Overlay) Profile(name string) (OverlayProfile, bool) {
@@ -71,7 +80,7 @@ func (o Overlay) Profile(name string) (OverlayProfile, bool) {
 // WithProfile returns a copy of the overlay with e in place of the profile
 // of the same name.
 func (o Overlay) WithProfile(e OverlayProfile) Overlay {
-	out := Overlay{Allow: slices.Clone(o.Allow)}
+	out := Overlay{Allow: slices.Clone(o.Allow), Routines: o.Routines}
 	for _, old := range o.Profiles {
 		if old.Profile.Name != e.Profile.Name {
 			out.Profiles = append(out.Profiles, old)
@@ -85,7 +94,7 @@ func (o Overlay) WithProfile(e OverlayProfile) Overlay {
 // WithRule returns a copy of the overlay with the rule r, in place of a
 // rule with the same text.
 func (o Overlay) WithRule(r OverlayRule) Overlay {
-	out := Overlay{Profiles: slices.Clone(o.Profiles)}
+	out := Overlay{Profiles: slices.Clone(o.Profiles), Routines: o.Routines}
 	for _, old := range o.Allow {
 		if old.Rule != r.Rule {
 			out.Allow = append(out.Allow, old)
@@ -242,7 +251,7 @@ func overlayFW(base map[string]any, o Overlay, configured map[string]fw.AgentPro
 	for k, v := range base {
 		out[k] = v
 	}
-	if len(o.Profiles) > 0 {
+	if len(o.Profiles) > 0 || len(o.Routines) > 0 {
 		agents := map[string]any{}
 		if m, ok := base["agents"].(map[string]any); ok {
 			for k, v := range m {
@@ -254,13 +263,51 @@ func overlayFW(base map[string]any, o Overlay, configured map[string]fw.AgentPro
 			if c, ok := configured[e.Profile.Name]; ok {
 				same = &c
 			}
+			if list, ok := o.Routines[e.Profile.Name]; ok {
+				e.Profile.Routines = list
+			}
+			if len(e.Profile.Routines) == 0 {
+				e.Profile.Routines = nil
+			}
 			m, err := profileMap(e.Profile, same)
 			if err != nil {
 				return nil, err
 			}
 			agents[e.Profile.Name] = m
 		}
-		out["agents"] = agents
+		for name, list := range o.Routines {
+			if _, ok := o.Profile(name); ok {
+				continue
+			}
+			cur, ok := agents[name].(map[string]any)
+			if !ok {
+				if agents[name] != nil {
+					continue
+				}
+				if _, configured := agents[name]; !configured {
+					continue // the pool does not run the agent
+				}
+				cur = map[string]any{} // a profile of the configuration with no key
+			}
+			if had, _ := cur["routines"].([]any); len(list) == 0 && len(had) == 0 {
+				// No routine, before and after: the profile stays as it
+				// is, so a first proposal replaces no Task.
+				continue
+			}
+			m := make(map[string]any, len(cur)+1)
+			for k, v := range cur {
+				m[k] = v
+			}
+			v, err := routinesValue(list)
+			if err != nil {
+				return nil, fmt.Errorf("encode the routines of %s: %w", name, err)
+			}
+			m["routines"] = v
+			agents[name] = m
+		}
+		if len(agents) > 0 {
+			out["agents"] = agents
+		}
 	}
 	if len(o.Allow) > 0 {
 		policy := map[string]any{}
@@ -344,10 +391,33 @@ func profileMap(p fw.AgentProfile, same *fw.AgentProfile) (map[string]any, error
 		return nil, fmt.Errorf("encode the profile %s: %w", p.Name, err)
 	}
 	delete(m, "name")
+	if len(p.Routines) == 0 {
+		delete(m, "routines")
+	}
 	if p.Skills != nil && len(p.Skills) == 0 {
 		m["skills"] = []any{}
 	}
 	return m, nil
+}
+
+// routinesValue turns the routines of an agent into the value of the key
+// routines of its profile under fw.agents, with every text escaped as
+// profileMap escapes it, so a template never reads a variable of the
+// worker.
+func routinesValue(list []fw.Routine) ([]any, error) {
+	if list == nil {
+		list = []fw.Routine{}
+	}
+	var n yaml.Node
+	if err := n.Encode(list); err != nil {
+		return nil, err
+	}
+	escapeNode(&n)
+	out := []any{}
+	if err := n.Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // noPath returns a text of one line with a line break at its end, so the

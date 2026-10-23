@@ -73,6 +73,13 @@ workbench:
     atespaces: [default]
     egress: fw.events
     intake: fw.jobs
+  # A rehearsing routine is ready for a sign-off after it would have acted
+  # on readyAfter runs of its version and agreed with the agent on
+  # readyAgreement of them, with no agreed run sent back
+  # (docs/ARCHITECTURE.md section 21.4). These are the defaults.
+  routines:
+    readyAfter: 200
+    readyAgreement: 0.95
   # The page of bossmode creates an agent with its workers from this
   # template: PUT /v1/agents/{name} makes a runtime pool of two workers for
   # a new agent (docs/ARCHITECTURE.md section 14.10). The template names no
@@ -208,6 +215,7 @@ workbench:
                 - front.agent_put
                 - front.agent_delete
                 - front.faces_put
+                - front.routine_standing
             # The budget of one conversation.
             budget:
               maxTurns: 400

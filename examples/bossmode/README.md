@@ -58,7 +58,8 @@ name the templates. Section 14.10 of the architecture has the rules.
 - The policy asks the operator before `front.approve`, `front.cancel`,
   `front.run_budget`, `front.enqueue`, `front.run`, `front.bridge_open`,
   `front.bridge_remove_member`, `front.agent_put`, `front.agent_delete`,
-  and `front.faces_put`. Every read runs without a question. A write to the
+  `front.faces_put`, and `front.routine_standing`, so a sign-off of a routine
+  waits for the operator. Every read runs without a question. A write to the
   wiki with `front.pages_write` runs without a question too, because the
   wiki keeps each older version.
 - The budget of one conversation: 400 turns, 8 hours of working time, and

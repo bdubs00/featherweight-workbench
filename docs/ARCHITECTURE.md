@@ -19,7 +19,7 @@ The workbench changes no kernel code. It plugs in through the extension points o
 - `fw.RegisterService` runs work beside the agent for as long as it lives, `Kit.SetRelay` of the native surface answers a request about a run of another process, `metrics.RegisterCollector` adds series to the metrics surface, and `cli.RegisterDoctorCheck` adds a line to `fw doctor`. The package `fleet` uses the service, the relay, the collector, and the doctor check (section 4). Its relay also implements the optional interface `native.AgentRelay`, so it answers `GET /v1/agents/{name}` for a profile of a pool (section 14.9). Its collector adds the series of the queues, the ends of the runs of the workers, and the approvals that wait (section 4.14). A worker exports the facts of its own runs, and the front shows the fleet as the egress stream and the server of the bus tell it.
 - `fw.Agent.SetPersonTokens` gives the tool sources of the kernel the access tokens of people, and `fw.Agent.Connected` resumes the calls that wait for a connection. The package `connections` uses both (section 11).
 - The package `sources` uses `fw.RegisterService`, `native.Extend`, and `cli.RegisterDoctorCheck` too: its service runs the sources, its route takes the events of webhooks, and its doctor line names the sources (section 13).
-- The packages `pages`, `faces`, and `bridges` use `fw.RegisterService` and `native.Extend`, and `mcp.RegisterTools` of the MCP server of the workbench (section 3.1): the service keeps the store, the routes serve it to people, and the tools offer it to MCP clients and agents (sections 15, 16, and 18). The service of `bridges` also watches the view of the fleet and fans the messages of a channel out to the runs of its members.
+- The packages `pages`, `faces`, `bridges`, and `routines` use `fw.RegisterService` and `native.Extend`, and `mcp.RegisterTools` of the MCP server of the workbench (section 3.1): the service keeps the store, the routes serve it to people, and the tools offer it to MCP clients and agents (sections 15, 16, 18, and 21). The service of `bridges` also watches the view of the fleet and fans the messages of a channel out to the runs of its members. The package `routines` gives the fleet the routines of the agents (`fleet.Routines`) and reads the events of the routines from the egress stream that the fleet reads (`fleet.Tap`).
 - The package `bossmode` uses `fw.RegisterService`, `native.Extend`, `metrics.RegisterCollector`, and `cli.RegisterDoctorCheck`: its service keeps the stream of the page, its routes serve the page, its settings, and the stream, and its doctor line names the page, the manager, the quick chat, the streams, and the stores of the wiki, the faces, and the bridges (section 17).
 - The package `workers` uses `native.Extend` and `mcp.RegisterTools` for the routes and the tools of the worker templates and the runtime pools (section 14.10). The package `skills` registers nothing: the package `bossmode` serves the routes and the tools of the skills, and the package `bridges` takes a slash command in a channel (section 20).
 - The package `manager` holds what makes an agent of the fleet a manager (section 19). `cmd/fw-workbench` wraps the authorization plug of every agent with `manager.Guard` through `fw.WithAuthzFrom`. It also adds the line `manager` to `fw doctor` with `cli.RegisterDoctorCheck`. Each tool of the MCP server that reads or acts calls `manager.OnBehalf` at its start.
@@ -27,7 +27,7 @@ The workbench changes no kernel code. It plugs in through the extension points o
   - The service of `bridges` gives its store to `manager.SetBridges` when it starts and takes it back with `manager.ClearBridges` when it stops. So a manager run on a run of a bridge gets what the record of that bridge delegates (section 19.4).
   - The service of `bridges` follows the changes of the view, `fleet.Of(a).(fleet.Watcher).Watch(ctx)`, and reads the view at each change that can concern a bridge. Without a fleet that sends its changes, it reads the view every two seconds (section 18.12).
   - The package `bridges` words the activity of a seat with `fleet.ActivityPhrase` (`bridges.UsePhrase` in `init`), the words of the `run` events of the stream, so the roster and the stream say the same thing (sections 17.3 and 18.7).
-  - The package `bossmode` registers the hooks `bridges.OnMessage`, `bridges.OnMember`, `pages.OnChange`, and `faces.OnChange` in `init`, and puts what they get on the stream with `bossmode.PublishTo` and the rule of each package for the caller of each stream (section 17.5).
+  - The package `bossmode` registers the hooks `bridges.OnMessage`, `bridges.OnMember`, `pages.OnChange`, `faces.OnChange`, and `routines.OnChange` in `init`, and puts what they get on the stream with `bossmode.PublishTo` and the rule of each package for the caller of each stream (section 17.5).
   - Each key of the configuration has one reader. The package `manager` reads `workbench.bossmode.manager` (`manager.Load`), the package `bridges` reads the block `workbench.bridges` (`bridges.Load`), and the package `bossmode` reads the rest of `workbench.bossmode` and asks the other two (section 17.1).
 
 Each driver of the workbench registers itself in `init` through `fw.Register*`, as the kernel drivers do. `fleet` registers the fleet driver, and `surface/mcp` registers the surface `mcp`. A blank import in `cmd/fw-workbench/drivers.go` links each one, beside every driver of the kernel binary, the `oidc` authentication mode of the kernel included, because the front verifies the tokens of people.
@@ -90,6 +90,8 @@ bridges/                the bridges of bossmode: one job split into seats, with 
                         the fan-out to the runs of the members, and the system lines (section 18)
 faces/                  the faces of the agents: an SVG, a display name, and a tagline,
                         the sanitizer, and the identicon (section 16)
+routines/               the routines of the agents: the store, the standings, the evidence,
+                        the runbook, the summary, the routes, and the tools (section 21)
 internal/bucket/        the key-value bucket under the stores of the front: a bucket of the
                         NATS server of the bus, or the memory of the process
 bossmode/               the page of bossmode at /bossmode, its settings, its stream of events,
@@ -313,7 +315,7 @@ A fleet is not a set of replicas. Replicas of one agent share one ledger and ser
 
 ### 4.1 The sources
 
-The front reads two sources, which the configuration names (section 4.6). `workbench.fleet.atespaces` names the atespaces whose Tasks are members: at every interval the front lists them on the ax API at `ax.server`, and each Task is a member named `<atespace>/<task>` with the address `ax:<atespace>/<task>` and the state of its phase, live when it runs, quiet when it is suspended or pending, stopped otherwise. A Task that leaves the list leaves the view, with its runs. A pool, another replica of the front, or a person can delete a Task and create it again under the same name between two reads of the list, as a roll of the pools does. The list then shows the name with another creation time, and the view takes that as the old Task leaving and a new one coming: the runs of the old Task leave the view, and the front reads the new Task as it reads a Task that becomes live. Otherwise an open run of the old Task, whose final event the old Task never sent, would stay open on the new one for good, and the page would count the worker as busy while it runs idle. `workbench.fleet.egress` names the subject prefix of the egress stream of the workers, `bus.egress` on each of them. The front subscribes to that stream and projects every run from its events with the projection of the kernel, so the state, the title, the pending approval, the turns, and the usage of a run are those of the ledger of the worker. The usage comes from the totals that `fw.run.finished` and `fw.run.suspended` carry (the kernel architecture, section 9.4). The stream therefore needs no `fw.model.responded`, which holds the content of a run, and the front knows the usage of a run each time it finishes or is suspended. A worker sets `bus.egressTypes` to the types of `fleet.EgressTypes`, as the pools render it (section 14.1): the lifecycle events of its runs, the approvals and the decisions, the annotations, the messages, the start and the end of each turn, the tool calls with `fw.tool.requested` and `fw.tool.responded`, the children, the grades of an outcome, and the reactions with `fw.run.reacted`. The turns and the tool calls give the view the activity of each run (section 4.15), and the reactions give the counts of `reactions` on the run object. The tool calls carry the inputs and the outputs of the tools, so a worker of a pool also sets `bus.egressMaxBytes` to 4,096 (`fleet.EgressMaxBytes`): its egress cuts each string value in the data of a published event to 4,096 bytes at a rune boundary, with the note ` [cut N of M bytes]`, and its ledger stays whole (the kernel architecture, section 9.4). An event without such a long string goes out byte for byte. A lost event costs nothing once a later `fw.run.finished` or `fw.run.suspended` of the run arrives. A lost final `fw.run.finished` has no later event, so the view keeps the state and the usage of the event before it until the front reads the Task again (below). The cost is the cost at the prices of the worker. The totals carry no breakdown by model, so the front cannot price them again: it loses its own pricing at every totals event, its price table prices only the increments that the stream carries after the totals, such as the title call of `fw.run.annotated`, and the cost that it shows can go down at an end of a run, to $0 with every token unpriced when the worker has no price table. A breakdown by model in the totals, a later change, can let the front price them with its own table. The stream keeps the order of the events of a run, unless two processes publish for the run or the bus is the mem bus (the kernel architecture, section 9.4). For a reorder, the view applies the first `fw.run.queued` of a run even when it arrives after later events, because only that event names the agent, the person, and the metadata of the run, and it keeps the state of the later events; a repeated `fw.run.queued` changes nothing. A late end of a run, `fw.run.finished` or `fw.run.suspended`, applies when no event that changes the state of the run came after it, as after a title annotation, and the usage that the later events added stays on top of its totals. Any other late event changes nothing. When two processes publish for one branch, because its source took its start for failed while its process took it after all, the `fw.run.queued` with the larger `kept` applies too: the record of the source holds no copy and no work, so the copies of the branch never count as its own work. Each event names its node (the kernel architecture, section 9.4), so the front knows which Task holds the run. A `fw.run.child` event of a run tells the view where a child of that run lives, a child of `spawn_task` or a branch in a Task of its own (the kernel architecture, sections 4.7 and 11.9); each child sends it twice, a child of `spawn_task` before its Task exists and again once its run started, a branch when it is placed and again when it starts, and the view keeps one link. The view shows the child under its parent. Until the events of the child arrive, because its Task is still starting, the view shows it as a queued run of the member of the parent, so a request for it goes to the parent, which answers for it.
+The front reads two sources, which the configuration names (section 4.6). `workbench.fleet.atespaces` names the atespaces whose Tasks are members: at every interval the front lists them on the ax API at `ax.server`, and each Task is a member named `<atespace>/<task>` with the address `ax:<atespace>/<task>` and the state of its phase, live when it runs, quiet when it is suspended or pending, stopped otherwise. A Task that leaves the list leaves the view, with its runs. A pool, another replica of the front, or a person can delete a Task and create it again under the same name between two reads of the list, as a roll of the pools does. The list then shows the name with another creation time, and the view takes that as the old Task leaving and a new one coming: the runs of the old Task leave the view, and the front reads the new Task as it reads a Task that becomes live. Otherwise an open run of the old Task, whose final event the old Task never sent, would stay open on the new one for good, and the page would count the worker as busy while it runs idle. `workbench.fleet.egress` names the subject prefix of the egress stream of the workers, `bus.egress` on each of them. The front subscribes to that stream and projects every run from its events with the projection of the kernel, so the state, the title, the pending approval, the turns, and the usage of a run are those of the ledger of the worker. The usage comes from the totals that `fw.run.finished` and `fw.run.suspended` carry (the kernel architecture, section 9.4). The stream therefore needs no `fw.model.responded`, which holds the content of a run, and the front knows the usage of a run each time it finishes or is suspended. A worker sets `bus.egressTypes` to the types of `fleet.EgressTypes`, as the pools render it (section 14.1): the lifecycle events of its runs, the approvals and the decisions, the annotations, the messages, the start and the end of each turn, the tool calls with `fw.tool.requested` and `fw.tool.responded`, the children, the grades of an outcome, and the reactions with `fw.run.reacted`. A pool whose profiles run a routine also lists `fw.routine.decided`, `fw.routine.applied`, and `fw.routine.compared` (`pools.RoutineEventTypes`, section 21.4), and another pool lists none of them, so a front that adds them replaces no Task of a pool without routines. The turns and the tool calls give the view the activity of each run (section 4.15), and the reactions give the counts of `reactions` on the run object. The tool calls carry the inputs and the outputs of the tools, so a worker of a pool also sets `bus.egressMaxBytes` to 4,096 (`fleet.EgressMaxBytes`): its egress cuts each string value in the data of a published event to 4,096 bytes at a rune boundary, with the note ` [cut N of M bytes]`, and its ledger stays whole (the kernel architecture, section 9.4). An event without such a long string goes out byte for byte. A lost event costs nothing once a later `fw.run.finished` or `fw.run.suspended` of the run arrives. A lost final `fw.run.finished` has no later event, so the view keeps the state and the usage of the event before it until the front reads the Task again (below). The cost is the cost at the prices of the worker. The totals carry no breakdown by model, so the front cannot price them again: it loses its own pricing at every totals event, its price table prices only the increments that the stream carries after the totals, such as the title call of `fw.run.annotated`, and the cost that it shows can go down at an end of a run, to $0 with every token unpriced when the worker has no price table. A breakdown by model in the totals, a later change, can let the front price them with its own table. The stream keeps the order of the events of a run, unless two processes publish for the run or the bus is the mem bus (the kernel architecture, section 9.4). For a reorder, the view applies the first `fw.run.queued` of a run even when it arrives after later events, because only that event names the agent, the person, and the metadata of the run, and it keeps the state of the later events; a repeated `fw.run.queued` changes nothing. A late end of a run, `fw.run.finished` or `fw.run.suspended`, applies when no event that changes the state of the run came after it, as after a title annotation, and the usage that the later events added stays on top of its totals. Any other late event changes nothing. When two processes publish for one branch, because its source took its start for failed while its process took it after all, the `fw.run.queued` with the larger `kept` applies too: the record of the source holds no copy and no work, so the copies of the branch never count as its own work. Each event names its node (the kernel architecture, section 9.4), so the front knows which Task holds the run. A `fw.run.child` event of a run tells the view where a child of that run lives, a child of `spawn_task` or a branch in a Task of its own (the kernel architecture, sections 4.7 and 11.9); each child sends it twice, a child of `spawn_task` before its Task exists and again once its run started, a branch when it is placed and again when it starts, and the view keeps one link. The view shows the child under its parent. Until the events of the child arrive, because its Task is still starting, the view shows it as a queued run of the member of the parent, so a request for it goes to the parent, which answers for it.
 
 Each time a Task becomes live, the front reads its runs and its agents through the router, with the static token of the fleet, so the runs that started before the front listened are in the view and the front knows which profiles the Task serves. A Task becomes live when the Task list shows its phase as Running after another phase, or when the router woke it for a request (section 4.12). A running Task is awake, so the reads wake nobody, and the front never reads a Task that sleeps. After a restart, the front learns the runs of the sleeping Tasks from the index of the runs (section 4.16). The front subscribes to the stream before it reads the Tasks, one after another, so the stream can reach a run before the read of its Task, without the `fw.run.queued` that named the run before the front listened. The read then gives the run its identity: a read at the sequence number of the view or later replaces the run, and a read that is older gives the agent, the person, the input, and the batch, while the newer state of the stream and the usage that it added after the read stay. A read of the runs that fails is tried again after a pause of one interval, which doubles up to five minutes, so a run stays without identity only briefly. After that read the front lives on the stream, with one exception. A worker that a suspend cuts can hold back its final events: the bus is out of reach, and the process is gone before the bus answers. A kernel with the file ledger sends them at its next boot (the kernel architecture, section 9.4), but a Task that sleeps does not boot, and a worker with another ledger loses them. Without a new read, the view holds the run as running for good, and the suspend controller never puts the Task to sleep. So while the view holds a run of a live Task as queued or running, the front reads the runs of that Task again once a minute, and a read at a later sequence number ends the run in the view. A short suspend and resume between two reads of the Task list leaves no trace in the phase, and this read repairs that case too. Each replica of the front reads on its own. A worker outside ax that publishes events is visible too, under its node name, without an address, and it leaves the view when no event arrived for `workbench.fleet.expire`. The view drops a finished run after `workbench.fleet.expire` without an event, and it keeps a copy of the identity of the run for as long again: a later event of the run, such as the `fw.run.child` of a branch of a finished run, brings the run back with its agent, its person, and its batch. A run that the view knows from events alone, because no `fw.run.queued`, no read of its Task, and no such copy named it, has no identity: the view lists it nowhere, and it leaves the view after `workbench.fleet.expire` without an event, whatever its state.
 
@@ -630,6 +632,12 @@ The view settles once it read the Task list of every atespace whole, with the ru
 
 The index has two limits. A run that started and went to sleep while no replica of the front ran is in no index. If the front stops while a write waits, the write is lost, and the entry keeps its older state until the next change.
 
+### 4.17 The taps of the stream
+
+Another package reads events of the egress stream through the view, without a subscription of its own. `fleet.Tap(fn, types...)` registers a function that gets each event of those types that the view reads, with the agent of its run and its line: the title that the start of the run names (`fw.title`), else the first line of its input, at most 200 bytes (`fleet.RunEvent`). A repeated event and an event that arrives after a later event of its run reach it too, because a bus can bring the events of a run out of order, though the view applies neither. The agent and the line are empty while the view has not seen the start of the run. The function runs while the view holds its lock, so it hands the event to a goroutine of its own and never blocks. Every replica of the front reads the stream, so every replica calls it for every event, and the consumer counts each event once, across replicas and repeats. A worker publishes a type only when its pool lists it in `bus.egressTypes`. The evidence of the routines hangs here (section 21.4).
+
+The view also marks two facts of each run of a Task for the summary of the routines (section 21.6): a routine completed the run (`fleet.AppliedOK`), and a quality observation of the run says `rejected` (`fleet.Verification`). `Fleet.Outcome(id)` returns both, and whether the view saw the start of the run on the stream, so it saw every such event after it. `fleet.RunsSince` and `fleet.FactsOf` read the runs of an agent in a window and these facts, from the view and from the ledgers of this process, for the day of an agent (section 17.8) and the summary of the routines.
+
 ## 5. Browser sign-in
 
 A person signs in to the dashboard at `/ui` through the OpenID Connect issuer of `auth.oidc`. Three keys turn the sign-in on and shape it:
@@ -704,6 +712,7 @@ The MCP server carries these management tools beside the work tools:
 | `pages_list`, `pages_read`, `pages_search`, `pages_history` | The wiki of the fleet: the pages, one page with its hash, a search by words, and the versions of a page (section 15.4) |
 | `pages_write` | Write a page of the wiki as a new version, with `ifHash` for a compare-and-swap. A run that writes through the token of the fleet is the writer `agent:<profile>` (section 15.4). |
 | `faces_put` | Set the face of an agent from the text of an SVG that passes the sanitizer, for the manager (section 16.4) |
+| `routines_list`, `routine_standing` | The routines of an agent with their standing, and one with its evidence, and a move of a routine to another standing, a sign-off included (section 21.6) |
 | `pools_list`, `templates_list` | The pools of the file and the runtime pools that the caller can see, with their state, and the worker templates (section 14.10) |
 | `pool_put`, `pool_delete` | Create a runtime pool from a template, change its replicas, its variables, its resources, or its template, or delete it (section 14.10) |
 | `bridge_read`, `bridge_post` | For a run of a seat of a bridge, or the manager run of a bridge: read the last messages of the channel, and post a message with `to` (section 18.11) |
@@ -1274,7 +1283,7 @@ workbench:
         Summary: {{.summary}}
         Requester: {{.requester.name}}
         Assignee: {{index . "assignee" | default "nobody"}}
-      title: "Triage {{.id}}"
+      title: "#{{.id}} {{.summary}}"
       metadata: { ticket: "{{.id}}" }
       key: "{{.id}}/{{.updated}}"
       redrive: { maxAttempts: 3, cooldown: 10m }
@@ -1533,7 +1542,7 @@ The Agents place of the page shows one line for each pool. A caller who can view
 
 ### 14.9 Profiles and rules of a pool
 
-The front owns the profiles that the workers of its pools run. A worker reads its profiles from the fw.yaml that the pool renders. Without the front, `agent_put` writes a profile into one Task: it reaches one worker only, and the next replacement of the Task removes it. So the front keeps an overlay for each pool. The overlay holds profiles, which are added to `fw.agents` or replace the profile of the same name, and allow rules, which are added to `fw.policy.allow`.
+The front owns the profiles that the workers of its pools run. A worker reads its profiles from the fw.yaml that the pool renders. Without the front, `agent_put` writes a profile into one Task: it reaches one worker only, and the next replacement of the Task removes it. So the front keeps an overlay for each pool. The overlay holds profiles, which are added to `fw.agents` or replace the profile of the same name, and allow rules, which are added to `fw.policy.allow`. It also carries the routines of the agents, which the front reads from the store of the routines at each pass (section 21.3).
 
 The store. On a NATS bus, the overlay of a pool lives in the key-value bucket `<stream>_POOL_<pool>`, where `<stream>` is `bus.options.stream`, `FW` by default, so every replica of the front reads one truth. Each profile is the entry `profile.<name>`, and each rule is the entry `allow.<rule>`, with the name in base64url. A write of an entry replaces it, so two replicas never race on a list. The bucket keeps the last ten values of each entry. The first write makes the bucket. The front opens its own connection with `bus.url` and the options `credentials` and `token` of the bus. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_POOL_*.>`. On the bus `mem`, the overlay lives in memory. On another bus, the pools run their configuration alone, and a write to a profile of a pool is refused.
 
@@ -1838,7 +1847,7 @@ The build of the page holds no inline script, no inline style element, and no da
 | `member` | `{"kind": "member", "member": "<name>", "state": "live", "time": "..."}`: the state of a member changed, or `"gone": true` | A caller who can see the member, as `GET /v1/fleet` decides |
 | `task` | `{"kind": "task", "member": "<name>", "phase": "Running", "time": "..."}`: the phase of the Task of a member changed, or `"gone": true` | As `member` |
 | `reset` | `null`: the stream cannot resume, and the page reads its lists again | Every caller |
-| `bridge.message`, `bridge.member`, `page`, and `face` | The data of the hooks of the bridges, the wiki, and the faces (section 17.5) | A caller who can see the bridge, read the wiki, or view the agent, as the routes of each package decide |
+| `bridge.message`, `bridge.member`, `page`, `face`, and `routine` | The data of the hooks of the bridges, the wiki, the faces, and the routines (section 17.5) | A caller who can see the bridge, read the wiki, or view the agent, as the routes of each package decide |
 | Any other kind of `Publish` | The data of the package, unchanged | Every caller, or the callers that the option of the event allows (section 17.5) |
 
 The `phrase` of a run event is the words of `fleet.ActivityPhrase` at the change, and the roster of a bridge words the activity of a seat with the same function (section 18.7), so the page shows one phrase for one run in both places. A test checks that the run event, the `bridge.member` event of the seat, and `fleet.ActivityPhrase` agree.
@@ -1894,7 +1903,7 @@ bossmode.Publish("note", id, note, bossmode.Allow(func(ctx context.Context) bool
 - With `bossmode.Allow(fn)`, the stream calls `fn` with the context of each stream, which holds the principal of its caller (`fw.PrincipalFrom`), once per event and stream, also for a resume, and sends the event only when `fn` returns true. A function does not cross the bus, so such an event reaches the streams of its own replica only.
 - `Publish` reaches the stream of every agent of the process that runs bossmode, which is one agent in `fw-workbench`, and `PublishTo(a, ...)` reaches the stream of one agent. Both also reach the other replicas (below). While bossmode is off, both drop the event and return nil.
 
-What feeds the stream. The package `bossmode` registers four hooks in `init` and turns what they get into events:
+What feeds the stream. The package `bossmode` registers five hooks in `init` and turns what they get into events:
 
 | Kind | Hook | Data | Who gets it |
 |---|---|---|---|
@@ -1902,6 +1911,7 @@ What feeds the stream. The package `bossmode` registers four hooks in `init` and
 | `bridge.member` | `bridges.OnMember`: a new seat, and each change of a seat, its presence, its activity, its task, muted, or fired | `{"bridge": "<id>", "member": <member>}` | As `bridge.message` |
 | `page` | `pages.OnChange`: each write that creates or changes a page, and each removal | The page without its text, as `GET /v1/pages` lists it, plus `"deleted": true` for a removal, whose `by` and `at` name the remover and the time | A caller who reads the wiki (`pages.Allowed`) |
 | `face` | `faces.OnChange`: each change of an SVG, a display name, or a tagline, and each removal of an SVG | The entry of `GET /v1/faces` for the agent | A caller who can view the agent (`faces.Check` with `agent.view`) |
+| `routine` | `routines.OnChange`: each change of the record of a routine or of its evidence, at most once per routine per two seconds (`bossmode.RoutineEvery`), the changes within the two seconds as one event at their end | `{"kind": "routine", "agent": "<agent>", "name": "<name>"}` | As `face` |
 
 Each hook puts its event on the stream of each agent of the process that has the store, with `PublishTo` and the option For of its kind, which binds the decision to that agent. The decision asks the store of the agent at the moment the stream sends the event, so each stream decides once per event for its caller with the current rules, and no decision is kept across callers or across events. An event of a bridge costs one read of the record of the bridge and the role checks of the agents of its seats per stream, and an event of the wiki the role checks of the agents of the fleet per stream. At most 64 streams bound both. A write that changes nothing, a refused face, and the index of the wiki, `_index.md`, give no event.
 
@@ -1920,7 +1930,7 @@ On the bus `mem`, nothing crosses a process, so two processes share no event. On
 
 ### 17.6 Doctor and metrics
 
-`fw-workbench doctor` has one line for bossmode, which covers the page, the manager, the quick chat, and the stores. It says off, or on with these facts: the page that it serves, from `dir` with or without an `index.html`, or the embedded copy and whether that copy is the placeholder; the theme, when a key of it is set, with the type and the size of the logo; the manager profile, and whether `fw.agents` or a pool defines a profile of that name; the profile of the quick chat, whether `fw.agents` or the profiles of a pool hold it, the overlay of the pool included, and the member of the configuration, or that the settings pick one; and the streams. Then, on or off, it adds the lines of the stores, `pages.Status`, `faces.Status`, and `bridges.Status`: where the wiki, the faces, and the bridges live, with their limits and the manager of the bridges. A `dir` that is not a directory, a `dir` without `index.html`, a logo that does not pass, a manager that no profile defines, a quick chat that no profile defines, and a store whose configuration does not load fail the line. The doctor runs in a process of its own, which serves no stream, so it names the gauge of the server for the open streams. The line `manager` says more about the pool of the manager (section 19.6).
+`fw-workbench doctor` has one line for bossmode, which covers the page, the manager, the quick chat, and the stores. It says off, or on with these facts: the page that it serves, from `dir` with or without an `index.html`, or the embedded copy and whether that copy is the placeholder; the theme, when a key of it is set, with the type and the size of the logo; the manager profile, and whether `fw.agents` or a pool defines a profile of that name; the profile of the quick chat, whether `fw.agents` or the profiles of a pool hold it, the overlay of the pool included, and the member of the configuration, or that the settings pick one; and the streams. Then, on or off, it adds the lines of the stores, `pages.Status`, `faces.Status`, `bridges.Status`, and `routines.Status`: where the wiki, the faces, the bridges, and the routines live, with their limits, the manager of the bridges, and the thresholds of the routines. A `dir` that is not a directory, a `dir` without `index.html`, a logo that does not pass, a manager that no profile defines, a quick chat that no profile defines, and a store whose configuration does not load fail the line. The doctor runs in a process of its own, which serves no stream, so it names the gauge of the server for the open streams. The line `manager` says more about the pool of the manager (section 19.6).
 
 | Metric | Type | What it counts |
 |---|---|---|
@@ -2396,7 +2406,8 @@ The profile `manager` has the tools `front.*`, `memory`, `recall`, `clock`, and 
 - `front.approve`, `front.cancel`, and `front.run_budget`,
 - `front.enqueue` and `front.run`,
 - `front.bridge_open` and `front.bridge_remove_member`,
-- `front.agent_put`, `front.agent_delete`, and `front.faces_put`.
+- `front.agent_put`, `front.agent_delete`, and `front.faces_put`,
+- `front.routine_standing`, so a sign-off of a routine waits for the operator.
 
 A write to the wiki runs without a question, because the wiki keeps each older version. The budget of a conversation is 400 turns, 8 hours of working time, and 2000 tool calls.
 
@@ -2650,3 +2661,209 @@ workbench:
 ```
 
 `FW_WORKBENCH_BOSSMODE_MARKETPLACES=team=https://skills.example.com/index.json,public=https://github.com/example/skills` sets the same first two.
+
+## 21. Routines
+
+A routine is a vetted sequence of tool calls with typed questions and a check afterward. Its kernel runs it in place of the model once a person signs it off. The kernel document `docs/ROUTINES.md` holds the shape of a routine (`fw.Routine`), the runner, and the events. The kernel runs what the profile says and records what happened. The front keeps the routines, brings them to the runs, counts what the runs showed, and judges when a routine is ready for a sign-off. The package `routines` holds this part. It is a service of the kernel (`fw.RegisterService`), mounts its routes on the native surface (`native.Extend`), and adds two tools to the MCP server (`mcp.RegisterTools`). Nothing in the package calls a model, and no key of it names a model.
+
+### 21.1 The record and the store
+
+On a NATS bus, the routines live in the key-value bucket `<stream>_ROUTINES`. Each routine is one entry under the key `<agent>/<name>`, and its evidence is the entry `<agent>/<name>/evidence` (section 21.4). The value of a routine is one record of JSON:
+
+| Field | Meaning |
+|---|---|
+| `agent` | The profile that runs the routine |
+| `routine` | The body in the shape of the kernel, without `standing`. `version` is the version of the record. |
+| `standing` | `proposed`, `rehearsing`, `live`, `paused`, or `retired` (section 21.2) |
+| `ready` | True for a rehearsing routine whose evidence passes the rule of section 21.4. The page shows it as `needs you`. |
+| `signedOff` | `{"by", "at"}` of the last move to `live`. A new body takes it away. |
+| `history` | The moves, oldest first, each with `at`, `by`, `standing`, `note`, and `version`. The record keeps the newest 256. |
+| `source` | Where the routine comes from: `runs`, `from` and `to` as days, and `proposedBy`, such as `fw routine propose` |
+| `createdAt`, `updatedAt` | The time of the first write and of the last change |
+
+The name of a routine holds 1 to 64 of `a-z`, `0-9`, and `-`, as the kernel says. The name of an agent follows the rule of a profile name, without two dots in a row, so the key fits the bucket. An agent holds at most 64 routines that are not retired. The kernel bounds the routines of one profile by the same number. A write past the bound answers 409.
+
+The kernel checks each body as it checks the routines of a profile (`fw.RoutineProblems`), without the models that answer its questions, which the configuration of the workers names. The pools check those when the routine reaches a profile (section 21.3). On a front where no pool runs the agent, nothing more is checked. A body that the kernel refuses answers 400 with the first problem.
+
+A body changes only through `PUT`. A body that differs from the body that the store holds gets the next version, `ready` goes false, and the evidence starts again. A live or paused routine whose body changes goes back to `rehearsing`, with a move in its history, and loses `signedOff`, because a new version rehearses again. A paused routine can go live with one move, so a new body of it rehearses first too. Only the store gives a profile its routines: `agent_put`, `PUT /v1/agents/{name}`, and a run request on a queue drop the routines that a caller sends. A write of the body that the store holds already changes nothing. A retired routine takes no new body.
+
+Every write is a compare-and-swap on the revision of the entry, up to eight times (`bucket.Modify`), so two replicas of the front never lose a write. A new routine that an operator proposes is a write that only creates, so it never changes a routine that another writer made in the meantime. The bucket keeps the last ten values of each entry. The front opens its own connection with `bus.url` and the options `credentials` and `token` of the bus. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_ROUTINES.>`. On the bus `mem`, the routines live in the process, and two processes share nothing. On another bus, the front logs once that the routines are off, mounts no route, and offers no tool.
+
+Other packages use the routines through Go. `routines.Of(a)` returns the `*routines.Store` of an agent, or nil. The store has `List(ctx, agent)`, `Get(ctx, agent, name)`, which adds the evidence, `Put(ctx, PutRequest)`, `Move(ctx, MoveRequest)`, and `Reaching(ctx)` (section 21.3). `routines.Check(ctx, a, agent, action)` decides an action on the routines of an agent as the routes do. `routines.OnChange(func(agent, name string))` registers a hook that gets each change that the store wrote to a record or to its evidence. `routines.Status(cfg)` gives one line for `fw-workbench doctor`, which the line `bossmode` holds.
+
+### 21.2 The standings
+
+| Standing | Reaches the runs | Moves to |
+|---|---|---|
+| `proposed` | no | `rehearsing`, `retired` |
+| `rehearsing` | yes, beside the agent, without acting | `live` (the sign-off), `paused`, `retired` |
+| `live` | yes, in place of the model when it applies | `paused`, `retired` |
+| `paused` | no | `rehearsing`, `live` |
+| `retired` | no | nothing |
+
+A move that the table forbids answers 409 with the standing and the allowed moves. A move to the standing that a routine has changes nothing and answers 200. Every move records who made it, when, the note, and the version in `history`. A move to `live` sets `signedOff`, and it needs a person: a user of the issuer or the local user of the process. The process itself, the static token alone, a workload, and an anonymous caller cannot sign a routine off, and they get 403. A move can name `version`, the version of the body that the caller read. When the routine is at another version, the move answers 409 with the version and the standing that the routine has, so a sign-off holds for the body that the person read. A run of the manager signs off for the person of the run (section 19.2), and the note of the move names the run, as `by manager run 01K... for ada`. A routine that leaves `rehearsing` is not ready. A routine that comes back to `rehearsing` is ready when its evidence passes the rule.
+
+A new routine starts `proposed`. A caller who may edit the agent can start it `rehearsing`. It never starts in another standing.
+
+### 21.3 Reaching the runs
+
+The front merges the routines of an agent into the profile that its workers run. The overlay of a pool gains `routines` by agent, as it carries the profiles and the rules (section 14.9). Each pass of the pools reads them once from the store of the routines (`fleet.Routines`), not from the store of the overlay. A rehearsing routine goes to the kernel with the standing `shadow`, and a live one with `live`, oldest first. No other standing reaches a profile. An agent with a record in the store gets the list of the store in place of the routines of its profile, in the configuration of the pool and in the overlay. An empty list takes away the routines that the configuration of the pool gives the profile, and it leaves a profile without routines as it is. An agent without a record keeps the routines of its profile. Each text is escaped, so a routine never reads a variable of the worker.
+
+The hash of the pool covers the routines, so these changes replace each Task of a pool that runs the agent once the Task is idle, as any change of the overlay does:
+
+- a new body of a rehearsing or a live routine, and a live or paused routine that goes back to rehearsing with its new body,
+- a move into `rehearsing` or `live`, and a move out of them.
+
+The first routine that reaches a profile of a pool also adds the three events of the routines to `bus.egressTypes` of the pool (section 4.1), in the same change. A proposal, a move between `proposed`, `paused`, and `retired`, a change of the source or of the replay, the evidence, and `ready` replace no Task.
+
+A store of the routines that does not answer holds every pool, as an overlay does, because a pass without the routines takes them away from every Task. While the bus keeps the routines and their service has not opened them yet, a pass waits too, so the start of the front never renders a pool without its routines and replaces its Tasks twice. The other readers of a pool, such as `agent_put`, the views, and the rules of an approval, take the routines of the last pass, so a store that does not answer for a moment breaks none of them. The worker checks each routine as it loads its profile, so a routine that names a model for its questions that the workers lack makes the overlay of the pool not fit. The front checks that first: a `PUT` or a move that brings a routine to the runs asks the merge of every pool that runs the agent (`fleet.CheckRoutines`), and a pool that refuses answers 400 with the problem of the pool. The dry run, `fw-workbench pools render`, names the routines that each profile gets.
+
+A run request that the front puts on a queue (`fleet.Enqueue`) carries the routines of its agent in its inline profile: the seats of a bridge, the tool `enqueue`, the tool `batch`, and the event sources (section 13). A list of routines in an inline profile, also an empty one, replaces the list of the profile for that run (the kernel architecture, section 12.5). So a Task that the pool did not replace yet runs the routines that the store holds now, and the kernel pins them in `fw.run.queued`. A store that does not answer sends the request without routines, and the log says so once until a read works again: the run then falls to the agent, the safe direction. A run that starts on a Task through `POST /v1/runs?member=`, such as the quick chat, reads the routines of the profile of its Task. A profile that only the front runs gets no routine.
+
+### 21.4 The evidence
+
+The workers of a pool whose profiles run a routine publish `fw.routine.decided`, `fw.routine.applied`, and `fw.routine.compared` on the egress stream (section 4.1). The front reads the stream already, and a projection hangs on it through `fleet.Tap` (section 4.17). It needs no second subscription and reads no ledger. The projection applies the events of a routine of the current version and drops an event of another version. It keeps per routine, under `<agent>/<name>/evidence`:
+
+| Field | Meaning |
+|---|---|
+| `version` | The version that the evidence covers |
+| `totals` and `days` | The counts of the version, and per day in UTC for the last 90 days, oldest first. `decided` counts the decisions beside the agent (rehearsal and canary runs). `acted` counts those where the routine would have acted. `agreed` counts those of `acted` where every compared question agreed with the agent, and `disagreed` those where one did not. `handed` counts every decision that did not apply, so the agent handled the run alone. `applied` counts the live runs that the routine completed, and `failed` the live runs where it stopped and the agent took over. |
+| `questions` | Per question, the reliability table: for each band of the probability of the chosen answer, from 0, 0.5, 0.7, 0.85, and 0.95, with the `act` of the question as one more bound, the compared runs that fell in it (`runs`) and how many agreed (`agreed`) |
+| `disagreements` | The last 50 runs where the routine would have acted and disagreed, newest first: `run`, `at`, `input`, the title that the start of the run names, else the first line of its input, `answers`, per compared question `said`, `observed`, `agree`, and `probability`, each answer cut to 200 bytes, and `verification`, the verification of the quality observation of the run once one came |
+| `sentBack` | The runs whose quality observation says `rejected`: `applied`, those that the routine completed, and `agreed`, those where it rehearsed and agreed with the agent |
+| `replay` | `{"matched", "total", "at"}`, the last replay of the routine over recorded runs, which a `PUT` sets |
+| `updatedAt` | The time of the last change |
+
+A rehearsing routine is ready when, over its current version, `acted` is at least `readyAfter`, `agreed` is at least `readyAgreement` of `acted`, and `sentBack.agreed` is 0. The projection writes `ready` into the record when it changes.
+
+Each replica of the front reads the stream, so each event reaches every replica. The evidence keeps a mark for each of its last 1,000 runs with what it counted, and an event that a mark shows as counted counts no more. So two replicas count an event once, and a repeated event counts once. A bus can bring the events of a run out of order. A comparison that comes before its decision waits in the mark of its run and counts when the decision comes. An event that comes before the start of its run, whose agent the view does not know yet, waits in the projection until the start comes, for at most 1,024 runs. A mark drops its probabilities and its answers once every compared question came, and the oldest marks go until the evidence fits an entry of the bucket. The projection applies the events that wait as one write per routine. At most 4,096 events wait. Past that, the projection drops an event, and the log says so once until the queue has room. The projection never moves the evidence back to an older version. A quality observation counts only for a run whose decision this replica saw, and only while the evidence marks the run. The runs of the front itself are not on the egress stream, so their events reach no evidence.
+
+### 21.5 The runbook
+
+On a move to `live`, the front writes the page `agents/<agent>/routines/<name>.md` of the wiki (section 15) as `pages.ByFront`, with no run. The title of the page is the name of the routine as the page of bossmode shows it, such as "Acknowledge a new ticket". The page says in words what the routine decides, with the answers and when it acts, the steps in order with the names of their tools, the checks afterward, where the routine comes from, who signed it off and when, what its rehearsal showed, and its standing. A value that the routine fills in reads as words, such as "the type it decided", and never as the text of the routine. Each later move writes the page again, so a paused or retired routine never reads as one that acts. A routine that was never signed off has no page. The Runbook tab of the page shows it. A wiki that does not take the page leaves the move as it is, and the log says why.
+
+### 21.6 The routes and the tools
+
+These routes sit behind the authentication of the native API. Reading needs the right to view the agent (`agent.view`). A new routine in `proposed` needs the operator role (`agent.run`). Every other write and every move needs the owner role (`agent.edit`), decided in the place of the agent, as `agent_put` decides (section 14.9). A caller who cannot view the agent, and an agent that the fleet does not run, get 404. A caller who can view it and lacks the role gets 403.
+
+| Method and path | Purpose |
+|---|---|
+| `GET /v1/routines` | `{"routines": [record...]}`, the records of the routines of every agent that the caller can view, without evidence, the newest change first. An agent of the store that the caller cannot view, or that the fleet no longer runs, stays out. `?agent=<name>` keeps the routines of that agent, and answers 404 for an agent that the caller cannot view. |
+| `GET /v1/routines/{agent}/{name}` | The record with `evidence` |
+| `PUT /v1/routines/{agent}/{name}` | Creates or replaces the body. The body is `{"routine", "standing", "source", "replay", "note"}`. `routine` is required, and its `name` is empty or the name of the path. `standing` is `proposed` or `rehearsing` for a new routine, and empty or the standing of a routine that exists. The answer is 201 with the record and `Location` for a new routine, else 200. |
+| `POST /v1/routines/{agent}/{name}/standing` | The body is `{"standing", "note", "version"}`, and `version` is optional. The answer is 200 with the record, or 409 with the allowed moves or with the version of the routine. |
+| `GET /v1/routines/summary?agent=<name>&days=7` | The week of the agent (below). `days` is 1 to 30, 7 by default. |
+
+A record, as `GET /v1/routines/{agent}/{name}` answers it:
+
+```json
+{
+  "agent": "triage",
+  "routine": {
+    "name": "acknowledge-a-new-ticket",
+    "version": 3,
+    "decider": "clef",
+    "questions": {
+      "type": {"type": "choice", "instructions": "What kind of ticket is this?",
+               "criteria": {"bug": "Something broke", "access": "An account or a permission", "other": "None of these"},
+               "act": 0.85, "expect": ["bug", "access"], "observe": {"answer": "\"type\": \"type/([a-z-]+)\""}},
+      "beyond": {"type": "noul", "instructions": "Does it ask for more than a label?", "act": 0.95, "expect": "no"}
+    },
+    "steps": [{"tool": "gitea.label_read", "input": "{\"method\": \"list\"}", "as": "labels"}],
+    "after": [{"tool": "gitea.issue_read", "input": "{\"method\": \"get\"}", "contains": ["status/triaged"], "lacks": ["status/new"]}],
+    "answer": "TRIAGE {\"type\": \"type/{{ .type }}\"}"
+  },
+  "standing": "rehearsing",
+  "ready": true,
+  "history": [
+    {"at": "2026-10-11T08:00:00Z", "by": "token", "standing": "proposed", "note": "", "version": 1},
+    {"at": "2026-10-11T09:30:00Z", "by": "ada@example.org", "standing": "rehearsing", "note": "", "version": 1}
+  ],
+  "source": {"runs": 212, "from": "2026-09-14", "to": "2026-10-21", "proposedBy": "fw routine propose"},
+  "createdAt": "2026-10-11T08:00:00Z",
+  "updatedAt": "2026-10-23T09:12:00Z",
+  "evidence": {
+    "version": 3,
+    "totals": {"decided": 1480, "acted": 1432, "agreed": 1397, "disagreed": 35, "handed": 48, "applied": 0, "failed": 0},
+    "days": [{"day": "2026-10-23", "decided": 120, "acted": 116, "agreed": 113, "disagreed": 3, "handed": 4, "applied": 0, "failed": 0}],
+    "questions": {"type": [{"from": 0, "to": 0.5, "runs": 2, "agreed": 0}, {"from": 0.5, "to": 0.7, "runs": 9, "agreed": 5},
+                           {"from": 0.7, "to": 0.85, "runs": 37, "agreed": 30}, {"from": 0.85, "to": 0.95, "runs": 231, "agreed": 214},
+                           {"from": 0.95, "to": 1, "runs": 1201, "agreed": 1182}]},
+    "disagreements": [{"run": "01K8...", "at": "2026-10-23T08:41:00Z", "input": "#4821 VPN drops every hour since the update",
+                       "answers": [{"question": "type", "said": "bug", "observed": "access", "agree": false, "probability": 0.91}],
+                       "verification": "accepted"}],
+    "sentBack": {"applied": 0, "agreed": 0},
+    "replay": {"matched": 212, "total": 212, "at": "2026-10-11T08:00:00Z"},
+    "updatedAt": "2026-10-23T09:12:00Z"
+  }
+}
+```
+
+`signedOff`, `source`, and `replay` are absent when a routine has none, and a list answers no `evidence`. The fields of `routine` follow the kernel: `canary` is absent for the default share of 0.05, `expect` is one value or a list, and `decider` is the kernel key of the model that answers the questions, a key of `deciders` in the configuration of the workers.
+
+A move that the table forbids:
+
+```json
+{"type": "about:blank", "title": "Conflict", "status": 409,
+ "detail": "a proposed routine cannot move to live. It can move to rehearsing or retired",
+ "instance": "/v1/routines/triage/acknowledge-a-new-ticket/standing",
+ "standing": "proposed", "allowed": ["rehearsing", "retired"]}
+```
+
+A move that names a version that the routine no longer has:
+
+```json
+{"type": "about:blank", "title": "Conflict", "status": 409,
+ "detail": "the move names version 3, and the routine is at version 4 now. Read it again",
+ "instance": "/v1/routines/triage/acknowledge-a-new-ticket/standing",
+ "standing": "rehearsing", "version": 4}
+```
+
+The summary follows the day of an agent (section 17.8). The runs are the runs of the agent that the caller can see and that started at `since` or later, child runs included: `since` is midnight `days` - 1 days before today, in the zone of the front.
+
+```json
+{"agent": "triage", "days": 7, "zone": "UTC", "since": "2026-10-17T00:00:00Z",
+ "runs": 1912, "byRoutine": 1358, "byAgent": 459, "withPerson": 95,
+ "costUSD": {"routine": 0.001, "agent": 0.02}, "sentBack": 7, "partial": false}
+```
+
+- A run is by a routine when a routine completed it (`fw.routine.applied` with `ok`), with a person when a person decided an approval or answered a question in it, and by the agent otherwise. `byRoutine`, `withPerson`, and `byAgent` add up to `runs`.
+- `costUSD` holds the cost of a run on average: `routine` over the runs by a routine, and `agent` over the runs by the agent, at the prices of the workers, each 0 without such runs.
+- `sentBack` counts the runs whose quality observation says `rejected`.
+- `partial` is true when a count or a cost can be short: a run without final usage, tokens without a price, a run whose start the view did not see, or a ledger of this process that did not read.
+- For a run of another member, the view marks a run that a routine completed and a run that came back (`Fleet.Outcome`, section 4.17). For a run of this process, the front reads its ledger, so a summary reads the ledgers of the runs of this process in the window. A summary of the same agent, window, and caller holds for a minute.
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `routines_list` | `agent`, `name` | The routines of the agent as `{"routines": [record...]}`, and without `agent` those of every agent that the caller can view. With `agent` and `name`, the one record with its evidence. Read-only. |
+| `routine_standing` | `agent`, `name`, `standing`, `note`, `version` | Moves a routine as the route does, and answers `{"routine": record, "moved": true}`. Its `destructiveHint` is true, because a retired routine stays retired. |
+
+The tools decide as the routes do. Each calls `manager.OnBehalf` at its start, so a run of the manager acts for its person (section 19). The policy of the profile that calls `routine_standing` decides whether a person approves the call first. The manager of `examples/bossmode` asks.
+
+The stream of bossmode carries the event `routine` on each change of a record or of its evidence, with the data `{"kind": "routine", "agent": "...", "name": "..."}`, to each caller who can view the agent (section 17.5). It goes out at most once per routine per two seconds (`bossmode.RoutineEvery`): the first change goes at once, and the changes after it go as one event at the end of the two seconds. Each hub of bossmode keeps this window. The page then reads the routine again.
+
+### 21.7 Configuration
+
+The routines read the block `routines` under the key `workbench` of `fw.yaml`. Each variable wins over the file.
+
+| Key | Variable | Meaning | Default |
+|---|---|---|---|
+| `workbench.routines.readyAfter` | `FW_WORKBENCH_ROUTINES_READY_AFTER` | The runs that a rehearsing routine of the current version would have acted on before it is ready, 1 to 1000000 | `200` |
+| `workbench.routines.readyAgreement` | `FW_WORKBENCH_ROUTINES_READY_AGREEMENT` | The share of those runs where it agreed with the agent, above 0 and at most 1 | `0.95` |
+
+A value outside its bound stops the start, and the error names the key. The model that answers the questions of a routine is configured on the workers, in the configuration of their pool (the kernel document `docs/ROUTINES.md`), never on the front.
+
+```yaml
+workbench:
+  routines:
+    readyAfter: 200
+    readyAgreement: 0.95
+```
+
+### 21.8 Security and bounds
+
+- A routine runs on a worker with the policy, the limits, and the budget of its run. The front grants it nothing.
+- A sign-off is the decision of a person. The process and the static token alone cannot make it.
+- No token and no secret enters a record, its evidence, a log line, or an event. The evidence holds the first line of the input of a run, at most 200 bytes, as the view holds it.
+- A log line of a change names the agent, the routine, the version, the standing, and the writer.
+- The front does not run a replay. A replay runs where the ledgers are, with `fw routine replay`, and a `PUT` with `replay` gives the result to the evidence.

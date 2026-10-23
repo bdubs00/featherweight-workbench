@@ -150,7 +150,7 @@ var seeFailing atomic.Bool
 // whose events always carry a scope.
 func scoped(kind string) bool {
 	switch kind {
-	case KindBridgeMessage, KindBridgeMember, KindPage, KindFace:
+	case KindBridgeMessage, KindBridgeMember, KindPage, KindFace, KindRoutine:
 		return true
 	}
 	return false

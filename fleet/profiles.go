@@ -67,13 +67,21 @@ func MergeOverlays(ctx context.Context, cfg *fw.Config, list []*pools.Pool) ([]*
 	if err != nil {
 		return list, err
 	}
+	// Without the routines, the dry run merges the rest and says so; the
+	// profiles then keep the routines of their configuration.
+	var problems []string
+	var routines map[string][]fw.Routine
+	if Routines != nil {
+		if routines, err = Routines(ctx, nil, cfg); err != nil {
+			problems = append(problems, "the routines did not read ("+err.Error()+"), so the output shows the profiles with the routines of their configuration")
+		}
+	}
 	if store == nil {
 		// Without a store, a pool merges an empty overlay, which ships
 		// the skills of the front that its profiles allow.
 		out := slices.Clone(list)
-		var problems []string
 		for i, p := range list {
-			if m, err := p.WithOverlay(pools.Overlay{}); err == nil {
+			if m, err := p.WithOverlay(withRoutines(pools.Overlay{}, routines)); err == nil {
 				out[i] = m
 			} else {
 				problems = append(problems, fmt.Sprintf("the pool %s: %v", p.Name, err))
@@ -90,11 +98,10 @@ func MergeOverlays(ctx context.Context, cfg *fw.Config, list []*pools.Pool) ([]*
 	ctx, cancel := context.WithTimeout(ctx, overlayTimeout)
 	defer cancel()
 	out := slices.Clone(list)
-	var problems []string
 	for i, p := range list {
 		o, err := store.Read(ctx, p.Name)
 		if err == nil {
-			out[i], err = p.WithOverlay(o)
+			out[i], err = p.WithOverlay(withRoutines(o, routines))
 		}
 		if err != nil {
 			out[i] = p
@@ -108,22 +115,29 @@ func MergeOverlays(ctx context.Context, cfg *fw.Config, list []*pools.Pool) ([]*
 }
 
 // mergedPool reads the overlay of a pool and merges it into the pool, with
-// the skills of the front that the profiles of the pool allow. A front
-// without a store of the overlays merges an empty overlay.
+// the routines of the last pass and the skills of the front that the
+// profiles of the pool allow. A front without a store of the overlays
+// merges an empty overlay.
 func (f *Fleet) mergedPool(ctx context.Context, base *pools.Pool) (*pools.Pool, error) {
+	return f.mergedPoolWith(ctx, base, f.lastRoutines(ctx))
+}
+
+// mergedPoolWith is mergedPool with the routines that a pass read.
+func (f *Fleet) mergedPoolWith(ctx context.Context, base *pools.Pool, routines map[string][]fw.Routine) (*pools.Pool, error) {
+	ctx, cancel := context.WithTimeout(ctx, overlayTimeout)
+	defer cancel()
 	if f.overlays == nil {
-		merged, err := base.WithOverlay(pools.Overlay{})
+		merged, err := base.WithOverlay(withRoutines(pools.Overlay{}, routines))
 		if err != nil {
 			return nil, &overlayFitError{err: err}
 		}
 		return merged, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, overlayTimeout)
-	defer cancel()
 	o, err := f.overlays.Read(ctx, base.Name)
 	if err != nil {
 		return nil, fmt.Errorf("fleet: read the overlay of the pool %s %s: %w", base.Name, f.overlays.Describe(), err)
 	}
+	o = withRoutines(o, routines)
 	merged, err := base.WithOverlay(o)
 	if err != nil {
 		return nil, &overlayFitError{overlay: o, err: err}

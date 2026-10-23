@@ -3,7 +3,8 @@ package bossmode
 // This file feeds the stream with the events of the other packages of
 // bossmode (docs/ARCHITECTURE.md section 17.5): bridge.message and
 // bridge.member from the hooks of the bridges, page from the hook of the
-// wiki, and face from the hook of the faces. Each event goes to the stream
+// wiki, face from the hook of the faces, and routine from the hook of the
+// routines. Each event goes to the stream
 // of each agent of the process that runs bossmode, through PublishTo, with
 // the decision of its scope bound to that agent: the stream asks the rule
 // of the routes of the package once per event and per stream, for the
@@ -16,11 +17,14 @@ package bossmode
 import (
 	"errors"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/faces"
 	"github.com/bdubs00/featherweight-workbench/pages"
+	"github.com/bdubs00/featherweight-workbench/routines"
 )
 
 // Kinds of the stream that the other packages of bossmode feed.
@@ -29,7 +33,12 @@ const (
 	KindBridgeMember  = "bridge.member"
 	KindPage          = "page"
 	KindFace          = "face"
+	KindRoutine       = "routine"
 )
+
+// RoutineEvery is the shortest time between two events routine of one
+// routine. A change within it goes out once at its end.
+const RoutineEvery = 2 * time.Second
 
 func init() {
 	bridges.OnMessage(feedMessage)
@@ -37,6 +46,7 @@ func init() {
 	bridges.OnMember(feedMember)
 	pages.OnChange(feedPage)
 	faces.OnChange(feedFace)
+	routines.OnChange(feedRoutine)
 }
 
 // bridgeMessage is the data of bridge.message. Partial is true when the
@@ -151,6 +161,85 @@ func feedFace(f faces.Face) {
 		if err := PublishTo(a, KindFace, f.Agent, f, ForAgent(f.Agent)); err != nil {
 			logOf(a).Warn("bossmode: a face is not on the stream", "agent", f.Agent, "error", err)
 		}
+	}
+}
+
+// routineEvent is the data of routine: the routine whose record or
+// evidence changed. The page reads the routine again.
+type routineEvent struct {
+	Kind  string `json:"kind"`
+	Agent string `json:"agent"`
+	Name  string `json:"name"`
+}
+
+// routineFeed coalesces the changes of the routines of a hub: last holds
+// when each routine last went out, and waiting the routines whose next
+// event waits for the end of RoutineEvery. now and after are the clock
+// and the timer, which a test replaces.
+type routineFeed struct {
+	mu      sync.Mutex
+	last    map[string]time.Time
+	waiting map[string]bool
+	now     func() time.Time
+	after   func(time.Duration, func())
+}
+
+func newRoutineFeed() *routineFeed {
+	return &routineFeed{last: map[string]time.Time{}, waiting: map[string]bool{}, now: time.Now,
+		after: func(d time.Duration, f func()) { time.AfterFunc(d, f) }}
+}
+
+// feedRoutine publishes a change of a routine to every caller who can
+// view its agent, on each hub of the process that keeps routines.
+func feedRoutine(agent, name string) {
+	for _, a := range agents() {
+		if h := Of(a); h != nil && routines.Of(a) != nil {
+			h.routines.change(agent, name, func() { h.publishRoutine(agent, name) })
+		}
+	}
+}
+
+// change sends a change of a routine at most once per RoutineEvery: the
+// first change goes out at once, and the changes after it go out as one,
+// at the end of the window.
+func (f *routineFeed) change(agent, name string, send func()) {
+	key := agent + "/" + name
+	f.mu.Lock()
+	if f.waiting[key] {
+		f.mu.Unlock()
+		return
+	}
+	now := f.now()
+	wait := RoutineEvery - now.Sub(f.last[key])
+	if wait <= 0 {
+		f.last[key] = now
+		if len(f.last) > 4096 {
+			for k, at := range f.last {
+				if now.Sub(at) > RoutineEvery {
+					delete(f.last, k)
+				}
+			}
+		}
+		f.mu.Unlock()
+		send()
+		return
+	}
+	f.waiting[key] = true
+	f.mu.Unlock()
+	f.after(wait, func() {
+		f.mu.Lock()
+		delete(f.waiting, key)
+		f.last[key] = f.now()
+		f.mu.Unlock()
+		send()
+	})
+}
+
+// publishRoutine puts the event routine on the stream of the hub, for the
+// callers who can view the agent.
+func (h *Hub) publishRoutine(agent, name string) {
+	if err := PublishTo(h.a, KindRoutine, agent+"/"+name, routineEvent{Kind: KindRoutine, Agent: agent, Name: name}, ForAgent(agent)); err != nil {
+		h.log.Warn("bossmode: a routine is not on the stream", "agent", agent, "routine", name, "error", err)
 	}
 }
 

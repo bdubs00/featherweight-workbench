@@ -861,6 +861,12 @@ func (p *Pool) workerFile(front Front) (string, error) {
 	}
 	b["egress"] = front.Egress
 	b["egressTypes"] = append([]string(nil), front.EgressTypes...)
+	if runsRoutines(m) {
+		// The events of the routines go out only from a pool whose
+		// profiles run one, so a front that adds them replaces no Task of
+		// a pool without routines; the routines replace the Tasks anyway.
+		b["egressTypes"] = append(b["egressTypes"].([]string), RoutineEventTypes...)
+	}
 	if _, set := b["egressMaxBytes"]; !set && front.MaxBytes > 0 {
 		// The stream carries the inputs and the outputs of the tool calls,
 		// so the worker cuts their long strings, unless the pool says
@@ -875,6 +881,26 @@ func (p *Pool) workerFile(front Front) (string, error) {
 		return "", err
 	}
 	return header(p.Name) + out, nil
+}
+
+// RoutineEventTypes are the event types that a worker publishes beside
+// those of the front when a profile of its pool runs a routine: the
+// decision, the end, and the comparison of a routine (the evidence of the
+// front, docs/ARCHITECTURE.md section 21.4).
+var RoutineEventTypes = []string{fw.EvRoutineDecided, fw.EvRoutineApplied, fw.EvRoutineCompared}
+
+// runsRoutines reports whether a profile of the block fw of a worker
+// carries a routine.
+func runsRoutines(m map[string]any) bool {
+	agents, _ := m["agents"].(map[string]any)
+	for _, v := range agents {
+		if p, ok := v.(map[string]any); ok {
+			if list, ok := p["routines"].([]any); ok && len(list) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // merge returns base with over on top. A mapping in both merges key by

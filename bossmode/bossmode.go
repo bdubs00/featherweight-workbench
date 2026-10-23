@@ -182,6 +182,9 @@ type Hub struct {
 	// imp imports the skills of an admin (section 20.7).
 	imp *skills.Importer
 
+	// routines coalesces the events routine (feeds.go).
+	routines *routineFeed
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -215,6 +218,7 @@ func newHub(a *fw.Agent, c Config) *Hub {
 		prefix:    RelayPrefix(a.Config()),
 		out:       make(chan outgoing, relayQueue),
 		sent:      make(chan struct{}),
+		routines:  newRoutineFeed(),
 		// The ids start at the time of the start in microseconds, so an id
 		// of an earlier process, or of another replica that started
 		// earlier, is below every id of this process and makes the stream

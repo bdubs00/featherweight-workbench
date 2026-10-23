@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"slices"
 	"sort"
@@ -332,6 +333,20 @@ func Write(w io.Writer, list []*Pool) error {
 		}
 		for _, r := range p.overlay.Allow {
 			fmt.Fprintf(&b, "The overlay of the front adds the rule %q to fw.policy.allow%s.\n", r.Rule, written(r.By, r.At, r.Run))
+		}
+		for _, name := range slices.Sorted(maps.Keys(p.overlay.Routines)) {
+			if _, runs := p.Profiles()[name]; !runs {
+				continue
+			}
+			var words []string
+			for _, r := range p.overlay.Routines[name] {
+				words = append(words, fmt.Sprintf("%s version %d (%s)", r.Name, r.Version, r.Standing))
+			}
+			if len(words) == 0 {
+				fmt.Fprintf(&b, "The routines of the front give the profile %s no routine.\n", name)
+				continue
+			}
+			fmt.Fprintf(&b, "The routines of the front give the profile %s the routines %s.\n", name, strings.Join(words, ", "))
 		}
 		if len(p.skillNames) > 0 {
 			fmt.Fprintf(&b, "The front ships its skills %s, which the profiles of the pool allow, to %s/%s of each worker.\n", strings.Join(p.skillNames, ", "), WorkspacePath, SkillsPath)

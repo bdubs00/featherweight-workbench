@@ -160,8 +160,15 @@ func EnqueueFor(ctx context.Context, a *fw.Agent, agent, pool string, reqs []fw.
 			f.recordJobs(ctx, queue, reqs[:sent])
 		}
 	}()
+	// Each request carries the routines that the store holds now, so a
+	// Task that runs an older configuration runs them too.
+	routines := enqueueRoutines(ctx, a)
 	for i, req := range reqs {
 		req.Agent = agent
+		// Only the store of the routines gives a run its routines, so a
+		// caller never sends a routine through a queue.
+		dropRoutines(&req)
+		inlineRoutines(&req, routines, req.Agent)
 		if strings.TrimSpace(req.Input) == "" && len(req.Files) == 0 {
 			return queue, sent, fmt.Errorf("%w: the input of item %d is empty", fw.ErrInvalidRequest, i+1)
 		}
