@@ -92,6 +92,9 @@ faces/                  the faces of the agents: an SVG, a display name, and a t
                         the sanitizer, and the identicon (section 16)
 routines/               the routines of the agents: the store, the standings, the evidence,
                         the runbook, the summary, the routes, and the tools (section 21)
+duties/                 the duties: the record, the store, the engine, the check first, the call
+                        of a webhook, the routes, and the tools (section 22); schedule/ holds the
+                        schedule in words, its next times, its readback, and its grammar
 internal/bucket/        the key-value bucket under the stores of the front: a bucket of the
                         NATS server of the bus, or the memory of the process
 bossmode/               the page of bossmode at /bossmode, its settings, its stream of events,
@@ -126,6 +129,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `/ui/connect/callback` | The end of a connection (section 2.1) | always |
 | `/.well-known/oauth-protected-resource` | Protected resource metadata (RFC 9728) | when `auth.mode` includes `oidc` |
 | `/v1/sources/{name}` | Webhook sources, POST only, with the credential of each source (section 13) | with a webhook source in `workbench.sources` |
+| `/v1/duties/{name}/call` | The call of the webhook of a duty, POST only, with the credential of the duty (section 22.9) | where the bus keeps the duties: `nats` or `mem` |
 | `/bossmode`, `/bossmode/{file...}` | The page of bossmode: its static files under `/bossmode/`, GET only, with no credential, and a 301 from `/bossmode` to `/bossmode/` (section 17.2) | with `workbench.bossmode.enabled` |
 
 | Method and path | Purpose |
@@ -181,6 +185,13 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `POST /v1/bridges/{id}/members` | Add a seat, `{"handle", "agent", "task"}`, and start its run. 201 with the seat. |
 | `DELETE /v1/bridges/{id}/members/{handle}` | Fire a seat: cancel its open runs and mute it. 200 with the fired seat. |
 | `PATCH /v1/bridges/{id}/members/{handle}` | Mute or unmute a seat, or give it a task, `{"muted", "task"}`. A task seats a seat whose newest run failed or was canceled again, also with the same text (section 18.9). 200 with the seat. |
+| `GET /v1/duties` | The duties that the caller can view, with the entries of `workbench.sources` as read-only duties, as `{"duties": [...], "paused": false}` (section 22.7). |
+| `GET /v1/duties/{name}` | One duty with its readback, its next five times, its state, and its last 50 starts. |
+| `PUT /v1/duties/{name}` | Create (201) or change (200) a duty, for an owner of its agent or an admin. `?dryRun=true` saves nothing and answers the readback, the next five times, and every problem. `&test=true` also runs the check once. `X-Time-Zone` is the time zone of a new schedule. |
+| `PATCH /v1/duties/{name}` | Pause or resume a duty, `{"paused"}`. 200 with the duty. |
+| `DELETE /v1/duties/{name}` | Remove a duty. 204. |
+| `POST /v1/duties/{name}/run` | Start a duty now, out of its schedule. 202 with `{"run"}`, or 200 with `{"skipped"}` and the reason. |
+| `PATCH /v1/duties` | The switch that pauses every duty, `{"paused", "reason"}`, for an admin. 200 with the switch. |
 
 ### 2.1 Connections
 
@@ -2907,3 +2918,251 @@ To stop one routine, pause or retire it. To stop every routine of the front, set
 - No token and no secret enters a record, its evidence, a log line, or an event. The evidence holds the first line of the input of a run, at most 200 bytes, as the view holds it.
 - A log line of a change names the agent, the routine, the version, the standing, and the writer.
 - The front does not run a replay. A replay runs where the ledgers are, with `fw routine replay`, and a `PUT` with `replay` gives the result to the evidence. A proposal runs there too, with `fw routine propose`. A worker built with the tag `lean` does not carry that verb. `fw` without the tag and `fw-workbench` do.
+
+## 22. Duties
+
+A duty is the work that an agent does on its own: who does it, when, what, and within which limits. A person says the time in words, such as "every weekday at 9am". The front reads the words with a fixed grammar and reads the schedule back in words. Nobody writes a cron expression or a template. The package `duties` holds the duties. It is a service of the kernel (`fw.RegisterService`). A process that serves has it, and a verb that runs one piece of work does not.
+
+Each replica of the front runs the engine. At each time of a duty, one replica wins the claim of that time and puts one run on the queue of the agent. A duty can also look for work first. It reads an HTTP address first, and only an answer with new items wakes the model.
+
+### 22.1 The record
+
+The page and the MCP tools write the same record. The contract of the build, `reports/Duties contract 2026-10-23.md` in the lab, names every field. This is a duty that reports each weekday morning:
+
+```json
+{
+  "name": "daily-homelab-report",
+  "agent": "docs-scribe",
+  "when": {"say": "every weekday at 9am"},
+  "do": {"ask": {"message": "Write the report of {date}. The last report is {last.title}."}},
+  "limits": {"budget": {"maxCostUSD": 0.5, "maxTurns": 40}, "perDayUSD": 2, "overlap": "skip", "catchUp": "1h", "retries": 1},
+  "whileAway": {"decider": "manager", "timeout": "2h", "then": "deny"},
+  "notify": {"failure": ["owner"], "needsYou": ["owner"]},
+  "runAs": "duty"
+}
+```
+
+| Field | Rule |
+|---|---|
+| `name` | 1 to 63 of `a-z`, `0-9`, `-`, and `_`. It names the route, the batch, and the keys. |
+| `agent` | Required. The access rules of the duty are those of this agent. |
+| `pool` | Optional. It names the pool for an agent that several pools run, as `fleet.EnqueueFor` takes it. |
+| `owner` | The front sets it to the subject of the person who creates the duty. A write never takes it from the body. |
+| `when` | Exactly one of `schedule`, `say`, `event`, and `webhook`. The front turns `say` into `schedule` and stores only `schedule`. |
+| `when.webhook` | `{"auth": {"mode", "secret", "header"}, "key"}`. The auth works as for a webhook source (section 13.4). `key` is an optional dotted path in the body to the key of the event. |
+| `checkFirst` | Optional. It looks for work before the model wakes (section 22.6). |
+| `do` | Exactly one action. This build has `ask`, which asks the agent with `message`. |
+| `limits.budget` | Required, with at least one limit above zero. A paid default is a silent cost, so a duty without a budget does not save. |
+| `limits.perDayUSD` | The cap of the cost of a day in the time zone of the duty. `0` has no cap. |
+| `limits.overlap` | `skip`, `queue`, or `allow`. The default is `skip`. |
+| `limits.catchUp` | A span from `0` to `24h`. A missed time younger than this span runs once. The default is `1h`. |
+| `limits.retries` | 0 to 3. A failed run goes again this many times. The default is 1. |
+| `whileAway` | Who decides a question of a run while nobody watches. The default is `{"decider": "manager", "timeout": "2h", "then": "deny"}`. The front keeps it, and a later part of the build applies it. |
+| `notify` | Who hears of a failed run and of a question: `owner`, or the subject of a person. The default names the owner for both. |
+| `runAs` | `duty`, the principal `duty:<name>` of the kind `workload`, or `owner`. Only the owner sets `owner`. When another person changes the duty, `runAs` goes back to `duty`. |
+| `paused` | `true` pauses the duty. A write that leaves it out keeps the pause of the duty. |
+
+The front fills each default into the record, so a read shows it. A write that does not fit gets 400 with each problem in words, in the field `problems` of the problem document. Each problem names its field, such as "limits.budget is required, with at least one limit above zero".
+
+These parts of the record are for later work. The front reads them, and a write answers "not available yet" until a package registers them (section 22.10):
+
+- `when.event`, a start on an event of the fleet
+- `do.post`, `do.open`, and `do.manager`
+- `checkFirst.look.tool`, a check with a tool of the agent. A write keeps it, but a test and each start answer "not available yet".
+
+A read adds these fields to the record:
+
+| Field | Meaning |
+|---|---|
+| `source` | `store` for a duty of the bucket, and `file` for an entry of `workbench.sources` (section 22.8) |
+| `revision` | The revision of the entry. A write that names it is a compare-and-swap, and a conflict gets 409. |
+| `readback` | The duty in words, from the record alone, such as "Every weekday at 9:00 AM, New York time." |
+| `next` | The next five times, in UTC |
+| `state` | `lastRun`, the newest start, and `todayUSD`, `failuresInRow`, and `pausedReason` |
+| `history` | In a read of one duty: the last 50 starts, newest first |
+
+Each start in `lastRun` and `history` has `at`, `slot`, `run`, `state`, and `costUSD`. It also has `found`, `woke`, `reason`, `start`, `attempt`, and `title`. `start` is `schedule`, `now`, `call`, or `event`. A start that works is `starting`, `waiting`, `retrying`, or in the state of its run. A start that ended is `completed`, `failed`, `canceled`, `skipped`, `missed`, `quiet`, `check-failed`, or `lost`. `reason` says in words why a start did not run, failed, or goes again.
+
+The message of `ask` is plain text with these placeholders, which the front replaces before the run goes on the queue: `{date}`, `{time}`, `{found}`, `{event}`, `{last.title}`, `{last.run}`, `{last.state}`, and `{duty}`. The date and the time are those of the start in the time zone of the duty. `{last.*}` names the newest earlier run of the duty. A placeholder without a value becomes `none`. No other text is a placeholder.
+
+### 22.2 The schedule in words
+
+The package `duties/schedule` holds the schedule. It reads no clock and calls no model.
+
+| Field | Values |
+|---|---|
+| `repeat` | `daily`, `weekdays`, `weekly`, `monthly`, `hourly`, or `every` |
+| `days` | `mon` to `sun`. It is required with `weekly`, and it filters `hourly` and `every`. |
+| `everyWeeks` | 1 to 4, with `weekly`. The weeks count from the week of the first day of the schedule on or after `start`. |
+| `dayOfMonth` | `1` to `31`, `last`, or `first`, `second`, `third`, `fourth`, or `last` with a day, such as `first monday`. A month without the day has no run. |
+| `times` | 1 to 12 times of the day as `HH:MM`, with `daily`, `weekdays`, `weekly`, and `monthly`. Without times, a day runs at `09:00`. |
+| `every` | A step from `15m` to `24h`, with `every` |
+| `between` | Two times that bound `hourly` and `every`, both included. Without it, the steps start at midnight. |
+| `timeZone` | An IANA name. The default is the header `X-Time-Zone` of the caller, else `UTC`. |
+| `start`, `end` | Dates, both included |
+
+When a schedule of several weeks names no `start`, the front sets `start` to the date of the write. When a write changes only the message, the duty keeps its weeks.
+
+The engine computes each time in the time zone of the duty. When summer time starts, a time in the gap runs at the first minute after the gap. When summer time ends, a time of the repeated hour runs once, at its first occurrence.
+
+The grammar reads its clauses in any order. These phrases and their variants work:
+
+- every day at 9am, daily at 9, at 9am
+- weekdays at 9:30am and 4pm, every weekday morning
+- every Monday and Thursday at 8:00, every Monday to Friday at 9
+- every other Tuesday at 3pm, every 2 weeks on Friday
+- on the first of the month at 10am, on the 15th of every month at noon
+- on the last day of the month, on the first Monday of the month at 9
+- every 2 hours between 8am and 6pm, every 15 minutes, every half hour
+- hourly on weekdays, every hour between 9am and 5pm on Monday
+- every morning (9:00), every evening (18:00)
+- starting 2026-11-01, until December 31, UTC, America/New_York
+
+A bare hour, such as "at 9", is a time on the clock of 24 hours. The readback shows the time as "9:00 AM", so a person sees how the front read it. When a part does not read, the answer names that part: "Every Tuesday is clear. "after lunch" is not a time: pick one."
+
+### 22.3 Configuration
+
+The duties read the block `duties` under the key `workbench` of `fw.yaml`. No variable sets these keys.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `workbench.duties.secrets` | The variables of the front that a duty can name: `{name, hosts}`. A check sends the value of a variable only to the hosts of its entry, as globs such as `api.example.com`. A webhook can name any variable of the list. | none |
+| `workbench.duties.checkHosts` | The hosts that a check can reach, as globs such as `*.example.com`. When the list is empty, a check reaches any public address. The dialer then refuses a loopback, private, link-local, or unspecified address after the name resolves. | empty |
+
+The owner of an agent writes a duty, so the operator decides which secrets of the front a duty can send, and where. A value that does not fit stops the start, and the error names the key.
+
+```yaml
+workbench:
+  duties:
+    checkHosts: ["*.service-now.com", "gitea.lab.internal"]
+    secrets:
+      - name: SNOW_API_TOKEN
+        hosts: ["acme.service-now.com"]
+      - name: TICKETS_HOOK_TOKEN
+```
+
+The duties need `workbench.fleet.intake` (section 4.6), so a run reaches a queue. `fw-workbench doctor` has a line for the duties. It names where they live, the hosts of the checks, and the secrets of the list. When a variable of the list holds no secret, the line fails.
+
+### 22.4 The store
+
+The duties live in three key-value buckets (package `internal/bucket`). On the bus `nats` they are buckets of the server of the bus, so every replica reads one truth. On the bus `mem` they live in the memory of the process. On another bus, the duties are off, and the log says so once.
+
+| Bucket | Keys |
+|---|---|
+| `<stream>_DUTIES` | `duty.<name>` holds a duty, with the last 10 values. `state.<name>` holds the counters of its engine. `switch` holds the switch that pauses every duty. Each write of a duty is a compare-and-swap on the revision that the writer read. |
+| `<stream>_DUTY_RUNS` | `<name>.<date>` holds the starts of a duty on one day in its time zone, at most 400. The bucket forgets an entry 30 days after its last write. |
+| `<stream>_DUTY_SEEN` | `check.<name>` holds the keys that the checks of a duty saw, at most 20000. `call.<name>.<hash>` holds a call of its webhook. Each key stays for 30 days. |
+
+A delete removes the duty, its counters, and its seen keys. Its history stays until the bucket forgets it.
+
+### 22.5 The engine
+
+Each replica of the front runs the engine. A pass comes at the next time of a schedule, after each write, and at least every 15 seconds. A pass does two things for each duty:
+
+1. It follows the starts that work. It reads the runs of the batch `duty:<name>` from this process and from the view of the fleet. It writes the state, the title, and the cost of each run into the history.
+2. It finds the newest time of the schedule at or before now. If no earlier pass handled that time, the replica starts it.
+
+A start of a time goes through these steps:
+
+1. The overlap. With `skip`, a time does not start while a run of the duty works, and the history says so. With `queue`, one time waits for that run, and a later time skips. With `allow`, the time starts beside it. A duty never holds more than 40 starts that work at one time.
+2. The daily cap. When the runs of the duty since midnight in its time zone cost `perDayUSD` or more, the time skips. The history says so, and the owner hears of it once that day.
+3. The claim. The replica adds the time to the entry of its day with a compare-and-swap. Of two replicas that claim one time, one wins, and only the winner goes on.
+4. For a duty with a check, the check (section 22.6).
+5. The run. The replica puts one run request on the queue of the pool of the agent with `fleet.EnqueueFor`. The request names its run id, so the front knows the run at once.
+
+The run request carries the idempotency key `duty/<name>/<time>`, with the time in RFC 3339 in UTC. It also carries the metadata `workbench.duty`, `workbench.dutySlot`, `fw.batch` (`duty:<name>`), and `fw.title`. A run of the duty acts as `duty:<name>` of the kind `workload`, or as the owner with `runAs: owner`. Its budget is `limits.budget`.
+
+A missed time is a time that passed while no replica ran. If the newest missed time is younger than `catchUp`, it runs once. If it is older, it does not run, and the history says why. A pass that meets a time within a minute starts it, also with a `catchUp` of `0`. The times of a pause do not run after the resume.
+
+A run that fails goes again after a minute, up to `retries`. A retry is a new run with the idempotency key `duty/<name>/<time>/<attempt>` and the metadata `workbench.dutyAttempt`. When the intake of the kernel retries a failed run itself, the start follows that retry and adds its cost. A run that a person cancels does not go again.
+
+When three runs fail in a row, the duty pauses itself with `pausedReason`, and the people of `notify.failure` hear of it. A completed run, or a resume, ends the row. A replica can stop between the claim and the publish. Two minutes later, the next pass of another replica takes the start over. If the start names a run, the pass waits for that run. Else the start goes again as a failed attempt. When no worker reports the run of a start for 2 hours, the start is `lost`, and the front stops waiting for it.
+
+The switch pauses every duty. `PATCH /v1/duties` and the tool `duties_pause_all` set it, for an admin of the process only. Runs that work go on. The times of the switch do not run after it turns off.
+
+### 22.6 Check first
+
+A check reads an HTTP address. Only an answer that holds work wakes the model. A check costs no model tokens.
+
+```json
+"checkFirst": {
+  "look": {"http": {"url": "https://acme.service-now.com/api/queue", "secret": "SNOW_API_TOKEN", "header": "X-Key"}},
+  "items": "result.records",
+  "key": "number",
+  "where": [{"field": "priority", "oneOf": [1, 2]}],
+  "wake": {"when": "new"}
+}
+```
+
+The front sends a GET with the poll of the sources (section 13.5). The value of `secret` goes in `header`, or as `Authorization: Bearer <value>` without `header`. A redirect goes to the same scheme and host only. One look takes at most 30 seconds and reads at most 1 MB.
+
+- `items` is the dotted path of the list of items in the answer. Each item is a JSON object.
+- `where` keeps the items that pass every filter. Each filter has a dotted `field` and one of `is`, `isNot`, `oneOf`, `contains`, `atLeast`, and `atMost`. Two numbers compare as numbers. This rule also holds for a number in text, such as `"1"` against `1`. Other values compare as text, so dates in the form `2006-01-02` order too. `contains` finds a text in a text, without case, or a value in a list.
+- `wake.when` is `new`, `any`, or `atLeast` with `count`. With `new`, the default, only the items whose `key` no earlier check saw wake the agent. The front remembers those keys once their run is on the queue.
+
+The run gets the items that woke it through `{found}`: one item as compact JSON per line, within 8 KB. A check that finds no work writes a start with the state `quiet` and starts no run. A check that fails writes `check-failed`, and the model does not wake. When three checks fail in a row, the duty pauses itself. A check that works ends the row.
+
+A dry run with `test=true` runs the check once. The answer adds `check`: the items that wake the agent now, at most 20, with `count`, `wakes`, `matched`, and `reason`. A test writes no seen key. When the address fails, the answer is 502.
+
+### 22.7 The routes and the tools
+
+Each capability is one Go function of the service. Its route and its MCP tool call that function, with the same access rules and the same errors. The viewers of the agent of a duty see the duty. The owners of the agent and the admins change it, run it, and remove it. A caller who cannot view the agent gets 404.
+
+| Route | Tool | Answer |
+|---|---|---|
+| `GET /v1/duties` | `duties_list` | `{"duties": [...], "paused": false}`, with `reason` while the switch is on |
+| `GET /v1/duties/{name}` | `duty_get` | The duty with its history |
+| `PUT /v1/duties/{name}` | `duty_put` | 201 with the duty and `Location` for a new duty, else 200. `?dryRun=true` answers `{"duty", "readback", "next", "problems"}` and saves nothing. `?dryRun=true&test=true` adds `check`. The header `X-Time-Zone`, or the argument `timeZone` of the tool, is the time zone of a new schedule. |
+| `PATCH /v1/duties/{name}` | `duty_pause` | `{"paused": true}` or `{"paused": false}`, and 200 with the duty |
+| `DELETE /v1/duties/{name}` | `duty_delete` | 204 |
+| `POST /v1/duties/{name}/run` | `duty_run_now` | 202 with `{"run"}`. For a start that waits, 202 with `{"waiting"}`. 200 with `{"skipped"}` and the reason. For a failed check or queue, 502. |
+| `PATCH /v1/duties` | `duties_pause_all` | `{"paused", "reason"}`, for an admin. 200 with the switch. |
+| `POST /v1/duties/{name}/call` | none | The call of another app (section 22.9) |
+
+`duty_put` takes `{"name", "duty", "dryRun", "test", "timeZone"}`. The other tools take `name`, and `duty_pause` also takes `paused`. `duties_pause_all` takes `paused` and `reason`. A client, such as the manager, calls `duty_put` with `dryRun` first. It shows the readback and the next times to the person, and it saves only after the person agrees.
+
+A run now runs the check of the duty and keeps its overlap and its daily cap. It also runs a paused duty, for a test, but not while the switch is on.
+
+Errors follow the workbench. A body that does not fit gets 400 with `problems`. A conflict of revision gets 409. An entry of `workbench.sources` gets 409 on a change. An outside system that failed gets 502. A test of parity reads the table of the routes in `duties/routes.go`. Each route has a tool or a reason.
+
+### 22.8 The sources as duties
+
+`GET /v1/duties` and `duty_get` show each entry of `workbench.sources` as a duty with `source: file`, for the viewers of its agent. A poll source shows its address without the query, its interval, and its items. A webhook source shows its credential. The templates of a source stay out of the read. The routes never change such an entry, and a duty of the store cannot take its name.
+
+### 22.9 The call of a webhook
+
+`POST /v1/duties/{name}/call` sits outside the authentication of the native API, as the route of a webhook source does. The duty compares the credential of the call with its own secret, with the code of the sources (section 13.4). The credential is a bearer token, or the HMAC-SHA256 of the body in `auth.header`, `X-Signature-256` by default.
+
+The body is the event, at most 1 MB. The run gets it through `{event}`, as compact JSON within 4 KB. When the duty names `when.webhook.key`, a second call with the same key within a week is a duplicate. Without a key, a second call with the same body within ten minutes is a duplicate.
+
+| Status | When |
+|---|---|
+| 202 | `{"run"}`: the call started a run. |
+| 200 | `{"duplicate": true}`, or `{"skipped"}` with the reason, such as a pause |
+| 400 | The body has no key at the path of `key`. |
+| 401 | The credential is missing or wrong. A bearer duty adds `WWW-Authenticate`. |
+| 404 | No duty with a webhook has the name. |
+| 413 | The body is larger than 1 MB. |
+| 503 | The store did not answer, or the secret of the webhook is not set. The answer has `Retry-After`. |
+
+### 22.10 The seams
+
+The later parts of the feature plug into the package without an edit of the engine:
+
+| Seam | Use |
+|---|---|
+| `RegisterAction(name, Action)` | Turns on `do.post`, `do.open`, or `do.manager`. `Action.Start` gets the run request of `ask`, with the placeholders filled. It answers the run that the engine follows, or none. |
+| `RegisterEvents(check)` and `Service.Fire(ctx, name, event)` | Turn on `when.event`. The package that serves the events calls `Fire` for each event of the fleet that a duty waits for. |
+| `RegisterLook("tool", fn)` | Turns on `checkFirst.look.tool`. The function answers the JSON document of the check run of the kernel. |
+| `OnNotice(fn)` | Gets each notice: `failed`, `paused`, `cap`, and `needs-you`. Each notice names the duty, its agent, its owner, the people of `notify`, the run, and the reason. |
+| `OnChange(fn)` | Gets the name of a duty after each change that this replica wrote, for the live stream of bossmode. An empty name is a change of the switch. |
+| `Service.Lookup(ctx, name)` and `NameOf(run)` | Read the duty of a run for the front itself, such as its `whileAway` |
+
+### 22.11 Security
+
+- The access rules of a route are those of the agent of the duty, as for the faces and the routines. A person of the static token never gets more than the token.
+- A duty names only the secrets of `workbench.duties.secrets`, and a check sends a secret only to its hosts. No secret enters a record, a log line, an answer, or the history. An error of a check names the host and never the whole address.
+- Without `checkHosts`, a check reaches no loopback, private, or link-local address. This rule also holds after a redirect and after the name resolves.
+- The call of a webhook takes no credential of the native API. Prefer `hmac`, and limit who reaches `/v1/duties/` with the gateway.
+- The content of an event or of an item of a check becomes the input of a run. Give the agent of a duty only the tools that its work needs, and make the tools that change things ask first.
+- Unattended runs make the open item of the ax API urgent: the ax API and the router take the static token with no other check.
