@@ -70,6 +70,24 @@ func TestLoadEgressMaxBytes(t *testing.T) {
 	}
 }
 
+// The workers of a pool take files of at most tools.files.maxFileBytes of
+// their configuration, and of the default of the kernel without one.
+func TestPoolMaxFileBytes(t *testing.T) {
+	if got := loadFixture(t, fixture)[0].MaxFileBytes(); got != fw.DefaultMaxFileBytes {
+		t.Errorf("default = %d", got)
+	}
+	text := strings.Replace(fixture, "      tools:\n        builtin: [files, clock]", "      tools:\n        files: {maxFileBytes: 16777216}\n        builtin: [files, clock]", 1)
+	if text == fixture {
+		t.Fatal("the fixture changed")
+	}
+	if got := loadFixture(t, text)[0].MaxFileBytes(); got != 16<<20 {
+		t.Errorf("set = %d", got)
+	}
+	if got := (&Pool{}).MaxFileBytes(); got != fw.DefaultMaxFileBytes {
+		t.Errorf("no worker = %d", got)
+	}
+}
+
 // A value that does not fit is an error that names its key and what to
 // set, every problem at once.
 func TestLoadNamesWhatToSet(t *testing.T) {

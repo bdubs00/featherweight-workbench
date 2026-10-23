@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bdubs00/featherweight-kernel/ax"
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/pools"
 )
@@ -24,6 +25,11 @@ const (
 	// value (suspend.go).
 	DefaultSuspendAfter = 10 * time.Minute
 	DefaultExpire       = 7 * 24 * time.Hour
+	// DefaultOrphansAfter is how long an orphan Task sleeps before the
+	// front removes it, when the configuration names atespaces and no
+	// other value (orphans.go). It is the retention of a child Task of the
+	// kernel, so an orphan stays as long as a child of a live parent.
+	DefaultOrphansAfter = ax.DefaultChildRetention
 
 	// FinishedRuns is how many finished runs a record holds, newest first.
 	FinishedRuns = 50

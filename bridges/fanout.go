@@ -22,12 +22,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/skills"
 )
 
@@ -241,11 +243,13 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 	var inputs map[string]string
 	var asked []string // the seats whose question began or ended
 	var up *upload
+	var limits map[string]int64
 	if len(files) > 0 {
 		if up, err = s.hold(spec.Files); err != nil {
 			return Message{}, err
 		}
 		defer up.release()
+		limits = fleet.MaxFileBytes(fctx, s.a, slices.Collect(maps.Values(runs)))
 	}
 	rec, err := s.b.update(ctx, id, func(rec *record) error {
 		lines, plan, seats, inputs, asked = nil, nil, nil, nil, nil
@@ -334,6 +338,9 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 			// keeps the draft.
 			if why := filesRefused(rec, planned, plan, runs); why != "" {
 				return fmt.Errorf("%w: %s", ErrConflict, why)
+			}
+			if why := filesTooLarge(spec.Files, plan, limits); why != "" {
+				return fmt.Errorf("%w: %s", ErrTooLarge, why)
 			}
 		}
 		return nil

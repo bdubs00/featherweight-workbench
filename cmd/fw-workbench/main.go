@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/bdubs00/featherweight-kernel/cli"
+	"github.com/bdubs00/featherweight-workbench/internal/memlimit"
 )
 
 // Build information, set with -ldflags "-X main.version=... -X main.commit=...".
@@ -27,6 +28,10 @@ var (
 const runnerName = "ax-task-runner"
 
 func main() {
+	// A front in a container gets the memory limit of its container as the
+	// soft limit of the runtime, so a large upload does not pass it with
+	// garbage (internal/memlimit).
+	memlimit.FromCgroup()
 	cli.Version, cli.Commit = version, commit
 	args := os.Args[1:]
 	if filepath.Base(os.Args[0]) == runnerName {

@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -41,6 +42,103 @@ func (f *orphanAX) DeleteTask(_ context.Context, req *v1alpha1.DeleteTaskRequest
 		return nil, status.Error(c, "the delete failed")
 	}
 	return &v1alpha1.DeleteTaskResponse{}, nil
+}
+
+// asleepSince gives the Task the condition Ready with the reason
+// TaskSuspended since at, as ax sets it for a Task that sleeps.
+func asleepSince(t *v1alpha1.Task, at time.Time) *v1alpha1.Task {
+	t.Status.Conditions = append(t.Status.Conditions, &v1alpha1.Condition{Type: condReady, Status: "False", Reason: reasonSuspended, UpdateTime: timestamppb.New(at)})
+	return t
+}
+
+// ran gives the Task the condition WorkspaceReady, which ax sets once the
+// Task ran.
+func ran(t *v1alpha1.Task) *v1alpha1.Task {
+	t.Status.Conditions = append(t.Status.Conditions, &v1alpha1.Condition{Type: condWorkspaceReady, Status: "True"})
+	return t
+}
+
+// The sweep removes an orphan that slept for orphansAfter or that failed
+// before it ran, each Task before the Task above it. An orphan that slept
+// less, that works, that failed after it ran, or that holds a run that has
+// not ended stays, and so does every orphan above it.
+func TestSweepOrphans(t *testing.T) {
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	long, short := now.Add(-30*time.Hour), now.Add(-time.Hour)
+	tasks := map[string][]*v1alpha1.Task{"default": {
+		childTask("manager-1", "", "Running", now.Add(-48*time.Hour)),
+		// A tree that slept long: the child goes before its parent.
+		asleepSince(ran(childTask("old", "ax:default/manager-0", "Suspended", long)), long),
+		asleepSince(ran(childTask("old-x", "ax:default/old", "Suspended", long)), long),
+		// A parent that slept long stays above a child that slept less.
+		asleepSince(ran(childTask("held", "ax:default/manager-0", "Suspended", long)), long),
+		asleepSince(ran(childTask("held-x", "ax:default/held", "Suspended", long)), short),
+		// It slept less, it works, it holds an open run, it failed after it ran.
+		asleepSince(ran(childTask("napping", "ax:default/manager-0", "Suspended", long)), short),
+		ran(childTask("working", "ax:default/manager-0", "Running", long)),
+		asleepSince(ran(childTask("busy", "ax:default/manager-0", "Suspended", long)), long),
+		ran(childTask("broke", "ax:default/manager-0", "Failed", long)),
+		// A Task that failed before it ran goes, and a Task without the
+		// condition counts from its creation.
+		childTask("stillborn", "ax:default/manager-0", "Failed", short),
+		ran(childTask("unmarked", "ax:default/manager-0", "Suspended", long)),
+	}}
+	client := &orphanAX{tasks: tasks}
+	off := time.Duration(0)
+	p := &platform{f: &Fleet{log: quietLogger(), orphansAfter: 24 * time.Hour}, atespaces: []string{"default"}, client: client, runs: map[string]*platformRun{
+		"r1": {run: &fw.Run{ID: "r1", State: fw.StateInputRequired}, member: "default/busy"},
+	}}
+	got := p.sweepOrphans(context.Background(), now)
+	want := []string{"default/old-x", "default/old", "default/stillborn", "default/unmarked"}
+	if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(client.deleted, want) {
+		t.Fatalf("swept %v and deleted %v, want %v", got, client.deleted, want)
+	}
+	// A sweep that is off removes nothing.
+	client.deleted = nil
+	p.f.orphansAfter = off
+	if got := p.sweepOrphans(context.Background(), now); got != nil || client.deleted != nil {
+		t.Fatalf("a sweep that is off removed %v", got)
+	}
+}
+
+// The sweep of the orphan Tasks is on with atespaces, after the retention
+// of a child Task of the kernel, and off with off or without atespaces.
+func TestOrphansAfterConfig(t *testing.T) {
+	for _, e := range []string{EnvAtespaces, EnvEgress, EnvName, EnvSuspendAfter, EnvOrphansAfter} {
+		t.Setenv(e, "")
+	}
+	t.Setenv("FW_ATESPACE", "")
+	cfg := fw.DefaultConfig()
+	t.Setenv(EnvAtespaces, "team")
+	c, err := Load(cfg)
+	if err != nil || c.orphansAfter() != DefaultOrphansAfter || DefaultOrphansAfter != ax.DefaultChildRetention {
+		t.Fatalf("default = %v, %v", c.orphansAfter(), err)
+	}
+	t.Setenv(EnvOrphansAfter, "off")
+	if c, err = Load(cfg); err != nil || c.orphansAfter() != 0 {
+		t.Fatalf("off = %v, %v", c.orphansAfter(), err)
+	}
+	t.Setenv(EnvOrphansAfter, "6h")
+	if c, err = Load(cfg); err != nil || c.orphansAfter() != 6*time.Hour {
+		t.Fatalf("6h = %v, %v", c.orphansAfter(), err)
+	}
+	t.Setenv(EnvOrphansAfter, "later")
+	if _, err = Load(cfg); err == nil || !strings.Contains(err.Error(), EnvOrphansAfter) {
+		t.Fatalf("bad duration = %v", err)
+	}
+	t.Setenv(EnvOrphansAfter, "-1h")
+	if _, err = Load(cfg); err == nil || !strings.Contains(err.Error(), "orphansAfter -1h0m0s is negative") {
+		t.Fatalf("negative = %v", err)
+	}
+	t.Setenv(EnvOrphansAfter, "6h")
+	t.Setenv(EnvAtespaces, "")
+	if _, err = Load(cfg); err == nil || !strings.Contains(err.Error(), "orphansAfter needs") {
+		t.Fatalf("without atespaces = %v", err)
+	}
+	t.Setenv(EnvOrphansAfter, "")
+	if c, err = Load(cfg); err != nil || c.orphansAfter() != 0 {
+		t.Fatalf("no atespaces, no sweep = %v, %v", c.orphansAfter(), err)
+	}
 }
 
 // childTask is a Task that names its parent in FW_PARENT_MEMBER, or a Task

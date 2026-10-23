@@ -171,6 +171,31 @@ func TestAttachmentRefusals(t *testing.T) {
 	}
 }
 
+// A file larger than the workspace of a member takes, the
+// tools.files.maxFileBytes of its workers, answers 413 before the fan-out:
+// the kernel of the member would refuse it after the post. The post
+// changes nothing, and a file at the limit goes out.
+func TestAttachmentOverTheFileLimitOfAMember(t *testing.T) {
+	s, _, fm, url, id := fanBridge(t, "")
+	endpoint := url + "/v1/bridges/" + id + "/messages"
+	before := len(channel(t, s, id))
+	post := func(size int) (*http.Response, string) {
+		body, _ := json.Marshal(PostSpec{To: []string{"reviewer"}, Files: []native.FileBody{{Name: "big.bin", Data: bytes.Repeat([]byte{7}, size)}}})
+		return do(t, http.MethodPost, endpoint, "alice", string(body))
+	}
+	resp, raw := post(9 << 20)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(raw, "big.bin") || !strings.Contains(raw, "holds 9 MiB, and reviewer takes files of at most 8 MiB (tools.files.maxFileBytes of its workers)") {
+		t.Fatalf("a file over the limit of the member = %d %s", resp.StatusCode, raw)
+	}
+	if len(channel(t, s, id)) != before || len(fm.find(http.MethodPost, pathRev)) != 0 || s.held.Load() != 0 {
+		t.Fatal("a refused post changed the channel, delivered to a member, or kept its bytes")
+	}
+	if resp, raw := post(fw.DefaultMaxFileBytes); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("a file at the limit = %d %.300s", resp.StatusCode, raw)
+	}
+	eventually(t, "the reviewer gets the file at the limit", func() bool { return len(fm.find(http.MethodPost, pathRev)) == 1 })
+}
+
 // A body over the bound of the files answers 413, and a body without files
 // keeps the bound of a body without files.
 func TestAttachmentBodyBounds(t *testing.T) {

@@ -78,6 +78,9 @@ func DoctorCheck(ctx context.Context, cfg *fw.Config, _ fw.Secrets, timeout time
 	} else {
 		parts = append(parts, "suspends no Task (set workbench.fleet.suspendAfter)")
 	}
+	if d := c.orphansAfter(); d > 0 {
+		parts = append(parts, "removes an orphan Task that sleeps for "+d.String())
+	}
 	for _, p := range list {
 		part := fmt.Sprintf("keeps the pool %s of %d %s of %s on %s", p.Name, p.Wanted(), plural(p.Wanted(), "Task", "Tasks"), p.Agent, p.Intake)
 		if p.Template != "" {

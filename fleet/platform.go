@@ -320,6 +320,9 @@ func (f *Fleet) startPlatform(atespaces []string, egress, server, tokenEnv strin
 	}
 	if p.client != nil {
 		go p.loop(f.ctx)
+		if f.orphansAfter > 0 {
+			go p.sweepLoop(f.ctx)
+		}
 	}
 	f.log.Info("fleet reads the platforms", "atespaces", strings.Join(atespaces, ","), "egress", p.egress, "server", p.server)
 	return nil

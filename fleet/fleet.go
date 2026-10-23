@@ -92,8 +92,11 @@ type Fleet struct {
 	interval time.Duration
 	expire   time.Duration
 	// suspendAfter is the grace period of the suspend controller, zero
-	// when it is off (suspend.go).
+	// when it is off (suspend.go), and orphansAfter how long an orphan
+	// Task sleeps before the front removes it, zero when the sweep is off
+	// (orphans.go).
 	suspendAfter time.Duration
+	orphansAfter time.Duration
 	router       string
 	client       *http.Client
 	// intake is the prefix of the intake queues, and wakeOnQueue turns
@@ -172,6 +175,7 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 		f.expire = DefaultExpire
 	}
 	f.suspendAfter = fc.suspendAfter()
+	f.orphansAfter = fc.orphansAfter()
 	f.intake = strings.TrimSpace(fc.Intake)
 	f.wakeOnQueue = fc.wakeOnQueue() && f.intake != "" && len(fc.Atespaces) > 0
 	if _, ok := f.bus.(*fw.MemBus); ok && egress != "" {
