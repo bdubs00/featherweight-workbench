@@ -350,6 +350,11 @@ type seatMark struct {
 	// worker of the fleet holds it (goneLines). The seat is then idle or
 	// in error, and a message or a patch with its task seats it again.
 	Gone string `json:"gone,omitempty"`
+	// Continued is the run that a person last continued after a stop at a
+	// limit (continueSeat), and ContinuedAt the time, so a second click
+	// before the run goes on gives it nothing more.
+	Continued   string     `json:"continued,omitempty"`
+	ContinuedAt *time.Time `json:"continuedAt,omitempty"`
 }
 
 // SeatBudget is the budget of one seat: the turns and the working time of

@@ -513,22 +513,30 @@ func (s *Store) limitedRun(ctx context.Context, id, handle string) (*fw.Run, err
 // of its budget: the channel says so, and one follow-up of the person
 // gives the run the allowance of its seat again (grant) and asks it to go
 // on. The run keeps its context, which a new run with the task would lose.
+// A second continue of the same run within seatAgainWait, before the run
+// goes on, does nothing, so a double click continues once.
 func (s *Store) continueSeat(ctx context.Context, rec *record, m Member, r *fw.Run, by *fw.Principal) {
 	now := s.now().UTC()
 	var line []Message
 	fresh, err := s.b.update(ctx, rec.ID, func(rec *record) error {
+		line = nil
+		sm := rec.seat(m.Handle)
+		if sm.Continued == r.ID && sm.ContinuedAt != nil && now.Sub(*sm.ContinuedAt) < seatAgainWait {
+			return errNoChange
+		}
+		sm.Continued, sm.ContinuedAt = r.ID, &now
 		line = seqLines(rec, []Message{system(EventTask, fmt.Sprintf("%s continued %s", s.nameOf(ctx, by), m.Handle))}, now)
 		return nil
 	})
 	if err != nil {
 		s.log.Warn("bridges: post the line of a continue", "bridge", rec.ID, "member", m.Handle, "error", err)
-		fresh, line = rec, nil
+		return
+	}
+	if len(line) == 0 {
+		return // a continue of this run went out a moment ago
 	}
 	s.land(ctx, rec.ID, line...)
-	seq := fresh.LastSeq
-	if len(line) > 0 {
-		seq = line[0].Seq
-	}
+	seq := line[0].Seq
 	snd := sender{subject: orOperator(subjectOfPrincipal(by))}
 	s.submit(s.deliveryJob(delivery{bridge: rec.ID, seq: seq, handle: m.Handle, run: r,
 		content: header(fresh, []string{m.Handle}, snd.name()) + continueText, from: snd.party(m.Handle)}))

@@ -217,6 +217,14 @@ func TestLimitStopContinuesTheSameRun(t *testing.T) {
 	if n := len(fm.find(http.MethodPost, "/v1/runs")); n != 0 {
 		t.Fatalf("continue started %d new runs", n)
 	}
+	// A double click continues once.
+	if resp, out := do(t, http.MethodPatch, url+"/v1/bridges/"+id+"/members/reviewer", "alice", `{"continue":true}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("a second continue = %d %s", resp.StatusCode, out)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n, lines := len(fm.find(http.MethodPost, pathRev)), withEvent(channel(t, s, id), EventTask); n != 1 || len(lines) != 1 {
+		t.Fatalf("a second continue: %d follow-ups, task lines %+v", n, lines)
+	}
 
 	// An agent cannot continue it; a person can.
 	if _, err := s.post(context.Background(), id, sender{handle: "migrator-1", run: "r-mig"}, PostSpec{Text: "Review again.", To: []string{"reviewer"}}); err != nil {
