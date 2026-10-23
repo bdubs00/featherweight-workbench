@@ -349,15 +349,26 @@ func TestRelayStartsARunForAPerson(t *testing.T) {
 
 // A header Fw-On-Behalf-Of of the caller never reaches the member: the
 // front names the person it decided about, and for the token and a
-// workload it names nobody.
+// workload it names nobody. A person who names another person is refused
+// at the front itself, because the kernel lets only the token and a
+// workload act for another person, so nothing reaches the member. A
+// person who names herself acts as herself.
 func TestRelayNeverPassesOnBehalfOfOfTheCaller(t *testing.T) {
 	pf := newPersonFront(t)
+	before := len(pf.reached())
+	if code, b := pf.do(t, http.MethodPost, "/v1/runs/r1/cancel", `{}`, "alice-token", HeaderOnBehalfOf, "mallory"); code != http.StatusForbidden || len(pf.reached()) != before {
+		t.Fatalf("a person who names another person: %d %s, and %d requests reached the member", code, b, len(pf.reached())-before)
+	}
 	for who, want := range map[string]memberCall{
 		"alice-token":    {auth: "Bearer fleet-secret", person: "alice"},
 		"fleet-secret":   {auth: "Bearer fleet-secret"},
 		"workload-token": {auth: "Bearer workload-token"},
 	} {
-		code, b := pf.do(t, http.MethodPost, "/v1/runs/r1/cancel", `{}`, who, HeaderOnBehalfOf, "mallory")
+		named := "mallory"
+		if who == "alice-token" {
+			named = "alice"
+		}
+		code, b := pf.do(t, http.MethodPost, "/v1/runs/r1/cancel", `{}`, who, HeaderOnBehalfOf, named)
 		if got := pf.last(t); code != http.StatusOK || got.auth != want.auth || got.person != want.person {
 			t.Fatalf("%s: %d %s, the member got %+v", who, code, b, got)
 		}

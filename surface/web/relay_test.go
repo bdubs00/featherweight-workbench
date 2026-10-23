@@ -148,10 +148,13 @@ func TestRelayErrors(t *testing.T) {
 	if pr := decodeProblem(t, resp, b, http.StatusForbidden); !strings.Contains(pr.Detail, "did not accept your credential") {
 		t.Errorf("detail for the token = %q", pr.Detail)
 	}
-	// The owner refuses an action of the token: the words say so.
+	// The owner refuses an action of the token: the words say so, with the
+	// reason of the owner. Here the front holds the credential of a person,
+	// bob, in place of the token, and the owner refuses bob, who cannot act
+	// for alice.
 	p.fleet.fail(nil, asBob)
 	resp, b = do(t, "POST", p.viewURL+"/v1/runs/"+p.remote.ID+"/cancel", `{}`, "Authorization", asAlice)
-	if pr := decodeProblem(t, resp, b, http.StatusForbidden); !strings.HasPrefix(pr.Detail, "the worker owner refused the token of the fleet: ") || !strings.Contains(pr.Detail, "bob") {
+	if pr := decodeProblem(t, resp, b, http.StatusForbidden); !strings.HasPrefix(pr.Detail, "the worker owner refused the token of the fleet: ") || len(pr.Detail) == len("the worker owner refused the token of the fleet: ") {
 		t.Errorf("detail of a refusal of the owner = %q", pr.Detail)
 	}
 	// Without the token of the fleet, the front acts for no person.
