@@ -37,13 +37,14 @@ import (
 //   - working: the newest run is queued, running, or suspended.
 //   - idle: the newest run finished, and the Task is live.
 //
-// The routes and the hooks apply two more rules first, from the record of
-// the bridge (decorate): a seat whose newest run no worker of the fleet
-// holds, as the channel said with the line lost, is idle when the channel
-// holds an end of that run, and in error otherwise; and a seat without a
-// run is waiting when something seats it, and not-started otherwise. Last,
-// a seat whose question waits for a person needs you, unless it is fired
-// or in error (ask.go).
+// The routes and the hooks apply more rules first, from the record of the
+// bridge (decorate): a seat whose newest run no worker of the fleet holds,
+// as the channel said with the line lost, is idle when the channel holds
+// an end of that run, and in error otherwise; a seat of a closed bridge
+// whose newest run the view does not hold is idle; and a seat without a
+// run is waiting when something seats it on an open bridge, and
+// not-started otherwise. Last, a seat whose question waits for a person
+// needs you, unless it is fired or in error (ask.go).
 func Presence(m Member, runs []*fw.Run, taskState string) string {
 	if m.Fired {
 		return PresenceFired
@@ -120,6 +121,8 @@ func decorate(rec *record, runs map[string]*fw.Run, states map[string]string) []
 			m.Activity = activityOf(newest)
 		}
 		if p, ok := gonePresence(rec, *m, runs); ok {
+			m.Presence, m.Activity, m.Gone = p, nil, true
+		} else if p, ok := closedPresence(rec, *m, runs); ok {
 			m.Presence, m.Activity = p, nil
 		}
 		if p, ok := unseatedPresence(rec, *m, runs); ok {
@@ -134,13 +137,13 @@ func decorate(rec *record, runs map[string]*fw.Run, states map[string]string) []
 }
 
 // unseatedPresence is the presence of a seat that has no run yet: waiting
-// when something seats it (willSeat), and not-started otherwise. It
-// reports false for any other seat.
+// when something seats it on a bridge that is not closed (willSeat), and not-started
+// otherwise. It reports false for any other seat.
 func unseatedPresence(rec *record, m Member, runs map[string]*fw.Run) (string, bool) {
 	if m.Fired || len(m.Runs) > 0 {
 		return "", false
 	}
-	if willSeat(rec, runs[managerRun(rec)]) {
+	if rec.State != StateClosed && willSeat(rec, runs[managerRun(rec)]) {
 		return PresenceWaiting, true
 	}
 	return PresenceNotStarted, true
@@ -165,6 +168,19 @@ func willSeat(rec *record, mgr *fw.Run) bool {
 	}
 	mk := rec.Marks[id]
 	return mk == nil || mk.Done == 0
+}
+
+// closedPresence is the presence of a seat of a closed bridge whose newest
+// run the view does not hold, such as a run that a pool took with its old
+// Task after the bridge closed. The watch of the bridge stopped with the
+// close, so no line says that the run is lost, and nothing seats the seat
+// again: it rests. It reports false for any other seat.
+func closedPresence(rec *record, m Member, runs map[string]*fw.Run) (string, bool) {
+	id := m.newest()
+	if rec.State != StateClosed || m.Fired || id == "" || runs[id] != nil {
+		return "", false
+	}
+	return PresenceIdle, true
 }
 
 // gonePresence is the presence of a seat whose newest run no worker of
@@ -199,6 +215,9 @@ func shownKey(m Member) string {
 	b.WriteString(m.Task)
 	if m.Fired {
 		b.WriteString("|fired")
+	}
+	if m.Gone {
+		b.WriteString("|gone")
 	}
 	if m.Muted {
 		b.WriteString("|muted")

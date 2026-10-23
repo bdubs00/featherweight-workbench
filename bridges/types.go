@@ -184,6 +184,10 @@ type Member struct {
 	// person, or 0 (ask.go). The record keeps it in the bookkeeping of the
 	// seat, and the routes and the hooks give it.
 	Question uint64 `json:"question"`
+	// Gone is true when no worker of the fleet holds the newest run of the
+	// seat, as the channel said (goneLines), so a reader of the run gets
+	// 404 and the page does not ask for it.
+	Gone bool `json:"gone,omitempty"`
 }
 
 // newest returns the newest run of the seat, or "".

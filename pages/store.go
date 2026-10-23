@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -814,7 +815,7 @@ func wordsOf(q string) []string {
 // the title, or the text.
 func match(info PageInfo, text string, words []string) (Hit, bool) {
 	lp, lt, lx := strings.ToLower(info.Path), strings.ToLower(info.Title), strings.ToLower(text)
-	score, first := 0, -1
+	score := 0
 	for _, w := range words {
 		n := 0
 		if strings.Contains(lp, w) {
@@ -826,9 +827,6 @@ func match(info PageInfo, text string, words []string) (Hit, bool) {
 		if lx != "" {
 			if c := strings.Count(lx, w); c > 0 {
 				n += min(c, 10)
-				if i := strings.Index(lx, w); first < 0 || i < first {
-					first = i
-				}
 			}
 		}
 		if n == 0 {
@@ -837,10 +835,152 @@ func match(info PageInfo, text string, words []string) (Hit, bool) {
 		score += n
 	}
 	hit := Hit{Path: info.Path, Title: info.Title, Version: info.Version, Score: score}
-	if first >= 0 {
-		hit.Snippet = snippetOf(text, lx, first)
+	if lx != "" {
+		hit.Snippet = excerpt(text, lx, words, lt)
 	}
 	return hit, true
+}
+
+// excerpt returns the snippet of a hit in plain words: the line of the body
+// around the first word of the query, else the first line of prose of the
+// body. The body leaves out the front matter, and the heading that repeats
+// the title, which the hit names already. lower is the text in lower case,
+// and title the title in lower case.
+func excerpt(text, lower string, words []string, title string) string {
+	first := -1
+	from := bodyStart(lower)
+	for _, w := range words {
+		if i := indexInBody(lower, w, from, title); i >= 0 && (first < 0 || i < first) {
+			first = i
+		}
+	}
+	if first >= 0 {
+		return plain(snippetOf(text, lower, first))
+	}
+	rest := text[bodyStart(text):]
+	for rest != "" {
+		line, next, _ := strings.Cut(rest, "\n")
+		rest = next
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "```") || tableRule.MatchString(t) || isTitleLine(strings.ToLower(t), title) {
+			continue
+		}
+		if s := plain(snippet(t, 0)); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// bodyStart returns the offset in text after its front matter, the lines
+// between a first line --- and the next line ---, or 0 without one.
+func bodyStart(text string) int {
+	start := len("---\n")
+	if !strings.HasPrefix(text, "---\n") {
+		if !strings.HasPrefix(text, "---\r\n") {
+			return 0
+		}
+		start = len("---\r\n")
+	}
+	for i := start; i < len(text); {
+		j := strings.IndexByte(text[i:], '\n')
+		if j < 0 {
+			return 0
+		}
+		if strings.TrimRight(text[i:i+j], "\r") == "---" {
+			return i + j + 1
+		}
+		i += j + 1
+	}
+	return 0
+}
+
+// indexInBody returns the offset of the first w in lower at or after from
+// that is not on the heading of the title, or -1.
+func indexInBody(lower, w string, from int, title string) int {
+	for i := from; i < len(lower); {
+		j := strings.Index(lower[i:], w)
+		if j < 0 {
+			return -1
+		}
+		at := i + j
+		start := strings.LastIndexByte(lower[:at], '\n') + 1
+		end := strings.IndexByte(lower[at:], '\n')
+		if end < 0 {
+			end = len(lower)
+		} else {
+			end += at
+		}
+		if !isTitleLine(strings.TrimSpace(lower[start:end]), title) {
+			return at
+		}
+		i = end + 1
+	}
+	return -1
+}
+
+// isTitleLine reports whether a trimmed line in lower case is a heading
+// that says the title in lower case.
+func isTitleLine(line, title string) bool {
+	h, ok := strings.CutPrefix(line, "#")
+	return ok && title != "" && strings.TrimSpace(strings.TrimLeft(h, "#")) == title
+}
+
+// The Markdown that plain takes out of a snippet.
+var (
+	mdLink      = regexp.MustCompile(`!?\[([^\]]*)\]\([^)]*\)`)
+	mdLinkTail  = regexp.MustCompile(`^[^\[(]*\]\([^)]*\)`)
+	mdURLTail   = regexp.MustCompile(`^[^\s\[\]()]*\)`)
+	mdLinkHead  = regexp.MustCompile(`!?\[([^\]]*)(\]\([^)]*)?$`)
+	mdBlockLead = regexp.MustCompile(`^(#{1,6}\s+|>\s*|[-*+]\s+(\[[ xX]\]\s+)?)`)
+	mdEmphasis  = regexp.MustCompile("\\*\\*|__|`")
+	tableRule   = regexp.MustCompile(`^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$`)
+	spaces      = regexp.MustCompile(`\s{2,}`)
+)
+
+// plain turns a snippet of Markdown into plain words: a link keeps its
+// text, a heading, a quote, and an item of a list lose their marks, the
+// cells of a table row stand apart with a dot, and bold and code lose
+// their marks. The marks ... of a cut snippet stay.
+func plain(s string) string {
+	s, lead := strings.CutPrefix(s, "...")
+	trail := false
+	if strings.HasSuffix(s, "...") {
+		s, trail = strings.TrimSuffix(s, "..."), true
+	}
+	s = mdLink.ReplaceAllString(s, "$1")
+	if lead {
+		// A cut can leave the end of a link at the start: the end of its
+		// text with its address, or the end of its address alone.
+		s = mdLinkTail.ReplaceAllStringFunc(s, func(m string) string { return m[:strings.Index(m, "](")] })
+		s = mdURLTail.ReplaceAllString(s, "")
+	}
+	if trail {
+		// A cut can leave the start of a link at the end.
+		s = mdLinkHead.ReplaceAllString(s, "$1")
+	}
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "|") || strings.HasSuffix(s, "|") || strings.Count(s, " | ") > 0 {
+		cells := strings.Split(strings.Trim(s, "| "), "|")
+		for i, c := range cells {
+			cells[i] = strings.TrimSpace(c)
+		}
+		s = strings.Join(cells, " · ")
+	} else {
+		s = mdBlockLead.ReplaceAllString(s, "")
+	}
+	s = spaces.ReplaceAllString(mdEmphasis.ReplaceAllString(s, ""), " ")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if lead {
+		s = "..." + s
+	}
+	if trail {
+		s += "..."
+	}
+	return s
 }
 
 // snippetOf returns the snippet of text around the offset at of lower, the
