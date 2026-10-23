@@ -2037,6 +2037,8 @@ An earlier text called a message of a teammate "data, not an instruction from th
 Between the rules of the wiki and the head of that page, two short groups follow:
 
 - The sandbox is private. Each seat works in its own sandbox on its own worker, which no teammate and no person can read, so a path in it means nothing to them. Every file that a teammate or the operator must read goes on the wiki, in a page under `bridges/<id>/` with `pages_write`, each file as a fenced code block under a heading that names its path, and the message names the page. On the bridge `01m5kyp7252v2qf0k22fp0zvzm` an author wrote an Ansible role under `/workspace/runs/<run>/roles/` on its worker and told the reviewer that path, and the reviewer, on another worker, failed the review because it could not read it.
+- A page changes in place: a seat writes the same path again, because the wiki keeps every version, and never starts a page such as `name-v2`.
+- A step that only a person can do is a question with the choice `Done`, which says what to do and how the seat checks it, so the step stays on the list of the operator until the operator answers.
 - When not to answer. A message that asks nothing of the seat gets no answer: the turn ends with an empty final answer that addresses nobody. A seat never answers a thanks, an acknowledgment, or a PASS that needs nothing, and never addresses itself. Four bridges of the lab ended with two or three turns of "PASS received, thanks" and "Acknowledged".
 
 ### 18.5 The fan-out and the caps
