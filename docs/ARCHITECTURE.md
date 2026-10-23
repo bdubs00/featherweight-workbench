@@ -331,7 +331,9 @@ The view decides as the front decides, with its own configuration:
 - In `rules` mode, the view applies the access rules (the kernel architecture, section 13.2) with its own `access.default`, `access.admins`, and the access blocks of its agent profiles, to the agents and the runs of every member. Whoever started a run sees that run. Whoever sees a run sees its children.
 - In `external` or `custom` mode, the view asks the `Authz` of its own process. With `workbench.access.external` (section 12), that is the control plane, and each check carries `member`, the access block of the agent, and the lineage of the run. A view without a decision point shows no run of another member. The view has no local fallback.
 
-Every action goes to the owner of the run, and the owner decides with its current rules.
+This is the rule for a person. The front decides every action of a person with the rules of what the person sees. A worker trusts only the credential of the fleet.
+
+A person is any principal but the process itself, the static token, and a workload (`fleet.IsPerson`). Before the front acts for a person on another member, it decides the action with the rules above. An action that the person cannot do never leaves the front. The request then carries the static token of the fleet and names the person, and the owner decides about the token (section 4.5). The static token and a workload act on another member with their own credential, and the owner decides with its current rules.
 
 When the MCP server acts for the person of a run of a worker (section 19), the principal of the call is that person, and the static token of the fleet stands behind it. The view then gives the person only what the token can do too: in the rules mode, each check passes only when it passes for the person and for the token, and in the other modes the `Authz` of the process does the same (`behalf.Guard`). The roles of the person on the profiles of a pool follow the same rule (section 14.9). Acting for a person therefore narrows what the token can do and never widens it.
 
@@ -351,11 +353,51 @@ The answer of the view has the shape of the answer of the member: the run object
 - `blocked` comes from a read of the Task alone (section 4.12).
 - `activity` is the last activity that the stream carried, and a member that sleeps does no work. Neither answer carries the words of an activity, such as `Ran "go test ./..."`, because the changes of the view carry them (section 4.15).
 
-The forwarded request carries the bearer credential of the caller. The owner authenticates the caller again and authorizes the action in its kernel. The view therefore never acts under an identity of its own, and the owner records the real decider in its ledger. A credential goes to one kind of address only: an ax address, through the router at `ax.router` with the header `ate-target-actor`. The router wakes a Task that sleeps, so an approval reaches a sleeping member, and the front then makes the phase of the Task follow (section 4.12). A worker that only the stream knows has no address, so no credential can reach it.
+The relay of the native surface, which the package registers with `Kit.SetRelay`, does the forwarding for the run routes of the kernel, and the MCP server does it for its work tools. The relay follows the rule of section 4.4. For a person, it decides the request at the front first, with the rules of what the person sees:
 
-The relay of the native surface, which the package registers with `Kit.SetRelay`, does the forwarding for the run routes of the kernel, and the MCP server does it for its work tools. An answer of `text/event-stream`, such as `GET /v1/runs/{id}/events` and the live text of a run at `GET /v1/runs/{id}/live` (the kernel architecture, section 8.2), flows through as the owner writes it, with a flush after each read and no write deadline, so a page reads the answer of a model on a Task as it grows. A test checks that the first event of a member reaches the client before the member writes the second. For the owner to accept the credential, the front and the workers trust the same issuer and the same `auth.oidc.audience`, or share the static token. A caller with an X.509 client certificate, or over stdio, carries no bearer credential. Such a caller sees the fleet but acts only on the runs of the front. If the owner refuses the credential, the view answers 403, and if the owner does not answer, the view answers 502. A forwarded request carries the header `Fw-Fleet-Via` with the name of the front, and a member never forwards such a request again.
+- A read needs `run.view`: the run object, its events, its live text, and its files.
+- A write needs `run.operate`: a message, a reaction, a change of the budget, a decision, a cancel, and a fork.
+- A fork also needs `agent.run` on the agent of the run, because a branch is a new run of that agent.
+- A start through `POST /v1/runs?member=<name>` needs `agent.run` on the agent of the body at that member. A body without an agent starts the agent `default`, as the kernel does.
 
-A request that the MCP server sends for the person of a run (section 19) carries the static token, so the owner decides about the token. The front decides about the person first, with the rules of section 4.4: `fleet.AllowRun` decides an action on a run of another member, such as `run.operate` before an approval, and `fleet.AllowAgent` decides an action on an agent of a member, such as `agent.run` before a run starts there. A view that cannot decide refuses, so no request goes out for a person without a decision.
+`fleet.AllowRun` and `fleet.AllowAgent` make these decisions. A view that cannot decide refuses, so no request goes out for a person without a decision.
+
+The request of a person then carries the static token of the fleet as its credential, and never the credential of the person. The header `Fw-On-Behalf-Of` names the subject of the person (`fleet.HeaderOnBehalfOf`). The owner decides about the token. It records the person as the decider of an approval and as the person of a message, a change of a budget, and a cancel. The kernel of the owner takes the header from the static token alone. A kernel that does not know the header records the token.
+
+The static token can name another party in a body, because the kernel trusts it (the kernel architecture, section 5.5). So the front applies the rules of the kernel for a person itself, with the words of the kernel. It refuses a body of a person that names the sender of a message, another person of a reaction, or the id of a run. It puts the person into `by` of a reaction, and into `principal` and `principalKind` of a run that starts. The member takes the person of a start from the static token, so the run belongs to the person. A key of a body names its field without regard to case, as the kernel decodes a body.
+
+The front sets `Fw-On-Behalf-Of` from its own decision alone. The relay copies only the headers `Accept`, `Content-Type`, `Idempotency-Key`, and `Last-Event-ID` of a caller. So the header of a caller never reaches a member. That holds for the static token too.
+
+The static token and a workload keep their own credential. The owner authenticates such a caller again and authorizes the action in its kernel, as before. A workload with an X.509 client certificate carries no bearer credential. Such a caller sees the fleet but acts only on the runs of the front.
+
+A refusal of the front is a 403 that says what the person wanted and what that needs on which agent. An example is `you cannot answer an approval of the run 01K...: that needs the operator role on the agent migrator, or to be the one who started the run`. The log holds the reason of the decision point. A decision point that does not answer gives a 503. A worker that refuses the static token is a problem of an operator, and the words say so:
+
+- A 401 of the member gives a 403 with `the worker <member> refused the token of the fleet; check FW_API_TOKEN on that worker`.
+- A 403 of the member gives a 403 with `the worker <member> refused the token of the fleet: <detail>`.
+- A front without the static token answers 503 with `the front holds no static token of the fleet: the secret FW_API_TOKEN is empty; until an operator sets it, the front acts for no person on another member`.
+
+The words name the secret that `auth.tokenEnv` names, `FW_API_TOKEN` by default. For the static token and a workload, a 401 of the member gives a 403 with `the fleet member <member> did not accept your credential; both members need the same issuer and audience, or the same token`. If the owner does not answer, the view answers 502.
+
+For a person, the run object of `GET /v1/runs/{id}` of a run of another member carries the field `can`. The view adds it to its own answer and to the answer of the member alike:
+
+```json
+"can": {"view": true, "operate": false}
+```
+
+`view` is always true, because the front answers only a run that the person can view. `operate` is the decision of `run.operate` for the person (`fleet.AllowRun`). It says whether the person can send a message, react, answer an approval, change the budget, cancel, and fork. A page draws its buttons from it. The decision costs one more check of the rules and no request to the member. A decision point that does not answer gives `false`, and the action itself decides again. The field adds to the run object and changes no other field. The static token, a workload, and a run of the front get no `can`.
+
+A credential goes to one kind of address only: an ax address, through the router at `ax.router` with the header `ate-target-actor`. The router wakes a Task that sleeps, so an approval reaches a sleeping member, and the front then makes the phase of the Task follow (section 4.12). A worker that only the stream knows has no address, so no credential can reach it. An answer of `text/event-stream`, such as `GET /v1/runs/{id}/events` and the live text of a run at `GET /v1/runs/{id}/live` (the kernel architecture, section 8.2), flows through as the owner writes it, with a flush after each read and no write deadline, so a page reads the answer of a model on a Task as it grows. A test checks that the first event of a member reaches the client before the member writes the second. A forwarded request carries the header `Fw-Fleet-Via` with the name of the front, and a member never forwards such a request again.
+
+A request that the MCP server sends for the person of a run (section 19) carries the static token too. The front decides about the person first, with `fleet.AllowRun` and `fleet.AllowAgent`, as the relay does. The request names the person in `Fw-On-Behalf-Of`, so the owner records the person and not the token.
+
+These paths still send the credential of the caller to the owner:
+
+- the MCP tools for a caller that is no run of the fleet,
+- the result and the transcript of a run,
+- `POST /v1/builder` with a `fromRun`,
+- and the slash command of bossmode (section 20.3).
+
+For them, the front and the workers trust the same issuer and the same `auth.oidc.audience`, or share the static token.
 
 ### 4.6 Configuration
 
@@ -421,6 +463,8 @@ An event source (section 13) puts its runs on the same queues through the same p
 ### 4.10 Security
 
 The events of the stream carry the inputs and the outputs of runs and the inputs and the outputs of their tool calls. A worker of a pool cuts each string value of an event to 4,096 bytes (`bus.egressMaxBytes`, section 4.1), and a record cuts the input, the output, and the error of a run again to 2 KB (section 4.2). The `Redact` middleware removes secrets before an event enters the ledger, so no secret reaches the stream. Limit publish and subscribe on the egress and the intake subjects to `fw` workloads, for example with NATS accounts. A process that can publish on the egress subject can show false runs in a view, and a process that can publish on an intake queue can give a worker work; it cannot act on a real run, because the owner decides, and a credential goes to the router only. The dead-letter subjects `<queue>.dead` carry the records of jobs, and the bucket `fw_workbench_jobs` holds batch names, the subjects of people, and the positions of their jobs, with no input. Limit them in the same way. The subjects `<egress>.bossmode.>` sit under the egress prefix and carry the events of the page of bossmode between the replicas of the front (section 17.5), so allow the publish there to the front alone. The buckets `<stream>_POOL_<pool>` hold the profiles and the allow rules that the front adds to its pools (section 14.9). A process that can write there changes what every worker of a pool runs, so allow the writes to the front alone. The bucket `<stream>_RUNS` holds the index of the runs (section 4.16): run ids, members, agents, batch names, and the subjects of people, with no text of a run. A process that can write there can point a run id at another Task. A request for that run then goes to that Task, which holds no such run. Allow the writes there to the front alone too. The front logs the id, the type, and the run of a dead letter, never its data.
+
+The front holds the static token of the fleet and acts with it for every person on another member (section 4.5). A worker that takes the token trusts the front, so the token is as strong as the front. The front decides each action of a person before it sends the token. On that path, the credential of a person never reaches a worker. A process that holds the token can name any person in `Fw-On-Behalf-Of`. The owner records that name, and it decides about the token alone. Keep the token on the front and on the workers, and out of the bash tool of a worker (section 14.1).
 
 ### 4.11 What the fleet does not do
 
@@ -1793,7 +1837,7 @@ The stream decides for each event and each caller when it sends the event, with 
 
 The front keeps the newest 4,096 events of every kind in a ring, with the events that it gets from the other replicas (section 17.5). A stream that opens with `Last-Event-ID` gets every event after that id that the caller can see, in order, and then the new events. An id that the ring no longer holds, an id above the newest one, and a value that is no number each give one event `reset` with the data `null` and the id of the newest event. The stream goes on from there, and the page reads its bridges, its faces, its channel, and its roster again. A stream without `Last-Event-ID` starts with the next event. A stream resumes on the replica that holds its ring. The ids of two replicas start at their start times, so another replica answers with `reset`, unless it sent more events than the microseconds between the two starts.
 
-A comment line, `: keep-alive`, goes out after 15 seconds without an event, so a proxy keeps the stream open. A stream ends after 15 minutes, and the page opens a new one with `Last-Event-ID`, so the front checks the credential again: a token that expired or that the issuer revoked stops the stream within that time, and the new request gets a 401. A process serves at most 64 streams at once, one per tab. The next request gets 429 with `Retry-After`.
+The stream starts with the comment line `: connected` at once after the headers. A proxy that holds an answer until its first bytes then passes the stream on at once. Cloudflare holds the first byte for about 4 seconds, and a stream can go without an event for a long time. The page skips a comment line, and a test checks that the comment comes before any event. A comment line, `: keep-alive`, goes out after 15 seconds without an event, so a proxy keeps the stream open. A stream ends after 15 minutes, and the page opens a new one with `Last-Event-ID`, so the front checks the credential again: a token that expired or that the issuer revoked stops the stream within that time, and the new request gets a 401. A process serves at most 64 streams at once, one per tab. The next request gets 429 with `Retry-After`.
 
 The fleet sends its changes through `Watch` (section 4.15), and the service of bossmode reads them at once into the ring. A slow stream reads from the ring and never holds up the fleet: a stream that falls more than 4,096 events behind gets `reset`.
 
@@ -2218,7 +2262,7 @@ The person in the context has the subject and the kind that `_meta` names. It ha
 
 The token stays the caller behind the person (`behalf.For`), for two ends:
 
-- A forwarded request carries the credential of the token (`fw.CredentialFrom`). The owner of a run therefore decides about the token, as section 4.5 says.
+- A forwarded request carries the credential of the token (`fw.CredentialFrom`). The owner of a run therefore decides about the token, as section 4.5 says. The request also names the person in the header `Fw-On-Behalf-Of`, so the owner records the person and not the token.
 - The guard of the authorization decides each check for both. `manager.Guard` wraps the authorization plug of the process. That plug is the control plane of `workbench.access.external` (section 12), or the rules of `access` without it. When a check is for the person, it passes only if the same check passes for the token too. The view of the fleet guards its rules for the records and for the profiles of the pools in the same way (section 4.4).
 
 So the on-behalf-of narrows what the token can do and never widens it. Through the token, a person reaches only what both the person and the token reach. `cmd/fw-workbench` builds every agent with the guard. When an agent has no guard, its MCP server says so in the log at start, and it decides for the person alone.
@@ -2236,29 +2280,32 @@ What changes for a run of the fleet with a person:
 
 | Tool | What changes |
 |---|---|
-| The reads | The view, the lists, and the reads are those of the person. A read of a run of another member still carries the token. |
+| The reads | The view, the lists, and the reads are those of the person. A read of a run of another member still carries the token, and it names the person. |
 | `run` | The run starts as the person. On another member, the body holds `principal` and `principalKind`, which the member takes from the token. |
 | `run` on another member | The front first decides `agent.run` for the person on that member (`fleet.AllowAgent`). So such a run names its `agent`. |
 | `enqueue` | Each request names the person. |
-| `approve` | The front decides `run.operate` for the person. The decider is the token, and the note names the actor. |
-| `send` | The front decides `run.operate` for the person. The message goes as the token, and its sender is the actor. |
-| `cancel`, `run_budget` | The front decides `run.operate` for the person. |
-| `fork` | The front decides `run.operate` and `agent.run` for the person. |
+| `approve` | The front decides `run.operate` for the person. The decider is the person, and the note names the actor. |
+| `send` | The front decides `run.operate` for the person. The message goes as the token, and its sender is the actor. On another member, the request names the person. |
+| `cancel`, `run_budget` | The front decides `run.operate` for the person. On another member, the request names the person. |
+| `fork` | The front decides `run.operate` and `agent.run` for the person. On another member, the request names the person. |
 | `agent_put`, `agent_delete` | The roles of the person decide. A new profile gets the person as its first owner. |
 
 A person cannot name the sender of a message (the kernel architecture, section 5.5). So `send` first decides for the person, and then sends as the token. Before the server forwards an action on a run of another member, it decides that action for the person (`fleet.AllowRun`, section 4.5). A view that cannot decide refuses. No request goes out for a person without a decision.
+
+Every request of the server to another member takes its context from one place (`withCredential` of `surface/mcp`). For a run of the fleet with a person, that context names the person for `Fw-On-Behalf-Of`. The owner then records the person, as section 4.5 says. A run without a person, and a run whose person is the token, name nobody.
 
 ### 19.3 Attribution
 
 What an actor does carries the name of the actor:
 
-- A decision of `approve` records the token as the decider, here and on another member. Its note is `by <agent> run <id> for <person>: <note>`.
+- A decision of `approve` records the person as the decider, here and on another member. On another member, the request names the person in `Fw-On-Behalf-Of` (section 4.5). Its note is `by <agent> run <id> for <person>: <note>`.
 - An example of such a note is `by manager run 01K... for alice: the plan is fine`.
 - A message of `send` has the sender `{kind: agent, name: <agent>, run: <id>}` (`fw.WithMessageFrom`).
 - The text of that message starts with the line `From the <agent> run <id> for <person>.` So the run that reads it knows for whom the manager asks.
 - A run that `run` or `enqueue` starts carries the metadata key `fw.via` (`manager.MetaVia`). A branch of `fork` carries it too.
 - The value of `fw.via` is `<agent>:<id>`, such as `manager:01K...`.
-- A cancel and a change of a budget take no note. For each, the front logs one line with the actor, the run, and the member.
+- A cancel and a change of a budget take no note. For each, the front logs one line with the actor, the run, and the member. On another member, the owner records the person of `Fw-On-Behalf-Of`.
+- A message of `send` goes as the token. On this process, the message is by `token`. On another member, the owner records the person of `Fw-On-Behalf-Of`.
 
 `fw.CheckMetadata` reserves no key `fw.via`. The server refuses `fw.via` from any caller in `run`, `fork`, and `enqueue`, so only the server sets it.
 
@@ -2299,7 +2346,7 @@ A write to the wiki runs without a question, because the wiki keeps each older v
 
 The system prompt says what a manager does and does not do. It reads before it acts, and it asks before it spends. It opens a bridge only with `bridge_open`. It writes its reports into the wiki, and it names the person it acts for. It answers the operator in plain words. It never claims that a run passed a check that it did not see.
 
-The person who talks to the manager sends their own credential, and the front forwards it to the Task (section 4.5). So the `fw` of the pool reads the tokens of people as the front does. A conversation that the token starts has no person, and the front acts as the token for it. A spawn bridge needs `spawn_task` and `await_task` in the profile. The example leaves them out until the operator chooses that placement. A test reads the example with the checks of the front, with a model and without one, and renders its Task.
+The person who talks to the manager signs in at the front. For the run routes, the front decides for the person and sends the static token to the Task (section 4.5). The paths of section 4.5 that still send the credential of the caller need the tokens of people on the Task. So the `fw` of the pool still reads them as the front does. A conversation that the token starts has no person, and the front acts as the token for it. A spawn bridge needs `spawn_task` and `await_task` in the profile. The example leaves them out until the operator chooses that placement. A test reads the example with the checks of the front, with a model and without one, and renders its Task.
 
 ### 19.6 The doctor line
 
@@ -2317,8 +2364,8 @@ Without a manager, the line says off. The line reads the configuration alone, so
 
 These are the rules of section 8 of the plan of bossmode, as the code keeps them:
 
-- Every action of a person goes to the owner of the run with the credential of that person, as before. The owner records the real decider.
-- Every action of the manager goes with the token of the fleet. The owner records the decider `token`.
+- The front decides every action of a person, with the rules of what the person sees (section 4.4). The action goes to the owner of the run with the token of the fleet and names the person. So the owner records the real decider.
+- Every action of the manager goes with the token of the fleet and names the person of the manager run. The owner records that person as the decider, or `token` for a run without a person.
 - The note, the sender, `fw.via`, or the log names the manager run and the person.
 - The manager is as strong as the token of the fleet on the front. Three things bound it: the policy of its profile, the delegation flags of each bridge, and the on-behalf-of.
 - The on-behalf-of lets the manager see and do only what its operator and the token both can.

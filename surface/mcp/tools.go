@@ -972,7 +972,7 @@ func (s *server) approve(ctx context.Context, req *sdk.CallToolRequest, in appro
 		if res := s.delegated(ctx, act, in.RunID, manager.DelegateApprove); res != nil {
 			return res, nil, nil
 		}
-		// The owner records the token as the decider, and the note names
+		// The owner records the person as the decider, and the note names
 		// the actor and the person (section 19).
 		in.Note = act.Note(in.Note)
 	}
@@ -1016,15 +1016,16 @@ func (s *server) allowRule(ctx context.Context, in approveArgs) (string, *sdk.Ca
 }
 
 // approveNow records the decision of an approval, on this process or on
-// the member that owns the run. The decider is the caller: for an actor,
-// the static token, as the owner of a run of another member records it.
+// the member that owns the run. The decider is the caller, and for an
+// actor with a person that person, as the owner of a run of another member
+// records it from fleet.HeaderOnBehalfOf.
 func (s *server) approveNow(ctx context.Context, req *sdk.CallToolRequest, in approveArgs, act manager.Actor, acting bool) *sdk.CallToolResult {
 	d := fw.ApprovalDecision{
 		ApprovalID: in.ApprovalID,
 		Decision:   in.Decision,
 		Note:       in.Note,
 		Content:    in.Content,
-		Decider:    callerOf(ctx, req),
+		Decider:    principalOf(ctx, req),
 	}
 	if err := s.a.Decide(ctx, in.RunID, d); err != nil {
 		if res := s.elsewhere(withCredential(ctx, req), in.RunID, err, func(ctx context.Context, member string) *sdk.CallToolResult {

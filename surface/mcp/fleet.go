@@ -108,8 +108,15 @@ var errFleetOff = fmt.Errorf("%w: the fleet is off; set workbench.fleet.subject 
 // withCredential puts the bearer credential of the HTTP request of a call
 // into ctx when ctx has none. Over a legacy session, the context of a call
 // comes from the request that opened the session, and the header of the
-// call itself is the right credential.
+// call itself is the right credential. Every request of a tool to another
+// member takes its context from here. When the server acts for the person
+// of a run (manager.OnBehalf), the credential is the static token, and ctx
+// also names that person for fleet.HeaderOnBehalfOf, so the owner records
+// the person and not the token (docs/ARCHITECTURE.md section 19.2).
 func withCredential(ctx context.Context, req sdk.Request) context.Context {
+	if act, ok := manager.ActorFrom(ctx); ok && act.ForPerson() {
+		ctx = fleet.WithOnBehalfOf(ctx, act.Person)
+	}
 	if fw.CredentialFrom(ctx) != "" || req == nil {
 		return ctx
 	}

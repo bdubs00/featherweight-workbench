@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,17 +20,43 @@ import (
 
 // fakeFleet is a fleet with one other member, "owner", that a test server
 // stands for. Forward sends each request to that server, as the fleet
-// driver does, and records it.
+// driver does, and records it. It decides an action for a person with the
+// rules of rules (fleet.Authorizer), as the view decides with the rules of
+// the front, and without rules it decides nothing.
 type fakeFleet struct {
 	name    string
 	owner   string // the URL of the owner
 	members []fleet.Member
+	rules   *fw.Agent
 
 	mu      sync.Mutex
 	runs    []*fw.Run
 	err     error  // Forward returns it when set
 	cred    string // a credential that replaces the one of the caller
 	forward []http.Header
+}
+
+// AllowRun implements fleet.Authorizer.
+func (f *fakeFleet) AllowRun(ctx context.Context, id, action string) error {
+	r, err := f.Run(ctx, id)
+	if err != nil {
+		return err
+	}
+	if f.rules == nil {
+		return fmt.Errorf("%w: the fake decides nothing", fw.ErrForbidden)
+	}
+	return f.rules.Authorize(ctx, action, fw.Target{Agent: r.Agent, Run: r})
+}
+
+// AllowAgent implements fleet.Authorizer.
+func (f *fakeFleet) AllowAgent(ctx context.Context, member, agent, action string) error {
+	switch {
+	case member != "owner":
+		return errors.Join(fleet.ErrNoRoute, errors.New("unknown member "+member))
+	case f.rules == nil:
+		return fmt.Errorf("%w: the fake decides nothing", fw.ErrForbidden)
+	}
+	return f.rules.Authorize(ctx, action, fw.Target{Agent: agent})
 }
 
 func (f *fakeFleet) Name() string { return f.name }
@@ -112,6 +139,11 @@ func (f *fakeFleet) Forward(ctx context.Context, member string, req *http.Reques
 	out.URL, out.Host, out.RequestURI = u, u.Host, ""
 	out.Header.Set("Authorization", cred)
 	out.Header.Set(fleet.HeaderVia, f.name)
+	// As the fleet does, the person comes from the context alone.
+	out.Header.Del(fleet.HeaderOnBehalfOf)
+	if who := fleet.OnBehalfOf(ctx); who != "" {
+		out.Header.Set(fleet.HeaderOnBehalfOf, who)
+	}
 	f.mu.Lock()
 	f.forward = append(f.forward, out.Header.Clone())
 	f.mu.Unlock()
@@ -142,7 +174,9 @@ func (f *fakeFleet) forwarded() []http.Header {
 }
 
 // fleetPair is a view with a fake fleet and an owner agent that serves the
-// runs of the member "owner". Alice owns the agent reviewer on both.
+// runs of the member "owner". Alice owns the agent reviewer on both. The
+// view holds the static token of the fleet, and the owner takes the token
+// as an admin, so the view decides for a person and the token acts.
 type fleetPair struct {
 	view, owner       *fw.Agent
 	viewURL, ownerURL string
@@ -155,14 +189,19 @@ type fleetPair struct {
 // The options apply to both agents.
 func newFleetPair(t *testing.T, opts ...fw.Option) *fleetPair {
 	t.Helper()
+	t.Setenv("FW_API_TOKEN", "fleet-token")
 	p := &fleetPair{calls: &atomic.Int32{}}
-	p.owner = manageAgent(t, newScript(callTool("c1", "rm", `{"path":"x"}`), endTurn("done"), endTurn("again")).model(), append([]fw.Option{fw.WithTools(rmTool(p.calls))}, opts...)...)
+	tokenAdmin := func(c *fw.Config) { c.Access.Admins = []string{"kind:token"} }
+	p.owner = manageAgentWith(t, newScript(callTool("c1", "rm", `{"path":"x"}`), endTurn("done"), endTurn("again")).model(), tokenAdmin, append([]fw.Option{fw.WithTools(rmTool(p.calls))}, opts...)...)
 	p.ownerURL = serve(t, p.owner).URL
 	p.fleet = &fakeFleet{name: "view", owner: p.ownerURL, members: []fleet.Member{
 		{Name: "view", Self: true, State: fleet.MemberLive, AccessMode: fw.AccessModeRules},
 		{Name: "owner", State: fleet.MemberLive, CanForward: true, AccessMode: fw.AccessModeRules, Agents: []fleet.RecordAgent{{Name: "reviewer", Role: "owner"}}},
 	}}
 	p.view = attach(manageAgent(t, newScript(endTurn("local")).model(), opts...), p.fleet)
+	// The view decides with the rules of its own profiles, which are those
+	// of the owner.
+	p.fleet.rules = p.view
 	p.viewURL = serve(t, p.view).URL
 
 	resp, b := do(t, "POST", p.ownerURL+"/v1/runs", `{"agent":"reviewer","input":"clean up","wait":true}`, "Authorization", asAlice)
@@ -253,15 +292,15 @@ func TestFleetListAndRead(t *testing.T) {
 		t.Errorf("kernel runs = %s", got)
 	}
 
-	// A read of the remote run goes to the owner with the credential of the
-	// caller and the via header, and comes back with the member.
+	// A read of the remote run goes to the owner with the static token for
+	// alice and the via header, and comes back with the member.
 	resp, b = do(t, "GET", p.viewURL+"/v1/runs/"+p.remote.ID, "", "Authorization", asAlice)
 	r := decodeRun(t, resp, b, http.StatusOK)
 	if r.ID != p.remote.ID || r.Member != "owner" || r.Pending == nil {
 		t.Fatalf("remote run = %+v", r)
 	}
 	h := p.fleet.forwarded()
-	if len(h) != 1 || h[0].Get("Authorization") != asAlice || h[0].Get(fleet.HeaderVia) != "view" || h[0].Get("Accept") != "" {
+	if len(h) != 1 || h[0].Get("Authorization") != asToken || h[0].Get(fleet.HeaderOnBehalfOf) != "alice" || h[0].Get(fleet.HeaderVia) != "view" || h[0].Get("Accept") != "" {
 		t.Fatalf("forwarded headers = %v", h)
 	}
 	// A local run never goes out.

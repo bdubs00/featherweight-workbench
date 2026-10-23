@@ -46,7 +46,7 @@ func newClient() *http.Client {
 
 // Forward implements View. The credential goes to an ax address through
 // the router, or to a URL that a glob of fleet.forward names, and nowhere
-// else.
+// else. HeaderOnBehalfOf comes from ctx alone and never from req.
 func (f *Fleet) Forward(ctx context.Context, member string, req *http.Request) (*http.Response, error) {
 	if req == nil || req.URL == nil {
 		return nil, fmt.Errorf("fleet: forward to %s: no request", member)
@@ -79,6 +79,10 @@ func (f *Fleet) Forward(ctx context.Context, member string, req *http.Request) (
 	if cred == "" {
 		return nil, fmt.Errorf("fleet: forward to %s: %w", member, ErrNoCredential)
 	}
+	person := OnBehalfOf(ctx)
+	if person != "" && !headerSubject(person) {
+		return nil, fmt.Errorf("fleet: forward to %s: the person %q fits no header", member, person)
+	}
 	u := *base
 	u.Path = strings.TrimSuffix(base.Path, "/") + path
 	u.RawPath = ""
@@ -102,6 +106,9 @@ func (f *Fleet) Forward(ctx context.Context, member string, req *http.Request) (
 	}
 	out.Header.Set("Authorization", cred)
 	out.Header.Set(HeaderVia, f.name)
+	if person != "" {
+		out.Header.Set(HeaderOnBehalfOf, person)
+	}
 	if actor != "" {
 		out.Header.Set(headerTargetActor, actor)
 	}

@@ -191,6 +191,32 @@ func TestStreamKeepAliveAndLife(t *testing.T) {
 	}
 }
 
+// The first bytes of the body go out at once after the headers: the
+// comment ": connected", before any event and long before a keep-alive, so
+// a proxy that holds an answer until its first bytes passes it on at once.
+func TestStreamSaysConnectedAtOnce(t *testing.T) {
+	fr := newFront(t, nil)
+	fr.h.keepAlive = time.Hour
+	start := time.Now()
+	s := openStream(t, fr, "ada", "")
+	select {
+	case f, ok := <-s.frames:
+		if !ok || f.comment != "connected" || f.kind != "" || f.id != "" {
+			t.Fatalf("first frame = %+v, %v", f, ok)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no first bytes within 2 seconds")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("the first bytes took %v", d)
+	}
+	// The events follow as before.
+	mark(t, "after")
+	if f := s.next(t); f.kind != "test.mark" {
+		t.Fatalf("next frame = %+v", f)
+	}
+}
+
 // The stream needs a credential, and a process serves at most MaxStreams.
 func TestStreamAuthAndBound(t *testing.T) {
 	fr := newFront(t, nil)

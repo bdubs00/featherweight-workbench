@@ -28,14 +28,18 @@ func (m tokenMap) Challenge(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
+// people are two people and the static token of the fleet, which the
+// front sends when it acts for a person on another member.
 var people = tokenMap{
 	"alice-token": {Subject: "alice", Name: "alice@example.com", Kind: fw.KindUser, Groups: []string{"platform"}},
 	"bob-token":   {Subject: "bob", Kind: fw.KindUser},
+	"fleet-token": {Subject: fw.KindToken, Kind: fw.KindToken},
 }
 
 const (
 	asAlice = "Bearer alice-token"
 	asBob   = "Bearer bob-token"
+	asToken = "Bearer fleet-token"
 )
 
 // manageAgent is an agent with three profiles: reviewer, which alice owns
@@ -44,6 +48,12 @@ const (
 // a creator.
 func manageAgent(t *testing.T, m fw.Model, opts ...fw.Option) *fw.Agent {
 	t.Helper()
+	return manageAgentWith(t, m, nil, opts...)
+}
+
+// manageAgentWith is manageAgent with a change of the configuration.
+func manageAgentWith(t *testing.T, m fw.Model, mut func(*fw.Config), opts ...fw.Option) *fw.Agent {
+	t.Helper()
 	cfg := fw.DefaultConfig()
 	cfg.Home = t.TempDir()
 	cfg.Access.Default = "closed"
@@ -51,6 +61,9 @@ func manageAgent(t *testing.T, m fw.Model, opts ...fw.Option) *fw.Agent {
 	// The profiles stand in for files under <home>/agents, so a person can
 	// change them. A profile that the configuration defines is locked.
 	cfg.FileProfiles = map[string]bool{"reviewer": true, "shared": true, "private": true}
+	if mut != nil {
+		mut(cfg)
+	}
 	base := []fw.Option{
 		fw.WithConfig(cfg),
 		fw.WithAuthn(people),

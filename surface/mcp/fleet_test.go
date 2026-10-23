@@ -81,6 +81,11 @@ func (f *fakeFleet) Forward(ctx context.Context, member string, req *http.Reques
 	out.URL, out.Host, out.RequestURI = u, u.Host, ""
 	out.Header.Set("Authorization", cred)
 	out.Header.Set(fleet.HeaderVia, f.name)
+	// As the fleet does, the person comes from the context alone.
+	out.Header.Del(fleet.HeaderOnBehalfOf)
+	if who := fleet.OnBehalfOf(ctx); who != "" {
+		out.Header.Set(fleet.HeaderOnBehalfOf, who)
+	}
 	f.mu.Lock()
 	f.forward = append(f.forward, out.Header.Clone())
 	f.mu.Unlock()
@@ -96,6 +101,13 @@ func (f *fakeFleet) set(runs ...*fw.Run) {
 		c.Member = "owner"
 		f.runs = append(f.runs, &c)
 	}
+}
+
+// forwards counts the requests that Forward sent.
+func (f *fakeFleet) forwards() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.forward)
 }
 
 func (f *fakeFleet) lastForward() http.Header {
