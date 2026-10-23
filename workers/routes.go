@@ -142,16 +142,18 @@ func (rt *routes) templates(w http.ResponseWriter, r *http.Request) {
 	native.WriteJSON(w, http.StatusOK, map[string]any{"templates": list})
 }
 
-// orphans answers GET /v1/fleet/orphans with {"orphans": [...]}: the child
-// Tasks whose parent Task is gone, each after the Tasks under it
-// (fleet.Orphans). It needs the admin role of the process.
+// orphans answers GET /v1/fleet/orphans with {"orphans": [...],
+// "removeAfter": n}: the child Tasks whose parent Task is gone, each after
+// the Tasks under it (fleet.Orphans), and the seconds that an orphan sleeps
+// before the front removes it, 0 when the sweep is off. It needs the admin
+// role of the process.
 func (rt *routes) orphans(w http.ResponseWriter, r *http.Request) {
 	list, err := fleet.Orphans(r.Context(), rt.a)
 	if err != nil {
 		rt.fail(w, r, err)
 		return
 	}
-	native.WriteJSON(w, http.StatusOK, map[string]any{"orphans": list})
+	native.WriteJSON(w, http.StatusOK, map[string]any{"orphans": list, "removeAfter": int64(fleet.OrphansAfter(rt.a).Seconds())})
 }
 
 // removeOrphans answers DELETE /v1/fleet/orphans with 200 and the Tasks

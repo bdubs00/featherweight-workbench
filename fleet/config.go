@@ -37,6 +37,9 @@ const (
 	EnvSuspendAfter = "FW_WORKBENCH_FLEET_SUSPEND_AFTER"
 	// EnvWakeOnQueue turns the wake on queue depth on or off (queues.go).
 	EnvWakeOnQueue = "FW_WORKBENCH_FLEET_WAKE_ON_QUEUE"
+	// EnvOrphansAfter is how long an orphan Task sleeps before the front
+	// removes it, a duration such as 24h, or off (orphans.go).
+	EnvOrphansAfter = "FW_WORKBENCH_FLEET_ORPHANS_AFTER"
 )
 
 // Config configures the fleet. The fleet is on when Atespaces or Egress
@@ -63,6 +66,11 @@ const (
 // when jobs wait in the intake queue of that profile (queues.go). Nil means
 // on when Atespaces and Intake are set, and false turns it off. The front
 // still wakes the Tasks after its own enqueue.
+//
+// OrphansAfter is how long an orphan Task, a child Task whose parent Task
+// is gone, sleeps before the front removes it (orphans.go). Nil means the
+// default of DefaultOrphansAfter when Atespaces is set, and zero turns the
+// sweep off. An admin still removes the orphans at once.
 type Config struct {
 	Name      string        `yaml:"name"`
 	Interval  time.Duration `yaml:"interval"`
@@ -73,6 +81,7 @@ type Config struct {
 
 	SuspendAfter *time.Duration `yaml:"suspendAfter"`
 	WakeOnQueue  *bool          `yaml:"wakeOnQueue"`
+	OrphansAfter *time.Duration `yaml:"orphansAfter"`
 
 	// Pools are the pools of workbench.pools, and Templates the worker
 	// templates of workbench.templates, which LoadAll reads and Start
@@ -91,6 +100,15 @@ func (c Config) suspendAfter() time.Duration {
 		return 0
 	}
 	return *c.SuspendAfter
+}
+
+// orphansAfter returns how long an orphan Task sleeps before the front
+// removes it, or zero when the sweep is off.
+func (c Config) orphansAfter() time.Duration {
+	if c.OrphansAfter == nil {
+		return 0
+	}
+	return *c.OrphansAfter
 }
 
 // wakeOnQueue reports whether the front wakes the sleeping Tasks for the
@@ -142,6 +160,16 @@ func Load(cfg *fw.Config) (Config, error) {
 		}
 		c.SuspendAfter = &d
 	}
+	if v, ok := lookup(EnvOrphansAfter); ok {
+		if strings.EqualFold(v, "off") {
+			v = "0s"
+		}
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("fleet: %s=%q is not a duration such as 24h, or off", EnvOrphansAfter, v)
+		}
+		c.OrphansAfter = &d
+	}
 	if v, ok := lookup(EnvWakeOnQueue); ok {
 		on, err := parseSwitch(v)
 		if err != nil {
@@ -171,6 +199,10 @@ func Load(cfg *fw.Config) (Config, error) {
 	if c.SuspendAfter == nil && len(c.Atespaces) > 0 {
 		d := DefaultSuspendAfter
 		c.SuspendAfter = &d
+	}
+	if c.OrphansAfter == nil && len(c.Atespaces) > 0 {
+		d := DefaultOrphansAfter
+		c.OrphansAfter = &d
 	}
 	if c.WakeOnQueue == nil && len(c.Atespaces) > 0 && c.Intake != "" {
 		on := true
@@ -260,6 +292,11 @@ func check(c Config) []string {
 		p = append(p, fmt.Sprintf("workbench.fleet.suspendAfter %s is negative", d))
 	} else if d > 0 && len(c.Atespaces) == 0 {
 		p = append(p, "workbench.fleet.suspendAfter needs workbench.fleet.atespaces, the Tasks that the front can suspend")
+	}
+	if d := c.orphansAfter(); d < 0 {
+		p = append(p, fmt.Sprintf("workbench.fleet.orphansAfter %s is negative", d))
+	} else if d > 0 && len(c.Atespaces) == 0 {
+		p = append(p, "workbench.fleet.orphansAfter needs workbench.fleet.atespaces, the Tasks that the front can remove")
 	}
 	if c.wakeOnQueue() && (len(c.Atespaces) == 0 || c.Intake == "") {
 		p = append(p, "workbench.fleet.wakeOnQueue needs workbench.fleet.atespaces, the Tasks that the front can wake, and workbench.fleet.intake, the queues that it reads")

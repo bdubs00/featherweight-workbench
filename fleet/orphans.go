@@ -6,7 +6,8 @@ package fleet
 // Task of the same name (the kernel, ax/sweep.go). A pool that replaces a
 // Task under another name leaves the child Tasks of the old Task behind,
 // and no kernel removes them. The front lists them for an admin, who
-// removes them from the page.
+// removes them from the page at once, and a sweep of the front removes
+// each one that slept for workbench.fleet.orphansAfter.
 
 import (
 	"context"
@@ -26,6 +27,22 @@ import (
 
 // deleteTimeout bounds one DeleteTask call of a removal.
 const deleteTimeout = 30 * time.Second
+
+// The times of the sweep of the orphan Tasks; tests shorten them. The first
+// pass waits for the view to read the Task list and the runs of the live
+// Tasks.
+var (
+	orphanFirst = 5 * time.Minute
+	orphanEvery = 15 * time.Minute
+)
+
+// The conditions of a Task that the sweep reads, as ax sets them.
+const (
+	condReady          = "Ready"
+	condWorkspaceReady = "WorkspaceReady"
+	reasonSuspended    = "TaskSuspended"
+	phaseFailed        = "Failed"
+)
 
 // ErrNoTaskList means that the fleet reads no Task list, so it cannot tell
 // which Tasks lost their parent.
@@ -72,6 +89,15 @@ func Orphans(ctx context.Context, a *fw.Agent) ([]Orphan, error) {
 	return p.orphans(ctx, client)
 }
 
+// OrphansAfter returns how long an orphan Task of the fleet of a sleeps
+// before the front removes it, or zero when the sweep is off.
+func OrphansAfter(a *fw.Agent) time.Duration {
+	if f, _ := Of(a).(*Fleet); f != nil {
+		return f.orphansAfter
+	}
+	return 0
+}
+
 // RemoveOrphans deletes the orphan Tasks of the fleet of a, each Task
 // before the Task above it, with the runs that they hold. A Task that ax
 // no longer has counts as removed. Only an admin of the process removes
@@ -112,20 +138,127 @@ func (p *platform) removeOrphans(ctx context.Context, client v1alpha1.AXClient) 
 		return out, err
 	}
 	for _, t := range tasks {
-		atespace, task := t.GetMetadata().GetAtespace(), t.GetMetadata().GetName()
-		name := atespace + "/" + task
-		cctx, cancel := context.WithTimeout(ctx, deleteTimeout)
-		_, err := client.DeleteTask(cctx, &v1alpha1.DeleteTaskRequest{Atespace: atespace, Name: task})
-		cancel()
-		if err != nil && status.Code(err) != codes.NotFound {
-			p.f.log.Warn("fleet: delete an orphan Task", "member", name, "error", err)
+		name := t.GetMetadata().GetAtespace() + "/" + t.GetMetadata().GetName()
+		if err := p.deleteOrphan(ctx, client, t, "an admin removed it", "principal", subjectOf(ctx)); err != nil {
 			out.Failed = append(out.Failed, RemovalFailed{Member: name, Error: status.Convert(err).Message()})
 			continue
 		}
-		p.f.log.Info("fleet: removed an orphan Task", "member", name, "parent", taskVar(t, ax.EnvParentMember), "principal", subjectOf(ctx))
 		out.Removed = append(out.Removed, name)
 	}
 	return out, nil
+}
+
+// deleteOrphan deletes the orphan Task t and logs why, with the attributes
+// attrs. A Task that ax no longer has counts as deleted.
+func (p *platform) deleteOrphan(ctx context.Context, client v1alpha1.AXClient, t *v1alpha1.Task, why string, attrs ...any) error {
+	atespace, task := t.GetMetadata().GetAtespace(), t.GetMetadata().GetName()
+	name := atespace + "/" + task
+	cctx, cancel := context.WithTimeout(ctx, deleteTimeout)
+	_, err := client.DeleteTask(cctx, &v1alpha1.DeleteTaskRequest{Atespace: atespace, Name: task})
+	cancel()
+	if err != nil && status.Code(err) != codes.NotFound {
+		p.f.log.Warn("fleet: delete an orphan Task", "member", name, "error", err)
+		return err
+	}
+	p.f.log.Info("fleet: removed an orphan Task", append([]any{"member", name, "parent", taskVar(t, ax.EnvParentMember), "reason", why}, attrs...)...)
+	return nil
+}
+
+// sweepLoop removes the orphan Tasks that are due (sweepOrphans) soon
+// after the start and then every orphanEvery, until ctx ends.
+func (p *platform) sweepLoop(ctx context.Context) {
+	t := time.NewTimer(orphanFirst)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		p.sweepOrphans(ctx, time.Now())
+		t.Reset(orphanEvery)
+	}
+}
+
+// sweepOrphans removes each orphan Task that is due (orphanDue), each Task
+// before the Task above it, and returns them. An orphan above one that
+// stays stays too, so no Task loses its parent while the sweep keeps it. A
+// Task list that fails removes nothing.
+func (p *platform) sweepOrphans(ctx context.Context, now time.Time) []string {
+	after := p.f.orphansAfter
+	p.mu.Lock()
+	client := p.client
+	p.mu.Unlock()
+	if client == nil || after <= 0 {
+		return nil
+	}
+	tasks, err := p.orphanTasks(ctx, client)
+	if err != nil {
+		p.f.log.Warn("fleet: the sweep of the orphan Tasks waits for the next pass", "error", err)
+		return nil
+	}
+	open := p.openRuns()
+	byMember := map[string]*v1alpha1.Task{}
+	for _, t := range tasks {
+		byMember["ax:"+t.GetMetadata().GetAtespace()+"/"+t.GetMetadata().GetName()] = t
+	}
+	keep := map[string]bool{}
+	for key, t := range byMember {
+		if orphanDue(t, open[strings.TrimPrefix(key, "ax:")], after, now) {
+			continue
+		}
+		for k := key; !keep[k]; {
+			keep[k] = true
+			up := taskVar(byMember[k], ax.EnvParentMember)
+			if byMember[up] == nil {
+				break
+			}
+			k = up
+		}
+	}
+	var removed []string
+	for _, t := range tasks {
+		key := "ax:" + t.GetMetadata().GetAtespace() + "/" + t.GetMetadata().GetName()
+		if keep[key] {
+			continue
+		}
+		if p.deleteOrphan(ctx, client, t, "it slept for "+after.String()) == nil {
+			removed = append(removed, strings.TrimPrefix(key, "ax:"))
+		}
+	}
+	return removed
+}
+
+// orphanDue reports whether the sweep removes the orphan Task t: the view
+// holds no run of it that has not ended (open), and it sleeps since after
+// ago, or it failed before it ran. The time of the sleep is the time of the
+// condition Ready with the reason TaskSuspended; a Task without that
+// condition counts from its creation.
+func orphanDue(t *v1alpha1.Task, open int, after time.Duration, now time.Time) bool {
+	if open > 0 {
+		return false
+	}
+	switch t.GetStatus().GetPhase() {
+	case phaseFailed:
+		return taskCondition(t, condWorkspaceReady) == nil
+	case phaseSuspended:
+		since := createdOf(t)
+		if c := taskCondition(t, condReady); c != nil && c.GetReason() == reasonSuspended && c.GetUpdateTime() != nil {
+			since = c.GetUpdateTime().AsTime()
+		}
+		return !since.IsZero() && now.Sub(since) >= after
+	}
+	return false
+}
+
+// taskCondition returns the condition of a Task of the type, or nil.
+func taskCondition(t *v1alpha1.Task, typ string) *v1alpha1.Condition {
+	for _, c := range t.GetStatus().GetConditions() {
+		if c.GetType() == typ {
+			return c
+		}
+	}
+	return nil
 }
 
 // orphanPlatform returns the platform of the fleet of a and its client of
