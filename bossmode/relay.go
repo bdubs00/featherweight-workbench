@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
@@ -121,7 +122,8 @@ func allowOf(a *fw.Agent, sc scope) func(context.Context) bool {
 // seeBridge decides an event of the bridge id for the caller in ctx, as
 // GET /v1/bridges/{id} decides (bridges.Store.Visible), with the bridges
 // that the agent has at the time of the decision. A store that does not
-// answer hides the event.
+// answer hides the event, and the log says so once until a decision works
+// again, so a page that misses entries leaves a trace.
 func seeBridge(a *fw.Agent, id string) func(context.Context) bool {
 	return func(ctx context.Context) bool {
 		s := bridges.Of(a)
@@ -129,9 +131,20 @@ func seeBridge(a *fw.Agent, id string) func(context.Context) bool {
 			return false
 		}
 		ok, err := s.Visible(ctx, id)
-		return err == nil && ok
+		if err != nil {
+			if seeFailing.CompareAndSwap(false, true) {
+				logOf(a).Warn("bossmode: the decision about an event of a bridge failed, so the stream leaves it out", "bridge", id, "error", err)
+			}
+			return false
+		}
+		seeFailing.Store(false)
+		return ok
 	}
 }
+
+// seeFailing is true from the first decision of seeBridge that failed to
+// the next one that works.
+var seeFailing atomic.Bool
 
 // scoped reports whether the kind is a kind of the hooks of feeds.go,
 // whose events always carry a scope.
