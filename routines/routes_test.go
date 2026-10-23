@@ -226,6 +226,17 @@ func TestListEveryAgent(t *testing.T) {
 	}
 }
 
+// On a front where no pool runs the agent, the workers hold the models
+// that answer the questions, so a routine that names one rehearses
+// without them on the front.
+func TestPutWithoutPool(t *testing.T) {
+	fr := newFront(t, nil)
+	resp, b := send(t, http.MethodPut, fr.url+"/v1/routines/triage/acknowledge", "alice", body(t, Rehearsing, nil))
+	if resp.StatusCode != http.StatusCreated || !strings.Contains(b, `"standing":"rehearsing"`) {
+		t.Fatalf("a rehearsing routine without a pool = %d %s", resp.StatusCode, b)
+	}
+}
+
 // The tools offer the same reads and moves, with the same rights.
 func TestTools(t *testing.T) {
 	fr := newFront(t, withClef)

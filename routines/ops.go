@@ -103,11 +103,13 @@ func put(ctx context.Context, a *fw.Agent, s *Store, agent, name string, in putB
 		return Record{}, PutResult{}, fmt.Errorf("%w: the routine is named %s in the body and %s in the path", ErrInvalid, body.Name, name)
 	}
 	err := allowed(ctx, a, agent, fw.ActionAgentEdit)
+	createOnly := false
 	if errors.Is(err, fw.ErrForbidden) && (in.Standing == "" || in.Standing == Proposed) {
-		// An operator proposes a new routine; only an owner changes one.
+		// An operator proposes a new routine. Only an owner changes one,
+		// also one that another writer creates in the meantime.
 		if _, _, gerr := s.get(ctx, agent, name); errors.Is(gerr, ErrNotFound) {
 			err = allowed(ctx, a, agent, fw.ActionAgentRun)
-			in.Standing = Proposed
+			in.Standing, createOnly = Proposed, true
 		}
 	}
 	if err != nil {
@@ -116,7 +118,7 @@ func put(ctx context.Context, a *fw.Agent, s *Store, agent, name string, in putB
 	by, note, _ := caller(ctx, in.Note)
 	return s.Put(ctx, PutRequest{
 		Agent: agent, Routine: body, Standing: in.Standing, Source: in.Source, Replay: in.Replay, By: by, Note: note,
-		Check: checkFor(a, agent),
+		CreateOnly: createOnly, Check: checkFor(a, agent),
 	})
 }
 

@@ -153,6 +153,15 @@ func TestEnqueueCarriesTheRoutines(t *testing.T) {
 	if req := <-got; req.Profile == nil || req.Profile.Routines != nil || len(req.Profile.Tools) != 1 {
 		t.Fatalf("a request with routines of the caller for another agent = %+v", req.Profile)
 	}
+	// An agent whose routines reach no profile gets an empty list, which
+	// the worker reads as empty: the run has no routine.
+	src.set(map[string][]fw.Routine{"default": {}})
+	if _, _, err := Enqueue(as("alice"), m.a, "default", []fw.RunRequest{{Input: "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if req := <-got; req.Profile == nil || req.Profile.Routines == nil || len(req.Profile.Routines) != 0 {
+		t.Fatalf("a request with an empty list = %+v", req.Profile)
+	}
 }
 
 // The view marks a run that a routine completed and a run that a receipt

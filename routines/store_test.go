@@ -149,7 +149,7 @@ func TestStorePutVersions(t *testing.T) {
 	changed := ack()
 	changed.Answer = "TRIAGE {{ .type }}"
 	rec, res, err := s.Put(ctx, PutRequest{Agent: "triage", Routine: changed, By: "alice"})
-	if err != nil || !res.Changed || res.Back || rec.Version() != 2 || rec.Standing != Rehearsing {
+	if err != nil || !res.Changed || rec.Version() != 2 || rec.Standing != Rehearsing || len(rec.History) != 1 {
 		t.Fatalf("a new body = %+v, %+v, %v", rec, res, err)
 	}
 	if got, _ := s.Get(ctx, "triage", "acknowledge"); got.Evidence.Version != 2 || got.Evidence.Totals.Acted != 0 {
@@ -160,7 +160,7 @@ func TestStorePutVersions(t *testing.T) {
 	}
 	changed.Answer = "TRIAGE type/{{ .type }}"
 	rec, res, err = s.Put(ctx, PutRequest{Agent: "triage", Routine: changed, By: "alice", Note: "a clearer answer"})
-	if err != nil || !res.Back || rec.Standing != Rehearsing || rec.Version() != 3 || rec.SignedOff != nil || rec.Ready {
+	if err != nil || !res.Changed || rec.Standing != Rehearsing || rec.Version() != 3 || rec.SignedOff != nil || rec.Ready {
 		t.Fatalf("a new body of a live routine = %+v, %+v, %v", rec, res, err)
 	}
 	last := rec.History[len(rec.History)-1]
@@ -177,7 +177,7 @@ func TestStorePutVersions(t *testing.T) {
 	}
 	changed.Answer = "TRIAGE type {{ .type }}"
 	rec, res, err = s.Put(ctx, PutRequest{Agent: "triage", Routine: changed, By: "alice"})
-	if err != nil || !res.Back || rec.Standing != Rehearsing || rec.Version() != 4 || rec.SignedOff != nil {
+	if err != nil || !res.Changed || rec.Standing != Rehearsing || rec.Version() != 4 || rec.SignedOff != nil {
 		t.Fatalf("a new body of a paused routine = %+v, %+v, %v", rec, res, err)
 	}
 	// A write of a routine that exists names no other standing.
@@ -190,6 +190,23 @@ func TestStorePutVersions(t *testing.T) {
 	_ = json.Unmarshal(b, &raw)
 	if _, ok := raw["routine"]["standing"]; ok || raw["routine"]["version"] != float64(4) || raw["routine"]["name"] != "acknowledge" {
 		t.Fatalf("the JSON of the record = %s", b)
+	}
+}
+
+// A write that only creates refuses a routine that exists.
+func TestStoreCreateOnly(t *testing.T) {
+	ctx := context.Background()
+	s := memStore(Config{})
+	if _, _, err := s.Put(ctx, PutRequest{Agent: "triage", Routine: ack(), CreateOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	changed := ack()
+	changed.Answer = "other"
+	if _, _, err := s.Put(ctx, PutRequest{Agent: "triage", Routine: changed, CreateOnly: true}); !errors.Is(err, fw.ErrForbidden) {
+		t.Fatalf("a second create = %v", err)
+	}
+	if rec, _ := s.Get(ctx, "triage", "acknowledge"); rec.Version() != 1 {
+		t.Fatalf("the routine changed: version %d", rec.Version())
 	}
 }
 

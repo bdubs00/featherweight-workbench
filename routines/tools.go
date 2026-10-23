@@ -84,9 +84,9 @@ func tools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolStanding,
 			Title:       "Move a routine",
-			Description: "Move a routine of an agent to another standing. A proposed routine moves to rehearsing or retired. A rehearsing one moves to live (a sign-off, so it acts on its own), paused, or retired. A live one moves to paused or retired, and a paused one to rehearsing or live. A sign-off needs a person behind the call, and it writes the runbook page agents/<agent>/routines/<name>.md of the wiki.",
+			Description: "Move a routine of an agent to another standing. A proposed routine moves to rehearsing or retired. A rehearsing one moves to live (a sign-off, so it acts on its own), paused, or retired. A live one moves to paused or retired, and a paused one to rehearsing or live. A retired routine stays retired, so a retirement cannot be undone. A sign-off needs a person behind the call, and it writes the runbook page agents/<agent>/routines/<name>.md of the wiki.",
 			InputSchema: json.RawMessage(standingSchema),
-			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(false), IdempotentHint: true, OpenWorldHint: ptr(false)},
+			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in standingArgs) (*sdk.CallToolResult, any, error) {
 			return standingTool(ctx, a, in), nil, nil
 		}),

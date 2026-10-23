@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -188,14 +187,8 @@ func New(b bucket.Bucket, c Config, log *slog.Logger) *Store {
 	return &Store{b: b, cfg: c, log: log, now: time.Now, cache: map[string]cached{}}
 }
 
-// Config returns the configuration of the store.
-func (s *Store) Config() Config { return s.cfg }
-
 // Describe names the place of the store for a person.
 func (s *Store) Describe() string { return s.b.Describe() }
-
-// routineName is the rule of the kernel for the name of a routine.
-var routineName = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 
 // CheckAgent checks the name of an agent as the kernel checks the name of
 // a profile for its memory, and that it fits a key of the bucket.
@@ -206,10 +199,11 @@ func CheckAgent(agent string) error {
 	return nil
 }
 
-// CheckName checks the name of a routine: 1 to 64 of a-z, 0-9, and -.
+// CheckName checks the name of a routine as the kernel does
+// (fw.CheckRoutineName): 1 to 64 of a-z, 0-9, and -.
 func CheckName(name string) error {
-	if !routineName.MatchString(name) {
-		return fmt.Errorf("%w: %q is not the name of a routine; a name holds 1 to 64 of a-z, 0-9, and -", ErrInvalid, name)
+	if err := fw.CheckRoutineName(name); err != nil {
+		return fmt.Errorf("%w: %s", ErrInvalid, strings.TrimPrefix(err.Error(), fw.ErrInvalidRequest.Error()+": "))
 	}
 	return nil
 }
@@ -475,16 +469,18 @@ type PutRequest struct {
 	Replay   *Replay
 	By       string
 	Note     string
+	// CreateOnly refuses a write of a routine that exists, so an operator
+	// who proposes a new routine never changes one that appeared since.
+	CreateOnly bool
 	// Check checks the routines that reach the profiles of the agent with
 	// this write, such as fleet.CheckRoutines. Nil checks nothing.
 	Check func(ctx context.Context, list []fw.Routine) error
 }
 
-// PutResult says what a write did: Created for a new routine, Changed
-// when the body changed and the version went up, and Back when a live
-// routine went back to rehearsing.
+// PutResult says what a write did: Created for a new routine, and Changed
+// when the body changed and the version went up.
 type PutResult struct {
-	Created, Changed, Back bool
+	Created, Changed bool
 }
 
 // Put creates or replaces the body of a routine. A body that differs from
@@ -508,8 +504,10 @@ func (s *Store) Put(ctx context.Context, req PutRequest) (Record, PutResult, err
 	body.Standing = ""
 	trial := body
 	trial.Standing, trial.Version = fw.RoutineShadow, 1
-	if err := fw.CheckRoutines(nil, []fw.Routine{trial}); err != nil {
-		return Record{}, PutResult{}, fmt.Errorf("%w: %s", ErrInvalid, strings.TrimPrefix(strings.TrimPrefix(err.Error(), fw.ErrInvalidRequest.Error()+": "), "routines[0] ("+body.Name+")."))
+	if problems := fw.RoutineProblems(nil, []fw.Routine{trial}); len(problems) > 0 {
+		// The kernel keys a problem from the list of a profile; here the
+		// body is the only routine.
+		return Record{}, PutResult{}, fmt.Errorf("%w: %s", ErrInvalid, strings.TrimPrefix(problems[0], "routines[0] ("+body.Name+")."))
 	}
 	if err := checkSource(req.Source); err != nil {
 		return Record{}, PutResult{}, err
@@ -544,6 +542,9 @@ func (s *Store) Put(ctx context.Context, req PutRequest) (Record, PutResult, err
 			rec.History = []Move{{At: now, By: req.By, Standing: req.Standing, Note: note, Version: 1}}
 			res = PutResult{Created: true, Changed: true}
 		} else {
+			if req.CreateOnly {
+				return Record{}, PutResult{}, fmt.Errorf("%w: the routine %s of %s exists, and an owner of the agent changes it", fw.ErrForbidden, body.Name, req.Agent)
+			}
 			if req.Standing != "" && req.Standing != cur.Standing {
 				return Record{}, PutResult{}, fmt.Errorf("%w: the routine %s is %s; change its standing with POST /v1/routines/%s/%s/standing or routine_standing", ErrInvalid, body.Name, cur.Standing, req.Agent, body.Name)
 			}
@@ -558,7 +559,7 @@ func (s *Store) Put(ctx context.Context, req PutRequest) (Record, PutResult, err
 				if cur.Standing == Live || cur.Standing == Paused {
 					// A paused routine can go live with one move, so its
 					// new version rehearses first too.
-					rec.Standing, rec.SignedOff, res.Back = Rehearsing, nil, true
+					rec.Standing, rec.SignedOff = Rehearsing, nil
 					rec.History = append(slices.Clone(cur.History), Move{At: now, By: req.By, Standing: Rehearsing, Note: joinNote("a new version rehearses again", note), Version: body.Version})
 				}
 			}
