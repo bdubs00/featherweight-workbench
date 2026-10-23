@@ -347,6 +347,8 @@ func TestInstructionsKeepTheSandboxAndTheQuiet(t *testing.T) {
 		"A message that asks nothing of you gets no answer",
 		"Never answer a thanks, an acknowledgment, or a PASS that needs nothing from you.",
 		"Never address yourself: do not write @reviewer.",
+		"ask with ask true and the choice [\"Done\"]",
+		"never start a new page such as name-v2 for a new version",
 	} {
 		if !strings.Contains(in, want) {
 			t.Errorf("the instructions lack %q", want)
