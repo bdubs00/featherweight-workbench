@@ -423,6 +423,20 @@ func (p *Pool) Policy() fw.PolicyConfig {
 	return p.worker.Policy
 }
 
+// Tools returns the tools that the workers of the pool offer a profile
+// that names none: the built-in tools, then <server>.* for each MCP
+// server, in the order of fw.tools.
+func (p *Pool) Tools() []string {
+	if p.worker == nil {
+		return nil
+	}
+	out := append([]string{}, p.worker.Tools.Builtin...)
+	for _, s := range p.worker.Tools.MCP {
+		out = append(out, s.Name+".*")
+	}
+	return out
+}
+
 // Owns reports whether a Task of that name is a Task of the pool by its
 // name, <pool>-<index>, in the atespace of the pool.
 func (p *Pool) Owns(atespace, task string) bool {

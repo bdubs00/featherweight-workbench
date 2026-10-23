@@ -296,6 +296,19 @@ func PlannedPool(at agents.Place) (pools.Status, bool) {
 	return pools.Initial(pl.base, "the save of the agent creates the pool"), true
 }
 
+// WorkerOffer returns what the workers of the pool of a place give a
+// profile: the tools of a profile that names none, and fw.policy of the
+// workers, which the policy of the profile can only tighten. A dry run
+// answers it, so a person sees what a new agent can do before the save.
+// It reports false for a place of this process.
+func WorkerOffer(at agents.Place) ([]string, fw.Rules, bool) {
+	pl, ok := at.(*poolPlace)
+	if !ok || pl.pool == nil {
+		return nil, fw.Rules{}, false
+	}
+	return pl.pool.Tools(), pl.pool.Policy().Rules, true
+}
+
 // PoolNamed returns the pool of the name of the fleet of a as the caller
 // sees it, and false when the caller sees no such pool.
 func PoolNamed(ctx context.Context, a *fw.Agent, name string) (pools.Status, bool, error) {
