@@ -137,7 +137,7 @@ func seeBridge(a *fw.Agent, id string) func(context.Context) bool {
 // whose events always carry a scope.
 func scoped(kind string) bool {
 	switch kind {
-	case KindBridgeMessage, KindBridgeMember, KindPage, KindFace:
+	case KindBridgeMessage, KindBridgeMember, KindPage, KindFace, KindRoutine:
 		return true
 	}
 	return false

@@ -3,7 +3,8 @@ package bossmode
 // This file feeds the stream with the events of the other packages of
 // bossmode (docs/ARCHITECTURE.md section 17.5): bridge.message and
 // bridge.member from the hooks of the bridges, page from the hook of the
-// wiki, and face from the hook of the faces. Each event goes to the stream
+// wiki, face from the hook of the faces, and routine from the hook of the
+// routines. Each event goes to the stream
 // of each agent of the process that runs bossmode, through PublishTo, with
 // the decision of its scope bound to that agent: the stream asks the rule
 // of the routes of the package once per event and per stream, for the
@@ -16,11 +17,14 @@ package bossmode
 import (
 	"errors"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/faces"
 	"github.com/bdubs00/featherweight-workbench/pages"
+	"github.com/bdubs00/featherweight-workbench/routines"
 )
 
 // Kinds of the stream that the other packages of bossmode feed.
@@ -29,13 +33,19 @@ const (
 	KindBridgeMember  = "bridge.member"
 	KindPage          = "page"
 	KindFace          = "face"
+	KindRoutine       = "routine"
 )
+
+// RoutineEvery is the shortest time between two events routine of one
+// routine. A change within it goes out once at its end.
+const RoutineEvery = 2 * time.Second
 
 func init() {
 	bridges.OnMessage(feedMessage)
 	bridges.OnMember(feedMember)
 	pages.OnChange(feedPage)
 	faces.OnChange(feedFace)
+	routines.OnChange(feedRoutine)
 }
 
 // bridgeMessage is the data of bridge.message. Partial is true when the
@@ -129,6 +139,75 @@ func feedFace(f faces.Face) {
 		}
 		if err := PublishTo(a, KindFace, f.Agent, f, ForAgent(f.Agent)); err != nil {
 			logOf(a).Warn("bossmode: a face is not on the stream", "agent", f.Agent, "error", err)
+		}
+	}
+}
+
+// routineEvent is the data of routine: the routine whose record or
+// evidence changed. The page reads the routine again.
+type routineEvent struct {
+	Kind  string `json:"kind"`
+	Agent string `json:"agent"`
+	Name  string `json:"name"`
+}
+
+// routineFeed coalesces the changes of a routine: last holds when each
+// routine last went out, and waiting the routines whose next event waits
+// for the end of RoutineEvery.
+var routineFeed struct {
+	mu      sync.Mutex
+	last    map[string]time.Time
+	waiting map[string]bool
+}
+
+// feedRoutine publishes a change of a routine to every caller who can
+// view its agent, at most once per routine per RoutineEvery: a change
+// within that time goes out once, at its end.
+func feedRoutine(agent, name string) {
+	key := agent + "/" + name
+	now := time.Now()
+	routineFeed.mu.Lock()
+	if routineFeed.last == nil {
+		routineFeed.last, routineFeed.waiting = map[string]time.Time{}, map[string]bool{}
+	}
+	if routineFeed.waiting[key] {
+		routineFeed.mu.Unlock()
+		return
+	}
+	wait := RoutineEvery - now.Sub(routineFeed.last[key])
+	if wait <= 0 {
+		routineFeed.last[key] = now
+		if len(routineFeed.last) > 4096 {
+			for k, at := range routineFeed.last {
+				if now.Sub(at) > RoutineEvery {
+					delete(routineFeed.last, k)
+				}
+			}
+		}
+		routineFeed.mu.Unlock()
+		publishRoutine(agent, name)
+		return
+	}
+	routineFeed.waiting[key] = true
+	routineFeed.mu.Unlock()
+	time.AfterFunc(wait, func() {
+		routineFeed.mu.Lock()
+		delete(routineFeed.waiting, key)
+		routineFeed.last[key] = time.Now()
+		routineFeed.mu.Unlock()
+		publishRoutine(agent, name)
+	})
+}
+
+// publishRoutine puts the event routine on the stream of each agent of the
+// process that keeps routines.
+func publishRoutine(agent, name string) {
+	for _, a := range agents() {
+		if routines.Of(a) == nil {
+			continue
+		}
+		if err := PublishTo(a, KindRoutine, agent+"/"+name, routineEvent{Kind: KindRoutine, Agent: agent, Name: name}, ForAgent(agent)); err != nil {
+			logOf(a).Warn("bossmode: a routine is not on the stream", "agent", agent, "routine", name, "error", err)
 		}
 	}
 }

@@ -1,0 +1,130 @@
+package routines
+
+// This file holds what the routes and the tools share: the checks of the
+// caller, a write of a body, and a move of a standing with its runbook.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/fleet"
+)
+
+// ErrHidden means that the caller cannot view the agent, or that no agent
+// of the fleet has the name. A route answers 404, so a caller learns
+// nothing of an agent that it cannot view.
+var ErrHidden = errors.New("routines: no agent that you can view has the name")
+
+// allowed decides an action on the routines of an agent for the caller
+// in ctx. A caller that cannot view the agent gets ErrHidden; one that can
+// view it but not do the action gets the refusal of the kernel.
+func allowed(ctx context.Context, a *fw.Agent, agent, action string) error {
+	err := Check(ctx, a, agent, fw.ActionAgentView)
+	switch {
+	case errors.Is(err, fw.ErrProfileNotFound), errors.Is(err, fw.ErrForbidden):
+		return fmt.Errorf("%w: %s", ErrHidden, agent)
+	case err != nil:
+		return err
+	case action == fw.ActionAgentView:
+		return nil
+	}
+	return Check(ctx, a, agent, action)
+}
+
+// putBody is the body of PUT /v1/routines/{agent}/{name} and the request of
+// a write. Standing is proposed or rehearsing for a new routine, and empty
+// or the standing of a routine that exists.
+type putBody struct {
+	Routine  *fw.Routine `json:"routine"`
+	Standing string      `json:"standing,omitempty"`
+	Source   *Source     `json:"source,omitempty"`
+	Replay   *Replay     `json:"replay,omitempty"`
+	Note     string      `json:"note,omitempty"`
+}
+
+// put writes the body of a routine for the caller in ctx. A new routine in
+// the standing proposed needs the operator role on the agent
+// (fw.ActionAgentRun). Every other write needs the owner role
+// (fw.ActionAgentEdit), as agent_put does.
+func put(ctx context.Context, a *fw.Agent, s *Store, agent, name string, in putBody) (Record, PutResult, error) {
+	if in.Routine == nil {
+		return Record{}, PutResult{}, fmt.Errorf("%w: the body is {\"routine\": {...}, \"standing\": \"proposed\", \"source\": {...}}, and routine is missing", ErrInvalid)
+	}
+	if err := checkKey(agent, name); err != nil {
+		return Record{}, PutResult{}, err
+	}
+	body := *in.Routine
+	switch body.Name {
+	case "":
+		body.Name = name
+	case name:
+	default:
+		return Record{}, PutResult{}, fmt.Errorf("%w: the routine is named %s in the body and %s in the path", ErrInvalid, body.Name, name)
+	}
+	err := allowed(ctx, a, agent, fw.ActionAgentEdit)
+	if errors.Is(err, fw.ErrForbidden) && (in.Standing == "" || in.Standing == Proposed) {
+		// An operator proposes a new routine; only an owner changes one.
+		if _, _, gerr := s.get(ctx, agent, name); errors.Is(gerr, ErrNotFound) {
+			err = allowed(ctx, a, agent, fw.ActionAgentRun)
+			in.Standing = Proposed
+		}
+	}
+	if err != nil {
+		return Record{}, PutResult{}, err
+	}
+	by, note, _ := caller(ctx, in.Note)
+	return s.Put(ctx, PutRequest{
+		Agent: agent, Routine: body, Standing: in.Standing, Source: in.Source, Replay: in.Replay, By: by, Note: note,
+		Check: func(ctx context.Context, list []fw.Routine) error { return fleet.CheckRoutines(ctx, a, agent, list) },
+	})
+}
+
+// moveBody is the body of POST /v1/routines/{agent}/{name}/standing.
+type moveBody struct {
+	Standing string `json:"standing"`
+	Note     string `json:"note,omitempty"`
+}
+
+// move moves a routine to another standing for the caller in ctx, which
+// needs the owner role on the agent. A move to live writes the runbook of
+// the routine to the wiki; a runbook that does not land leaves the move
+// as it is, and the log says why.
+func move(ctx context.Context, a *fw.Agent, s *Store, agent, name string, in moveBody) (Record, bool, error) {
+	if err := checkKey(agent, name); err != nil {
+		return Record{}, false, err
+	}
+	if err := allowed(ctx, a, agent, fw.ActionAgentEdit); err != nil {
+		return Record{}, false, err
+	}
+	by, note, person := caller(ctx, in.Note)
+	rec, moved, err := s.Move(ctx, MoveRequest{
+		Agent: agent, Name: name, To: strings.TrimSpace(in.Standing), Note: note, By: by, Person: person,
+		Check: func(ctx context.Context, list []fw.Routine) error { return fleet.CheckRoutines(ctx, a, agent, list) },
+	})
+	if err != nil || !moved {
+		return rec, moved, err
+	}
+	a.Logger().Info("routines: a routine moved", "agent", agent, "routine", name, "version", rec.Version(), "standing", rec.Standing, "by", by)
+	if rec.Standing == Live {
+		full, err := s.Get(ctx, agent, name)
+		if err == nil {
+			_, err = writeRunbook(ctx, a, full)
+		}
+		if err != nil {
+			a.Logger().Warn("routines: the runbook of a signed-off routine did not land", "agent", agent, "routine", name, "error", err)
+		}
+	}
+	return rec, true, nil
+}
+
+// reason returns the words of an error of the package without its prefix.
+func reason(err error) string {
+	s := err.Error()
+	for _, e := range []error{ErrInvalid, ErrNotFound, ErrLimit, ErrConflict, ErrRetired, ErrHidden, fw.ErrInvalidRequest, fw.ErrForbidden} {
+		s = strings.TrimPrefix(s, e.Error()+": ")
+	}
+	return s
+}

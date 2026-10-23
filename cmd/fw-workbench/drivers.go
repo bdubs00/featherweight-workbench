@@ -38,6 +38,7 @@ import (
 	_ "github.com/bdubs00/featherweight-workbench/bridges"
 	_ "github.com/bdubs00/featherweight-workbench/faces"
 	_ "github.com/bdubs00/featherweight-workbench/pages"
+	_ "github.com/bdubs00/featherweight-workbench/routines"
 	_ "github.com/bdubs00/featherweight-workbench/surface/web"
 	_ "github.com/bdubs00/featherweight-workbench/titles"
 	_ "github.com/bdubs00/featherweight-workbench/tools/builder"

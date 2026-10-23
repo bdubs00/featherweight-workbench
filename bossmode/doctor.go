@@ -11,6 +11,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/faces"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/pages"
+	"github.com/bdubs00/featherweight-workbench/routines"
 )
 
 // DoctorCheck is the line of fw doctor about bossmode (cli.DoctorCheck):
@@ -20,7 +21,7 @@ import (
 // profile of the quick chat and the pools that run it, and the open
 // streams. Then, on or off, it gives the lines of the stores that
 // bossmode reads: the wiki (pages.Status), the faces (faces.Status), and
-// the bridges (bridges.Status). A directory without index.html, a logo
+// the bridges (bridges.Status), and the routines (routines.Status). A directory without index.html, a logo
 // that does not pass, a manager that no profile of fw.agents and no pool
 // defines, a quick chat that no profile defines, and a store whose
 // configuration does not load fail the check. cmd/fw-workbench registers
@@ -28,7 +29,7 @@ import (
 // the manager.
 func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duration) (bool, string) {
 	ok, line := pageCheck(cfg)
-	for _, status := range []func(*fw.Config) (bool, string){pages.Status, faces.Status, bridges.Status} {
+	for _, status := range []func(*fw.Config) (bool, string){pages.Status, faces.Status, bridges.Status, routines.Status} {
 		good, text := status(cfg)
 		ok = ok && good
 		line += "; " + text

@@ -15,6 +15,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/faces"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/pages"
+	"github.com/bdubs00/featherweight-workbench/routines"
 )
 
 // storeFront is a front whose profile manager only ada operates, with the
@@ -261,5 +262,42 @@ func TestStreamAndRosterAgree(t *testing.T) {
 	}
 	if run != want || member != want || fleet.ActivityPhrase(r) != want {
 		t.Fatalf("the run event says %q, the seat %q, and fleet.ActivityPhrase %q; want %q", run, member, fleet.ActivityPhrase(r), want)
+	}
+}
+
+// A change of a routine reaches a caller who can view its agent as
+// routine, with the agent and the name, at most once per routine in
+// RoutineEvery: the first change goes out at once, and the changes after
+// it go out as one event at the end of the window.
+func TestFeedRoutines(t *testing.T) {
+	fr := storeFront(t)
+	cl, err := routines.Start(context.Background(), fr.a)
+	if err != nil || cl == nil {
+		t.Fatalf("start the routines: %v, %v", cl, err)
+	}
+	t.Cleanup(func() { _ = cl.Close() })
+	ada := openStream(t, fr, "ada", "")
+	carol := openStream(t, fr, "carol", "")
+	ctx := context.Background()
+	s := routines.Of(fr.a)
+	r := fw.Routine{Name: "close-duplicate", Steps: []fw.RoutineStep{{Tool: "tickets.close", Input: "{}"}}}
+	if _, _, err := s.Put(ctx, routines.PutRequest{Agent: "manager", Routine: r, By: "ada"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, to := range []string{routines.Rehearsing, routines.Paused, routines.Rehearsing} {
+		if _, _, err := s.Move(ctx, routines.MoveRequest{Agent: "manager", Name: r.Name, To: to, By: "ada", Person: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(RoutineEvery + 500*time.Millisecond)
+	got := kinds(t, ada, "routines")
+	if len(got) != 2 || got[0].kind != KindRoutine || got[1].kind != KindRoutine {
+		t.Fatalf("ada got %+v", got)
+	}
+	if got[0].data != `{"kind":"routine","agent":"manager","name":"close-duplicate"}` {
+		t.Fatalf("routine = %s", got[0].data)
+	}
+	if got := kinds(t, carol, "routines-carol"); len(got) != 0 {
+		t.Errorf("carol, who views no agent, got %+v", got)
 	}
 }
