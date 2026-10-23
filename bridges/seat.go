@@ -456,10 +456,12 @@ type rosterLine struct {
 	You                 bool
 }
 
-// instructionsData is the data of the template of the instructions.
+// instructionsData is the data of the template of the instructions. Peer
+// is the handle of a teammate for an example, or teammate when the seat
+// has none.
 type instructionsData struct {
 	ID, Title, Goal, Operator string
-	Handle, Agent, Task       string
+	Handle, Agent, Task, Peer string
 	Roster                    []rosterLine
 	Learned                   string
 }
@@ -477,6 +479,12 @@ func (s *Store) instructionsOf(ctx context.Context, rec *record, m Member) strin
 			continue
 		}
 		d.Roster = append(d.Roster, rosterLine{Handle: o.Handle, Agent: o.Agent, Task: oneLine(o.Task, 300), You: o.Handle == m.Handle})
+		if d.Peer == "" && o.Handle != m.Handle {
+			d.Peer = o.Handle
+		}
+	}
+	if d.Peer == "" {
+		d.Peer = "teammate"
 	}
 	d.Learned = s.learnedOf(ctx, m.Agent)
 	var b bytes.Buffer
