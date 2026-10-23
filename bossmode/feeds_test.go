@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -281,6 +282,16 @@ func TestFeedRoutines(t *testing.T) {
 	ctx := context.Background()
 	s := routines.Of(fr.a)
 	r := fw.Routine{Name: "close-duplicate", Steps: []fw.RoutineStep{{Tool: "tickets.close", Input: "{}"}}}
+	// The clock of the feed stands still, and its timer waits for the
+	// test.
+	clock := time.Now()
+	var fire []func()
+	var mu sync.Mutex
+	f := fr.h.routines
+	f.mu.Lock()
+	f.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	f.after = func(_ time.Duration, fn func()) { mu.Lock(); fire = append(fire, fn); mu.Unlock() }
+	f.mu.Unlock()
 	if _, _, err := s.Put(ctx, routines.PutRequest{Agent: "manager", Routine: r, By: "ada"}); err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +300,14 @@ func TestFeedRoutines(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	time.Sleep(RoutineEvery + 500*time.Millisecond)
+	mu.Lock()
+	if len(fire) != 1 {
+		t.Fatalf("%d timers wait, want 1", len(fire))
+	}
+	clock = clock.Add(RoutineEvery)
+	end := fire[0]
+	mu.Unlock()
+	end()
 	got := kinds(t, ada, "routines")
 	if len(got) != 2 || got[0].kind != KindRoutine || got[1].kind != KindRoutine {
 		t.Fatalf("ada got %+v", got)

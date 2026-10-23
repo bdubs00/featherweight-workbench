@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -212,8 +213,9 @@ func waitEvidence(t *testing.T, s *Store, agent, name string, ok func(*Evidence)
 	}
 }
 
-// Two replicas of the front read the same stream and write one bucket:
-// each applies every event, and the evidence counts each event once.
+// Two replicas of the front read the same stream and write one bucket at
+// the same time: each applies every event, and the evidence counts each
+// event once.
 func TestTwoReplicasCountOnce(t *testing.T) {
 	ctx := context.Background()
 	one := memStore(Config{})
@@ -234,9 +236,16 @@ func TestTwoReplicasCountOnce(t *testing.T) {
 		ev("01Y", 3, fw.EvRoutineDecided, fw.RoutineDecidedData{Routine: "acknowledge", Version: 1, Mode: fw.RoutineLive, Applies: true}),
 		ev("01Y", 9, fw.EvRoutineApplied, fw.RoutineAppliedData{Routine: "acknowledge", Version: 1, OK: false, Steps: 2, FailedStep: 2, Reason: "hole empty"}),
 	}
-	for _, s := range []*Store{one, two, one} {
-		newProjector(s, quiet()).apply(ctx, batch)
+	// The two replicas apply the stream at the same moment, each twice.
+	var wg sync.WaitGroup
+	for _, s := range []*Store{one, two, one, two} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			newProjector(s, quiet()).apply(ctx, batch)
+		}()
 	}
+	wg.Wait()
 	rec, _ := two.Get(ctx, "triage", "acknowledge")
 	if rec.Evidence.Totals != (Counts{Decided: 1, Acted: 1, Agreed: 1, Failed: 1}) {
 		t.Fatalf("totals = %+v", rec.Evidence.Totals)

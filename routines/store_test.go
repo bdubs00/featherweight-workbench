@@ -116,9 +116,10 @@ func TestStoreMoves(t *testing.T) {
 }
 
 // A body that changes gets the next version and starts its evidence
-// again; the same body changes nothing. A live routine whose body changes
-// goes back to rehearsing, and its sign-off goes. A new routine starts
-// proposed or rehearsing, never live, and the kernel checks the body.
+// again; the same body changes nothing. A live or paused routine whose
+// body changes goes back to rehearsing, and its sign-off goes. A new
+// routine starts proposed or rehearsing, never live, and the kernel checks
+// the body.
 func TestStorePutVersions(t *testing.T) {
 	ctx := context.Background()
 	s := memStore(Config{})

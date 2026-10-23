@@ -514,44 +514,47 @@ func (s *Store) Put(ctx context.Context, req PutRequest) (Record, PutResult, err
 	if err := checkSource(req.Source); err != nil {
 		return Record{}, PutResult{}, err
 	}
-	key := keyOf(req.Agent, body.Name)
-	for range writeAttempts {
+	var rec, cur Record
+	var res PutResult
+	wrote, err := bucket.Modify(ctx, s.b, keyOf(req.Agent, body.Name), writeAttempts, func(value []byte, exists bool) ([]byte, error) {
 		now := s.now().UTC()
-		cur, rev, err := s.get(ctx, req.Agent, body.Name)
-		exists := err == nil
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return Record{}, PutResult{}, err
+		res, cur = PutResult{}, Record{}
+		if exists {
+			var err error
+			if cur, err = decodeRecord(value); err != nil {
+				return nil, err
+			}
 		}
-		var res PutResult
-		rec := cur
+		rec = cur
+		body := body
 		if !exists {
-			switch req.Standing {
+			standing := req.Standing
+			switch standing {
 			case "":
-				req.Standing = Proposed
+				standing = Proposed
 			case Proposed, Rehearsing:
 			default:
-				return Record{}, PutResult{}, fmt.Errorf("%w: a new routine starts proposed or rehearsing, not %s", ErrInvalid, req.Standing)
+				return nil, fmt.Errorf("%w: a new routine starts proposed or rehearsing, not %s", ErrInvalid, standing)
 			}
 			n, err := s.count(ctx, req.Agent)
 			if err != nil {
-				return Record{}, PutResult{}, err
+				return nil, err
 			}
 			if n >= MaxPerAgent {
-				return Record{}, PutResult{}, fmt.Errorf("%w: the agent %s has %d routines that are not retired, the most; retire one, or change one", ErrLimit, req.Agent, n)
+				return nil, fmt.Errorf("%w: the agent %s has %d routines that are not retired, the most; retire one, or change one", ErrLimit, req.Agent, n)
 			}
 			body.Version = 1
-			rec = Record{Agent: req.Agent, Routine: body, Standing: req.Standing, CreatedAt: now}
-			rec.History = []Move{{At: now, By: req.By, Standing: req.Standing, Note: note, Version: 1}}
+			rec = Record{Agent: req.Agent, Routine: body, Standing: standing, CreatedAt: now}
+			rec.History = []Move{{At: now, By: req.By, Standing: standing, Note: note, Version: 1}}
 			res = PutResult{Created: true, Changed: true}
 		} else {
-			if req.CreateOnly {
-				return Record{}, PutResult{}, fmt.Errorf("%w: the routine %s of %s exists, and an owner of the agent changes it", fw.ErrForbidden, body.Name, req.Agent)
-			}
-			if req.Standing != "" && req.Standing != cur.Standing {
-				return Record{}, PutResult{}, fmt.Errorf("%w: the routine %s is %s; change its standing with POST /v1/routines/%s/%s/standing or routine_standing", ErrInvalid, body.Name, cur.Standing, req.Agent, body.Name)
-			}
-			if cur.Standing == Retired {
-				return Record{}, PutResult{}, fmt.Errorf("%w: the routine %s of %s is retired and stays retired; give a new routine another name", ErrRetired, body.Name, req.Agent)
+			switch {
+			case req.CreateOnly:
+				return nil, fmt.Errorf("%w: the routine %s of %s exists, and an owner of the agent changes it", fw.ErrForbidden, body.Name, req.Agent)
+			case req.Standing != "" && req.Standing != cur.Standing:
+				return nil, fmt.Errorf("%w: the routine %s is %s; change its standing with POST /v1/routines/%s/%s/standing or routine_standing", ErrInvalid, body.Name, cur.Standing, req.Agent, body.Name)
+			case cur.Standing == Retired:
+				return nil, fmt.Errorf("%w: the routine %s of %s is retired and stays retired; give a new routine another name", ErrRetired, body.Name, req.Agent)
 			}
 			body.Version = cur.Version()
 			if !sameBody(body, cur.Routine) {
@@ -570,45 +573,41 @@ func (s *Store) Put(ctx context.Context, req PutRequest) (Record, PutResult, err
 			src := *req.Source
 			rec.Source = &src
 		}
-		if !res.Changed && req.Replay == nil && sameSource(cur.Source, rec.Source) {
-			return cur, res, nil
+		if !res.Changed && sameSource(cur.Source, rec.Source) {
+			return nil, nil
 		}
 		if _, reaches := kernelStanding(rec.Standing); reaches && res.Changed && req.Check != nil {
 			list, err := s.reachingWith(ctx, rec)
 			if err != nil {
-				return Record{}, PutResult{}, err
+				return nil, err
 			}
 			if err := req.Check(ctx, list); err != nil {
-				return Record{}, PutResult{}, err
+				return nil, err
 			}
 		}
 		rec.History = trimHistory(rec.History)
 		rec.UpdatedAt = now
 		rec.Evidence = nil
-		value, err := encode(rec)
-		if err != nil {
-			return Record{}, PutResult{}, err
-		}
-		if exists {
-			_, err = s.b.Update(ctx, key, value, rev)
-		} else {
-			_, err = s.b.Create(ctx, key, value)
-		}
-		if errors.Is(err, bucket.ErrConflict) {
-			continue
-		}
-		if err != nil {
-			return Record{}, PutResult{}, fmt.Errorf("routines: write the routine %s of %s: %w", body.Name, req.Agent, err)
-		}
-		if res.Changed || req.Replay != nil {
-			if err := s.resetEvidence(ctx, rec, res.Changed, req.Replay); err != nil {
-				s.log.Warn("routines: the evidence of a new version did not start; the projection starts it at the next event", "agent", req.Agent, "routine", body.Name, "error", err)
-			}
-		}
-		emitChange(req.Agent, body.Name)
-		return rec, res, nil
+		return encode(rec)
+	})
+	if errors.Is(err, bucket.ErrConflict) {
+		return Record{}, PutResult{}, fmt.Errorf("%w: other writers changed the routine %s of %s %d times while this write tried; try again", ErrConflict, body.Name, req.Agent, writeAttempts)
 	}
-	return Record{}, PutResult{}, fmt.Errorf("%w: other writers changed the routine %s of %s %d times while this write tried; try again", ErrConflict, body.Name, req.Agent, writeAttempts)
+	if err != nil {
+		return Record{}, PutResult{}, fmt.Errorf("routines: write the routine %s of %s: %w", body.Name, req.Agent, err)
+	}
+	if !wrote {
+		rec = cur
+	}
+	if res.Changed || req.Replay != nil {
+		if err := s.resetEvidence(ctx, rec, res.Changed, req.Replay); err != nil {
+			s.log.Warn("routines: the evidence of a new version did not start; the projection starts it at the next event", "agent", req.Agent, "routine", body.Name, "error", err)
+		}
+	}
+	if wrote || req.Replay != nil {
+		emitChange(req.Agent, body.Name)
+	}
+	return rec, res, nil
 }
 
 // MoveRequest is a move of a routine to another standing. Version, when
@@ -640,26 +639,27 @@ func (s *Store) Move(ctx context.Context, req MoveRequest) (Record, bool, error)
 	if err != nil {
 		return Record{}, false, err
 	}
-	key := keyOf(req.Agent, req.Name)
-	for range writeAttempts {
-		cur, rev, err := s.get(ctx, req.Agent, req.Name)
+	var rec Record
+	wrote, err := bucket.Modify(ctx, s.b, keyOf(req.Agent, req.Name), writeAttempts, func(value []byte, exists bool) ([]byte, error) {
+		if !exists {
+			return nil, fmt.Errorf("%w: the agent %s has no routine %s", ErrNotFound, req.Agent, req.Name)
+		}
+		cur, err := decodeRecord(value)
 		if err != nil {
-			return Record{}, false, err
+			return nil, err
 		}
-		if req.Version != 0 && req.Version != cur.Version() {
-			return Record{}, false, &VersionError{Want: req.Version, Version: cur.Version(), Standing: cur.Standing}
-		}
-		if cur.Standing == req.To {
-			return cur, false, nil
-		}
-		if !CanMove(cur.Standing, req.To) {
-			return Record{}, false, &MoveError{From: cur.Standing, To: req.To, Allowed: Moves(cur.Standing)}
-		}
-		if req.To == Live && !req.Person {
-			return Record{}, false, fmt.Errorf("%w: a person signs a routine off; the process and the static token alone cannot", fw.ErrForbidden)
+		rec = cur
+		switch {
+		case req.Version != 0 && req.Version != cur.Version():
+			return nil, &VersionError{Want: req.Version, Version: cur.Version(), Standing: cur.Standing}
+		case cur.Standing == req.To:
+			return nil, nil
+		case !CanMove(cur.Standing, req.To):
+			return nil, &MoveError{From: cur.Standing, To: req.To, Allowed: Moves(cur.Standing)}
+		case req.To == Live && !req.Person:
+			return nil, fmt.Errorf("%w: a person signs a routine off: a user of the issuer or the local user, not the process, the static token, or a workload", fw.ErrForbidden)
 		}
 		now := s.now().UTC()
-		rec := cur
 		rec.Standing = req.To
 		rec.History = trimHistory(append(slices.Clone(cur.History), Move{At: now, By: req.By, Standing: req.To, Note: note, Version: cur.Version()}))
 		rec.UpdatedAt = now
@@ -670,32 +670,31 @@ func (s *Store) Move(ctx context.Context, req MoveRequest) (Record, bool, error)
 		if req.To == Rehearsing {
 			ev, _, err := s.evidence(ctx, req.Agent, req.Name)
 			if err != nil {
-				return Record{}, false, err
+				return nil, err
 			}
 			rec.Ready = ev != nil && ev.Version == rec.Version() && ev.Ready(s.cfg)
 		}
 		if _, reaches := kernelStanding(req.To); reaches && req.Check != nil {
 			list, err := s.reachingWith(ctx, rec)
 			if err != nil {
-				return Record{}, false, err
+				return nil, err
 			}
 			if err := req.Check(ctx, list); err != nil {
-				return Record{}, false, err
+				return nil, err
 			}
 		}
-		value, err := encode(rec)
-		if err != nil {
-			return Record{}, false, err
-		}
-		if _, err := s.b.Update(ctx, key, value, rev); errors.Is(err, bucket.ErrConflict) {
-			continue
-		} else if err != nil {
-			return Record{}, false, fmt.Errorf("routines: write the routine %s of %s: %w", req.Name, req.Agent, err)
-		}
-		emitChange(req.Agent, req.Name)
-		return rec, true, nil
+		return encode(rec)
+	})
+	if errors.Is(err, bucket.ErrConflict) {
+		return Record{}, false, fmt.Errorf("%w: other writers changed the routine %s of %s %d times while this move tried; try again", ErrConflict, req.Name, req.Agent, writeAttempts)
 	}
-	return Record{}, false, fmt.Errorf("%w: other writers changed the routine %s of %s %d times while this move tried; try again", ErrConflict, req.Name, req.Agent, writeAttempts)
+	if err != nil {
+		return Record{}, false, err
+	}
+	if wrote {
+		emitChange(req.Agent, req.Name)
+	}
+	return rec, wrote, nil
 }
 
 // evidence returns the evidence of a routine and its revision, or nil and
@@ -708,15 +707,24 @@ func (s *Store) evidence(ctx context.Context, agent, name string) (*Evidence, ui
 	if err != nil {
 		return nil, 0, fmt.Errorf("routines: read the evidence of %s of %s: %w", name, agent, err)
 	}
-	var ev Evidence
-	if err := json.Unmarshal(e.Value, &ev); err != nil {
+	ev, err := decodeEvidence(e.Value)
+	if err != nil {
 		s.log.Warn("routines: the evidence does not decode; it starts again", "agent", agent, "routine", name, "error", err)
 		return nil, e.Revision, nil
+	}
+	return ev, e.Revision, nil
+}
+
+// decodeEvidence reads an entry of evidence.
+func decodeEvidence(value []byte) (*Evidence, error) {
+	var ev Evidence
+	if err := json.Unmarshal(value, &ev); err != nil {
+		return nil, err
 	}
 	if ev.Questions == nil {
 		ev.Questions = map[string][]Band{}
 	}
-	return &ev, e.Revision, nil
+	return &ev, nil
 }
 
 // resetEvidence starts the evidence of the version of rec again when fresh
@@ -742,65 +750,54 @@ func (s *Store) resetEvidence(ctx context.Context, rec Record, fresh bool, repla
 // result at the revision that it read, when f reports a change. It
 // returns the evidence after the change, or nil when nothing changed.
 func (s *Store) updateEvidence(ctx context.Context, agent, name string, f func(ev *Evidence) bool) (*Evidence, error) {
-	key := evidenceKeyOf(agent, name)
-	for range writeAttempts {
-		ev, rev, err := s.evidence(ctx, agent, name)
-		if err != nil {
-			return nil, err
+	var out *Evidence
+	_, err := bucket.Modify(ctx, s.b, evidenceKeyOf(agent, name), writeAttempts, func(value []byte, exists bool) ([]byte, error) {
+		out = newEvidence(0)
+		if exists {
+			ev, err := decodeEvidence(value)
+			if err != nil {
+				s.log.Warn("routines: the evidence does not decode; it starts again", "agent", agent, "routine", name, "error", err)
+			} else {
+				out = ev
+			}
 		}
-		exists := rev != 0
-		if ev == nil {
-			ev = newEvidence(0)
-		}
-		if !f(ev) {
+		if !f(out) {
+			out = nil
 			return nil, nil
 		}
-		ev.UpdatedAt = s.now().UTC()
-		value, err := ev.fit(maxValue)
-		if err != nil {
-			return nil, err
-		}
-		if exists {
-			_, err = s.b.Update(ctx, key, value, rev)
-		} else {
-			_, err = s.b.Create(ctx, key, value)
-		}
-		if errors.Is(err, bucket.ErrConflict) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("routines: write the evidence of %s of %s: %w", name, agent, err)
-		}
-		return ev, nil
+		out.UpdatedAt = s.now().UTC()
+		return out.fit(maxValue)
+	})
+	if errors.Is(err, bucket.ErrConflict) {
+		return nil, fmt.Errorf("%w: other writers changed the evidence of %s of %s %d times while this write tried", ErrConflict, name, agent, writeAttempts)
 	}
-	return nil, fmt.Errorf("%w: other writers changed the evidence of %s of %s %d times while this write tried", ErrConflict, name, agent, writeAttempts)
+	if err != nil {
+		return nil, fmt.Errorf("routines: write the evidence of %s of %s: %w", name, agent, err)
+	}
+	return out, nil
 }
 
 // setReady writes the ready flag of a routine when it differs.
 func (s *Store) setReady(ctx context.Context, agent, name string, version int, ready bool) error {
-	key := keyOf(agent, name)
-	for range writeAttempts {
-		cur, rev, err := s.get(ctx, agent, name)
+	_, err := bucket.Modify(ctx, s.b, keyOf(agent, name), writeAttempts, func(value []byte, exists bool) ([]byte, error) {
+		if !exists {
+			return nil, nil
+		}
+		cur, err := decodeRecord(value)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		want := ready && cur.Standing == Rehearsing && cur.Version() == version
 		if cur.Ready == want {
-			return nil
+			return nil, nil
 		}
 		cur.Ready = want
-		value, err := encode(cur)
-		if err != nil {
-			return err
-		}
-		if _, err := s.b.Update(ctx, key, value, rev); errors.Is(err, bucket.ErrConflict) {
-			continue
-		} else if err != nil {
-			return fmt.Errorf("routines: write the routine %s of %s: %w", name, agent, err)
-		}
-		return nil
+		return encode(cur)
+	})
+	if err != nil {
+		return fmt.Errorf("routines: write the ready flag of the routine %s of %s: %w", name, agent, err)
 	}
-	return fmt.Errorf("%w: other writers changed the routine %s of %s while the ready flag was written", ErrConflict, name, agent)
+	return nil
 }
 
 // sameBody reports whether two bodies are equal, their standing and their

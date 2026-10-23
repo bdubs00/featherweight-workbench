@@ -3,6 +3,8 @@ package bucket
 import (
 	"context"
 	"errors"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -171,5 +173,36 @@ func TestOpen(t *testing.T) {
 	bad.History = 65
 	if _, _, err := Open(ctx, fw.DefaultConfig(), bad, nil); err == nil {
 		t.Fatal("a history of 65 opened")
+	}
+}
+
+// Modify writes at the revision that it read: two writers that race add
+// both of their changes, and a function that returns nothing writes
+// nothing.
+func TestModify(t *testing.T) {
+	ctx := context.Background()
+	b := NewMem(Config{History: 1})
+	add := func(s string) error {
+		_, err := Modify(ctx, b, "k", 8, func(v []byte, _ bool) ([]byte, error) { return append(slices.Clone(v), s...), nil })
+		return err
+	}
+	var wg sync.WaitGroup
+	for _, s := range []string{"a", "b", "c", "d"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := add(s); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	e, _ := b.Get(ctx, "k")
+	if len(e.Value) != 4 {
+		t.Fatalf("the value = %q", e.Value)
+	}
+	wrote, err := Modify(ctx, b, "k", 8, func([]byte, bool) ([]byte, error) { return nil, nil })
+	if wrote || err != nil {
+		t.Fatalf("a function that returns nothing wrote: %v, %v", wrote, err)
 	}
 }

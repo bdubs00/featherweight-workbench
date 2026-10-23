@@ -603,3 +603,34 @@ func (m *memBucket) Keys(context.Context) ([]Entry, error) {
 func (m *memBucket) tooLarge(value []byte) bool {
 	return m.cfg.MaxValue > 0 && len(value) > m.cfg.MaxValue
 }
+
+// Modify reads the newest value of key, gives it to f, and writes what f
+// returns at the revision that it read: Create when the key holds no live
+// value, else Update. When another writer came first, it reads again and
+// calls f again, up to attempts times, and then returns ErrConflict. f
+// gets the value and whether the key holds one, and returns the value to
+// write, or nil to write nothing. An error of f ends Modify with that
+// error. It reports whether it wrote.
+func Modify(ctx context.Context, b Bucket, key string, attempts int, f func(value []byte, exists bool) ([]byte, error)) (bool, error) {
+	for range attempts {
+		cur, err := b.Get(ctx, key)
+		exists := err == nil
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return false, err
+		}
+		value, err := f(cur.Value, exists)
+		if err != nil || value == nil {
+			return false, err
+		}
+		if exists {
+			_, err = b.Update(ctx, key, value, cur.Revision)
+		} else {
+			_, err = b.Create(ctx, key, value)
+		}
+		if errors.Is(err, ErrConflict) {
+			continue
+		}
+		return err == nil, err
+	}
+	return false, ErrConflict
+}

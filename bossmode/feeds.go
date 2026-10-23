@@ -151,64 +151,74 @@ type routineEvent struct {
 	Name  string `json:"name"`
 }
 
-// routineFeed coalesces the changes of a routine: last holds when each
-// routine last went out, and waiting the routines whose next event waits
-// for the end of RoutineEvery.
-var routineFeed struct {
+// routineFeed coalesces the changes of the routines of a hub: last holds
+// when each routine last went out, and waiting the routines whose next
+// event waits for the end of RoutineEvery. now and after are the clock
+// and the timer, which a test replaces.
+type routineFeed struct {
 	mu      sync.Mutex
 	last    map[string]time.Time
 	waiting map[string]bool
+	now     func() time.Time
+	after   func(time.Duration, func())
+}
+
+func newRoutineFeed() *routineFeed {
+	return &routineFeed{last: map[string]time.Time{}, waiting: map[string]bool{}, now: time.Now,
+		after: func(d time.Duration, f func()) { time.AfterFunc(d, f) }}
 }
 
 // feedRoutine publishes a change of a routine to every caller who can
-// view its agent, at most once per routine per RoutineEvery: a change
-// within that time goes out once, at its end.
+// view its agent, on each hub of the process that keeps routines.
 func feedRoutine(agent, name string) {
-	key := agent + "/" + name
-	now := time.Now()
-	routineFeed.mu.Lock()
-	if routineFeed.last == nil {
-		routineFeed.last, routineFeed.waiting = map[string]time.Time{}, map[string]bool{}
+	for _, a := range agents() {
+		if h := Of(a); h != nil && routines.Of(a) != nil {
+			h.routines.change(agent, name, func() { h.publishRoutine(agent, name) })
+		}
 	}
-	if routineFeed.waiting[key] {
-		routineFeed.mu.Unlock()
+}
+
+// change sends a change of a routine at most once per RoutineEvery: the
+// first change goes out at once, and the changes after it go out as one,
+// at the end of the window.
+func (f *routineFeed) change(agent, name string, send func()) {
+	key := agent + "/" + name
+	f.mu.Lock()
+	if f.waiting[key] {
+		f.mu.Unlock()
 		return
 	}
-	wait := RoutineEvery - now.Sub(routineFeed.last[key])
+	now := f.now()
+	wait := RoutineEvery - now.Sub(f.last[key])
 	if wait <= 0 {
-		routineFeed.last[key] = now
-		if len(routineFeed.last) > 4096 {
-			for k, at := range routineFeed.last {
+		f.last[key] = now
+		if len(f.last) > 4096 {
+			for k, at := range f.last {
 				if now.Sub(at) > RoutineEvery {
-					delete(routineFeed.last, k)
+					delete(f.last, k)
 				}
 			}
 		}
-		routineFeed.mu.Unlock()
-		publishRoutine(agent, name)
+		f.mu.Unlock()
+		send()
 		return
 	}
-	routineFeed.waiting[key] = true
-	routineFeed.mu.Unlock()
-	time.AfterFunc(wait, func() {
-		routineFeed.mu.Lock()
-		delete(routineFeed.waiting, key)
-		routineFeed.last[key] = time.Now()
-		routineFeed.mu.Unlock()
-		publishRoutine(agent, name)
+	f.waiting[key] = true
+	f.mu.Unlock()
+	f.after(wait, func() {
+		f.mu.Lock()
+		delete(f.waiting, key)
+		f.last[key] = f.now()
+		f.mu.Unlock()
+		send()
 	})
 }
 
-// publishRoutine puts the event routine on the stream of each agent of the
-// process that keeps routines.
-func publishRoutine(agent, name string) {
-	for _, a := range agents() {
-		if routines.Of(a) == nil {
-			continue
-		}
-		if err := PublishTo(a, KindRoutine, agent+"/"+name, routineEvent{Kind: KindRoutine, Agent: agent, Name: name}, ForAgent(agent)); err != nil {
-			logOf(a).Warn("bossmode: a routine is not on the stream", "agent", agent, "routine", name, "error", err)
-		}
+// publishRoutine puts the event routine on the stream of the hub, for the
+// callers who can view the agent.
+func (h *Hub) publishRoutine(agent, name string) {
+	if err := PublishTo(h.a, KindRoutine, agent+"/"+name, routineEvent{Kind: KindRoutine, Agent: agent, Name: name}, ForAgent(agent)); err != nil {
+		h.log.Warn("bossmode: a routine is not on the stream", "agent", agent, "routine", name, "error", err)
 	}
 }
 
