@@ -304,6 +304,30 @@ func TestListCarriesTheTimeOfTheNewestEntry(t *testing.T) {
 	}
 }
 
+// A line of sleep or wake does not make a bridge fresh: a worker that
+// serves seats of several bridges wakes for one, and each other bridge gets
+// the line too.
+func TestListTimeSkipsTheLinesOfSleepAndWake(t *testing.T) {
+	s, _, _, url, id := budgetBridge(t, "")
+	msgs := channel(t, s, id)
+	newest := msgs[len(msgs)-1].At
+	time.Sleep(5 * time.Millisecond)
+	if err := s.postLines(context.Background(), id, system(EventAsleep, "reviewer went to sleep"), system(EventStarted, "reviewer woke up")); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := do(t, http.MethodGet, url+"/v1/bridges", "alice", "")
+	var list struct {
+		Bridges []Item `json:"bridges"`
+	}
+	decodeJSON(t, body, &list)
+	if resp.StatusCode != http.StatusOK || len(list.Bridges) != 1 || list.Bridges[0].LastAt == nil || !list.Bridges[0].LastAt.Equal(newest) {
+		t.Fatalf("list = %d %s, newest %v", resp.StatusCode, body, newest)
+	}
+	if !quietLine(system(EventStarted, "reviewer woke up")) || quietLine(system(EventStarted, "reviewer started: Review the roles")) {
+		t.Fatal("quietLine tells a wake line from the start of a seat wrongly")
+	}
+}
+
 // The instructions of a seat say that its sandbox is private, so a file
 // for a teammate goes on the wiki, and they keep the channel quiet: no
 // answer to a message that asks nothing, and no address of itself.

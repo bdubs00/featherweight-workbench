@@ -68,6 +68,25 @@ type buckets struct {
 type summary struct {
 	kind, name string
 	at         time.Time
+	// quiet marks a line of a worker that went to sleep or woke up, which
+	// says nothing about the work of the bridge (quietLine).
+	quiet bool
+}
+
+// quietLine reports whether an entry is a line of sleep or wake: a worker
+// that serves seats of several bridges wakes for one of them, and each of
+// the others gets the line too, so these lines never make a bridge look
+// fresh (lastAt).
+func quietLine(m Message) bool {
+	if m.From.Kind != KindSystem {
+		return false
+	}
+	return m.Event == EventAsleep || m.Event == EventStarted && strings.HasSuffix(m.Text, " woke up")
+}
+
+// summarize is the summary of an entry.
+func summarize(m Message) summary {
+	return summary{kind: m.From.Kind, name: m.From.Name, at: m.At, quiet: quietLine(m)}
 }
 
 // maxSummaries bounds the summaries that a process keeps.
@@ -255,7 +274,7 @@ func (b *buckets) remember(key string, m Message) {
 	if b.summaries == nil || len(b.summaries) >= maxSummaries {
 		b.summaries = map[string]summary{}
 	}
-	b.summaries[key] = summary{kind: m.From.Kind, name: m.From.Name, at: m.At}
+	b.summaries[key] = summarize(m)
 }
 
 // summaryOf returns the summary of an entry, from memory or from the
@@ -275,27 +294,35 @@ func (b *buckets) summaryOf(ctx context.Context, id string, seq uint64) (summary
 	if err != nil {
 		return summary{}, false, err
 	}
-	return summary{kind: m.From.Kind, name: m.From.Name, at: m.At}, true, nil
+	return summarize(m), true, nil
 }
 
 // lastAtScan bounds the seqs that lastAt reads back from the newest one,
 // past the gaps of writes that a crash cut or that did not land yet.
 const lastAtScan = 8
 
-// lastAt returns the time of the newest entry of a channel, from the
-// summaries, which a count of the unread entries reads anyway. It reports
-// false for a channel without an entry.
+// lastAt returns the time of the newest entry of a channel that is not a
+// line of sleep or wake, from the summaries, which a count of the unread
+// entries reads anyway. When the scan finds only such lines, the newest of
+// them gives the time. It reports false for a channel without an entry.
 func (b *buckets) lastAt(ctx context.Context, rec *record) (time.Time, bool) {
+	var quiet time.Time
 	for seq, n := rec.LastSeq, 0; seq > 0 && n < lastAtScan; seq, n = seq-1, n+1 {
 		s, ok, err := b.summaryOf(ctx, rec.ID, seq)
 		if err != nil {
 			return time.Time{}, false
 		}
-		if ok && !s.at.IsZero() {
+		if !ok || s.at.IsZero() {
+			continue
+		}
+		if !s.quiet {
 			return s.at, true
 		}
+		if quiet.IsZero() {
+			quiet = s.at
+		}
 	}
-	return time.Time{}, false
+	return quiet, !quiet.IsZero()
 }
 
 // Bounds of a page of the channel.
