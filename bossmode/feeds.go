@@ -33,6 +33,7 @@ const (
 
 func init() {
 	bridges.OnMessage(feedMessage)
+	bridges.OnCatchUp(feedCatchUp)
 	bridges.OnMember(feedMember)
 	pages.OnChange(feedPage)
 	faces.OnChange(feedFace)
@@ -77,16 +78,36 @@ func feedMessage(bridge string, m bridges.Message) {
 		if bridges.Of(a) == nil {
 			continue
 		}
-		err := PublishTo(a, KindBridgeMessage, bridge, bridgeMessage{Bridge: bridge, Message: m}, ForBridge(bridge))
-		if errors.Is(err, ErrTooLarge) && m.Decision != nil {
-			d := *m.Decision
-			d.Input, d.Schema = nil, nil
-			m.Decision = &d
-			err = PublishTo(a, KindBridgeMessage, bridge, bridgeMessage{Bridge: bridge, Message: m, Partial: true}, ForBridge(bridge))
-		}
-		if err != nil {
-			logOf(a).Warn("bossmode: an entry of a channel is not on the stream", "bridge", bridge, "seq", m.Seq, "error", err)
-		}
+		publishMessage(a, bridge, m)
+	}
+}
+
+// feedCatchUp publishes an entry that another replica wrote, which the
+// watch of the bridges of a found (bridges.OnCatchUp), to the streams of
+// a alone: every replica finds the entry on its own, so the relay of the
+// bus carries no second copy.
+func feedCatchUp(a *fw.Agent, bridge string, m bridges.Message) {
+	if Of(a) == nil {
+		return
+	}
+	publishMessage(a, bridge, m, onlyHere())
+}
+
+// publishMessage puts an entry of a channel on the stream of a, for the
+// callers who can see the bridge. An entry with a large decision goes
+// without the input and the schema of the call, marked partial, and the
+// page reads it whole.
+func publishMessage(a *fw.Agent, bridge string, m bridges.Message, opts ...Option) {
+	opts = append([]Option{ForBridge(bridge)}, opts...)
+	err := PublishTo(a, KindBridgeMessage, bridge, bridgeMessage{Bridge: bridge, Message: m}, opts...)
+	if errors.Is(err, ErrTooLarge) && m.Decision != nil {
+		d := *m.Decision
+		d.Input, d.Schema = nil, nil
+		m.Decision = &d
+		err = PublishTo(a, KindBridgeMessage, bridge, bridgeMessage{Bridge: bridge, Message: m, Partial: true}, opts...)
+	}
+	if err != nil {
+		logOf(a).Warn("bossmode: an entry of a channel is not on the stream", "bridge", bridge, "seq", m.Seq, "error", err)
 	}
 }
 

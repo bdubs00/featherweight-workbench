@@ -153,6 +153,10 @@ type Store struct {
 	shown    map[string]string    // by bridge and handle: the presence and activity that a hook got
 	canceled map[string]bool      // by run id: the runs of fired seats that a cancel went to
 	missing  map[string]missing   // by bridge and handle: the newest run of a seat that a settled view did not hold
+
+	// feeds holds what this replica gave its streams of each channel
+	// (catchup.go).
+	feeds feeds
 }
 
 // New returns a store on two buckets. The service starts nothing until
@@ -189,6 +193,7 @@ func New(a *fw.Agent, records, channels bucket.Bucket, cfg Config, log *slog.Log
 		shown:       map[string]string{},
 		canceled:    map[string]bool{},
 		missing:     map[string]missing{},
+		feeds:       feeds{by: map[string]*feedMark{}},
 	}
 }
 
@@ -319,6 +324,7 @@ var hooks struct {
 	mu      sync.Mutex
 	message []func(bridge string, m Message)
 	member  []func(bridge string, m Member)
+	catchUp []func(a *fw.Agent, bridge string, m Message)
 	phrase  func(r *fw.Run) string
 }
 

@@ -323,6 +323,9 @@ func plural(n int, one, many string) string {
 // page reads past, and the log names it.
 func (s *Store) land(ctx context.Context, id string, msgs ...Message) {
 	for _, m := range msgs {
+		// This replica gives the entry to its streams itself, so its
+		// catch-up does not (catchup.go).
+		s.fed(id, m.Seq)
 		if m.Cut && m.whole != "" {
 			if err := s.b.putWhole(s.asFront(ctx), id, m.Seq, m.whole); err != nil {
 				s.log.Warn("bridges: the whole text of an entry is lost", "bridge", id, "seq", m.Seq, "error", err)

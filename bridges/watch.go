@@ -151,6 +151,7 @@ func (s *Store) poll(ctx context.Context) {
 			live[id] = true
 		}
 	}
+	s.forgetFeeds(watched)
 	s.mu.Lock()
 	for key := range s.missing {
 		if bridge, _, _ := strings.Cut(key, "/"); !watched[bridge] {
@@ -324,6 +325,9 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 	}
 	s.reportCheck(ctx, fresh)
 	s.show(fresh, runs, states)
+	// The entries that another replica wrote reach the streams of this one
+	// too, also when the relay of the bus missed them (catchup.go).
+	s.catchUp(ctx, fresh)
 	return runs
 }
 

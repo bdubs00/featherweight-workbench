@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/pages"
 )
@@ -246,5 +247,24 @@ func TestRelaySubject(t *testing.T) {
 		if got := relaySubject("fw.bossmode", kind); got != want {
 			t.Errorf("relaySubject(%q) = %q, want %q", kind, got, want)
 		}
+	}
+}
+
+// An entry that the catch-up of a replica found (bridges.OnCatchUp) goes
+// to the streams of that replica alone: every replica finds the entry on
+// its own, so the bus carries no second copy.
+func TestCatchUpStaysOnItsReplica(t *testing.T) {
+	one, two := replicaPair(t)
+	m := bridges.Message{Seq: 39, From: bridges.From{Kind: bridges.KindSystem}, Text: "net-auditor wants to use ansible.adhoc", Event: bridges.EventNeedsYou}
+	feedCatchUp(one.a, "b1", m)
+	if err := PublishTo(one.a, "test.after", "a1", map[string]int{"n": 1}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, two.h, "test.after", 1)
+	if n := len(ofKind(one.h, KindBridgeMessage)); n != 1 {
+		t.Fatalf("the replica that caught up holds %d entries", n)
+	}
+	if n := len(ofKind(two.h, KindBridgeMessage)); n != 0 {
+		t.Fatalf("the other replica got %d entries over the bus", n)
 	}
 }
