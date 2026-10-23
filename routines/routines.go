@@ -16,7 +16,8 @@
 // routines_list and routine_standing (mcp.RegisterTools), gives the fleet
 // the routines of the agents (fleet.UseRoutines), reads the events of the
 // routines from the egress stream that the fleet reads (fleet.Tap), and
-// reads workbench.routines and FW_WORKBENCH_ROUTINES_*. Status gives a line
+// reads workbench.routines and FW_WORKBENCH_ROUTINES_*, whose key enabled
+// turns all of it off. Status gives a line
 // for fw-workbench doctor, and OnChange gives the live stream of bossmode
 // each change of a routine or of its evidence.
 package routines
@@ -81,7 +82,11 @@ func Attach(a *fw.Agent, s *Store) {
 	stores.Store(a, s)
 }
 
+// ErrOff means that workbench.routines.enabled turns the routines off.
+var ErrOff = errors.New("routines: workbench.routines.enabled turns the routines off")
+
 // Open opens the routines of the configuration cfg on its bus. It returns
+// ErrOff when the configuration turns the routines off, and
 // bucket.ErrNoStore for a bus that keeps no store. The function that it
 // returns closes the connection; it is nil for the routines in memory.
 func Open(ctx context.Context, cfg *fw.Config, log *slog.Logger) (*Store, func(), error) {
@@ -95,6 +100,9 @@ func open(ctx context.Context, cfg *fw.Config, log *slog.Logger, openBucket open
 	if err != nil {
 		return nil, nil, err
 	}
+	if !c.On() {
+		return nil, nil, ErrOff
+	}
 	b, closeFn, err := openBucket(ctx, cfg, bucketConfig, log)
 	if err != nil {
 		return nil, nil, fmt.Errorf("routines: %w", err)
@@ -104,12 +112,17 @@ func open(ctx context.Context, cfg *fw.Config, log *slog.Logger, openBucket open
 
 // Start is the service of the routines (fw.Service). It opens the routines
 // on the bus of the configuration, attaches them to the agent, and starts
-// the projection of the evidence. On a bus that keeps no store it logs once
-// that the routines are off and returns nil. A configuration that does not
-// fit stops the start.
+// the projection of the evidence. When the configuration turns the
+// routines off, or on a bus that keeps no store, it logs once that the
+// routines are off and returns nil. A configuration that does not fit
+// stops the start.
 func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	log := a.Logger().With("component", "routines")
 	s, closeFn, err := Open(ctx, a.Config(), log)
+	if errors.Is(err, ErrOff) {
+		log.Info("routines: the routines are off; set workbench.routines.enabled or " + EnvEnabled + " to turn them on")
+		return nil, nil
+	}
 	if errors.Is(err, bucket.ErrNoStore) {
 		where, _ := bucket.Where(a.Config(), bucketConfig)
 		log.Warn("routines: the routines are off; they live "+where, "bus", a.Config().Bus.Driver)
@@ -151,6 +164,9 @@ func Status(cfg *fw.Config) (bool, string) {
 	if err != nil {
 		return false, err.Error()
 	}
+	if !c.On() {
+		return true, "routines: off; workbench.routines.enabled turns them off"
+	}
 	where, on := bucket.Where(cfg, bucketConfig)
 	if !on {
 		return true, "routines: off; the routines live " + where
@@ -166,13 +182,17 @@ var errNotOpen = errors.New("routines: the store of the routines is not open yet
 // agent a of the front, it reads the store of the agent. While the bus
 // keeps a store and the service has not opened it yet, it answers
 // errNotOpen, so a pass of the pools waits instead of rendering without
-// the routines and replacing every Task twice. A bus that keeps no store
-// gives none, and the profiles keep their own. Without an agent, for the
-// dry run, it reads the store of the configuration cfg once.
+// the routines and replacing every Task twice. Routines that the
+// configuration turns off, or a bus that keeps no store, give none, and
+// the profiles keep their own. Without an agent, for the dry run, it reads
+// the store of the configuration cfg once.
 func reaching(ctx context.Context, a *fw.Agent, cfg *fw.Config) (map[string][]fw.Routine, error) {
 	if a != nil {
 		if s := Of(a); s != nil {
 			return s.Reaching(ctx)
+		}
+		if c, err := Load(a.Config()); err != nil || !c.On() {
+			return nil, err
 		}
 		if _, on := bucket.Where(a.Config(), bucketConfig); on {
 			return nil, errNotOpen
@@ -180,7 +200,7 @@ func reaching(ctx context.Context, a *fw.Agent, cfg *fw.Config) (map[string][]fw
 		return nil, nil
 	}
 	s, closeFn, err := open(ctx, cfg, slog.New(slog.DiscardHandler), bucket.OpenOnce)
-	if errors.Is(err, bucket.ErrNoStore) {
+	if errors.Is(err, ErrOff) || errors.Is(err, bucket.ErrNoStore) {
 		return nil, nil
 	}
 	if err != nil {

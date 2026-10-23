@@ -24,6 +24,7 @@ import (
 	_ "github.com/bdubs00/featherweight-kernel/bus/nats"
 	_ "github.com/bdubs00/featherweight-kernel/bus/redis"
 	_ "github.com/bdubs00/featherweight-kernel/config"
+	_ "github.com/bdubs00/featherweight-kernel/decider/systemone"
 	_ "github.com/bdubs00/featherweight-kernel/model/anthropic"
 	_ "github.com/bdubs00/featherweight-kernel/model/gemini"
 	_ "github.com/bdubs00/featherweight-kernel/model/openai"
