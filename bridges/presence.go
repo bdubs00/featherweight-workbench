@@ -15,8 +15,8 @@ import (
 )
 
 // Presence returns the presence of a member: PresenceWorking,
-// PresenceNeedsYou, PresenceIdle, PresenceAsleep, PresenceError,
-// PresenceFired, or PresenceWaiting. runs holds the runs of the member in
+// PresenceNeedsYou, PresenceIdle, PresenceAsleep, PresenceLimit,
+// PresenceError, PresenceFired, or PresenceWaiting. runs holds the runs of the member in
 // the bridge, in any order; the newest one decides. taskState is the state
 // of the Task that holds the newest run: fleet.MemberLive,
 // fleet.MemberQuiet, fleet.MemberStopped, TaskBlocked, or "" when the view
@@ -26,6 +26,9 @@ import (
 //
 //   - fired: the seat is fired.
 //   - waiting: the view holds no run of the member.
+//   - limit: the newest run stopped at a limit of its budget, on a Task
+//     that is neither blocked nor stopped. No fault: a person continues
+//     the run with more room (section 18.9).
 //   - error: the newest run failed, or the Task is blocked or stopped.
 //   - needs-you: the newest run waits for an approval, an answer, or a
 //     connection, also on a Task that sleeps, because a decision wakes it.
@@ -55,7 +58,11 @@ func Presence(m Member, runs []*fw.Run, taskState string) string {
 		return PresenceWaiting
 	}
 	switch {
-	case newest.State == fw.StateFailed, taskState == TaskBlocked, taskState == fleet.MemberStopped, newest.Blocked != "":
+	case taskState == TaskBlocked, taskState == fleet.MemberStopped, newest.Blocked != "":
+		return PresenceError
+	case limited(newest):
+		return PresenceLimit
+	case newest.State == fw.StateFailed:
 		return PresenceError
 	case newest.State == fw.StateInputRequired:
 		return PresenceNeedsYou

@@ -26,6 +26,7 @@ const (
 	EnvMaxMessages        = "FW_WORKBENCH_BRIDGES_MAX_MESSAGES"
 	EnvMaxFanoutPerMinute = "FW_WORKBENCH_BRIDGES_MAX_FANOUT_PER_MINUTE"
 	EnvMaxPairMessages    = "FW_WORKBENCH_BRIDGES_MAX_PAIR_MESSAGES"
+	EnvMaxTurns           = "FW_WORKBENCH_BRIDGES_MAX_TURNS"
 	// EnvManager names the profile of the manager. The package manager
 	// reads it with workbench.bossmode.manager (manager.Load).
 	EnvManager = manager.EnvManager
@@ -38,6 +39,12 @@ const (
 	DefaultMaxMessages        = 2000
 	DefaultMaxFanoutPerMinute = 30
 	DefaultMaxPairMessages    = 6
+	// DefaultMaxTurns is the default of caps.maxTurns: the turns of every
+	// run of a bridge together. Each message gives a seat its allowance
+	// again (grant), so this cap is what bounds a bridge whose agents
+	// keep each other busy. A healthy bridge of a few seats spends some
+	// hundred turns.
+	DefaultMaxTurns = 1000
 
 	// MaxMembersLimit bounds maxMembers, so a record stays small.
 	MaxMembersLimit = 64
@@ -45,10 +52,12 @@ const (
 	MaxMessagesLimit = 100000
 	// MaxFanoutLimit bounds maxFanoutPerMinute and maxPairMessages.
 	MaxFanoutLimit = 1000
+	// MaxTurnsLimit bounds maxTurns.
+	MaxTurnsLimit = 1000000
 )
 
 // Config configures the bridges. Placement is the default placement of a
-// new bridge, MaxMembers bounds the seats of a bridge, and the three caps
+// new bridge, MaxMembers bounds the seats of a bridge, and the four caps
 // are the defaults of the caps of a new bridge. Manager is the profile of
 // the manager, from workbench.bossmode.manager through manager.Load, and
 // empty means no manager. No key names a model.
@@ -58,6 +67,7 @@ type Config struct {
 	MaxMessages        int    `yaml:"maxMessages"`
 	MaxFanoutPerMinute int    `yaml:"maxFanoutPerMinute"`
 	MaxPairMessages    int    `yaml:"maxPairMessages"`
+	MaxTurns           int    `yaml:"maxTurns"`
 	Manager            string `yaml:"-"`
 }
 
@@ -88,7 +98,7 @@ func Load(cfg *fw.Config) (Config, error) {
 	for _, e := range []struct {
 		env string
 		dst *int
-	}{{EnvMaxMembers, &c.MaxMembers}, {EnvMaxMessages, &c.MaxMessages}, {EnvMaxFanoutPerMinute, &c.MaxFanoutPerMinute}, {EnvMaxPairMessages, &c.MaxPairMessages}} {
+	}{{EnvMaxMembers, &c.MaxMembers}, {EnvMaxMessages, &c.MaxMessages}, {EnvMaxFanoutPerMinute, &c.MaxFanoutPerMinute}, {EnvMaxPairMessages, &c.MaxPairMessages}, {EnvMaxTurns, &c.MaxTurns}} {
 		v, ok := os.LookupEnv(e.env)
 		if v = strings.TrimSpace(v); !ok || v == "" {
 			continue
@@ -115,6 +125,9 @@ func Load(cfg *fw.Config) (Config, error) {
 	if c.MaxPairMessages == 0 {
 		c.MaxPairMessages = DefaultMaxPairMessages
 	}
+	if c.MaxTurns == 0 {
+		c.MaxTurns = DefaultMaxTurns
+	}
 	var problems []string
 	if c.Placement != PlacementQueue && c.Placement != PlacementSpawn {
 		problems = append(problems, fmt.Sprintf("workbench.bridges.placement (%s) must be queue or spawn, not %q", EnvPlacement, c.Placement))
@@ -133,7 +146,7 @@ func Load(cfg *fw.Config) (Config, error) {
 
 // caps returns the default caps of a new bridge.
 func (c Config) caps() Caps {
-	return Caps{MaxMessages: c.MaxMessages, MaxFanoutPerMinute: c.MaxFanoutPerMinute, MaxPairMessages: c.MaxPairMessages}
+	return Caps{MaxMessages: c.MaxMessages, MaxFanoutPerMinute: c.MaxFanoutPerMinute, MaxPairMessages: c.MaxPairMessages, MaxTurns: c.MaxTurns}
 }
 
 // checkCaps says what is wrong with caps, or "".
@@ -147,6 +160,9 @@ func checkCaps(c Caps) string {
 	}
 	if c.MaxPairMessages < 1 || c.MaxPairMessages > MaxFanoutLimit {
 		problems = append(problems, fmt.Sprintf("maxPairMessages (%s) must be 1 to %d, not %d", EnvMaxPairMessages, MaxFanoutLimit, c.MaxPairMessages))
+	}
+	if c.MaxTurns < 1 || c.MaxTurns > MaxTurnsLimit {
+		problems = append(problems, fmt.Sprintf("maxTurns (%s) must be 1 to %d, not %d", EnvMaxTurns, MaxTurnsLimit, c.MaxTurns))
 	}
 	return strings.Join(problems, "; ")
 }
@@ -202,5 +218,5 @@ func Status(cfg *fw.Config) (bool, string) {
 	if c.Manager != "" {
 		manager = "the manager " + c.Manager
 	}
-	return true, fmt.Sprintf("bridges: the bridges live in %s, with the placement %s, at most %d members, the caps %d messages, %d deliveries a minute, and %d messages between two agents, and %s", where, c.Placement, c.MaxMembers, c.MaxMessages, c.MaxFanoutPerMinute, c.MaxPairMessages, manager)
+	return true, fmt.Sprintf("bridges: the bridges live in %s, with the placement %s, at most %d members, the caps %d messages, %d deliveries a minute, %d messages between two agents, and %d turns, and %s", where, c.Placement, c.MaxMembers, c.MaxMessages, c.MaxFanoutPerMinute, c.MaxPairMessages, c.MaxTurns, manager)
 }

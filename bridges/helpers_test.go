@@ -89,7 +89,7 @@ func newAgentWith(t *testing.T, mut func(*fw.Config), opts ...fw.Option) *fw.Age
 	t.Setenv("FW_API_TOKEN", fleetToken)
 	t.Setenv(fleet.EnvIntake, "fw.jobs")
 	t.Setenv(teams.EnvTeams, "")
-	for _, env := range []string{EnvPlacement, EnvMaxMembers, EnvMaxMessages, EnvMaxFanoutPerMinute, EnvMaxPairMessages, EnvManager} {
+	for _, env := range []string{EnvPlacement, EnvMaxMembers, EnvMaxMessages, EnvMaxFanoutPerMinute, EnvMaxPairMessages, EnvMaxTurns, EnvManager} {
 		t.Setenv(env, "")
 	}
 	cfg := fw.DefaultConfig()

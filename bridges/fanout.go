@@ -13,7 +13,9 @@ package bridges
 // under the caps, so two replicas never deliver past a cap, and the
 // replica that took the post delivers, so a message is delivered once. A
 // delivery runs on a bounded worker, never on the request of the poster,
-// and a delivery that fails is tried again with a pause that doubles.
+// and a delivery that fails is tried again with a pause that doubles. Each
+// delivery gives the seat run the allowance of its seat again (grant), and
+// the cap maxTurns bounds the turns of the whole bridge.
 
 import (
 	"context"
@@ -174,13 +176,21 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 	}
 	var to []string
 	seen := map[string]bool{}
+	self := false // the agent addressed itself
 	for _, h := range spec.To {
 		h = strings.TrimPrefix(strings.TrimSpace(h), "@")
+		if snd.handle != "" && strings.EqualFold(h, snd.handle) {
+			self = true
+			continue
+		}
 		if h != "" && !seen[h] {
 			seen[h] = true
 			to = append(to, h)
 		}
 	}
+	// A message that an agent addressed to itself alone addresses nobody:
+	// it reaches no member, and not every member either.
+	nobody := self && len(to) == 0
 	fctx := s.asFront(ctx)
 	runs, err := s.runsOf(fctx, id)
 	if err != nil {
@@ -234,7 +244,20 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 			c := cmd.Command
 			msg.Skill = &c
 		}
-		lines, plan, seats, inputs = fanPlan(rec, snd, msg, text, runs, now)
+		if snd.run != "" {
+			// The final answer of the run that repeats this post word for
+			// word does not reach the channel again (facts).
+			mk := rec.mark(snd.run, snd.handle)
+			mk.Posts = append(mk.Posts, postDigest(text))
+			if len(mk.Posts) > maxPosts {
+				mk.Posts = mk.Posts[len(mk.Posts)-maxPosts:]
+			}
+		}
+		planned := msg
+		if nobody {
+			planned.To = []string{snd.handle}
+		}
+		lines, plan, seats, inputs = fanPlan(rec, snd, planned, text, runs, now)
 		return nil
 	})
 	if err != nil {
@@ -270,6 +293,9 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 //   - maxPairMessages counts the messages between two agents since the
 //     last message of a person. Past it, the two get nothing more from
 //     each other until a person writes or the operator raises the cap.
+//   - maxTurns counts the turns of every run of the bridge (turnsOf).
+//     Past it, no message fans out until the operator raises the cap,
+//     because each delivery gives a seat its allowance again (grant).
 //
 // Each member gets the message by the state of its newest run:
 //
@@ -277,7 +303,9 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 //     message of an agent, because a person stopped it, and a message of
 //     a person starts a new turn of it.
 //   - A run that failed gets nothing, and the channel says so once for
-//     that run with the reason from the run (cannotTake).
+//     that run with the reason from the run (cannotTake). A run that
+//     stopped at a limit of its budget gets a message of a person, which
+//     continues it with the allowance of its seat (grant).
 //   - A run that no worker of the fleet holds, as the channel said with
 //     the line lost (goneLines), gets nothing: the message seats the
 //     member again on a new run, whose input sends it to the channel
@@ -311,6 +339,13 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 		if !f.Capped {
 			f.Capped = true
 			lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d messages", rec.Caps.MaxMessages)))
+		}
+		return seqLines(rec, lines, now), nil, nil, nil
+	}
+	if limit, turns := rec.Caps.turnCap(), turnsOf(runs); turns >= limit {
+		if !f.TurnsCapped {
+			f.TurnsCapped = true
+			lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d turns", limit)))
 		}
 		return seqLines(rec, lines, now), nil, nil, nil
 	}
@@ -355,6 +390,9 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 			seat, input = true, wakeInput(msg.Seq)
 		case r == nil:
 			// The view does not hold the run yet: a deferred delivery.
+		case limited(r) && snd.handle == "":
+			// A person continues a run that stopped at a limit: the
+			// delivery gives it the allowance of its seat again (grant).
 		case r.State == fw.StateFailed:
 			if mk := rec.mark(r.ID, m.Handle); !mk.Limit {
 				mk.Limit = true
@@ -425,6 +463,17 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 // a message of an agent.
 func managerStopped(rec *record, mgr *fw.Run) bool {
 	return rec.Placement == PlacementSpawn && mgr != nil && (mgr.State == fw.StateCanceled || limited(mgr))
+}
+
+// turnsOf sums the turns of the runs of a bridge, for the cap maxTurns: the
+// seats, their helpers, and in a spawn bridge the manager run and its
+// children. A run that the view forgot no longer counts.
+func turnsOf(runs map[string]*fw.Run) int {
+	n := 0
+	for _, r := range runs {
+		n += r.Usage.Turns
+	}
+	return n
 }
 
 // fanOut is what fanPlan decided for one message: the deliveries, and
@@ -531,7 +580,9 @@ func (s *Store) deliveryJob(d delivery) *job {
 	do := func(ctx context.Context) error { return s.deferred(ctx, d) }
 	if d.run != nil {
 		run = d.run.ID
-		do = func(ctx context.Context) error { return s.send(ctx, d.run, d.content, d.from, d.pinned) }
+		do = func(ctx context.Context) error {
+			return s.sendSeat(ctx, d.bridge, d.handle, d.run, d.content, d.from, d.pinned)
+		}
 	}
 	return &job{
 		name: fmt.Sprintf("message %d of %s to %s", d.seq, d.bridge, d.handle),
@@ -562,13 +613,15 @@ func (s *Store) deferred(ctx context.Context, d delivery) error {
 	}
 	if r := s.runOf(fctx, d.newest); r != nil {
 		switch {
+		case limited(r) && d.from.Kind != fw.FromAgent:
+			// A person continues a run that stopped at a limit, as in fanPlan.
 		case r.State == fw.StateFailed:
 			s.cannotTakeLine(ctx, d.bridge, d.handle, r)
 			return nil
 		case r.State == fw.StateCanceled && d.from.Kind == fw.FromAgent:
 			return nil
 		}
-		return s.send(ctx, r, d.content, d.from, d.pinned)
+		return s.sendSeat(ctx, d.bridge, d.handle, r, d.content, d.from, d.pinned)
 	}
 	if sm := rec.Seats[d.handle]; sm != nil && sm.Gone == d.newest {
 		if d.from.Kind == fw.FromAgent && managerStopped(rec, s.runOf(fctx, managerRun(rec))) {

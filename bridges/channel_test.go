@@ -21,7 +21,7 @@ func TestRecordAndChannel(t *testing.T) {
 	if it.State != StateOpen || it.Placement != PlacementQueue || it.Operator != "alice" || it.Manager != nil || it.LastSeq != 1 {
 		t.Fatalf("record = %+v", it.Bridge)
 	}
-	if it.Delegation != (Delegation{Report: true}) || it.Caps != (Caps{MaxMessages: 2000, MaxFanoutPerMinute: 30, MaxPairMessages: 6}) {
+	if it.Delegation != (Delegation{Report: true}) || it.Caps != (Caps{MaxMessages: 2000, MaxFanoutPerMinute: 30, MaxPairMessages: 6, MaxTurns: 1000}) {
 		t.Fatalf("delegation %+v caps %+v", it.Delegation, it.Caps)
 	}
 	if len(it.Members) != 2 || it.MemberCount != 2 || it.Members[0].Handle != "migrator-1" || it.Members[0].Presence != PresenceWaiting || it.Members[0].Runs == nil {

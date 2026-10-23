@@ -123,6 +123,10 @@ func (s *Store) item(ctx context.Context, rec *record, subject string, members b
 	}
 	ms := decorate(rec, runs, s.taskStates(fctx))
 	it := Item{Bridge: rec.public(), Read: read, Unread: unread, UnreadMore: more, MemberCount: len(rec.Members), NeedsYou: needsYou(ms)}
+	it.Caps.MaxTurns = rec.Caps.turnCap()
+	if at, ok := s.b.lastAt(fctx, rec); ok {
+		it.LastAt = &at
+	}
 	it.Members = nil
 	if members {
 		it.Members = ms
@@ -392,10 +396,12 @@ func (s *Store) submitCancel(bridge, handle string, r *fw.Run) {
 	})
 }
 
-// MemberPatch changes a seat: muted, and a new task.
+// MemberPatch changes a seat: muted, and a new task. Continue continues a
+// seat whose newest run stopped at a limit of its budget (continueSeat).
 type MemberPatch struct {
-	Muted *bool   `json:"muted,omitempty"`
-	Task  *string `json:"task,omitempty"`
+	Muted    *bool   `json:"muted,omitempty"`
+	Task     *string `json:"task,omitempty"`
+	Continue bool    `json:"continue,omitempty"`
 }
 
 // patchMember mutes, unmutes, or gives a seat a task. A task that differs
@@ -405,6 +411,9 @@ type MemberPatch struct {
 // gets a new run, also when the text did not change, which is how the page
 // seats a stopped member again; a changed task reaches a run that can go
 // on as a follow-up of the person, and a seat that works gets no new run.
+// Continue goes on with the newest run of a seat that stopped at a limit
+// of its budget (continueSeat), and a seat whose newest run did not stop
+// at a limit answers ErrConflict.
 func (s *Store) patchMember(ctx context.Context, id, handle string, p MemberPatch, by *fw.Principal) (Member, error) {
 	var task string
 	if p.Task != nil {
@@ -414,7 +423,17 @@ func (s *Store) patchMember(ctx context.Context, id, handle string, p MemberPatc
 			return Member{}, invalid("a task needs words")
 		case len(task) > maxTaskBytes:
 			return Member{}, invalid("a task holds at most %d bytes", maxTaskBytes)
+		case p.Continue:
+			return Member{}, invalid("continue goes on with the run that stopped; a task alone seats the member again on a new run")
 		}
+	}
+	var stopped *fw.Run
+	if p.Continue {
+		r, err := s.limitedRun(ctx, id, handle)
+		if err != nil {
+			return Member{}, err
+		}
+		stopped = r
 	}
 	now := s.now().UTC()
 	var lines []Message
@@ -453,9 +472,66 @@ func (s *Store) patchMember(ctx context.Context, id, handle string, p MemberPatc
 	if p.Task != nil {
 		s.giveTask(ctx, rec, *rec.member(handle), by, newTask)
 	}
+	if stopped != nil {
+		s.continueSeat(ctx, rec, *rec.member(handle), stopped, by)
+	}
 	out := s.memberOf(ctx, rec, handle)
 	emitMember(id, out)
 	return out, nil
+}
+
+// continueText is the follow-up that continues a seat run that stopped at
+// a limit of its budget. Messages for the seat waited in the channel while
+// the run was stopped, so the run reads the channel first.
+const continueText = "You stopped at a limit of your budget, and the operator gave you more room. Go on with your task from where you stopped. Messages for you may have come while you were stopped, so read the channel with bridge_read first. Your final answer reaches the channel by itself."
+
+// limitedRun returns the newest run of a seat when it stopped at a limit
+// of its budget, and ErrConflict otherwise, because the seat then has no
+// run to continue: a task seats it again on a new run.
+func (s *Store) limitedRun(ctx context.Context, id, handle string) (*fw.Run, error) {
+	rec, _, err := s.b.get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	m := rec.member(handle)
+	switch {
+	case m == nil:
+		return nil, fmt.Errorf("%w: no member %s in the bridge %s", ErrNotFound, handle, id)
+	case m.Fired:
+		return nil, fmt.Errorf("%w: %s is fired", ErrConflict, handle)
+	case rec.State != StateOpen:
+		return nil, fmt.Errorf("%w: the bridge %s is closed", ErrConflict, id)
+	}
+	r := s.runOf(s.asFront(ctx), m.newest())
+	if r == nil || !limited(r) {
+		return nil, fmt.Errorf("%w: the newest run of %s did not stop at a limit, so there is nothing to continue; a task seats it again on a new run", ErrConflict, handle)
+	}
+	return r, nil
+}
+
+// continueSeat continues the newest run of a seat that stopped at a limit
+// of its budget: the channel says so, and one follow-up of the person
+// gives the run the allowance of its seat again (grant) and asks it to go
+// on. The run keeps its context, which a new run with the task would lose.
+func (s *Store) continueSeat(ctx context.Context, rec *record, m Member, r *fw.Run, by *fw.Principal) {
+	now := s.now().UTC()
+	var line []Message
+	fresh, err := s.b.update(ctx, rec.ID, func(rec *record) error {
+		line = seqLines(rec, []Message{system(EventTask, fmt.Sprintf("%s continued %s", s.nameOf(ctx, by), m.Handle))}, now)
+		return nil
+	})
+	if err != nil {
+		s.log.Warn("bridges: post the line of a continue", "bridge", rec.ID, "member", m.Handle, "error", err)
+		fresh, line = rec, nil
+	}
+	s.land(ctx, rec.ID, line...)
+	seq := fresh.LastSeq
+	if len(line) > 0 {
+		seq = line[0].Seq
+	}
+	snd := sender{subject: orOperator(subjectOfPrincipal(by))}
+	s.submit(s.deliveryJob(delivery{bridge: rec.ID, seq: seq, handle: m.Handle, run: r,
+		content: header(fresh, []string{m.Handle}, snd.name()) + continueText, from: snd.party(m.Handle)}))
 }
 
 // giveTask acts on the newest run of a seat after a patch with a task.
@@ -562,6 +638,10 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 			changed = changed || before != rec.Delegation
 		}
 		if p.Caps != nil {
+			if rec.Caps.MaxTurns == 0 {
+				// A record of an older front has no cap of turns.
+				rec.Caps.MaxTurns = rec.Caps.turnCap()
+			}
 			before := rec.Caps
 			p.Caps.apply(&rec.Caps)
 			if problem := checkCaps(rec.Caps); problem != "" {
@@ -571,7 +651,7 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 				changed = true
 				// A raised cap delivers again, and a cap that still holds
 				// says so again.
-				rec.Fan.Capped, rec.Fan.PairCapped, rec.Fan.MinuteCapped = false, nil, time.Time{}
+				rec.Fan.Capped, rec.Fan.TurnsCapped, rec.Fan.PairCapped, rec.Fan.MinuteCapped = false, false, nil, time.Time{}
 			}
 		}
 		var l Message
