@@ -302,7 +302,7 @@ func (s *Service) forgetOpen(name, date string) {
 	delete(s.open[name], date)
 }
 
-// dates returns the dates of the history of a duty that the engine reads:
+// followDates returns the dates of the history of a duty that the engine reads:
 // today and yesterday in the time zone of the duty, and the older dates
 // with a start that works, oldest first.
 func (s *Service) followDates(name string, loc *time.Location, now time.Time) []string {
