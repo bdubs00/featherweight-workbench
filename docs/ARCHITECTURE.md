@@ -148,7 +148,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `GET /v1/connections` | The services that act for the caller, connected or not, as `{"connections": [...]}` (section 11). |
 | `POST /v1/connections/{server}` | Start a connection. Body field: `next`, a place in the page to return to. The answer holds `url`, the authorization request, and sets the cookie of the callback. |
 | `DELETE /v1/connections/{server}` | Remove the grant of the caller for the service. |
-| `GET /v1/pages` | The tree of the wiki: every page without its text (section 15.3). |
+| `GET /v1/pages` | The tree of the wiki: every page without its text. `?prefix=` keeps the pages whose path starts with that text (section 15.3). |
 | `GET /v1/pages/{path}` | One page with its hash in `ETag`. `Accept: text/markdown` gives the text alone, and `?version=` an older version. |
 | `PUT /v1/pages/{path}` | Write a page from `{"text", "summary"}`. `If-Match` makes a compare-and-swap, and `If-None-Match: *` creates only. 412 on a mismatch, with the current `hash`. |
 | `DELETE /v1/pages/{path}` | Remove a page. Its history stays. |
@@ -1669,7 +1669,7 @@ Other packages of the workbench use the wiki through Go. `pages.Of(a)` returns t
 
 | Method and path | Purpose |
 |---|---|
-| `GET /v1/pages` | Every page without its text, sorted by path, as `{"pages": [...]}`. Each page has `path`, `title`, `tags`, `hash`, `version`, `size`, `by`, `at`, and `summary`, and `run` when a run wrote it. The list leaves out the index. |
+| `GET /v1/pages` | Every page without its text, sorted by path, as `{"pages": [...]}`. Each page has `path`, `title`, `tags`, `hash`, `version`, `size`, `by`, `at`, and `summary`, and `run` when a run wrote it. The list leaves out the index. `?prefix=` keeps only the pages whose path starts with that text, such as `agents/reviewer/`, as the tool `pages_list` does. A prefix that matches no page gives an empty list. |
 | `GET /v1/pages/{path}` | The page as JSON: the fields of the list and `text`, with the hash in the header `ETag`. A client that accepts `text/markdown` or `text/plain` and not JSON gets the text alone. `?version=` reads a version that the history names, in the same shape. `If-None-Match` with the hash answers 304. |
 | `PUT /v1/pages/{path}` | Writes the page. See below. |
 | `DELETE /v1/pages/{path}` | Removes the page and answers 204. `If-Match` makes the removal a compare-and-swap. The history stays. |

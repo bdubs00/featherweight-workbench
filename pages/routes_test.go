@@ -217,6 +217,49 @@ func TestRoutesAccess(t *testing.T) {
 	}
 }
 
+// GET /v1/pages?prefix= lists only the pages whose path starts with the
+// text, as the tool pages_list does, and an empty prefix lists them all.
+func TestRoutesListPrefix(t *testing.T) {
+	a := newAgent(t, nil)
+	base := serve(t, a) + "/v1/pages"
+	for _, p := range []string{"agents/reviewer/learned.md", "agents/reviewer-two/notes.md", "agents/triage/learned.md", "runbooks/cron.md"} {
+		if resp, out := do(t, "PUT", base+"/"+p, "alice", jsonText("# "+p+"\n")); resp.StatusCode != http.StatusCreated {
+			t.Fatalf("PUT %s = %d %s", p, resp.StatusCode, out)
+		}
+	}
+	paths := func(query string) []string {
+		t.Helper()
+		resp, out := do(t, "GET", base+query, "bob", "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /v1/pages%s = %d %s", query, resp.StatusCode, out)
+		}
+		var tree struct {
+			Pages []PageInfo `json:"pages"`
+		}
+		decodeJSON(t, out, &tree)
+		if tree.Pages == nil {
+			t.Fatalf("GET /v1/pages%s answered no list: %s", query, out)
+		}
+		got := []string{}
+		for _, p := range tree.Pages {
+			got = append(got, p.Path)
+		}
+		return got
+	}
+	for query, want := range map[string]string{
+		"?prefix=agents/reviewer/": "agents/reviewer/learned.md",
+		"?prefix=agents/reviewer":  "agents/reviewer-two/notes.md agents/reviewer/learned.md",
+		"?prefix=agents%2F":        "agents/reviewer-two/notes.md agents/reviewer/learned.md agents/triage/learned.md",
+		"?prefix=":                 "agents/reviewer-two/notes.md agents/reviewer/learned.md agents/triage/learned.md runbooks/cron.md",
+		"":                         "agents/reviewer-two/notes.md agents/reviewer/learned.md agents/triage/learned.md runbooks/cron.md",
+		"?prefix=wiki/":            "",
+	} {
+		if got := strings.Join(paths(query), " "); got != want {
+			t.Errorf("GET /v1/pages%s = %q, want %q", query, got, want)
+		}
+	}
+}
+
 // A process whose bus keeps no store has no wiki and mounts no route.
 func TestOffOnAnotherBus(t *testing.T) {
 	a := newAgent(t, func(c *fw.Config) { c.Bus.Driver = "redis" })

@@ -98,8 +98,9 @@ type conflictProblem struct {
 	Hash string `json:"hash,omitempty"`
 }
 
-// list answers GET /v1/pages with every page without its text, sorted by
-// path, as {"pages": [...]}.
+// list answers GET /v1/pages?prefix= with every page without its text,
+// sorted by path, as {"pages": [...]}. With prefix, only the pages whose
+// path starts with that text, as the tool pages_list takes it.
 func (rt *routes) list(w http.ResponseWriter, r *http.Request) {
 	s, ok := rt.store(w, r, false)
 	if !ok {
@@ -109,6 +110,15 @@ func (rt *routes) list(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		rt.failStore(w, r, err)
 		return
+	}
+	if prefix := r.URL.Query().Get("prefix"); prefix != "" {
+		got := []PageInfo{}
+		for _, info := range infos {
+			if strings.HasPrefix(info.Path, prefix) {
+				got = append(got, info)
+			}
+		}
+		infos = got
 	}
 	native.WriteJSON(w, http.StatusOK, map[string]any{"pages": infos})
 }
