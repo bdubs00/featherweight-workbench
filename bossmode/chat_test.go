@@ -106,8 +106,8 @@ pools:
     agent: manager
     image: ghcr.io/example/fw@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     egress:
-      rules:
-        - http: {hostnames: [nats.example], ports: [8080]}
+      hosts:
+        - http://nats.example:8080
     fw:
       model: openai/some-model
       bus: {url: "ws://nats.example:8080"}

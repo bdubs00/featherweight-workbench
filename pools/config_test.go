@@ -90,13 +90,13 @@ func TestLoadNamesWhatToSet(t *testing.T) {
 		{"atespace of no fleet", "replicas: 3", "replicas: 3\n    atespace: other", "is not in workbench.fleet.atespaces"},
 		{"intake in fw", `bus: {url: "ws://nats.agents.svc.cluster.local:8080"}`, `bus: {url: "ws://nats.agents.svc.cluster.local:8080", intake: x}`, "remove fw.bus.intake"},
 		{"token blind", "description: Sorts new tickets.", "description: Sorts new tickets.\n          access: {operators: [\"group:support\"]}", "add kind:token to fw.access.admins"},
-		{"no egress", "    egress:\n      rules:\n        - http: {hostnames: [nats.agents.svc.cluster.local], ports: [8080]}\n        - http: {hostnames: [model-proxy.models.svc.cluster.local], ports: [8080]}\n        - https: {hostnames: [mcp.example.com]}\n", "", "set egress.rules"},
-		{"bad hostname", "mcp.example.com]", "MCP.Example.com]", "does not fit the ax API"},
+		{"no egress", "    egress:\n      hosts:\n        - http://nats.agents.svc.cluster.local:8080\n        - http://model-proxy.models.svc.cluster.local:8080\n        - https://mcp.example.com\n", "", "set egress.hosts"},
+		{"bad hostname", "https://mcp.example.com", "https://MCP.Example.com", "egress.hosts[2]"},
 		{"no token mode", "effort: low", "effort: low\n      auth: {mode: none}", "leaves out token"},
 		{"reserved file", "path: notes/triage.md", "path: .fw/fw.yaml", "the pool writes .fw/fw.yaml from fw"},
 		{"a configuration variable", "- name: OPENAI_API_KEY", "- name: FW_ACCESS_DEFAULT", "remove FW_ACCESS_DEFAULT: a variable FW_* changes the configuration of the worker"},
 		{"a variable of ax", "- name: OPENAI_API_KEY", "- name: AX_TASK_YAML", "ax sets the variables AX_*"},
-		{"two protocols in one rule", "- https: {hostnames: [mcp.example.com]}", "- {https: {hostnames: [mcp.example.com]}, tls: {hostnames: [mcp.example.com]}}", "egress.rules[2] sets 2 protocols"},
+		{"a path in a host", "- https://mcp.example.com", "- https://mcp.example.com/mcp", "egress.hosts[2]"},
 		{"a credential in the bus", `bus: {url: "ws://nats.agents.svc.cluster.local:8080"}`, `bus: {url: "ws://user:s3cret@nats.agents.svc.cluster.local:8080"}`, "fw.bus.url holds a credential"},
 	}
 	for _, c := range cases {
@@ -204,7 +204,7 @@ func TestRenderResolvesTheFront(t *testing.T) {
 	if env["FW_API_TOKEN"] != "front-secret-token" || env["TICKETS_TOKEN"] != "tickets-secret" || env[EnvPool] != "triage" || env[EnvSpec] != p.Hash() {
 		t.Fatalf("env = %v", env)
 	}
-	if task.Spec.Resources.Requests.Cpu != "500m" || len(task.Spec.Egress.Rules) != 3 || task.Spec.Egress.Rules[2].Https.Hostnames[0] != "mcp.example.com" {
+	if task.Spec.Resources.Requests.Cpu != "500m" || len(task.Spec.Egress.Hosts) != 3 || task.Spec.Egress.Hosts[2] != "https://mcp.example.com" {
 		t.Fatalf("spec = %+v", task.Spec)
 	}
 	if _, _, err := p.Render(0, func(string) (string, bool) { return "", false }); err == nil || !strings.Contains(err.Error(), "FRONT_TICKETS_TOKEN") {
@@ -271,7 +271,7 @@ func TestRedact(t *testing.T) {
 // every secret, in documents that the manifest reader of the kernel
 // takes, and the warnings of a pool.
 func TestWriteHidesSecrets(t *testing.T) {
-	text := strings.Replace(fixture, "- https: {hostnames: [mcp.example.com]}", "- https: {hostnames: [other.example.com]}", 1)
+	text := strings.Replace(fixture, "- https://mcp.example.com", "- https://other.example.com", 1)
 	list := loadFixture(t, text)
 	var b strings.Builder
 	if err := Write(&b, list); err != nil {
@@ -284,7 +284,7 @@ func TestWriteHidesSecrets(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"<secret: FW_API_TOKEN of the front>", "<secret: FRONT_TICKETS_TOKEN of the front>", "FW_POOL_SPEC=" + list[0].Hash(),
-		"Warning: workbench.pools[0] (triage): egress.rules allows no https connection to mcp.example.com:443, the MCP server tickets"} {
+		"Warning: workbench.pools[0] (triage): egress.hosts allows no https connection to mcp.example.com:443, the MCP server tickets"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the dry run has no %q", want)
 		}

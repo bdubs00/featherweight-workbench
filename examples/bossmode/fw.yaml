@@ -85,10 +85,10 @@ workbench:
         - {name: OPENAI_API_KEY, value: strata-needs-no-key}
         - {name: ANTHROPIC_API_KEY, value: the-proxy-holds-the-key}
       egress:
-        rules:
-          - http: {hostnames: [nats.fw-fleet.svc.cluster.local], ports: [8080]}
-          - http: {hostnames: [ax-model.fw-fleet.svc.cluster.local], ports: [8080]}
-          - http: {hostnames: [ax-anthropic.fw-fleet.svc.cluster.local], ports: [8080]}
+        hosts:
+          - http://nats.fw-fleet.svc.cluster.local:8080
+          - http://ax-model.fw-fleet.svc.cluster.local:8080
+          - http://ax-anthropic.fw-fleet.svc.cluster.local:8080
       fw:
         bus:
           url: ws://nats.fw-fleet.svc.cluster.local:8080
@@ -126,13 +126,13 @@ workbench:
       # spawn.driver ax uses to seat the members of a spawn bridge in
       # child Tasks. A child Task gets the same egress.
       egress:
-        rules:
-          - http: {hostnames: [nats.fw-fleet.svc.cluster.local], ports: [8080]}
-          - http: {hostnames: [ax-model.fw-fleet.svc.cluster.local], ports: [8080]}
-          - http: {hostnames: [ax-anthropic.fw-fleet.svc.cluster.local], ports: [8080]}
-          - http: {hostnames: [fw-front.fw-fleet.svc.cluster.local], ports: [8080]}
-          - http: {hostnames: [ax-server.ax-system.svc.cluster.local], ports: [8080]}
-          - http: {hostnames: [atenet-router.ate-system.svc.cluster.local], ports: [80]}
+        hosts:
+          - http://nats.fw-fleet.svc.cluster.local:8080
+          - http://ax-model.fw-fleet.svc.cluster.local:8080
+          - http://ax-anthropic.fw-fleet.svc.cluster.local:8080
+          - http://fw-front.fw-fleet.svc.cluster.local:8080
+          - http://ax-server.ax-system.svc.cluster.local:8080
+          - http://atenet-router.ate-system.svc.cluster.local:80
       fw:
         # No model here: set one (see the top of this file).
         # The manager has no workspace to contend for, so one Task runs four
