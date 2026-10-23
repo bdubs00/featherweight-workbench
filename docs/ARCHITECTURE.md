@@ -148,7 +148,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `GET /v1/connections` | The services that act for the caller, connected or not, as `{"connections": [...]}` (section 11). |
 | `POST /v1/connections/{server}` | Start a connection. Body field: `next`, a place in the page to return to. The answer holds `url`, the authorization request, and sets the cookie of the callback. |
 | `DELETE /v1/connections/{server}` | Remove the grant of the caller for the service. |
-| `GET /v1/pages` | The tree of the wiki: every page without its text (section 15.3). |
+| `GET /v1/pages` | The tree of the wiki: every page without its text. `?prefix=` keeps the pages whose path starts with that text (section 15.3). |
 | `GET /v1/pages/{path}` | One page with its hash in `ETag`. `Accept: text/markdown` gives the text alone, and `?version=` an older version. |
 | `PUT /v1/pages/{path}` | Write a page from `{"text", "summary"}`. `If-Match` makes a compare-and-swap, and `If-None-Match: *` creates only. 412 on a mismatch, with the current `hash`. |
 | `DELETE /v1/pages/{path}` | Remove a page. Its history stays. |
@@ -1669,7 +1669,7 @@ Other packages of the workbench use the wiki through Go. `pages.Of(a)` returns t
 
 | Method and path | Purpose |
 |---|---|
-| `GET /v1/pages` | Every page without its text, sorted by path, as `{"pages": [...]}`. Each page has `path`, `title`, `tags`, `hash`, `version`, `size`, `by`, `at`, and `summary`, and `run` when a run wrote it. The list leaves out the index. |
+| `GET /v1/pages` | Every page without its text, sorted by path, as `{"pages": [...]}`. Each page has `path`, `title`, `tags`, `hash`, `version`, `size`, `by`, `at`, and `summary`, and `run` when a run wrote it. The list leaves out the index. `?prefix=` keeps only the pages whose path starts with that text, such as `agents/reviewer/`, as the tool `pages_list` does. A prefix that matches no page gives an empty list. |
 | `GET /v1/pages/{path}` | The page as JSON: the fields of the list and `text`, with the hash in the header `ETag`. A client that accepts `text/markdown` or `text/plain` and not JSON gets the text alone. `?version=` reads a version that the history names, in the same shape. `If-None-Match` with the hash answers 304. |
 | `PUT /v1/pages/{path}` | Writes the page. See below. |
 | `DELETE /v1/pages/{path}` | Removes the page and answers 204. `If-Match` makes the removal a compare-and-swap. The history stays. |
@@ -1821,6 +1821,7 @@ Quote the accent in YAML, because `#` starts a comment there.
 - A path with an element that starts with a dot, such as `.env` or `.git/config`, is a 404, also without an extension.
 - A path that holds an element `..`, a backslash, or a control character is a 400. Such a path can reach the route only escaped, such as `%2e%2e`. The files of `dir` open through an `os.Root`, so no name and no symbolic link leads out of the directory.
 - `index.html` gets `Cache-Control: no-store`. A file under `assets/`, where the build puts the files with a hash in their names, gets `public, max-age=3600`. Any other file gets `no-cache`.
+- The build of the page writes the element `<meta name="bossmode-build" content="<build>">` into the head of `index.html`. The build is a hash of the rest of `index.html`, which names the files of the build by their hashes, so each new build of the page has a new one. The stream names the build that this process serves (section 17.3).
 - Without `dir`, the route serves the copy that the binary embeds. The binary embeds `bossmode/static`, which holds the build of the page after `make page` or the build of an image with the build context `page` (section 1.2), and `bossmode/placeholder`. When `static` holds `index.html`, the route serves `static`. Otherwise it serves the placeholder, an `index.html` that says that the binary does not hold the page and names `workbench.bossmode.dir` and `make page`, so the route is never a 404 that confuses. The file `.gitkeep` of `static` is hidden, so the route answers it with 404. A `dir` without `index.html` answers 503 with a sentence that names the key, and the log of the start says so once.
 
 Every answer of the page carries this content security policy, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`:
@@ -1831,7 +1832,7 @@ connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none';
 form-action 'self'; frame-ancestors 'none'
 ```
 
-The build of the page holds no inline script, no inline style element, and no data URI, and the faces are blob images. The page keeps its token in `sessionStorage["fw.token"]`, as `/ui` does, and sends it as a bearer token. On a 401 with `signin`, it sends the person to `/ui/signin` with `next` set to its own path and fragment, such as `/bossmode/#bridge/01K`, and the callback returns the person there (section 5).
+The build of the page holds no inline script, no inline style element, and no data URI, and the faces are blob images. The page keeps its token in `sessionStorage["fw.token"]`, as `/ui` does, and sends it as a bearer token. On a 401 with `signin`, it sends the person to `/ui/signin` with `next` set to its own path and fragment, such as `/bossmode/#bridge/01K`, and the callback returns the person there (section 5). Each 401 of the front leaves a line in its log with the route, the reason, and the replica (the kernel architecture, section 13.1), so a sign-out that nobody expected has a cause to read.
 
 ### 17.3 The stream
 
@@ -1857,6 +1858,8 @@ The stream decides for each event and each caller when it sends the event, with 
 The front keeps the newest 4,096 events of every kind in a ring, with the events that it gets from the other replicas (section 17.5). A stream that opens with `Last-Event-ID` gets every event after that id that the caller can see, in order, and then the new events. An id that the ring no longer holds, an id above the newest one, and a value that is no number each give one event `reset` with the data `null` and the id of the newest event. The stream goes on from there, and the page reads its bridges, its faces, its channel, and its roster again. A stream without `Last-Event-ID` starts with the next event. A stream resumes on the replica that holds its ring. The ids of two replicas start at their start times, so another replica answers with `reset`, unless it sent more events than the microseconds between the two starts.
 
 The stream starts with the comment line `: connected` at once after the headers. A proxy that holds an answer until its first bytes then passes the stream on at once. Cloudflare holds the first byte for about 4 seconds, and a stream can go without an event for a long time. The page skips a comment line, and a test checks that the comment comes before any event. A comment line, `: keep-alive`, goes out after 15 seconds without an event, so a proxy keeps the stream open. A stream ends after 15 minutes, and the page opens a new one with `Last-Event-ID`, so the front checks the credential again: a token that expired or that the issuer revoked stops the stream within that time, and the new request gets a 401. A process serves at most 64 streams at once, one per tab. The next request gets 429 with `Retry-After`.
+
+The answer of the stream carries the header `Fw-Page-Build` (`bossmode.HeaderPageBuild`), the build of the page that this process serves (section 17.2). The front reads it from `index.html`: once for the embedded copy, and at each start of a stream for `dir`, so a new build in the directory counts at once. A page without the element, such as the placeholder, gives no header. The page compares the header with the element of its own `index.html` at each start of the stream: at boot, after the 15 minutes of a stream, and after a replica stops in a deploy. When they differ, the page offers a reload in one line, and the person decides when. The header costs no extra request, and a tab that only changes its fragment learns of the new page too.
 
 The fleet sends its changes through `Watch` (section 4.15), and the service of bossmode reads them at once into the ring. A slow stream reads from the ring and never holds up the fleet: a stream that falls more than 4,096 events behind gets `reset`.
 

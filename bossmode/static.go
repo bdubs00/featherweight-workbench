@@ -4,7 +4,8 @@ package bossmode
 // (docs/ARCHITECTURE.md section 17.2): from workbench.bossmode.dir, or from
 // the copy that the binary embeds, the build of the page in static/ when
 // make page or the Dockerfile put it there, else the placeholder in
-// placeholder/.
+// placeholder/. It also reads the build of the page that it serves, which
+// the stream names (pageBuild).
 
 import (
 	"embed"
@@ -16,7 +17,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/bdubs00/featherweight-kernel/surface/native"
@@ -237,3 +240,59 @@ func embeddedPlaceholder() bool {
 
 // placeholderMark is a comment in the placeholder index.html.
 const placeholderMark = "<!-- fw-workbench: bossmode placeholder -->"
+
+// HeaderPageBuild names, on the answer of GET /v1/bossmode/stream, the
+// build of the page that this process serves (pageBuild). A tab compares
+// it with the build that runs in it, at each start of the stream, and
+// offers a reload when they differ, so a tab that stays open through a
+// deploy learns of the new page.
+const HeaderPageBuild = "Fw-Page-Build"
+
+// buildMeta finds the build in index.html: the element that the build of
+// the page writes into its head, such as
+// <meta name="bossmode-build" content="9f2c4e1a7b3d5f60">.
+var buildMeta = regexp.MustCompile(`<meta\s+name="bossmode-build"\s+content="([A-Za-z0-9._-]{1,64})"\s*/?>`)
+
+// maxIndexRead bounds the part of index.html that pageBuild reads. The
+// element sits in the head, near the start.
+const maxIndexRead = 64 << 10
+
+// embeddedBuild is the build of the embedded page. The binary does not
+// change, so it reads it once.
+var embeddedBuild = sync.OnceValue(func() string { return readBuild("") })
+
+// pageBuild returns the build of the page that the route of dir serves,
+// or "" for a page without the element, such as the placeholder or a
+// build of the page from before the element. A directory is read at each
+// call, because a deployment can put a new build there while the process
+// runs, and index.html is small.
+func pageBuild(dir string) string {
+	if dir == "" {
+		return embeddedBuild()
+	}
+	return readBuild(dir)
+}
+
+// readBuild reads the build from index.html of dir, or of the embedded
+// copy for "".
+func readBuild(dir string) string {
+	fsys, done, err := pageFS(dir)
+	if err != nil {
+		return ""
+	}
+	defer done()
+	f, err := fsys.Open(indexFile)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxIndexRead))
+	if err != nil {
+		return ""
+	}
+	m := buildMeta.FindSubmatch(b)
+	if m == nil {
+		return ""
+	}
+	return string(m[1])
+}

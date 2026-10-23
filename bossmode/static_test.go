@@ -169,6 +169,46 @@ func TestStaticPlaceholder(t *testing.T) {
 	}
 }
 
+// The stream names the build of the page in the directory, read at each
+// start of a stream, so a tab learns of a new build that a deploy put
+// there. A page without the element gives no header.
+func TestStreamNamesThePageBuild(t *testing.T) {
+	dir := pageDir(t)
+	t.Setenv(EnvDir, dir)
+	fr := newFront(t, nil)
+	index := func(head string) {
+		t.Helper()
+		body := "<!doctype html><html><head>" + head + "<title>bossmode</title></head><body><script type=module src=/bossmode/assets/index-BeZQCCyd.js></script></body></html>"
+		if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	build := func() string {
+		t.Helper()
+		s := openStream(t, fr, "ada", "")
+		defer s.close()
+		return s.resp.Header.Get(HeaderPageBuild)
+	}
+	if got := build(); got != "" {
+		t.Fatalf("a page without the element: %s = %q", HeaderPageBuild, got)
+	}
+	index(`<meta charset="utf-8"><meta name="bossmode-build" content="9f2c4e1a7b3d5f60">`)
+	if got := build(); got != "9f2c4e1a7b3d5f60" {
+		t.Fatalf("%s = %q", HeaderPageBuild, got)
+	}
+	index(`<meta name="bossmode-build" content="0a1b2c3d4e5f6071" />`)
+	if got := build(); got != "0a1b2c3d4e5f6071" {
+		t.Fatalf("after a new build: %s = %q", HeaderPageBuild, got)
+	}
+	// A value outside the letters of a build never reaches the header.
+	for _, head := range []string{`<meta name="bossmode-build" content="a b">`, `<meta name="bossmode-build" content="">`, `<meta name="bossmode-build" content="` + strings.Repeat("a", 65) + `">`} {
+		index(head)
+		if got := build(); got != "" {
+			t.Errorf("%s: %s = %q", head, HeaderPageBuild, got)
+		}
+	}
+}
+
 // Without enabled, no route of bossmode is there, and the service starts
 // nothing.
 func TestOff(t *testing.T) {
