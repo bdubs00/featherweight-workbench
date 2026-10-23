@@ -275,9 +275,17 @@ type Action struct {
 }
 
 // Looker reads the document of a check: the JSON in which the check finds
-// its items. A later package registers the look tool, a check run of the
-// kernel through the tool of the agent.
+// its items. The package duties/looks registers the look tool, a check
+// run of the kernel through the tool of the agent.
 type Looker func(ctx context.Context, a *fw.Agent, d *Duty) ([]byte, error)
+
+// Names of the looks of a check: LookNameHTTP reads an address in the
+// front, and LookNameTool calls a tool of the agent in a check run of the
+// kernel.
+const (
+	LookNameHTTP = "http"
+	LookNameTool = "tool"
+)
 
 // Notice is an event of a duty for the notifications: a failed run, a
 // duty that paused itself, a daily cap that a duty reached, or a run that
@@ -362,7 +370,7 @@ func Offered() (events, actions, looks []string) {
 	for name := range hooks.actions {
 		actions = append(actions, name)
 	}
-	looks = []string{"http"}
+	looks = []string{LookNameHTTP}
 	for name := range hooks.looks {
 		looks = append(looks, name)
 	}

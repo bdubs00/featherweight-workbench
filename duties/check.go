@@ -6,8 +6,8 @@ package duties
 // agent: new items, any item, or a number of items. It costs no model
 // call. A check of an HTTP address runs in the front with the poll of the
 // sources, a GET with the secret of a variable of the front. A check with
-// a tool of the agent needs the check run of the kernel, which a later
-// package registers (RegisterLook).
+// a tool of the agent needs the check run of the kernel, which the package
+// duties/looks registers (RegisterLook).
 
 import (
 	"bytes"
@@ -59,7 +59,7 @@ func (s *Service) check(ctx context.Context, d *Duty) (checkResult, error) {
 func (s *Service) look(ctx context.Context, d *Duty) ([]byte, error) {
 	c := d.CheckFirst
 	if c.Look.Tool != "" {
-		fn := lookOf("tool")
+		fn := lookOf(LookNameTool)
 		if fn == nil {
 			return nil, fmt.Errorf("%w: a check with a tool of the agent needs the check run of the kernel, which this build does not have. Use an HTTP address for now", ErrNotAvailable)
 		}
