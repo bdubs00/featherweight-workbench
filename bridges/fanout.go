@@ -17,8 +17,10 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/surface/native"
 )
 
 // Bounds of a message.
@@ -69,9 +71,10 @@ func (x sender) party(member string) fw.MessageFrom {
 // PostSpec is a message of a person or an agent: the text, the handles
 // that it addresses, and the entry that it replies to.
 type PostSpec struct {
-	Text    string   `json:"text"`
-	To      []string `json:"to,omitempty"`
-	ReplyTo *uint64  `json:"replyTo,omitempty"`
+	Text    string            `json:"text"`
+	To      []string          `json:"to,omitempty"`
+	ReplyTo *uint64           `json:"replyTo,omitempty"`
+	Files   []native.FileBody `json:"files,omitempty"`
 }
 
 // delivery is one follow-up of a message to the newest run of a member.
@@ -82,6 +85,7 @@ type delivery struct {
 	run     *fw.Run
 	content string
 	from    fw.MessageFrom
+	files   []native.FileBody
 }
 
 // header is the first line of a follow-up, which names the bridge, so a
@@ -103,10 +107,14 @@ func limited(r *fw.Run) bool {
 // post appends a message of a person or an agent to the channel and fans
 // it out. It returns the entry.
 func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) (Message, error) {
+	files, err := describeFiles(spec.Files)
+	if err != nil {
+		return Message{}, err
+	}
 	text := clean(spec.Text)
 	switch {
-	case text == "":
-		return Message{}, invalid("a message needs a text")
+	case text == "" && len(files) == 0:
+		return Message{}, invalid("a message needs text or files")
 	case len(text) > maxTextBytes:
 		return Message{}, invalid("a message holds at most %d bytes", maxTextBytes)
 	case len(spec.To) > maxTo:
@@ -153,11 +161,29 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 		claim(rec, runs)
 		cut, isCut := cutText(text, entryTextBytes)
 		msg = newMessage(snd.from(), cut)
+		msg.Files = files
 		msg.Seq, msg.At, msg.Cut, msg.ReplyTo = rec.alloc(), now, isCut, spec.ReplyTo
 		if to != nil {
 			msg.To = to
 		}
 		lines, plan = fanPlan(rec, snd, msg, text, runs, now)
+		if len(files) > 0 {
+			// A channel keeps metadata alone. Refuse before the post when
+			// a recipient cannot take the bytes, so the UI keeps its draft.
+			targets := 0
+			for _, m := range rec.Members {
+				if m.Fired || m.Handle == snd.handle || (len(to) == 0 && m.Muted) || (len(to) > 0 && !seen[m.Handle]) {
+					continue
+				}
+				targets++
+			}
+			if targets == 0 || len(plan) != targets {
+				return fmt.Errorf("%w: files need a ready run for every recipient and room under the bridge caps; wait for the runs, raise the caps, or address a ready member", ErrConflict)
+			}
+			for i := range plan {
+				plan[i].files = spec.Files
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -175,6 +201,30 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 	}
 	s.log.Info("bridges: a message reached the channel", "bridge", rec.ID, "seq", msg.Seq, "from", snd.name(), "deliveries", len(plan))
 	return msg, nil
+}
+
+// describeFiles validates the upload before a message reaches the channel.
+// The recipient kernel applies its workspace rules and sniffs the bytes too.
+func describeFiles(files []native.FileBody) ([]AttachedFile, error) {
+	if len(files) > fw.MaxAttachments {
+		return nil, invalid("a message holds at most %d files", fw.MaxAttachments)
+	}
+	var out []AttachedFile
+	total := 0
+	for _, f := range files {
+		if strings.TrimSpace(f.Name) == "" || len(f.Name) > 255 || strings.ContainsAny(f.Name, "/\\") || strings.IndexFunc(f.Name, unicode.IsControl) >= 0 {
+			return nil, invalid("a file needs a name of at most 255 bytes without a path or control characters")
+		}
+		if len(f.Data) == 0 {
+			return nil, invalid("the file %q has no bytes", f.Name)
+		}
+		total += len(f.Data)
+		if total > fw.MaxAttachmentBytes {
+			return nil, invalid("the files of a message hold at most %d bytes", fw.MaxAttachmentBytes)
+		}
+		out = append(out, AttachedFile{Name: f.Name, Size: int64(len(f.Data)), MediaType: fw.SniffMediaType(f.Data)})
+	}
+	return out, nil
 }
 
 // fanPlan decides the deliveries of a message under the caps of the
@@ -325,7 +375,7 @@ type job struct {
 func (s *Store) deliveryJob(d delivery) *job {
 	return &job{
 		name: fmt.Sprintf("message %d of %s to %s", d.seq, d.bridge, d.handle),
-		do:   func(ctx context.Context) error { return s.send(ctx, d.run, d.content, d.from) },
+		do:   func(ctx context.Context) error { return s.send(ctx, d.run, d.content, d.from, d.files...) },
 		fail: func(err error) {
 			s.log.Warn("bridges: a member did not get a message", "bridge", d.bridge, "seq", d.seq, "member", d.handle, "run", d.run.ID, "error", err)
 			_ = s.postLines(s.ctx, d.bridge, system(EventFailed, fmt.Sprintf("%s did not get message %d: %s.", d.handle, d.seq, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))

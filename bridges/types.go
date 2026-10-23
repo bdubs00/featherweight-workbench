@@ -193,11 +193,20 @@ type Message struct {
 	To        []string            `json:"to"`
 	ReplyTo   *uint64             `json:"replyTo"`
 	Text      string              `json:"text"`
+	Files     []AttachedFile      `json:"files,omitempty"`
 	Event     string              `json:"event,omitempty"`
 	Cut       bool                `json:"cut"`
 	Mirrors   *Mirror             `json:"mirrors"`
 	Reactions map[string][]string `json:"reactions"`
 	Decision  *Decision           `json:"decision"`
+}
+
+// AttachedFile describes a file sent with a message. Only the recipient
+// workspace holds its bytes; the channel and the stream hold this metadata.
+type AttachedFile struct {
+	Name      string `json:"name"`
+	Size      int64  `json:"size"`
+	MediaType string `json:"mediaType"`
 }
 
 // From is the sender of an entry. A person has Name, the subject, and

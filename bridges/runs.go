@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
@@ -336,11 +337,15 @@ func (s *Store) call(ctx context.Context, member, method, path string, body any,
 func runPath(id, rest string) string { return "/v1/runs/" + url.PathEscape(id) + rest }
 
 // send gives a run a follow-up message from a party.
-func (s *Store) send(ctx context.Context, r *fw.Run, content string, from fw.MessageFrom) error {
+func (s *Store) send(ctx context.Context, r *fw.Run, content string, from fw.MessageFrom, files ...native.FileBody) error {
 	if r.Member == "" {
-		return s.a.Send(s.asFront(ctx), r.ID, fw.Message{Role: fw.RoleUser, Content: []fw.Block{fw.Text(content)}}, fw.OriginHTTP, fw.WithMessageFrom(from))
+		blocks := append([]fw.Block{fw.Text(content)}, native.Attachments(files)...)
+		return s.a.Send(s.asFront(ctx), r.ID, fw.Message{Role: fw.RoleUser, Content: blocks}, fw.OriginHTTP, fw.WithMessageFrom(from))
 	}
 	body := map[string]any{"content": content, "from": from}
+	if len(files) > 0 {
+		body["files"] = files
+	}
 	return s.call(ctx, r.Member, http.MethodPost, runPath(r.ID, "/messages"), body, "", nil)
 }
 

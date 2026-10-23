@@ -51,7 +51,7 @@ func TestRecordAndChannel(t *testing.T) {
 	for _, c := range []struct{ body, want string }{
 		{`{"text":"hi","to":["nobody"]}`, "no member nobody"},
 		{`{"text":"hi","replyTo":99}`, "no entry 99"},
-		{`{"text":"  "}`, "needs a text"},
+		{`{"text":"  "}`, "needs text or files"},
 	} {
 		resp, body := do(t, http.MethodPost, url+"/v1/bridges/"+it.ID+"/messages", "alice", c.body)
 		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, c.want) {
