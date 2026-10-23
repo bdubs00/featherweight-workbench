@@ -168,8 +168,10 @@ type Store struct {
 	mu    sync.Mutex
 	cache map[string]cached // by key: the record at a revision
 
-	// proj is the projection of the evidence, which Start runs.
-	proj *projector
+	// proj is the projection of the evidence, which Start runs, and
+	// summaries the summaries that hold for a minute (summary.go).
+	proj      *projector
+	summaries summaries
 }
 
 // cached is a record that the store read at a revision.

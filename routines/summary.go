@@ -3,23 +3,29 @@ package routines
 // This file serves GET /v1/routines/summary, the week of an agent on the
 // details pane of the page (docs/ARCHITECTURE.md section 21.6): how many
 // runs a routine handled, how many the agent handled, how many needed a
-// person, what a run cost on average, and how many came back. It follows
-// the day of an agent of bossmode (section 17.8): the front keeps no state
-// for it, and each request reads the view and the ledger of this process.
+// person, what a run cost on average, and how many came back. It reads the
+// runs as the day of an agent of bossmode does (section 17.8): the view,
+// and the ledgers of the runs of this process in the window. A summary
+// holds for a minute per agent, window, and caller, so a page that reads
+// it often reads no ledger again.
 
 import (
 	"context"
-	"encoding/json"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
-// Bounds of the window of a summary, in days.
+// Bounds of the window of a summary, in days, and how long a summary
+// holds.
 const (
 	DefaultSummaryDays = 7
-	MaxSummaryDays     = 90
+	MaxSummaryDays     = 30
+	summaryFor         = time.Minute
+	maxSummaries       = 256
 )
 
 // Summary is the answer of GET /v1/routines/summary. The runs are the runs
@@ -30,10 +36,10 @@ const (
 // person decided an approval or answered a question in it, and by the
 // agent otherwise. CostUSD holds the cost of a run on average, by a
 // routine and by the agent, at the prices of the workers. SentBack counts
-// the runs that a quality receipt rejected. Partial is true when a count
-// or a cost can be short: a run without final usage, tokens without a
-// price, a run whose start the view did not see, or a ledger that did not
-// read.
+// the runs that a quality observation rejected. Partial is true when a
+// count or a cost can be short: a run without final usage, tokens without
+// a price, a run whose start the view did not see, or a ledger that did
+// not read.
 type Summary struct {
 	Agent      string      `json:"agent"`
 	Days       int         `json:"days"`
@@ -55,69 +61,85 @@ type SummaryCost struct {
 	Agent   float64 `json:"agent"`
 }
 
-// runFacts is what the summary needs to know of one run beside its usage.
-type runFacts struct {
-	byRoutine, sentBack, withPerson, whole bool
+// summaries keeps the summaries of a store for a minute.
+type summaries struct {
+	mu sync.Mutex
+	m  map[string]heldSummary
+}
+
+type heldSummary struct {
+	s     Summary
+	until time.Time
 }
 
 // SummaryOf returns the summary of the profile agent over the last days
 // for the caller in ctx, as Summary says. It decides no role on the agent;
-// the route does.
+// the route does. A summary of the same agent, window, and caller holds
+// for a minute.
 func SummaryOf(ctx context.Context, a *fw.Agent, agent string, days int) (Summary, error) {
 	if days < 1 {
 		days = DefaultSummaryDays
 	}
 	days = min(days, MaxSummaryDays)
+	now := a.Clock().Now()
+	var held *summaries
+	key := agent + "\x00" + strconv.Itoa(days)
+	if p := fw.PrincipalFrom(ctx); p != nil {
+		key += "\x00" + p.Kind + "\x00" + p.Subject
+	}
+	if s := Of(a); s != nil {
+		held = &s.summaries
+		held.mu.Lock()
+		h, ok := held.m[key]
+		held.mu.Unlock()
+		if ok && now.Before(h.until) {
+			return h.s, nil
+		}
+	}
+	out, err := summaryOf(ctx, a, agent, days, now)
+	if err != nil || held == nil {
+		return out, err
+	}
+	held.mu.Lock()
+	defer held.mu.Unlock()
+	if held.m == nil || len(held.m) >= maxSummaries {
+		held.m = map[string]heldSummary{}
+	}
+	held.m[key] = heldSummary{s: out, until: now.Add(summaryFor)}
+	return out, nil
+}
+
+// summaryOf reads the summary.
+func summaryOf(ctx context.Context, a *fw.Agent, agent string, days int, now time.Time) (Summary, error) {
 	loc, zone, err := fw.LoadZone(a.Config().Time.Zone)
 	if err != nil {
 		loc, zone = time.UTC, "UTC"
 	}
-	now := a.Clock().Now().In(loc)
+	now = now.In(loc)
 	since := time.Date(now.Year(), now.Month(), now.Day()-(days-1), 0, 0, 0, 0, loc)
 	out := Summary{Agent: agent, Days: days, Zone: zone, Since: since}
-	local, err := a.List(ctx)
+	runs, err := fleet.RunsSince(ctx, a, agent, since)
 	if err != nil {
 		return Summary{}, err
 	}
-	var runs []*fw.Run
-	for _, r := range local {
-		if r.Agent == agent && !r.CreatedAt.Before(since) {
-			runs = append(runs, r)
-		}
-	}
-	f, _ := fleet.Of(a).(*fleet.Fleet)
-	if f != nil {
-		remote, err := f.AgentRuns(ctx, agent, since)
-		if err != nil {
-			return Summary{}, err
-		}
-		runs = append(runs, remote...)
-	}
 	var byRoutine, byAgent, all fleet.UsageSum
 	for _, r := range runs {
-		var rf runFacts
-		if r.Member == "" {
-			rf = localFacts(ctx, a, r.ID)
-		} else if f != nil {
-			n, whole := f.Decisions(r.ID)
-			rf.byRoutine, rf.sentBack, rf.whole = f.Outcome(r.ID)
-			rf.withPerson, rf.whole = n > 0, rf.whole && whole
-		}
+		facts := fleet.FactsOf(ctx, a, r)
 		all.Add(r)
 		switch {
-		case rf.byRoutine:
+		case facts.ByRoutine:
 			out.ByRoutine++
 			byRoutine.Add(r)
-		case rf.withPerson:
+		case facts.Decisions > 0:
 			out.WithPerson++
 		default:
 			out.ByAgent++
 			byAgent.Add(r)
 		}
-		if rf.sentBack {
+		if facts.SentBack {
 			out.SentBack++
 		}
-		out.Partial = out.Partial || !rf.whole
+		out.Partial = out.Partial || !facts.Whole
 	}
 	out.Runs = len(runs)
 	out.CostUSD = SummaryCost{Routine: average(byRoutine), Agent: average(byAgent)}
@@ -132,54 +154,4 @@ func average(u fleet.UsageSum) float64 {
 		return 0
 	}
 	return u.CostUSD / float64(u.Reported)
-}
-
-// localFacts reads the ledger of a run of this process, after the events
-// that a branch kept from its source: whether a routine completed it,
-// whether a person decided in it, and whether a quality receipt rejected
-// it. whole is false when the ledger did not read.
-func localFacts(ctx context.Context, a *fw.Agent, id string) runFacts {
-	var kept uint64
-	type seen struct {
-		seq uint64
-		typ string
-		ok  bool
-	}
-	var list []seen
-	rf := runFacts{whole: true}
-	for e, err := range a.Ledger().Read(ctx, id, 0) {
-		if err != nil {
-			rf.whole = false
-			break
-		}
-		switch e.Type {
-		case fw.EvRunQueued:
-			var d struct {
-				Kept uint64 `json:"kept"`
-			}
-			if json.Unmarshal(e.Data, &d) == nil && d.Kept > kept {
-				kept = d.Kept
-			}
-		case fw.EvApprovalDecided:
-			list = append(list, seen{seq: e.Seq, typ: e.Type, ok: true})
-		case fw.EvRoutineApplied:
-			list = append(list, seen{seq: e.Seq, typ: e.Type, ok: fleet.AppliedOK(e)})
-		case fw.EvRunAnnotated:
-			list = append(list, seen{seq: e.Seq, typ: e.Type, ok: fleet.Verification(e) == "rejected"})
-		}
-	}
-	for _, s := range list {
-		if s.seq <= kept || !s.ok {
-			continue
-		}
-		switch s.typ {
-		case fw.EvApprovalDecided:
-			rf.withPerson = true
-		case fw.EvRoutineApplied:
-			rf.byRoutine = true
-		case fw.EvRunAnnotated:
-			rf.sentBack = true
-		}
-	}
-	return rf
 }

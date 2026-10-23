@@ -167,7 +167,7 @@ func (rt *routes) standing(w http.ResponseWriter, r *http.Request) {
 }
 
 // summary answers GET /v1/routines/summary?agent=&days= with the summary
-// of the agent over the last days, 7 by default and 90 at most.
+// of the agent over the last days, 7 by default and 30 at most.
 func (rt *routes) summary(w http.ResponseWriter, r *http.Request) {
 	ctx, _, _ := manager.OnBehalf(r.Context())
 	agent, ok := agentParam(w, r)
@@ -178,7 +178,7 @@ func (rt *routes) summary(w http.ResponseWriter, r *http.Request) {
 	if v := strings.TrimSpace(r.URL.Query().Get("days")); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 || n > MaxSummaryDays {
-			native.WriteProblem(w, r, http.StatusBadRequest, "days is a whole number from 1 to 90")
+			native.WriteProblem(w, r, http.StatusBadRequest, "days is a whole number from 1 to 30")
 			return
 		}
 		days = n

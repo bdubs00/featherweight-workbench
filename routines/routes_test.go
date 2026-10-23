@@ -157,7 +157,7 @@ func TestRoutes(t *testing.T) {
 	if err != nil || page.By != pages.ByFront || page.Run != "" {
 		t.Fatalf("the runbook = %+v, %v", page, err)
 	}
-	for _, want := range []string{"# acknowledge", "Signed off by alice", "`gitea.issue_write` (add_labels)", "at least 85% sure, and only for bug, access", "at least 95% sure that the answer is no", "The result holds `status/triaged`", "Made from 212 runs of triage between 2026-09-14 and 2026-10-21"} {
+	for _, want := range []string{"title: Acknowledge\n", "# Acknowledge\n", "Signed off by alice", "It is live: it acts on its own", "It calls `gitea.issue_write` with add_labels.", "at least 85% sure, and only for bug or access.", "at least 95% sure that the answer is no.", "The result holds `status/triaged`.", "Made from 212 tickets that triage handled between 14 September 2026 and 21 October 2026"} {
 		if !strings.Contains(page.Text, want) {
 			t.Errorf("the runbook lacks %q:\n%s", want, page.Text)
 		}
@@ -166,6 +166,14 @@ func TestRoutes(t *testing.T) {
 		if strings.Contains(strings.ToLower(page.Text), never) {
 			t.Errorf("the runbook says %q:\n%s", never, page.Text)
 		}
+	}
+	// A later move writes the runbook again with the standing.
+	if resp, b := send(t, http.MethodPost, standing, "alice", `{"standing": "paused"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("a pause = %d %s", resp.StatusCode, b)
+	}
+	page, _ = pages.Of(fr.a).Read(context.Background(), RunbookPath("triage", "acknowledge"), 0)
+	if !strings.Contains(page.Text, "It is paused: it does not run") || strings.Contains(page.Text, "acts on its own") {
+		t.Fatalf("the runbook of a paused routine:\n%s", page.Text)
 	}
 	h := rec["history"].([]any)
 	if len(h) != 3 || h[2].(map[string]any)["note"] != "the evidence is good" {
@@ -318,12 +326,36 @@ func TestSummary(t *testing.T) {
 	if !got.Since.Equal(midnight.AddDate(0, 0, -6)) {
 		t.Fatalf("since = %s", got.Since)
 	}
-	for _, q := range []string{"days=0", "days=91", "days=x"} {
+	for _, q := range []string{"days=0", "days=31", "days=x"} {
 		if resp, _ := send(t, http.MethodGet, fr.url+"/v1/routines/summary?agent=triage&"+q, "bob", ""); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s = %d", q, resp.StatusCode)
 		}
 	}
 	if resp, _ := send(t, http.MethodGet, fr.url+"/v1/routines/summary?agent=private", "bob", ""); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("the summary of an agent that bob cannot view = %d", resp.StatusCode)
+	}
+	// A summary holds for a minute for its caller: a new run shows after
+	// that, and at once for another caller.
+	fr.event(t, now, "01NEW", 1, fw.EvRunQueued, queued)
+	summary := func(who string) Summary {
+		_, b := send(t, http.MethodGet, fr.url+"/v1/routines/summary?agent=triage&days=7", who, "")
+		var s Summary
+		decodeJSON(t, b, &s)
+		return s
+	}
+	if got := summary("bob"); got.Runs != 4 {
+		t.Fatalf("the summary within a minute = %d runs", got.Runs)
+	}
+	if got := summary("alice"); got.Runs != 5 {
+		t.Fatalf("the summary of another caller = %d runs", got.Runs)
+	}
+	fr.s.summaries.mu.Lock()
+	for k, h := range fr.s.summaries.m {
+		h.until = time.Time{}
+		fr.s.summaries.m[k] = h
+	}
+	fr.s.summaries.mu.Unlock()
+	if got := summary("bob"); got.Runs != 5 {
+		t.Fatalf("the summary after a minute = %d runs", got.Runs)
 	}
 }

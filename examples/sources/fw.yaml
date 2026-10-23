@@ -32,7 +32,9 @@ workbench:
         Summary: {{.summary}}
         Requester: {{.requester.name}}
         Assignee: {{index . "assignee" | default "nobody"}}
-      title: "Triage {{.id}}"
+      # The title names the ticket, so a list of runs, and the evidence of
+      # a routine, tell the tickets apart.
+      title: "#{{.id}} {{.summary}}"
       metadata: { ticket: "{{.id}}" }
       # The id and the time of the change: each change starts one run, and a
       # change that arrives twice starts one run.

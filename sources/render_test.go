@@ -60,6 +60,27 @@ func TestRender(t *testing.T) {
 	}
 }
 
+// A source of the issues of Gitea titles each run "#<number> <title>", so
+// the runs of the tickets differ by their title where their input starts
+// with the same sentence.
+func TestRenderTitleOfAnIssue(t *testing.T) {
+	src := compiled(t, Source{Name: "tickets", Agent: "triage",
+		Input: "A new ticket of the helpdesk {{.repository.full_name}} (event {{.action}}). Triage it.\nNumber: {{.issue.number}}",
+		Title: "#{{.issue.number}} {{.issue.title}}",
+		Key:   "{{.issue.number}}"})
+	events, err := decodeEvents([]byte(`{"action": "opened", "issue": {"number": 42, "title": "The printer on floor 3 is down", "user": {"login": "ada"}}, "repository": {"full_name": "lab/helpdesk"}}`), "")
+	if err != nil || len(events) != 1 {
+		t.Fatalf("decodeEvents = %v, %v", events, err)
+	}
+	it, err := src.render(1, events[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := it.req.Metadata[fw.MetaTitle]; got != "#42 The printer on floor 3 is down" {
+		t.Fatalf("title = %q", got)
+	}
+}
+
 // TestRenderDefaultInput gives the run the event as JSON when the source
 // sets no input, with every digit of a large id.
 func TestRenderDefaultInput(t *testing.T) {

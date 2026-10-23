@@ -144,8 +144,8 @@ type moveBody struct {
 
 // move moves a routine to another standing for the caller in ctx, which
 // needs the owner role on the agent. A move to live writes the runbook of
-// the routine to the wiki; a runbook that does not land leaves the move
-// as it is, and the log says why.
+// the routine to the wiki, and a later move writes it again. A runbook
+// that does not land leaves the move as it is, and the log says why.
 func move(ctx context.Context, a *fw.Agent, s *Store, agent, name string, in moveBody) (Record, bool, error) {
 	if err := checkKey(agent, name); err != nil {
 		return Record{}, false, err
@@ -162,14 +162,14 @@ func move(ctx context.Context, a *fw.Agent, s *Store, agent, name string, in mov
 		return rec, moved, err
 	}
 	a.Logger().Info("routines: a routine moved", "agent", agent, "routine", name, "version", rec.Version(), "standing", rec.Standing, "by", by)
-	if rec.Standing == Live {
-		full, err := s.Get(ctx, agent, name)
-		if err == nil {
-			_, err = writeRunbook(ctx, a, full)
-		}
-		if err != nil {
-			a.Logger().Warn("routines: the runbook of a signed-off routine did not land", "agent", agent, "routine", name, "error", err)
-		}
+	// A sign-off writes the runbook, and each later move writes it again,
+	// so the page always says the standing of the routine.
+	full, err := s.Get(ctx, agent, name)
+	if err == nil {
+		_, err = writeRunbook(ctx, a, full)
+	}
+	if err != nil {
+		a.Logger().Warn("routines: the runbook of a routine did not follow its move", "agent", agent, "routine", name, "error", err)
 	}
 	return rec, true, nil
 }
