@@ -434,3 +434,45 @@ func TestPoolsAskTheTaskForEachRun(t *testing.T) {
 		t.Fatal("Busy with a wrong token answered")
 	}
 }
+
+// A Task of a pool that appears after the front started reaches the view
+// of the pools at the next read of the Task list, also while the reads of
+// the runs of a Task that just started hold the poll. Before, the pools
+// showed the Tasks of the last pass, which runs after those reads, so
+// during a roll of every pool the page showed the Tasks that were up when
+// the front started for many minutes, and a reload read the same.
+func TestPoolsShowANewTaskWhileReadsWait(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "team")
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
+	t.Setenv("FRONT_TICKETS_TOKEN", "tickets-secret")
+	ctx := context.Background()
+	ax := newPoolAX(t)
+	tasks := newFakeTasks(t)
+	front := newMember(t, fw.NewMemBus(), "front", poolFront(t, ax, strings.TrimPrefix(tasks.srv.URL, "http://"), poolBlock))
+	eventually(t, "the pool is ready", func() bool {
+		ps, err := front.f.Pools(ctx)
+		return err == nil && len(ps) == 1 && ps[0].Ready == 2
+	})
+	// Another replica of the front, or a roll, brings a Task of the pool
+	// that answers no read yet.
+	release := make(chan struct{})
+	tasks.mu.Lock()
+	tasks.block["team/triage-2"] = release
+	tasks.mu.Unlock()
+	t.Cleanup(func() { close(release) })
+	made := ax.get("team", "triage-0")
+	made.Metadata.Name = "triage-2"
+	ax.put(made, "Running")
+	eventually(t, "the pools list the new Task", func() bool {
+		ps, err := front.f.Pools(ctx)
+		if err != nil || len(ps) != 1 {
+			return false
+		}
+		for _, task := range ps[0].Tasks {
+			if task.Name == "triage-2" && task.Phase == "Running" && task.Current {
+				return true
+			}
+		}
+		return false
+	})
+}

@@ -51,6 +51,10 @@ const fillPauseMax = 5 * time.Minute
 // and one interval of the Task list.
 const fillRepairInterval = time.Minute
 
+// fillParallel bounds the reads of the runs of Tasks that one poll makes
+// at once.
+const fillParallel = 8
+
 // EgressTypes are the ledger event types that a worker publishes for the
 // view of the front: enough for the state, the title, the pending
 // approval, the turns, the activity, and the reactions of a run. The
@@ -430,6 +434,13 @@ func (p *platform) poll(ctx context.Context) {
 		}
 	}
 	p.mu.Unlock()
+	// The pools show the Tasks of this list at once: the reads below wait
+	// up to readTimeout for each Task that just started.
+	p.observePools(listed, failed)
+	// The reads of the Tasks go side by side, so a poll waits for the
+	// slowest read and not for their sum.
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, fillParallel)
 	for _, m := range fill {
 		p.mu.Lock()
 		live := p.members[m.name] == m && m.state == MemberLive
@@ -437,10 +448,18 @@ func (p *platform) poll(ctx context.Context) {
 			m.filling, m.filled = false, false
 		}
 		p.mu.Unlock()
-		if live {
-			p.backfill(ctx, m)
+		if !live {
+			continue
 		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(m *platformMember) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			p.backfill(ctx, m)
+		}(m)
 	}
+	wg.Wait()
 	p.mu.Lock()
 	for _, atespace := range p.atespaces {
 		if failed[atespace] == nil {

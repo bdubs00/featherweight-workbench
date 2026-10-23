@@ -63,16 +63,26 @@ type fakeTasks struct {
 	// token of the fleet.
 	runs   map[string]map[string]*fw.Run
 	tokens map[string]string
+	// block holds the requests to an actor until the channel closes, as a
+	// Task that just started holds a read.
+	block map[string]chan struct{}
 }
 
 func newFakeTasks(t *testing.T) *fakeTasks {
 	t.Helper()
-	ft := &fakeTasks{status: map[string]view.Status{}, reads: map[string]int{}, runs: map[string]map[string]*fw.Run{}, tokens: map[string]string{}}
+	ft := &fakeTasks{status: map[string]view.Status{}, reads: map[string]int{}, runs: map[string]map[string]*fw.Run{}, tokens: map[string]string{}, block: map[string]chan struct{}{}}
 	ft.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		actor := r.Header.Get("ate-target-actor")
 		ft.mu.Lock()
-		own := ft.tokens[actor]
+		own, block := ft.tokens[actor], ft.block[actor]
 		ft.mu.Unlock()
+		if block != nil {
+			select {
+			case <-block:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		auth := r.Header.Get("Authorization")
 		if actor == "" || (auth != "Bearer fleet-secret" && (own == "" || auth != "Bearer "+own)) {
 			http.Error(w, "unexpected request", http.StatusBadRequest)

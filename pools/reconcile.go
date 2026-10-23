@@ -544,6 +544,43 @@ func (r *Reconciler) memberOf(t *v1alpha1.Task, idx int, p *Pool) *member {
 	return m
 }
 
+// Observe returns the state of a pool with the Tasks of a fresh list of its
+// atespace, with no change and no call: the Tasks of the pool by name, each
+// with its phase and whether it runs the current configuration, and the
+// counts. The reasons of the last pass and the notes of the Tasks that it
+// knew stay as prev holds them. The front applies it right after each
+// read of the Task list, so the view shows each Task of a pool within one
+// interval, also while the reads that a pass needs take long.
+func (r *Reconciler) Observe(p *Pool, prev Status, tasks []*v1alpha1.Task) Status {
+	st := prev
+	notes := make(map[string]string, len(prev.Tasks))
+	for _, t := range prev.Tasks {
+		notes[t.Name] = t.Note
+	}
+	var owned []*member
+	for _, t := range tasks {
+		idx, ok := p.indexOf(t.GetMetadata().GetName())
+		if !ok || envOf(t, EnvPool) != p.Name {
+			continue
+		}
+		owned = append(owned, r.memberOf(t, idx, p))
+	}
+	sort.Slice(owned, func(i, j int) bool { return owned[i].index < owned[j].index })
+	st.Tasks = make([]TaskStatus, 0, len(owned))
+	st.Actual, st.Ready = 0, 0
+	for _, m := range owned {
+		st.Tasks = append(st.Tasks, TaskStatus{Name: m.name, Phase: m.phase, Current: m.current, Note: notes[m.name]})
+		if m.phase == v1alpha1.PhaseTerminating || m.broken() {
+			continue
+		}
+		st.Actual++
+		if m.current && m.up() {
+			st.Ready++
+		}
+	}
+	return st
+}
+
 // hold returns why a pass must change nothing in the pool, or "". The
 // generation orders the configurations of a pool. A front is superseded
 // when the marker of the pool or a Task of the pool carries a higher

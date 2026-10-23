@@ -88,6 +88,34 @@ func (p *platform) startPools(list []*pools.Pool, vals *pools.Values) {
 	p.f.log.Info("fleet keeps the pools", "pools", strings.Join(names, ","), "templates", pools.TemplateNames(p.f.templates))
 }
 
+// observePools gives each pool the Tasks of the list that the poll just
+// read (pools.Reconciler.Observe), before the reads of the Tasks and the
+// pass, which can take minutes while the Tasks of a roll start. So the
+// view lists a new Task of a pool within one interval. A pool whose
+// atespace the front could not list, and a pool that no pass merged yet,
+// keep their state. The caller holds no lock.
+func (p *platform) observePools(listed map[string][]*v1alpha1.Task, failed map[string]error) {
+	if p.reconciler == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	names := make([]string, 0, len(p.pools)+len(p.rt))
+	for _, pool := range p.pools {
+		names = append(names, pool.Name)
+	}
+	for name := range p.rt {
+		names = append(names, name)
+	}
+	for _, name := range names {
+		merged := p.merged[name]
+		if merged == nil || failed[merged.Atespace] != nil {
+			continue
+		}
+		p.poolState[name] = p.reconciler.Observe(merged, p.poolState[name], listed[merged.Atespace])
+	}
+}
+
 // reconcilePools runs one pass of every pool over the Tasks of its
 // atespace: the pools of the file, then the runtime pools of the store
 // (runtime.go). A pool whose atespace the front could not list keeps its
