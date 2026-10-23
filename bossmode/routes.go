@@ -15,6 +15,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/routines"
 )
 
 // extension mounts the routes with workbench.bossmode.enabled: the page
@@ -46,7 +47,9 @@ func extension(k *native.Kit) error {
 // reads, as the package bridges reads them (bridges.Load), the theme of
 // the deployment, the worker templates from which the page offers a
 // choice when it creates an agent (fleet.TemplatesOf), an empty list for
-// none, and the quick chat, when the configuration names one.
+// none, the quick chat, when the configuration names one, and whether this
+// process keeps routines and serves their routes, so the page shows the
+// place Routines only then.
 type Settings struct {
 	Manager    *Manager   `json:"manager"`
 	Placement  string     `json:"placement"`
@@ -54,6 +57,7 @@ type Settings struct {
 	Theme      PageTheme  `json:"theme"`
 	Templates  []Template `json:"templates"`
 	Chat       *QuickChat `json:"chat"`
+	Routines   bool       `json:"routines"`
 }
 
 // ChatView is the value of the metadata key fw.view (dashboard.ViewKey)
@@ -102,7 +106,7 @@ func settingsRoute(k *native.Kit, c Config) http.HandlerFunc {
 			k.Fail(w, r, err)
 			return
 		}
-		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers, Theme: pageTheme(a, c.Theme), Templates: []Template{}}
+		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers, Theme: pageTheme(a, c.Theme), Templates: []Template{}, Routines: routines.Of(a) != nil}
 		for _, t := range fleet.TemplatesOf(a) {
 			out.Templates = append(out.Templates, Template{Name: t.Name, Default: t.Default})
 		}

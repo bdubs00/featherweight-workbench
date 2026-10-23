@@ -277,6 +277,12 @@ func TestFeedRoutines(t *testing.T) {
 		t.Fatalf("start the routines: %v, %v", cl, err)
 	}
 	t.Cleanup(func() { _ = cl.Close() })
+	// The settings tell the page that this process keeps routines, so it
+	// shows the place Routines.
+	var set Settings
+	if resp, body := get(t, fr.url+"/v1/bossmode", "ada"); resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &set) != nil || !set.Routines {
+		t.Fatalf("settings with routines: %d %s", resp.StatusCode, body)
+	}
 	ada := openStream(t, fr, "ada", "")
 	carol := openStream(t, fr, "carol", "")
 	ctx := context.Background()

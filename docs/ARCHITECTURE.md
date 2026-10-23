@@ -138,6 +138,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `GET /v1/pools`, `GET /v1/pools/{name}` | The pools that the caller can view, of the file and of the store, with `source` and `template` (section 14.10). On a front with pools or templates. |
 | `POST /v1/pools`, `PATCH /v1/pools/{name}`, `DELETE /v1/pools/{name}` | Create, change, or delete a runtime pool (section 14.10). |
 | `GET /v1/templates` | The worker templates, with `default`, and no image, variable, or egress rule (section 14.10). |
+| `GET /v1/fleet/orphans`, `DELETE /v1/fleet/orphans` | The child Tasks whose parent Task is gone, and their removal, for an admin (section 14.10). |
 | `GET /v1/home` | The home of the caller: the runs that need the caller, the runs in progress, and the recent results (section 6.3). |
 | `GET /v1/home/others` | The top-level runs of the people outside the teams of the caller, newest first, at most 200, as `{"runs": [...]}` (section 8). |
 | `GET /v1/runs/{id}/result` | What the run produced and what it needs next (section 6.3). The read authorizes the caller as `GET /v1/runs/{id}` does. |
@@ -1616,6 +1617,8 @@ A pass. At each pass, after the pools of the file, the front reads every entry o
 
 The delete. A delete of a runtime pool sets `deleting` and `replicas: 0` in its entry. The pool then needs no profile, so it runs without its overlay, and the front deletes each Task once it is idle, as section 14.4 says. Once the Task list shows no Task of the pool, the front deletes the marker of the pool and removes the entry, at the revision that it read. A Task that failed after it ran keeps the entry until a person deletes the Task. A deleted pool changes no more. While it goes, its agent is gone: `agents_list` leaves the profiles of the pool out, and a new agent of that name gets a conflict until the pool is gone. The overlay of the pool stays in its bucket, so a pool of that name later finds its profiles and its rules again. An entry whose name a pool of the file holds owns no Task, so a delete removes it at once.
 
+Orphan Tasks. A child Task names its parent in `FW_PARENT_MEMBER`, and the kernel in the parent Task removes it once its runs ended (the kernel architecture, section 11.9). The kernel also removes the children of an earlier Task of the same name. A pool that replaces a Task under another name, such as `manager-1` after `manager-0`, leaves the children of the old Task behind, and no kernel removes them. Such a child Task is an orphan: the Task list of its atespace does not hold its parent, or ax created the parent after the child, so the parent is a later Task of the same name. A Task under an orphan is an orphan too. A parent in an atespace that the front does not list is unknown, so its child is no orphan. The front reads the Task lists again for each request, and a list that fails stops the request with 502. An admin of the front lists the orphans and removes them, from the page or with the routes below. The removal deletes each Task before the Task above it, with the runs that it holds, also a run that works. A Task that ax no longer has counts as removed. The log of the front names each Task and the admin.
+
 The routes and the tools. These routes sit behind the authentication of the native API:
 
 | Method and path | Purpose |
@@ -1626,6 +1629,8 @@ The routes and the tools. These routes sit behind the authentication of the nati
 | `PATCH /v1/pools/{name}` | Changes a runtime pool. The body holds `replicas`, `env`, `resources`, and `template`, each optional. `env` replaces the variables of the pool, and `[]` clears them. `resources` replaces its resource values, and `{}` clears them. The answer is 200 with the pool, one generation higher when the change touches what the workers run. |
 | `DELETE /v1/pools/{name}` | Deletes a runtime pool, as the delete above says. The answer is 202 with the pool, which carries `deleting`. |
 | `GET /v1/templates` | The templates, as `{"templates": [...]}`. Each has `name`, `default`, `atespace`, `model` when the template names one, and `generation`. The list holds no image, no variable, and no egress rule. |
+| `GET /v1/fleet/orphans` | The orphan Tasks, as `{"orphans": [...]}`, each Task before the Task above it. Each has `member` (`<atespace>/<task>`), `parent` (`FW_PARENT_MEMBER`), `phase`, `pool` when the Task carries `FW_POOL`, `createdAt`, and `open`, the runs of the Task that the view holds as not ended. Only an admin of the front reads it, and another caller gets 403. A front that reads no Task list answers 404. |
+| `DELETE /v1/fleet/orphans` | Removes the orphan Tasks, as the paragraph above says. The answer is 200 with `removed`, the Tasks that went, and `failed`, each Task whose delete failed with `member` and `error`. Only an admin of the front removes them. |
 
 A name that a pool of the file or of the store holds answers 409, and so does a change of a deleted pool. A pool that no entry holds answers 404, a change of a pool of the file answers 400 and says to change `fw.yaml`, and a body that does not fit answers 400 with the problem. The MCP tools do the same work: `pools_list`, `templates_list`, `pool_put`, which creates a pool when it gets `agent` and changes the pool of the name without it, and `pool_delete`. The package `workers` holds the routes and the tools, and it registers them through `native.Extend` and `mcp.RegisterTools` on a front whose fleet keeps pools or templates. A runtime pool of `POST /v1/pools` waits for the profile of its agent until `agent_put` with `pool` writes it. `agent_put` with `workers` creates the agent and its pool in one call (below).
 
@@ -1874,7 +1879,8 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
   "maxMembers": 16,
   "theme": {"accent": "#FF4D00", "name": "", "logo": ""},
   "templates": [{"name": "general", "default": true}, {"name": "python", "default": false}],
-  "chat": {"agent": "chat", "member": "default/manager-0"}
+  "chat": {"agent": "chat", "member": "default/manager-0"},
+  "routines": true
 }
 ```
 
@@ -1885,6 +1891,7 @@ The fleet sends its changes through `Watch` (section 4.15), and the service of b
 - `theme` is the theme of the deployment (section 17.1). `accent` is the accent of the configuration, else `#FF4D00`. `name` is the name of the organization, else `""`. `logo` is `"/v1/bossmode/logo"` when the configuration names a logo, else `""`.
 - `templates` names the worker templates of the front in the order of the configuration, each with `default`, so the page offers the choice when it creates an agent. It is `[]` without templates. The page creates the agent and its workers with `PUT /v1/agents/{name}` and `workers` (section 14.10).
 - `chat` is `null` when `workbench.bossmode.chat.agent` is empty. `chat.agent` is the profile of the quick chat (section 17.7). `chat.member` is `workbench.bossmode.chat.member` as the configuration names it. Without it, the settings pick the member as for `manager.member`, with the profile of the quick chat in the place of the manager, and the answer names only a member that the caller can see, else `""`.
+- `routines` is true when this process keeps routines and serves their routes (section 21). It is false when `workbench.routines.enabled` turns them off or the bus keeps no store, and the page then shows no place Routines.
 
 `GET /v1/bossmode/logo`, behind the authentication of the native API, serves the logo with its content type, `image/svg+xml` or `image/png`, and an `ETag`, the SHA-256 of the body in quotes. `If-None-Match` with the ETag answers 304. An SVG goes out as the sanitizer wrote it, and a PNG goes out as it is. The answer carries `Cache-Control: private, no-cache`, `X-Content-Type-Options: nosniff`, and the content security policy of a face (section 16.3). Without a logo, the route answers 404. An `img` element sends no bearer token, so the page reads the logo with `fetch` and shows it as a blob URL, as it shows a face.
 
