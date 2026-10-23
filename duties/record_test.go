@@ -2,6 +2,7 @@ package duties
 
 import (
 	"encoding/json"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -42,58 +43,59 @@ func TestNormalizeDefaults(t *testing.T) {
 	}
 }
 
-// Each problem of a record names its field in words.
+// Each problem of a record starts with the dotted path of its field and
+// a colon, and says the problem in words.
 func TestProblems(t *testing.T) {
 	for _, c := range []struct {
 		mut  func(*Duty)
 		want string
 	}{
-		{func(d *Duty) { d.Name = "Daily Report" }, `The name "Daily Report" must be 1 to 63 of a-z, 0-9, '-', and '_'.`},
-		{func(d *Duty) { d.Agent = "" }, "agent is required"},
-		{func(d *Duty) { d.When = When{} }, "when needs a start"},
-		{func(d *Duty) { d.When.Webhook = &Webhook{Auth: WebhookAuth{Mode: "none"}} }, "when holds more than one start"},
-		{func(d *Duty) { d.When.Schedule.Times = []string{"25:00"} }, `when.schedule: times holds "25:00"`},
-		{func(d *Duty) { d.When = When{Event: &Event{Kind: "lunch"}} }, `when.event.kind is "lunch"`},
-		{func(d *Duty) { d.When = When{Webhook: &Webhook{}} }, "when.webhook.auth.mode is required"},
-		{func(d *Duty) { d.When = When{Webhook: &Webhook{Auth: WebhookAuth{Mode: "bearer"}}} }, "when.webhook.auth.secret must name the variable"},
-		{func(d *Duty) { d.When = When{Webhook: &Webhook{Auth: WebhookAuth{Mode: "none", Secret: "X"}}} }, "the mode is none"},
+		{func(d *Duty) { d.Name = "Daily Report" }, `name: The name "Daily Report" must be 1 to 63 of a-z, 0-9, '-', and '_'.`},
+		{func(d *Duty) { d.Agent = "" }, "agent: Name the agent"},
+		{func(d *Duty) { d.When = When{} }, "when: Pick a start"},
+		{func(d *Duty) { d.When.Webhook = &Webhook{Auth: WebhookAuth{Mode: "none"}} }, "when: Keep one start"},
+		{func(d *Duty) { d.When.Schedule.Times = []string{"25:00"} }, `when.schedule.times: times holds "25:00"`},
+		{func(d *Duty) { d.When = When{Event: &Event{Kind: "lunch"}} }, `when.event.kind: "lunch" is not a kind of event`},
+		{func(d *Duty) { d.When = When{Webhook: &Webhook{}} }, "when.webhook.auth.mode: Pick bearer, hmac, or none"},
+		{func(d *Duty) { d.When = When{Webhook: &Webhook{Auth: WebhookAuth{Mode: "bearer"}}} }, "when.webhook.auth.secret: Name the variable"},
+		{func(d *Duty) { d.When = When{Webhook: &Webhook{Auth: WebhookAuth{Mode: "none", Secret: "X"}}} }, "when.webhook.auth.secret: The mode is none"},
 		{func(d *Duty) {
 			d.When = When{Webhook: &Webhook{Auth: WebhookAuth{Mode: "none"}, Key: "a..b"}}
-		}, "when.webhook.key"},
-		{func(d *Duty) { d.Do = Do{} }, "do needs an action"},
-		{func(d *Duty) { d.Do.Manager = &AskManager{Message: "x"} }, "do holds more than one action"},
-		{func(d *Duty) { d.Do.Ask.Message = " " }, "do.ask.message is empty"},
-		{func(d *Duty) { d.Do.Ask.Message = strings.Repeat("x", MaxMessageBytes+1) }, "longer than 32 KB"},
-		{func(d *Duty) { d.Limits.Budget = nil }, "limits.budget is required"},
+		}, `when.webhook.key: "a..b" is not a dotted path`},
+		{func(d *Duty) { d.Do = Do{} }, "do: Pick an action"},
+		{func(d *Duty) { d.Do.Manager = &AskManager{Message: "x"} }, "do: Keep one action"},
+		{func(d *Duty) { d.Do.Ask.Message = " " }, "do.ask.message: The message is empty"},
+		{func(d *Duty) { d.Do.Ask.Message = strings.Repeat("x", MaxMessageBytes+1) }, "do.ask.message: The text is longer than 32 KB"},
+		{func(d *Duty) { d.Limits.Budget = nil }, "limits.budget: A budget is required"},
 		{func(d *Duty) { d.Limits.Budget = &Budget{} }, "a paid default would be a silent cost"},
-		{func(d *Duty) { d.Limits.Budget.MaxTurns = -1 }, "a limit below zero"},
-		{func(d *Duty) { d.Limits.PerDayUSD = -1 }, "limits.perDayUSD is below zero"},
-		{func(d *Duty) { d.Limits.Overlap = "never" }, `limits.overlap is "never"`},
-		{func(d *Duty) { d.Limits.CatchUp = "25h" }, `limits.catchUp is "25h"`},
-		{func(d *Duty) { d.Limits.Retries = intp(4) }, "limits.retries is 4"},
-		{func(d *Duty) { d.WhileAway = &WhileAway{Decider: "boss", Timeout: "2h", Then: "deny"} }, `whileAway.decider is "boss"`},
-		{func(d *Duty) { d.WhileAway = &WhileAway{Decider: "nobody", Timeout: "10s", Then: "deny"} }, `whileAway.timeout is "10s"`},
-		{func(d *Duty) { d.WhileAway = &WhileAway{Decider: "nobody", Timeout: "1h", Then: "allow"} }, `whileAway.then is "allow"`},
-		{func(d *Duty) { d.Notify = &Notify{Failure: []string{""}} }, `notify.failure holds ""`},
-		{func(d *Duty) { d.RunAs = "root" }, `runAs is "root"`},
-		{func(d *Duty) { d.CheckFirst = &CheckFirst{Key: "id"} }, "checkFirst.look needs http"},
+		{func(d *Duty) { d.Limits.Budget.MaxTurns = -1 }, "limits.budget: A limit is below zero"},
+		{func(d *Duty) { d.Limits.PerDayUSD = -1 }, "limits.perDayUSD: The cap is below zero"},
+		{func(d *Duty) { d.Limits.Overlap = "never" }, `limits.overlap: "never" is not an overlap`},
+		{func(d *Duty) { d.Limits.CatchUp = "25h" }, `limits.catchUp: "25h" is not a span`},
+		{func(d *Duty) { d.Limits.Retries = intp(4) }, "limits.retries: 4 is out of range"},
+		{func(d *Duty) { d.WhileAway = &WhileAway{Decider: "boss", Timeout: "2h", Then: "deny"} }, `whileAway.decider: "boss" is not a decider`},
+		{func(d *Duty) { d.WhileAway = &WhileAway{Decider: "nobody", Timeout: "10s", Then: "deny"} }, `whileAway.timeout: "10s" is not a span`},
+		{func(d *Duty) { d.WhileAway = &WhileAway{Decider: "nobody", Timeout: "1h", Then: "allow"} }, `whileAway.then: "allow" is not a choice`},
+		{func(d *Duty) { d.Notify = &Notify{Failure: []string{""}} }, `notify.failure: "" is not owner`},
+		{func(d *Duty) { d.RunAs = "root" }, `runAs: "root" is not a choice`},
+		{func(d *Duty) { d.CheckFirst = &CheckFirst{Key: "id"} }, "checkFirst.look: Pick http"},
 		{func(d *Duty) {
 			d.CheckFirst = &CheckFirst{Look: Look{HTTP: &LookHTTP{URL: "https://x"}, Tool: "t"}, Key: "id"}
-		}, "checkFirst.look holds http and tool"},
-		{func(d *Duty) { d.CheckFirst = &CheckFirst{Look: Look{HTTP: &LookHTTP{URL: "ftp://x"}}, Key: "id"} }, "absolute http or https"},
+		}, "checkFirst.look: Keep one of http and tool"},
+		{func(d *Duty) { d.CheckFirst = &CheckFirst{Look: Look{HTTP: &LookHTTP{URL: "ftp://x"}}, Key: "id"} }, "checkFirst.look.http.url: Write an absolute http or https address"},
 		{func(d *Duty) {
 			d.CheckFirst = &CheckFirst{Look: Look{HTTP: &LookHTTP{URL: "https://u:p@x"}}, Key: "id"}
-		}, "holds a user or a password"},
-		{func(d *Duty) { d.CheckFirst = &CheckFirst{Look: Look{HTTP: &LookHTTP{URL: "https://x"}}} }, "checkFirst.key is required with wake new"},
+		}, "checkFirst.look.http.url: The address holds a user or a password"},
+		{func(d *Duty) { d.CheckFirst = &CheckFirst{Look: Look{HTTP: &LookHTTP{URL: "https://x"}}} }, "checkFirst.key: A key is required with wake new"},
 		{func(d *Duty) {
 			d.CheckFirst = &CheckFirst{Look: Look{HTTP: &LookHTTP{URL: "https://x"}}, Key: "id", Where: []Where{{Field: "p"}}}
-		}, "needs exactly one of is"},
+		}, "checkFirst.where[0]: A filter needs exactly one of is"},
 		{func(d *Duty) {
 			d.CheckFirst = &CheckFirst{Look: Look{HTTP: &LookHTTP{URL: "https://x"}}, Wake: Wake{When: WakeAtLeast}}
-		}, "checkFirst.wake.count must be 1 or more"},
+		}, "checkFirst.wake.count: Write 1 or more"},
 		{func(d *Duty) {
 			d.CheckFirst = &CheckFirst{Look: Look{HTTP: &LookHTTP{URL: "https://x"}}, Wake: Wake{When: "often"}}
-		}, `checkFirst.wake.when is "often"`},
+		}, `checkFirst.wake.when: "often" is not a choice`},
 	} {
 		d := daily("report")
 		c.mut(&d)
@@ -102,8 +104,17 @@ func TestProblems(t *testing.T) {
 		if !strings.Contains(got, c.want) {
 			t.Errorf("problems = %q, want %q", got, c.want)
 		}
+		for _, q := range d.problems() {
+			if !problemPattern.MatchString(q) {
+				t.Errorf("the problem %q does not start with the path of its field", q)
+			}
+		}
 	}
 }
+
+// problemPattern is a problem of a field: a dotted path, a colon, and the
+// text.
+var problemPattern = regexp.MustCompile(`^[a-z][A-Za-z]*(\[[0-9]+\])?(\.[a-z][A-Za-z]*(\[[0-9]+\])?)*: \S`)
 
 // The wake of a check reads as an object or as a word alone, and an
 // object with an unknown key does not read.

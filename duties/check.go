@@ -71,7 +71,7 @@ func (s *Service) look(ctx context.Context, d *Duty) ([]byte, error) {
 	}
 	host := hostOf(h.URL)
 	if p := s.cfg.lookProblems(h); len(p) > 0 {
-		return nil, fmt.Errorf("%s", strings.TrimSuffix(p[0], "."))
+		return nil, fmt.Errorf("%s", strings.TrimSuffix(problemText(p[0]), "."))
 	}
 	value := ""
 	if h.Secret != "" {

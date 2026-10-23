@@ -44,7 +44,7 @@ func TestTools(t *testing.T) {
 		t.Fatalf("a write = %s", textOf(res))
 	}
 	bad := map[string]any{"agent": "triage", "when": map[string]any{"say": "every weekday at 9am"}, "do": map[string]any{"ask": map[string]any{"message": "x"}}}
-	if res := call(t, cs, ToolPut, map[string]any{"name": "nobudget", "duty": bad}); !res.IsError || !strings.Contains(textOf(res), "limits.budget is required") {
+	if res := call(t, cs, ToolPut, map[string]any{"name": "nobudget", "duty": bad}); !res.IsError || !strings.Contains(textOf(res), "limits.budget: A budget is required") {
 		t.Fatalf("a write without a budget = %s", textOf(res))
 	}
 	res = call(t, cs, ToolGet, map[string]any{"name": "report"})

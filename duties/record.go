@@ -462,39 +462,41 @@ func (w When) starts() int {
 	return n
 }
 
-// problems lists what does not fit in a normalized duty, in words, each
-// naming its field. It reads the record alone; the service adds what
-// needs the fleet and the configuration (Service.problems).
+// problems lists what does not fit in a normalized duty, in words. Each
+// problem of a field starts with the dotted path of the field and a colon,
+// such as "limits.budget: ...", so the page shows the text beside the
+// field. It reads the record alone; the service adds what needs the fleet
+// and the configuration (Service.contextProblems).
 func (d *Duty) problems() []string {
 	var p []string
-	add := func(format string, args ...any) { p = append(p, fmt.Sprintf(format, args...)) }
+	add := func(path, format string, args ...any) { p = append(p, problem(path, format, args...)) }
 	if err := CheckName(d.Name); err != nil {
-		add("%s.", capital(err.Error()))
+		add("name", "%s.", capital(err.Error()))
 	}
 	if d.Agent == "" {
-		add("agent is required: it names the agent that does the duty, and the access rules of the duty are those of the agent.")
+		add("agent", "Name the agent that does the duty. The access rules of the duty are those of the agent.")
 	}
 	switch d.When.starts() {
 	case 0:
-		add("when needs a start: schedule, say, event, or webhook.")
+		add("when", "Pick a start: schedule, say, event, or webhook.")
 	case 1:
 	default:
-		add("when holds more than one start: keep one of schedule, say, event, and webhook.")
+		add("when", "Keep one start of schedule, say, event, and webhook.")
 	}
 	if s := d.When.Schedule; s != nil {
 		for _, q := range s.Check() {
-			add("when.schedule: %s", q)
+			p = append(p, scheduleProblem(q))
 		}
 	}
 	if e := d.When.Event; e != nil {
 		switch e.Kind {
 		case EventBridgeClosed, EventRunFailed, EventQuestionWaiting, EventPageChanged, EventRoutineReady, EventCapReached:
 		default:
-			add("when.event.kind is %q: pick bridge.closed, run.failed, question.waiting, page.changed, routine.ready, or cap.reached.", e.Kind)
+			add("when.event.kind", "%q is not a kind of event. Pick bridge.closed, run.failed, question.waiting, page.changed, routine.ready, or cap.reached.", e.Kind)
 		}
 		if e.After != "" {
 			if v, err := readDur(e.After); err != nil || v < 0 {
-				add("when.event.after is %q: write a span such as 1h.", e.After)
+				add("when.event.after", "%q is not a span. Write a span such as 1h.", e.After)
 			}
 		}
 	}
@@ -502,22 +504,22 @@ func (d *Duty) problems() []string {
 		switch w.Auth.Mode {
 		case sources.AuthBearer, sources.AuthHMAC:
 			if !envPattern.MatchString(w.Auth.Secret) {
-				add("when.webhook.auth.secret must name the variable of the front that holds the %s secret.", w.Auth.Mode)
+				add("when.webhook.auth.secret", "Name the variable of the front that holds the %s secret.", w.Auth.Mode)
 			}
 			if w.Auth.Mode == sources.AuthHMAC && !headerPattern.MatchString(w.Auth.Header) {
-				add("when.webhook.auth.header %q is not a header name.", w.Auth.Header)
+				add("when.webhook.auth.header", "%q is not a header name.", w.Auth.Header)
 			}
 		case sources.AuthNone:
 			if w.Auth.Secret != "" {
-				add("when.webhook.auth.secret is set, and the mode is none.")
+				add("when.webhook.auth.secret", "The mode is none, so leave out the secret.")
 			}
 		case "":
-			add("when.webhook.auth.mode is required: bearer, hmac, or none. A webhook without a credential must say none.")
+			add("when.webhook.auth.mode", "Pick bearer, hmac, or none. A webhook without a credential says none.")
 		default:
-			add("when.webhook.auth.mode is %q: pick bearer, hmac, or none.", w.Auth.Mode)
+			add("when.webhook.auth.mode", "%q is not a mode. Pick bearer, hmac, or none.", w.Auth.Mode)
 		}
 		if w.Key != "" && !pathPattern.MatchString(w.Key) {
-			add("when.webhook.key %q is not a dotted path, such as event.id.", w.Key)
+			add("when.webhook.key", "%q is not a dotted path, such as event.id.", w.Key)
 		}
 	}
 	if c := d.CheckFirst; c != nil {
@@ -525,109 +527,158 @@ func (d *Duty) problems() []string {
 	}
 	switch d.Do.count() {
 	case 0:
-		add("do needs an action: ask, with the message for the agent.")
+		add("do", "Pick an action, such as ask with the message for the agent.")
 	case 1:
 		msg := d.Do.Message()
 		switch {
 		case d.Do.Ask != nil && strings.TrimSpace(msg) == "":
-			add("do.ask.message is empty: say what the agent does.")
+			add("do.ask.message", "The message is empty. Say what the agent does.")
 		case len(msg) > MaxMessageBytes:
-			add("the message of do is longer than %d KB.", MaxMessageBytes>>10)
+			add(d.Do.messagePath(), "The text is longer than %d KB.", MaxMessageBytes>>10)
 		}
 	default:
-		add("do holds more than one action: keep one of ask, post, open, and manager.")
+		add("do", "Keep one action of ask, post, open, and manager.")
 	}
 	l := d.Limits
 	switch b := l.Budget; {
 	case b == nil || (b.MaxCostUSD <= 0 && b.MaxTurns <= 0 && b.MaxTokens <= 0 && b.MaxToolCalls <= 0):
-		add("limits.budget is required, with at least one limit above zero, such as {\"maxCostUSD\": 0.5}. A duty without a budget does not save, because a paid default would be a silent cost.")
+		add("limits.budget", "A budget is required, with at least one limit above zero, such as {\"maxCostUSD\": 0.5}. A duty without a budget does not save, because a paid default would be a silent cost.")
 	case b.MaxCostUSD < 0 || b.MaxTurns < 0 || b.MaxTokens < 0 || b.MaxToolCalls < 0:
-		add("limits.budget holds a limit below zero.")
+		add("limits.budget", "A limit is below zero.")
 	}
 	if l.PerDayUSD < 0 {
-		add("limits.perDayUSD is below zero: write 0 for no daily cap.")
+		add("limits.perDayUSD", "The cap is below zero. Write 0 for no daily cap.")
 	}
 	switch l.Overlap {
 	case OverlapSkip, OverlapQueue, OverlapAllow:
 	default:
-		add("limits.overlap is %q: pick skip, queue, or allow.", l.Overlap)
+		add("limits.overlap", "%q is not an overlap. Pick skip, queue, or allow.", l.Overlap)
 	}
 	if v, err := readDur(l.CatchUp); err != nil || v < 0 || v > MaxCatchUp {
-		add("limits.catchUp is %q: write a span from 0 to 24h, such as 1h.", l.CatchUp)
+		add("limits.catchUp", "%q is not a span from 0 to 24h. Write one such as 1h.", l.CatchUp)
 	}
 	if r := l.Retries; r != nil && (*r < 0 || *r > MaxRetries) {
-		add("limits.retries is %d: pick 0 to %d.", *r, MaxRetries)
+		add("limits.retries", "%d is out of range. Pick 0 to %d.", *r, MaxRetries)
 	}
 	if w := d.WhileAway; w != nil {
 		if w.Decider != "manager" && w.Decider != "nobody" {
-			add("whileAway.decider is %q: pick manager or nobody.", w.Decider)
+			add("whileAway.decider", "%q is not a decider. Pick manager or nobody.", w.Decider)
 		}
 		if v, err := readDur(w.Timeout); err != nil || v < MinAwayFor || v > MaxAwayFor {
-			add("whileAway.timeout is %q: write a span from 1m to 168h, such as 2h.", w.Timeout)
+			add("whileAway.timeout", "%q is not a span from 1m to 168h. Write one such as 2h.", w.Timeout)
 		}
 		if w.Then != "deny" && w.Then != "cancel" {
-			add("whileAway.then is %q: pick deny or cancel.", w.Then)
+			add("whileAway.then", "%q is not a choice. Pick deny or cancel.", w.Then)
 		}
 	}
 	if n := d.Notify; n != nil {
-		for field, list := range map[string][]string{"notify.failure": n.Failure, "notify.needsYou": n.NeedsYou} {
-			if len(list) > maxNotify {
-				add("%s names %d people: at most %d.", field, len(list), maxNotify)
+		for _, f := range []struct {
+			path string
+			list []string
+		}{{"notify.failure", n.Failure}, {"notify.needsYou", n.NeedsYou}} {
+			if len(f.list) > maxNotify {
+				add(f.path, "The list names %d people, and the most is %d.", len(f.list), maxNotify)
 			}
-			for _, who := range list {
+			for _, who := range f.list {
 				if strings.TrimSpace(who) == "" || len(who) > 256 || strings.ContainsAny(who, "\r\n\t") {
-					add("%s holds %q: write owner or the subject of a person.", field, who)
+					add(f.path, "%q is not owner or the subject of a person.", who)
 				}
 			}
 		}
 	}
 	if d.RunAs != RunAsDuty && d.RunAs != RunAsOwner {
-		add("runAs is %q: pick duty or owner.", d.RunAs)
+		add("runAs", "%q is not a choice. Pick duty or owner.", d.RunAs)
 	}
 	return p
 }
 
-// problems lists what does not fit in a check.
+// messagePath returns the dotted path of the text of the action of do:
+// the goal of open, else the message.
+func (d Do) messagePath() string {
+	if d.Open != nil {
+		return "do.open.goal"
+	}
+	if name := d.Name(); name != "" {
+		return "do." + name + ".message"
+	}
+	return "do"
+}
+
+// problem writes a problem of the field at the dotted path: the path, a
+// colon, and the text. A problem of the whole duty has no path.
+func problem(path, format string, args ...any) string {
+	text := fmt.Sprintf(format, args...)
+	if path == "" {
+		return text
+	}
+	return path + ": " + text
+}
+
+// problemText returns the text of a problem without the path of its
+// field.
+func problemText(p string) string {
+	if path, text, ok := strings.Cut(p, ": "); ok && pathPattern.MatchString(path) {
+		return text
+	}
+	return p
+}
+
+// scheduleFields are the fields of a schedule, the first word of most of
+// the problems of schedule.Check.
+var scheduleFields = map[string]bool{"repeat": true, "days": true, "everyWeeks": true, "dayOfMonth": true, "times": true, "every": true, "between": true, "timeZone": true, "start": true, "end": true}
+
+// scheduleProblem gives a problem of schedule.Check the path of its
+// field, such as when.schedule.times, else when.schedule.
+func scheduleProblem(q string) string {
+	word, _, _ := strings.Cut(q, " ")
+	if scheduleFields[word] {
+		return "when.schedule." + word + ": " + q
+	}
+	return "when.schedule: " + q
+}
+
+// problems lists what does not fit in a check, each with the path of its
+// field.
 func (c *CheckFirst) problems() []string {
 	var p []string
-	add := func(format string, args ...any) { p = append(p, fmt.Sprintf(format, args...)) }
+	add := func(path, format string, args ...any) { p = append(p, problem(path, format, args...)) }
 	switch {
 	case c.Look.HTTP != nil && c.Look.Tool != "":
-		add("checkFirst.look holds http and tool: keep one.")
+		add("checkFirst.look", "Keep one of http and tool.")
 	case c.Look.HTTP == nil && c.Look.Tool == "":
-		add("checkFirst.look needs http, with the address, or tool, with its input.")
+		add("checkFirst.look", "Pick http, with the address, or tool, with its input.")
 	case c.Look.HTTP != nil:
 		h := c.Look.HTTP
 		u, err := url.Parse(h.URL)
 		switch {
 		case err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
-			add("checkFirst.look.http.url must be an absolute http or https address.")
+			add("checkFirst.look.http.url", "Write an absolute http or https address.")
 		case u.User != nil:
-			add("checkFirst.look.http.url holds a user or a password: name a variable in secret instead.")
+			add("checkFirst.look.http.url", "The address holds a user or a password. Name a variable in secret instead.")
 		}
 		if h.Secret != "" && !envPattern.MatchString(h.Secret) {
-			add("checkFirst.look.http.secret %q must name a variable of the front.", h.Secret)
+			add("checkFirst.look.http.secret", "%q is not the name of a variable of the front.", h.Secret)
 		}
 		if h.Header != "" && (!headerPattern.MatchString(h.Header) || h.Secret == "") {
-			add("checkFirst.look.http.header %q must be a header name, and it needs secret.", h.Header)
+			add("checkFirst.look.http.header", "%q must be a header name, and it needs secret.", h.Header)
 		}
 		if c.Look.Input != nil {
-			add("checkFirst.look.input goes with tool, not with http.")
+			add("checkFirst.look.input", "The input goes with tool, not with http.")
 		}
 	}
 	if c.Items != "" && !pathPattern.MatchString(c.Items) {
-		add("checkFirst.items %q is not a dotted path, such as result.records.", c.Items)
+		add("checkFirst.items", "%q is not a dotted path, such as result.records.", c.Items)
 	}
 	switch {
 	case c.Key != "" && !pathPattern.MatchString(c.Key):
-		add("checkFirst.key %q is not a dotted path, such as number.", c.Key)
+		add("checkFirst.key", "%q is not a dotted path, such as number.", c.Key)
 	case c.Key == "" && c.Wake.When == WakeNew:
-		add("checkFirst.key is required with wake new: it names what makes an item new, such as number.")
+		add("checkFirst.key", "A key is required with wake new. It names what makes an item new, such as number.")
 	}
 	for i, w := range c.Where {
 		at := fmt.Sprintf("checkFirst.where[%d]", i)
 		if !pathPattern.MatchString(strings.TrimSpace(w.Field)) {
-			add("%s.field %q is not a dotted path, such as priority.", at, w.Field)
+			add(at+".field", "%q is not a dotted path, such as priority.", w.Field)
 		}
 		n := 0
 		for _, set := range []bool{len(w.Is) > 0, len(w.IsNot) > 0, w.OneOf != nil, len(w.Contains) > 0, len(w.AtLeast) > 0, len(w.AtMost) > 0} {
@@ -636,20 +687,20 @@ func (c *CheckFirst) problems() []string {
 			}
 		}
 		if n != 1 {
-			add("%s needs exactly one of is, isNot, oneOf, contains, atLeast, and atMost.", at)
+			add(at, "A filter needs exactly one of is, isNot, oneOf, contains, atLeast, and atMost.")
 		}
 	}
 	switch c.Wake.When {
 	case WakeNew, WakeAny:
 		if c.Wake.Count != 0 {
-			add("checkFirst.wake.count goes with atLeast.")
+			add("checkFirst.wake.count", "The count goes with atLeast.")
 		}
 	case WakeAtLeast:
 		if c.Wake.Count < 1 {
-			add("checkFirst.wake.count must be 1 or more with atLeast.")
+			add("checkFirst.wake.count", "Write 1 or more with atLeast.")
 		}
 	default:
-		add("checkFirst.wake.when is %q: pick new, any, or atLeast.", c.Wake.When)
+		add("checkFirst.wake.when", "%q is not a choice. Pick new, any, or atLeast.", c.Wake.When)
 	}
 	return p
 }

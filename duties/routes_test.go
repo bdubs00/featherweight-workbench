@@ -92,10 +92,10 @@ func TestRoutesDryRun(t *testing.T) {
 		t.Fatalf("a dry run saved: %d", resp.StatusCode)
 	}
 	for _, c := range []struct{ body, want string }{
-		{strings.Replace(words, "weekdays at 9am", "every Tuesday after lunch", 1), `Every Tuesday is clear. \"after lunch\" is not a time: pick one.`},
-		{strings.Replace(words, `"budget": {"maxTurns": 10}`, `"perDayUSD": 2`, 1), "limits.budget is required"},
-		{strings.Replace(words, `{"say": "weekdays at 9am"}`, `{"event": {"kind": "bridge.closed"}}`, 1), "when.event is not available yet"},
-		{strings.Replace(words, `{"ask": {"message": "Report."}}`, `{"post": {"bridge": "b", "message": "x"}}`, 1), "do.post is not available yet"},
+		{strings.Replace(words, "weekdays at 9am", "every Tuesday after lunch", 1), `when.say: Every Tuesday is clear. \"after lunch\" is not a time: pick one.`},
+		{strings.Replace(words, `"budget": {"maxTurns": 10}`, `"perDayUSD": 2`, 1), "limits.budget: A budget is required"},
+		{strings.Replace(words, `{"say": "weekdays at 9am"}`, `{"event": {"kind": "bridge.closed"}}`, 1), "when.event: Not available yet"},
+		{strings.Replace(words, `{"ask": {"message": "Report."}}`, `{"post": {"bridge": "b", "message": "x"}}`, 1), "do.post: Not available yet"},
 	} {
 		resp, b := send(t, http.MethodPut, one+"?dryRun=true", "alice", c.body)
 		if resp.StatusCode != http.StatusOK || !strings.Contains(b, c.want) {
@@ -106,13 +106,13 @@ func TestRoutesDryRun(t *testing.T) {
 			t.Errorf("write of %s = %d %s", c.body, resp.StatusCode, b)
 		}
 	}
-	if resp, b := send(t, http.MethodPut, one+"?dryRun=true", "alice", words, HeaderTimeZone, "Mars/Base"); !strings.Contains(b, `The time zone \"Mars/Base\" of the caller is not an IANA time zone`) {
+	if resp, b := send(t, http.MethodPut, one+"?dryRun=true", "alice", words, HeaderTimeZone, "Mars/Base"); !strings.Contains(b, `when.schedule.timeZone: The time zone \"Mars/Base\" of the caller is not an IANA time zone`) {
 		t.Fatalf("a bad zone = %d %s", resp.StatusCode, b)
 	}
 	if resp, _ := send(t, http.MethodPut, one+"?test=true", "alice", words); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("a test without a dry run = %d", resp.StatusCode)
 	}
-	if resp, b := send(t, http.MethodPut, one+"?dryRun=true&test=true", "alice", words); resp.StatusCode != http.StatusOK || !strings.Contains(b, "test runs checkFirst, and the duty has no check") {
+	if resp, b := send(t, http.MethodPut, one+"?dryRun=true&test=true", "alice", words); resp.StatusCode != http.StatusOK || !strings.Contains(b, "checkFirst: The test runs the check, and the duty has none") {
 		t.Fatalf("a test without a check = %d %s", resp.StatusCode, b)
 	}
 	if resp, b := send(t, http.MethodPut, one, "alice", `{"agent": "triage", "surprise": 1}`); resp.StatusCode != http.StatusBadRequest || !strings.Contains(b, "surprise") {
