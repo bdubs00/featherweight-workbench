@@ -34,7 +34,7 @@ func extension(k *native.Kit) error {
 	k.HandlePublic("GET "+Path+"/{file...}", pageRoute(c.Dir))
 	k.Handle("GET /v1/bossmode", settingsRoute(k, c))
 	k.Handle("GET "+LogoPath, logoRoute(a))
-	k.Handle("GET /v1/bossmode/stream", streamRoute(a))
+	k.Handle("GET /v1/bossmode/stream", streamRoute(a, c.Dir))
 	k.Handle("GET /v1/bossmode/agents/{agent}/today", todayRoute(k))
 	mountSkills(k)
 	mountImports(k)

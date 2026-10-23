@@ -18,14 +18,18 @@ import (
 )
 
 // streamRoute answers the stream of the agent, or 503 while the hub has
-// not started.
-func streamRoute(a *fw.Agent) http.HandlerFunc {
+// not started. The answer names the build of the page of dir in
+// HeaderPageBuild, when the page has one.
+func streamRoute(a *fw.Agent, dir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		h := Of(a)
 		if h == nil {
 			w.Header().Set("Retry-After", "5")
 			native.WriteProblem(w, r, http.StatusServiceUnavailable, "bossmode: the stream of this process has not started yet")
 			return
+		}
+		if b := pageBuild(dir); b != "" {
+			w.Header().Set(HeaderPageBuild, b)
 		}
 		h.ServeStream(w, r)
 	}
