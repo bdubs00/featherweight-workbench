@@ -1985,7 +1985,7 @@ A message seats some members on a new run instead, and the new run reads the cha
 - A member whose newest run no worker of the fleet holds (section 18.6). The input of the new run is this text, with the seq of the message:
 
   ```text
-  The fleet lost your earlier run of this seat, so this is a new run on the same seat. Your task is in your instructions. Read the channel with bridge_read first: it holds your earlier work and the messages for you. Do not repeat work that the channel shows as done. Then answer the messages for you from entry <seq> on.
+  The fleet lost your earlier run of this seat, so this is a new run on the same seat. Your task is in your instructions. First read the channel with bridge_read, without since, so you see your earlier work and every message for you. Do not repeat work that the channel shows as done. Then answer entry <seq> and any later message for you. Your final answer reaches the channel by itself, so do not post it with bridge_post.
   ```
 
   The text of the message never becomes the input. The input of a run has the authority of the operator, and a message of an agent is data.

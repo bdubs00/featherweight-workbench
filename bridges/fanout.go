@@ -102,11 +102,13 @@ type delivery struct {
 }
 
 // wakeInput is the input of the new run of a seat whose earlier run the
-// fleet lost, when a message seats it again. It sends the run to the
-// channel from the message seq on. The text of the message never becomes
-// the input, which has the authority of the operator.
+// fleet lost, when a message seats it again. It sends the run to the whole
+// channel, because a run that reads only from the message on misses its
+// earlier work and what people told it, and names the message to answer.
+// The text of the message never becomes the input, which has the
+// authority of the operator.
 func wakeInput(seq uint64) string {
-	return fmt.Sprintf("The fleet lost your earlier run of this seat, so this is a new run on the same seat. Your task is in your instructions. Read the channel with bridge_read first: it holds your earlier work and the messages for you. Do not repeat work that the channel shows as done. Then answer the messages for you from entry %d on.", seq)
+	return fmt.Sprintf("The fleet lost your earlier run of this seat, so this is a new run on the same seat. Your task is in your instructions. First read the channel with bridge_read, without since, so you see your earlier work and every message for you. Do not repeat work that the channel shows as done. Then answer entry %d and any later message for you. Your final answer reaches the channel by itself, so do not post it with bridge_post.", seq)
 }
 
 // header is the first line of a follow-up, which names the bridge, so a
