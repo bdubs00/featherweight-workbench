@@ -391,6 +391,62 @@ func TestMessageSeatsANotStartedSeat(t *testing.T) {
 	}
 }
 
+// A spawn bridge whose manager run stopped is no dead end: a message of
+// the person seats the members. A manager run that a person canceled
+// takes the seatings as follow-ups (TestMessageSeatsANotStartedSeat). A
+// manager run that stopped at a limit fails a follow-up at once, so the
+// message starts one new manager run with the plan of the seats. A
+// message of an agent seats nobody under a stopped manager run, because
+// only a person starts the work again.
+func TestMessageSeatsASpawnBridgeWhoseManagerStopped(t *testing.T) {
+	x := newSpawned(t)
+	ctx := context.Background()
+	// The manager posts while its run is canceled: nobody is seated.
+	if _, err := x.s.post(ctx, x.id, sender{handle: HandleManager, run: "mgr-run-1"}, PostSpec{Text: "Seats, start your work."}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := len(x.fm.find(http.MethodPost, "/v1/runs/mgr-run-1/messages")); n != 0 || len(x.fm.find(http.MethodPost, "/v1/runs")) != 1 {
+		t.Fatalf("an agent seated under a canceled manager run: %d follow-ups", n)
+	}
+
+	// The manager run stopped at a limit instead.
+	x.mgr.State, x.mgr.Error = fw.StateFailed, "budget exceeded: maxTurns 12"
+	x.v.put(x.mgr)
+	x.s.poll(ctx)
+	if got := presenceOf(t, x.url, x.id); got["migrator-1"] != PresenceNotStarted || got["reviewer"] != PresenceNotStarted {
+		t.Fatalf("presence = %v", got)
+	}
+	if _, err := x.s.post(ctx, x.id, sender{handle: HandleManager, run: "mgr-run-1"}, PostSpec{Text: "Seats, start your work."}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := len(x.fm.find(http.MethodPost, "/v1/runs")); n != 1 {
+		t.Fatalf("an agent started %d manager runs", n)
+	}
+
+	x.fm.mu.Lock()
+	x.fm.ids["bridge:"+x.id+":manager:1"] = "mgr-run-2"
+	x.fm.mu.Unlock()
+	do(t, http.MethodPost, x.url+"/v1/bridges/"+x.id+"/messages", "alice", `{"text":"Please get going."}`)
+	eventually(t, "a new manager run", func() bool { return len(x.fm.find(http.MethodPost, "/v1/runs")) == 2 })
+	st := x.fm.find(http.MethodPost, "/v1/runs")[1]
+	input, _ := st.Body["input"].(string)
+	if st.Idem != "bridge:"+x.id+":manager:1" || st.Body["agent"] != "manager" || !strings.Contains(input, "[seat migrator-1] Migrate cron") || !strings.Contains(input, "[seat reviewer] Review cron") || strings.Contains(input, "Please get going") {
+		t.Fatalf("the new manager run = %+v", st)
+	}
+	if n := len(x.fm.find(http.MethodPost, "/v1/runs/mgr-run-1/messages")); n != 0 {
+		t.Fatalf("the stopped manager run got %d follow-ups", n)
+	}
+	eventually(t, "the record names the new manager run", func() bool {
+		rec, _, _ := x.s.b.get(ctx, x.id)
+		return rec.Manager != nil && rec.Manager.Run == "mgr-run-2"
+	})
+	if got := presenceOf(t, x.url, x.id); got["migrator-1"] != PresenceWaiting || got["reviewer"] != PresenceWaiting {
+		t.Fatalf("presence while the new manager run starts = %v", got)
+	}
+}
+
 // The page seats a seat that nothing seats again with its task, as a
 // stopped one: the patch with the same task posts the line and starts its
 // run. A seat whose run comes gets nothing.

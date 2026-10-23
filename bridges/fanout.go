@@ -289,6 +289,10 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 //     nothing, and its instructions tell it to read the channel first. A
 //     member without a run that nothing seats is seated by the message on
 //     a new run with its task.
+//   - In a spawn bridge whose manager run a person canceled or that
+//     stopped at a limit (managerStopped), only a message of a person
+//     seats a member, because the seating continues a run that a person
+//     stopped, or starts a manager run with a new budget.
 //
 // A seating counts as one delivery under the caps, and it moves the marks
 // Again and AgainAt of the seat as seatAgain does, so a second message
@@ -360,6 +364,9 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 		case r.State == fw.StateCanceled && snd.handle != "":
 			continue // a person stopped the run, and only a person starts it again
 		}
+		if seat && snd.handle != "" && managerStopped(rec, runs[managerRun(rec)]) {
+			continue // only a person seats a member under a manager run that a person stopped or that reached its limit
+		}
 		pair := ""
 		if snd.handle != "" {
 			pair = pairKey(snd.handle, m.Handle)
@@ -409,6 +416,15 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 		lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d deliveries a minute, and %s did not get message %d", rec.Caps.MaxFanoutPerMinute, strings.Join(minuteMissed, ", "), msg.Seq)))
 	}
 	return seqLines(rec, lines, now), plan, seats, inputs
+}
+
+// managerStopped reports whether the manager run of a spawn bridge
+// stopped in a way that only a person undoes: a person canceled it, or it
+// stopped at a limit of its budget, so a seating starts a new manager run
+// with a new budget (place). fanPlan and deferred then seat no member for
+// a message of an agent.
+func managerStopped(rec *record, mgr *fw.Run) bool {
+	return rec.Placement == PlacementSpawn && mgr != nil && (mgr.State == fw.StateCanceled || limited(mgr))
 }
 
 // fanOut is what fanPlan decided for one message: the deliveries, and
@@ -555,6 +571,9 @@ func (s *Store) deferred(ctx context.Context, d delivery) error {
 		return s.send(ctx, r, d.content, d.from, d.pinned)
 	}
 	if sm := rec.Seats[d.handle]; sm != nil && sm.Gone == d.newest {
+		if d.from.Kind == fw.FromAgent && managerStopped(rec, s.runOf(fctx, managerRun(rec))) {
+			return nil // only a person seats it again, as in fanPlan
+		}
 		s.seatLost(ctx, d.bridge, d.handle, d.newest, d.seq)
 		return nil
 	}

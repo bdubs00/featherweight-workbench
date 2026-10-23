@@ -471,4 +471,18 @@ func TestCloseAsksForTheReport(t *testing.T) {
 	if rec.Manager == nil || rec.Manager.Run != "mgr-run-1" {
 		t.Fatalf("manager = %+v", rec.Manager)
 	}
+
+	// A manager run that stopped at a limit fails a follow-up at once, so
+	// the close starts a new manager run for the report.
+	v.put(&fw.Run{ID: "mgr-run-1", Agent: "manager", Member: "default/manager-0", State: fw.StateFailed, Error: "budget exceeded: maxTurns 12", Metadata: map[string]string{fw.MetaBatch: BatchOf(it.ID)}})
+	before := len(fm.find(http.MethodPost, "/v1/runs/mgr-run-1/messages"))
+	do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID, "alice", `{"state":"closed"}`)
+	starts = fm.find(http.MethodPost, "/v1/runs")
+	if input, _ := starts[len(starts)-1].Body["input"].(string); len(starts) != 3 || !strings.Contains(input, "bridges/"+it.ID+"/report.md") {
+		t.Fatalf("the report run after a limit = %+v", starts[len(starts)-1])
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := len(fm.find(http.MethodPost, "/v1/runs/mgr-run-1/messages")); n != before {
+		t.Fatalf("the stopped manager run got %d asks", n-before)
+	}
 }

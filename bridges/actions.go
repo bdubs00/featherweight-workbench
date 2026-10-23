@@ -195,8 +195,10 @@ func (s *Store) addMember(ctx context.Context, id string, spec SeatSpec, by *fw.
 // place starts a run for each seat in the way of its bridge: a request on
 // the queue of its pool (enqueue), or in a spawn bridge one follow-up per
 // seat to the manager run that asks it to seat the member. A follow-up
-// starts a new turn of a manager run that finished. A spawn bridge whose
-// manager run the view does not hold gets a new manager run for the seats
+// starts a new turn of a manager run that finished, also of one that a
+// person canceled. A spawn bridge whose manager run the view does not
+// hold, or whose manager run stopped at a limit of its budget, where a
+// follow-up fails at once, gets a new manager run for the seats
 // (newManager). inputs holds the input of the run of a seat by handle
 // (inputOf).
 func (s *Store) place(ctx context.Context, rec *record, seats []Member, inputs map[string]string) error {
@@ -205,7 +207,7 @@ func (s *Store) place(ctx context.Context, rec *record, seats []Member, inputs m
 		return nil
 	}
 	mgr := s.runOf(s.asFront(ctx), managerRun(rec))
-	if mgr == nil {
+	if mgr == nil || limited(mgr) {
 		r, err := s.newManager(ctx, rec, seats, inputs)
 		if r == nil {
 			return err
@@ -236,7 +238,8 @@ func (s *Store) place(ctx context.Context, rec *record, seats []Member, inputs m
 }
 
 // newManager seats members of a spawn bridge whose manager run the view
-// does not hold. It reads the record again first, and the starts of this
+// does not hold, or whose manager run stopped at a limit of its budget.
+// It reads the record again first, and the starts of this
 // replica go one at a time, so of two seatings at once the second one
 // finds the run that the first one started. A manager run that the watch
 // never saw, such as a run that started a moment ago, gets the follow-ups:
@@ -253,10 +256,11 @@ func (s *Store) newManager(ctx context.Context, rec *record, seats []Member, inp
 		return nil, err
 	}
 	if id := managerRun(cur); id != "" {
-		if r := s.runOf(fctx, id); r != nil {
+		r := s.runOf(fctx, id)
+		switch {
+		case r != nil && !limited(r):
 			return r, nil
-		}
-		if mk := cur.Marks[id]; mk == nil || !mk.Started {
+		case r == nil && (cur.Marks[id] == nil || !cur.Marks[id].Started):
 			return &fw.Run{ID: id, Member: cur.Manager.Member}, nil
 		}
 	}
@@ -607,7 +611,9 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 func (s *Store) askReport(ctx context.Context, rec *record) {
 	op := orOperator(rec.Operator)
 	ask := fmt.Sprintf("The operator closed the bridge. Write the report of the bridge in the wiki page %s with pages_write: what each member did, what is done, what is open, and the runs that hold the work. Read the channel with bridge_read (bridge %s) first. Then end your turn.", reportPath(rec.ID), rec.ID)
-	if mgr := s.runOf(s.asFront(ctx), managerRun(rec)); mgr != nil {
+	// A manager run that stopped at a limit fails a follow-up at once, so
+	// a new manager run writes the report.
+	if mgr := s.runOf(s.asFront(ctx), managerRun(rec)); mgr != nil && !limited(mgr) {
 		content := header(rec, []string{HandleManager}, HandleOperator) + ask
 		s.submit(&job{
 			name: "the report of " + rec.ID,
