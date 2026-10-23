@@ -228,7 +228,9 @@ type Item struct {
 // the page of bossmode links it without a link in the text. Pinned is true
 // for a message that a person pinned and for a slash command: each of its
 // deliveries is a pinned follow-up, which survives every compaction of the
-// run that gets it.
+// run that gets it. Files describes the files of a message of a person
+// (attach.go), and the workspace of each run that got the message holds
+// the bytes.
 type Message struct {
 	Seq       uint64              `json:"seq"`
 	At        time.Time           `json:"at"`
@@ -236,6 +238,7 @@ type Message struct {
 	To        []string            `json:"to"`
 	ReplyTo   *uint64             `json:"replyTo"`
 	Text      string              `json:"text"`
+	Files     []AttachedFile      `json:"files,omitempty"`
 	Event     string              `json:"event,omitempty"`
 	Page      string              `json:"page,omitempty"`
 	Cut       bool                `json:"cut"`

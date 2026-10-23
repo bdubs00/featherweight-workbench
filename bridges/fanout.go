@@ -15,7 +15,8 @@ package bridges
 // delivery runs on a bounded worker, never on the request of the poster,
 // and a delivery that fails is tried again with a pause that doubles. Each
 // delivery gives the seat run the allowance of its seat again (grant), and
-// the cap maxTurns bounds the turns of the whole bridge.
+// the cap maxTurns bounds the turns of the whole bridge. The files of a
+// message of a person go with each delivery (attach.go).
 
 import (
 	"context"
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/skills"
 )
 
@@ -84,13 +86,17 @@ func (x sender) party(member string) fw.MessageFrom {
 // does not take it. Skill makes the message a slash command of a person:
 // the front expands the skill of the catalog (skills.Prepare), and Text,
 // which is optional then, follows the skill (docs/ARCHITECTURE.md section
-// 20.3). A slash command is always pinned.
+// 20.3). A slash command is always pinned. Files are the files of a
+// message of a person, each name with its bytes, base64 in JSON, as POST
+// /v1/runs takes them (attach.go). Text is optional with files. The tool
+// bridge_post does not take them.
 type PostSpec struct {
-	Text    string          `json:"text"`
-	To      []string        `json:"to,omitempty"`
-	ReplyTo *uint64         `json:"replyTo,omitempty"`
-	Pinned  bool            `json:"pinned,omitempty"`
-	Skill   *skills.Command `json:"skill,omitempty"`
+	Text    string            `json:"text"`
+	To      []string          `json:"to,omitempty"`
+	ReplyTo *uint64           `json:"replyTo,omitempty"`
+	Pinned  bool              `json:"pinned,omitempty"`
+	Skill   *skills.Command   `json:"skill,omitempty"`
+	Files   []native.FileBody `json:"files,omitempty"`
 	// Ask makes a message of a seat a question for the people of the
 	// bridge, with the choices that a person picks from (ask.go). Only the
 	// tool bridge_post takes them, so the route of a person refuses them as
@@ -102,7 +108,8 @@ type PostSpec struct {
 // delivery is one follow-up of a message to the newest run of a member.
 // pinned makes the follow-up survive every compaction of the run. A
 // delivery without a run waits for newest, the newest run of the member,
-// which the view did not hold when the message came (deferred).
+// which the view did not hold when the message came (deferred). files are
+// the files of the message, which always go to a run that the view held.
 type delivery struct {
 	bridge  string
 	seq     uint64
@@ -112,6 +119,7 @@ type delivery struct {
 	content string
 	from    fw.MessageFrom
 	pinned  bool // a pinned message or a slash command
+	files   *upload
 }
 
 // wakeInput is the input of the new run of a seat whose earlier run the
@@ -156,6 +164,15 @@ func cannotTake(handle string, r *fw.Run) string {
 // post appends a message of a person or an agent to the channel and fans
 // it out. It returns the entry.
 func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) (Message, error) {
+	files, err := describeFiles(spec.Files)
+	switch {
+	case err != nil:
+		return Message{}, err
+	case len(files) > 0 && snd.handle != "":
+		return Message{}, invalid("only a person attaches files")
+	case len(files) > 0 && (spec.Pinned || spec.Skill != nil):
+		return Message{}, invalid("a pinned message and a slash command take no files")
+	}
 	text := clean(spec.Text)
 	var cmd *skills.Expansion
 	if spec.Skill != nil {
@@ -172,8 +189,8 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 		cmd, text = &x, x.Message
 	}
 	switch {
-	case text == "":
-		return Message{}, invalid("a message needs a text or a skill")
+	case text == "" && len(files) == 0:
+		return Message{}, invalid("a message needs a text, a skill, or files")
 	case len(text) > maxTextBytes:
 		return Message{}, invalid("a message holds at most %d bytes", maxTextBytes)
 	case len(spec.To) > maxTo:
@@ -223,6 +240,13 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 	var seats []Member
 	var inputs map[string]string
 	var asked []string // the seats whose question began or ended
+	var up *upload
+	if len(files) > 0 {
+		if up, err = s.hold(spec.Files); err != nil {
+			return Message{}, err
+		}
+		defer up.release()
+	}
 	rec, err := s.b.update(ctx, id, func(rec *record) error {
 		lines, plan, seats, inputs, asked = nil, nil, nil, nil, nil
 		if rec.State != StateOpen {
@@ -252,6 +276,7 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 		}
 		cut, isCut := cutText(shown, entryTextBytes)
 		msg = newMessage(snd.from(), cut)
+		msg.Files = files
 		// A slash command is pinned, so its entry says so, and fanPlan
 		// pins each delivery of a pinned entry.
 		msg.Seq, msg.At, msg.Cut, msg.ReplyTo, msg.Pinned = rec.alloc(), now, isCut || cmd != nil, spec.ReplyTo, spec.Pinned || cmd != nil
@@ -303,10 +328,24 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 			planned.To = []string{snd.handle}
 		}
 		lines, plan, seats, inputs = fanPlan(rec, snd, planned, delivered, runs, now)
+		if up != nil {
+			// The channel keeps no bytes, so files that do not reach every
+			// member go nowhere: the post changes nothing, and the page
+			// keeps the draft.
+			if why := filesRefused(rec, planned, plan, runs); why != "" {
+				return fmt.Errorf("%w: %s", ErrConflict, why)
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		return Message{}, err
+	}
+	if up != nil {
+		up.take(len(plan))
+		for i := range plan {
+			plan[i].files = up
+		}
 	}
 	s.land(ctx, id, msg)
 	s.land(ctx, id, lines...)
@@ -397,20 +436,7 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 		}
 		return seqLines(rec, lines, now), nil, nil, nil
 	}
-	var targets []*Member
-	if len(msg.To) > 0 {
-		for _, h := range msg.To {
-			if m := rec.member(h); m != nil && !m.Fired {
-				targets = append(targets, m)
-			}
-		}
-	} else {
-		for i := range rec.Members {
-			if m := &rec.Members[i]; !m.Fired && !m.Muted {
-				targets = append(targets, m)
-			}
-		}
-	}
+	targets := recipients(rec, msg.To)
 	minute := now.Truncate(time.Minute)
 	if !f.Minute.Equal(minute) {
 		f.Minute, f.Count = minute, 0
@@ -502,6 +528,27 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 		lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d deliveries a minute, and %s did not get message %d", rec.Caps.MaxFanoutPerMinute, strings.Join(minuteMissed, ", "), msg.Seq)))
 	}
 	return seqLines(rec, lines, now), plan, seats, inputs
+}
+
+// recipients returns the members that a message to the handles to
+// reaches: the addressed members that are not fired, or every active
+// member when to is empty. The sender among them gets nothing.
+func recipients(rec *record, to []string) []*Member {
+	var out []*Member
+	if len(to) > 0 {
+		for _, h := range to {
+			if m := rec.member(h); m != nil && !m.Fired {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	for i := range rec.Members {
+		if m := &rec.Members[i]; !m.Fired && !m.Muted {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // managerStopped reports whether the manager run of a spawn bridge
@@ -622,20 +669,28 @@ type job struct {
 }
 
 // deliveryJob is the job of one delivery. A delivery without a run is
-// deferred: each try reads the record and the run again.
+// deferred: each try reads the record and the run again. A delivery with
+// files releases them when it is done or gives up.
 func (s *Store) deliveryJob(d delivery) *job {
 	run := d.newest
 	do := func(ctx context.Context) error { return s.deferred(ctx, d) }
 	if d.run != nil {
 		run = d.run.ID
 		do = func(ctx context.Context) error {
-			return s.sendSeat(ctx, d.bridge, d.handle, d.run, d.content, d.from, d.pinned)
+			err := s.sendSeat(ctx, d.bridge, d.handle, d.run, d.content, d.from, d.pinned, d.files)
+			if err == nil && d.files != nil {
+				d.files.release()
+			}
+			return err
 		}
 	}
 	return &job{
 		name: fmt.Sprintf("message %d of %s to %s", d.seq, d.bridge, d.handle),
 		do:   do,
 		fail: func(err error) {
+			if d.files != nil {
+				d.files.release()
+			}
 			s.log.Warn("bridges: a member did not get a message", "bridge", d.bridge, "seq", d.seq, "member", d.handle, "run", run, "error", err)
 			_ = s.postLines(s.ctx, d.bridge, system(EventFailed, fmt.Sprintf("%s did not get message %d: %s", d.handle, d.seq, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
 		},
@@ -669,7 +724,7 @@ func (s *Store) deferred(ctx context.Context, d delivery) error {
 		case r.State == fw.StateCanceled && d.from.Kind == fw.FromAgent:
 			return nil
 		}
-		return s.sendSeat(ctx, d.bridge, d.handle, r, d.content, d.from, d.pinned)
+		return s.sendSeat(ctx, d.bridge, d.handle, r, d.content, d.from, d.pinned, nil)
 	}
 	if sm := rec.Seats[d.handle]; sm != nil && sm.Gone == d.newest {
 		if d.from.Kind == fw.FromAgent && managerStopped(rec, s.runOf(fctx, managerRun(rec))) {

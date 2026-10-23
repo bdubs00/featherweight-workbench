@@ -345,6 +345,7 @@ func (t *toolSet) read(ctx context.Context, _ *sdk.CallToolRequest, in readArgs)
 		if !whole {
 			b.WriteString("\n[The channel holds only this start of the entry.]")
 		}
+		b.WriteString(attachedText(m.Files))
 		return mcp.Result(b.String(), readResult{Bridge: c.rec.ID, Title: c.rec.Title, LastSeq: c.rec.LastSeq, Messages: []Message{m}}), nil, nil
 	}
 	msgs, err := s.b.tail(s.asFront(ctx), c.rec, in.Since, in.Limit)
@@ -359,6 +360,7 @@ func (t *toolSet) read(ctx context.Context, _ *sdk.CallToolRequest, in readArgs)
 		if cut || m.Cut {
 			fmt.Fprintf(&b, "\n[Entry %d goes on. bridge_read with seq %d returns it whole.]", m.Seq, m.Seq)
 		}
+		b.WriteString(attachedText(m.Files))
 	}
 	return mcp.Result(b.String(), readResult{Bridge: c.rec.ID, Title: c.rec.Title, LastSeq: c.rec.LastSeq, Messages: msgs}), nil, nil
 }

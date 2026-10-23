@@ -85,7 +85,7 @@ func TestSlashCommandRefusals(t *testing.T) {
 		{`{"skill":{"name":"hidden"}}`, http.StatusBadRequest, "user-invocable: false"},
 		{`{"skill":{"name":"huge"}}`, http.StatusRequestEntityTooLarge, "at most 65536"},
 		{`{"skill":{"name":""}}`, http.StatusBadRequest, "needs the name of a skill"},
-		{`{}`, http.StatusBadRequest, "a message needs a text or a skill"},
+		{`{}`, http.StatusBadRequest, "a message needs a text, a skill, or files"},
 	} {
 		resp, out := do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", c.body)
 		if resp.StatusCode != c.status || !strings.Contains(out, c.words) {
