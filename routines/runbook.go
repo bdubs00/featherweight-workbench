@@ -101,10 +101,10 @@ func Runbook(rec Record) string {
 		for _, c := range r.After {
 			parts := []string{fmt.Sprintf("It reads with `%s`", c.Tool)}
 			if len(c.Contains) > 0 {
-				parts = append(parts, "The result holds "+texts(c.Contains, r))
+				parts = append(parts, "The result holds "+texts(c.Contains, r, and))
 			}
 			if len(c.Lacks) > 0 {
-				parts = append(parts, "The result holds no "+texts(c.Lacks, r))
+				parts = append(parts, "The result holds no "+texts(c.Lacks, r, or))
 			}
 			b.WriteString("- " + strings.Join(parts, ". ") + ".\n")
 		}
@@ -157,7 +157,7 @@ func standingLine(rec Record) string {
 // texts words the texts of a check, each as code, with the holes of the
 // routine as an ellipsis and their words after it, such as `type/…`, with
 // the type it decided.
-func texts(list []string, r fw.Routine) string {
+func texts(list []string, r fw.Routine, join func([]string) string) string {
 	out := make([]string, len(list))
 	for i, s := range list {
 		var said []string
@@ -165,12 +165,15 @@ func texts(list []string, r fw.Routine) string {
 			said = append(said, holeWords(holes.FindStringSubmatch(h)[1], r))
 			return "…"
 		})
+		// A text that ends in a period keeps it for the check, and the
+		// sentence adds its own, so the page shows one.
+		code = strings.TrimRight(code, ".")
 		out[i] = "`" + strings.ReplaceAll(code, "`", "'") + "`"
 		if len(said) > 0 {
 			out[i] += ", with " + and(said)
 		}
 	}
-	return and(out)
+	return join(out)
 }
 
 // holeWords words one action of a text: a question as what the routine

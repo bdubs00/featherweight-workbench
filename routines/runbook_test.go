@@ -27,7 +27,7 @@ func TestRunbook(t *testing.T) {
 		"title: Acknowledge a new ticket\n", "# Acknowledge a new ticket\n",
 		"A routine of triage, version 3. Signed off by ada@example.org on 23 October 2026. It is live: it acts on its own, and the agent still handles 5% of the tickets, to compare.",
 		"- **Priority**: How urgent is it. Answers: p1, p2, p3. It acts when it is at least 80% sure.",
-		"`type/…`, with the type it decided", "`priority/…`, with the priority it decided", "The result holds no `status/new` and `…`, with the labels it read.",
+		"`type/…`, with the type it decided", "`priority/…`, with the priority it decided", "The result holds no `status/new` or `…`, with the labels it read.",
 		"Made from 1,212 tickets that triage handled between 14 September 2026 and 21 October 2026, proposed by fw routine propose.",
 		"would have acted on 1,432 tickets, with 97.6% agreed", "212 of 212 past tickets, handled the same way.",
 	} {
