@@ -464,7 +464,7 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 				keep = append(keep, lc)
 				continue
 			}
-			card, line := decidedCard(r.ID, seat, lc.Card, lc.Question, lc.Tool, lv)
+			card, line := decidedCard(r.ID, seat, lc.Card, lc.Question, lc.Tool, lv, s.deciderName)
 			if card != nil {
 				cards = append(cards, *card)
 			}
@@ -477,7 +477,7 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 	// A card whose decision landed, from any surface, or whose run the
 	// front failed to read after decisionTries tries.
 	if mk.Pending != "" && (r.Pending == nil || r.Pending.ID != mk.Pending) && v != nil {
-		card, line := decidedCard(r.ID, seat, mk.Card, mk.Question, mk.Tool, v)
+		card, line := decidedCard(r.ID, seat, mk.Card, mk.Question, mk.Tool, v, s.deciderName)
 		if card != nil {
 			cards = append(cards, *card)
 		}
@@ -639,8 +639,9 @@ func alwaysOffered(r *fw.Run, d dashboard.Decision) bool {
 // ended or asked again, is written again as denied, with no line. A card
 // whose run the front failed to read after decisionTries tries is written
 // again with the state unknown and the note unknownNote, and the channel
-// gets a line with the event failed that says so.
-func decidedCard(run, seat string, card uint64, question bool, tool string, v *verdict) (*Message, *Message) {
+// gets a line with the event failed that says so. name names the decider
+// in the line (deciderName); the card keeps the subject.
+func decidedCard(run, seat string, card uint64, question bool, tool string, v *verdict, name func(string) string) (*Message, *Message) {
 	switch {
 	case v.found:
 		at := v.at.UTC()
@@ -648,7 +649,7 @@ func decidedCard(run, seat string, card uint64, question bool, tool string, v *v
 		if question {
 			d.Answer = answerOf(v.d)
 		}
-		line := system(EventDecided, decidedText(seat, tool, v.d, question, d.Answer))
+		line := system(EventDecided, decidedText(seat, tool, v.d, question, d.Answer, name(v.d.Decider)))
 		line.Mirrors = &Mirror{Run: run, Seq: v.seq, Type: fw.EvApprovalDecided}
 		if card == 0 {
 			return nil, &line
@@ -717,10 +718,8 @@ func answerOf(d fw.ApprovalDecidedData) string {
 
 // decidedText is the line of a decision, of a question when question is
 // true: who decided, the verb, and the call or the question of the seat,
-// with the note or the answer. The decider is the subject of the person,
-// or the kind token for the static token of the fleet.
-func decidedText(seat, tool string, d fw.ApprovalDecidedData, question bool, answer string) string {
-	who := d.Decider
+// with the note or the answer. who names the decider (deciderName).
+func decidedText(seat, tool string, d fw.ApprovalDecidedData, question bool, answer, who string) string {
 	if who == "" {
 		who = "somebody"
 	}
@@ -739,6 +738,16 @@ func decidedText(seat, tool string, d fw.ApprovalDecidedData, question bool, ans
 		verb = "denied"
 	}
 	return fmt.Sprintf("%s %s %s's %s%s", who, verb, seat, callOf(tool), note)
+}
+
+// deciderName names the decider of a card in a line: the person by a name
+// that people read (personName), or the kind token for the static token of
+// the fleet. An empty decider stays empty, and the line says somebody.
+func (s *Store) deciderName(subject string) string {
+	if subject == "" {
+		return ""
+	}
+	return s.personName(subject, "")
 }
 
 // callOf names the call of a tool in the line of a decision.

@@ -141,7 +141,7 @@ func TestSystemLines(t *testing.T) {
 	mig.State, mig.Seq, mig.Pending = fw.StateRunning, 9, nil
 	v.put(mig)
 	got = poll()
-	if len(got) != 1 || got[0].Text != "alice answered migrator-1's question: ops" {
+	if len(got) != 1 || got[0].Text != "Alice answered migrator-1's question: ops" {
 		t.Fatalf("answer = %+v", got)
 	}
 

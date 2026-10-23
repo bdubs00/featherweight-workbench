@@ -54,12 +54,14 @@ func (x sender) from() From {
 	return From{Kind: KindPerson, Name: x.subject, Display: x.display}
 }
 
-// name is the sender in the first line of a follow-up.
+// name is the sender in the first line of a follow-up: the handle of an
+// agent, or operator for a person, because the agents address the people
+// of a bridge as operator.
 func (x sender) name() string {
 	if x.handle != "" {
 		return x.handle
 	}
-	return orOperator(x.subject)
+	return HandleOperator
 }
 
 // party is the sender as the kernel records it on the follow-up for the

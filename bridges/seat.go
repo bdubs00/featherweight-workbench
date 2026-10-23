@@ -268,6 +268,9 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 	if by != nil {
 		rec.Operator, rec.OperatorKind = by.Subject, by.Kind
 		rec.Teams = teams.Of(teams.Patterns(s.a.Config()), by)
+		if n := s.knownName(by.Subject, by.Name); n != by.Subject {
+			rec.OperatorName = n
+		}
 	}
 	for _, m := range spec.Members {
 		rec.Members = append(rec.Members, Member{Handle: m.Handle, Agent: m.Agent, Pool: s.poolOf(ctx, m.Agent, m.Pool), Task: m.Task, Runs: []string{}})
@@ -289,7 +292,7 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 		}
 		rec.Manager = run
 	}
-	opened := system(EventOpened, fmt.Sprintf("%s opened the bridge with %s", nameOf(by), plural(len(rec.Members), "member", "members")))
+	opened := system(EventOpened, fmt.Sprintf("%s opened the bridge with %s", s.nameOf(ctx, by), plural(len(rec.Members), "member", "members")))
 	opened.Seq, opened.At = rec.alloc(), now
 	if err := s.b.create(ctx, rec); err != nil {
 		return nil, err
@@ -303,19 +306,6 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 	}
 	s.log.Info("bridges: a bridge is open", "bridge", rec.ID, "placement", placement, "members", len(rec.Members), "operator", rec.Operator)
 	return rec, nil
-}
-
-// nameOf is the name of a person in a system line.
-func nameOf(p *fw.Principal) string {
-	switch {
-	case p == nil:
-		return "the front"
-	case strings.TrimSpace(p.Name) != "":
-		return p.Name
-	case p.Subject != "":
-		return p.Subject
-	}
-	return "somebody"
 }
 
 // plural writes a number with the singular or the plural noun.
@@ -478,10 +468,7 @@ type instructionsData struct {
 // goal, the roster with the task of each seat, the rules of the channel
 // and of the wiki, and the head of the page agents/<agent>/learned.md.
 func (s *Store) instructionsOf(ctx context.Context, rec *record, m Member) string {
-	d := instructionsData{ID: rec.ID, Title: rec.Title, Goal: rec.Goal, Operator: rec.Operator, Handle: m.Handle, Agent: m.Agent, Task: m.Task}
-	if d.Operator == "" {
-		d.Operator = "The operator"
-	}
+	d := instructionsData{ID: rec.ID, Title: rec.Title, Goal: rec.Goal, Operator: s.operatorName(rec, "The operator"), Handle: m.Handle, Agent: m.Agent, Task: m.Task}
 	if d.Goal == "" {
 		d.Goal = rec.Title
 	}
@@ -539,10 +526,7 @@ func (s *Store) planOf(ctx context.Context, rec *record, seats []Member, inputs 
 	d := struct {
 		ID, Title, Goal, Operator string
 		Seats                     []planSeat
-	}{ID: rec.ID, Title: rec.Title, Goal: rec.Goal, Operator: rec.Operator}
-	if d.Operator == "" {
-		d.Operator = "the operator"
-	}
+	}{ID: rec.ID, Title: rec.Title, Goal: rec.Goal, Operator: s.operatorName(rec, "the operator")}
 	if d.Goal == "" {
 		d.Goal = rec.Title
 	}

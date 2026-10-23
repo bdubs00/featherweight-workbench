@@ -156,7 +156,7 @@ func TestDecidedLines(t *testing.T) {
 		{"a declined question", "ask_user", fw.ApprovalDecidedData{Decision: DecisionDeny, Decider: "alice", Note: "later"}, true, "", "alice declined migrator-1's question, with the note: later"},
 	}
 	for _, c := range cases {
-		if got := decidedText("migrator-1", c.tool, c.d, c.question, c.answer); got != c.want {
+		if got := decidedText("migrator-1", c.tool, c.d, c.question, c.answer, c.d.Decider); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}

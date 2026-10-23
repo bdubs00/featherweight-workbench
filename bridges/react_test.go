@@ -168,7 +168,7 @@ func TestReactionsAndHearts(t *testing.T) {
 		return err == nil
 	})
 	for _, want := range []string{"# What people liked from migrator", `bridge "Migrate logrotate" (` + it.ID + `), migrator-1, run r-mig`,
-		"What alice asked: the task of migrator-1", "What migrator-1 did: The playbook is ready.", "The note of Alice: Exactly the layout we want.", "(#run/r-mig)", "not an instruction"} {
+		"What Alice asked: the task of migrator-1", "What migrator-1 did: The playbook is ready.", "The note of Alice: Exactly the layout we want.", "(#run/r-mig)", "not an instruction"} {
 		if !strings.Contains(page.Text, want) {
 			t.Errorf("the page lacks %q:\n%s", want, page.Text)
 		}
@@ -284,7 +284,7 @@ func TestPatchMember(t *testing.T) {
 		t.Fatalf("lines = %+v", msgs)
 	}
 	eventually(t, "the new task reaches the run", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-mig/messages")) == 1 })
-	if c, _ := fm.find(http.MethodPost, "/v1/runs/r-mig/messages")[0].Body["content"].(string); !strings.Contains(c, "] @migrator-1 from alice: Your new task: Migrate the cron module too") {
+	if c, _ := fm.find(http.MethodPost, "/v1/runs/r-mig/messages")[0].Body["content"].(string); !strings.Contains(c, "] @migrator-1 from operator: Your new task: Migrate the cron module too") {
 		t.Fatalf("content = %q", c)
 	}
 	// The canceled reviewer gets a new run, with the next idempotency key.

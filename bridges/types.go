@@ -103,18 +103,22 @@ const (
 // channel and one batch, BatchOf(ID). Members holds the seats, with the
 // presence and the activity of each when a route answers it.
 type Bridge struct {
-	ID         string     `json:"id"`
-	Title      string     `json:"title"`
-	Goal       string     `json:"goal"`
-	Operator   string     `json:"operator"`
-	State      string     `json:"state"`
-	Placement  string     `json:"placement"`
-	CreatedAt  time.Time  `json:"createdAt"`
-	ClosedAt   *time.Time `json:"closedAt"`
-	Manager    *Manager   `json:"manager"`
-	Delegation Delegation `json:"delegation"`
-	Caps       Caps       `json:"caps"`
-	Members    []Member   `json:"members,omitempty"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Goal     string `json:"goal"`
+	Operator string `json:"operator"`
+	// OperatorName is a name of the operator that people read, the email
+	// or the display name, when the front knew one at the open. The
+	// subject in Operator can be an id that the issuer made.
+	OperatorName string     `json:"operatorName,omitempty"`
+	State        string     `json:"state"`
+	Placement    string     `json:"placement"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	ClosedAt     *time.Time `json:"closedAt"`
+	Manager      *Manager   `json:"manager"`
+	Delegation   Delegation `json:"delegation"`
+	Caps         Caps       `json:"caps"`
+	Members      []Member   `json:"members,omitempty"`
 	// LastSeq is the seq of the newest entry of the channel. A change of
 	// the record moves it, so two replicas never give two entries one seq.
 	LastSeq uint64 `json:"lastSeq"`

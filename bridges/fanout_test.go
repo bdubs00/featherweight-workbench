@@ -57,13 +57,13 @@ func TestFanOut(t *testing.T) {
 	if got.Auth != "Bearer "+fleetToken || got.Member != "default/crew-0" || from["kind"] != fw.FromPerson || from["name"] != "alice" || from["member"] != "migrator-1" {
 		t.Fatalf("delivery = %+v", got)
 	}
-	if !strings.HasPrefix(content, `[bridge "Migrate logrotate" `+id+`] to everyone from alice: Status, please.`) {
+	if !strings.HasPrefix(content, `[bridge "Migrate logrotate" `+id+`] to everyone from operator: Status, please.`) {
 		t.Fatalf("content = %q", content)
 	}
 
 	do(t, http.MethodPost, url+"/v1/bridges/"+id+"/messages", "alice", `{"text":"Only you.","to":["reviewer"]}`)
 	eventually(t, "the reviewer gets the addressed message", func() bool { return len(fm.find(http.MethodPost, pathRev)) == 2 })
-	if c, _ := fm.find(http.MethodPost, pathRev)[1].Body["content"].(string); !strings.Contains(c, "] @reviewer from alice: Only you.") {
+	if c, _ := fm.find(http.MethodPost, pathRev)[1].Body["content"].(string); !strings.Contains(c, "] @reviewer from operator: Only you.") {
 		t.Fatalf("addressed content = %q", c)
 	}
 
@@ -507,7 +507,7 @@ func TestDeferredDelivery(t *testing.T) {
 	}
 	v.put(rev)
 	eventually(t, "the run gets the message once the view holds it", func() bool { return len(fm.find(http.MethodPost, pathRev)) == 1 })
-	if c, _ := fm.find(http.MethodPost, pathRev)[0].Body["content"].(string); !strings.Contains(c, "@reviewer from alice: Still there?") {
+	if c, _ := fm.find(http.MethodPost, pathRev)[0].Body["content"].(string); !strings.Contains(c, "@reviewer from operator: Still there?") {
 		t.Fatalf("content = %q", c)
 	}
 

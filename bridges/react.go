@@ -90,7 +90,7 @@ func (s *Store) reactEntry(ctx context.Context, id string, seq uint64, spec Reac
 		})
 	}
 	if reaction == ReactionHeart {
-		person := nameOf(by)
+		person := s.nameOf(ctx, by)
 		s.submit(&job{
 			name: fmt.Sprintf("the heart on entry %d of %s", seq, id),
 			do:   func(ctx context.Context) error { return s.heart(ctx, rec, m, person, note) },
@@ -160,7 +160,7 @@ func (s *Store) heart(ctx context.Context, rec *record, m Message, person, note 
 	}
 	b.WriteString("\n\n")
 	if asked != "" {
-		fmt.Fprintf(&b, "- What %s asked: %s\n", rec.operatorName(), asked)
+		fmt.Fprintf(&b, "- What %s asked: %s\n", s.operatorName(rec, "the operator"), asked)
 	}
 	fmt.Fprintf(&b, "- What %s did: %s\n", orWords(handle, agent), oneLine(m.Text, heartDid))
 	if note != "" {
@@ -192,9 +192,6 @@ func (s *Store) heart(ctx context.Context, rec *record, m Message, person, note 
 	}
 	return fmt.Errorf("bridges: the page %s changed %d times while the front wrote it", path, pageAttempts)
 }
-
-// operatorName names the operator of a bridge in a heart.
-func (r *record) operatorName() string { return orWords(r.Operator, "the operator") }
 
 // learnedHeader starts the page of the hearts of an agent.
 func learnedHeader(agent string) string {

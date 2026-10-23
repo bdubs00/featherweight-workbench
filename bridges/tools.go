@@ -228,8 +228,12 @@ type call struct {
 	manager bool   // the run is the manager run of the bridge
 }
 
-// person is the person of the run, from _meta, or nil.
-func (c call) person(as string) *fw.Principal {
+// person is the person of the run, from _meta, or nil. It has the subject
+// and the kind alone, as section 19.2 of the architecture says: a line
+// names the run for its person through actingAs, never through the name
+// of the principal, so no rule of the access matches the person by a
+// name.
+func (c call) person() *fw.Principal {
 	if c.meta.Principal == "" {
 		return nil
 	}
@@ -237,11 +241,7 @@ func (c call) person(as string) *fw.Principal {
 	if kind == "" {
 		kind = fw.KindUser
 	}
-	p := &fw.Principal{Subject: c.meta.Principal, Kind: kind}
-	if as != "" {
-		p.Name = as + " for " + c.meta.Principal
-	}
-	return p
+	return &fw.Principal{Subject: c.meta.Principal, Kind: kind}
 }
 
 // operator reports whether the person of the run is the operator of the
@@ -396,13 +396,15 @@ func (s *Store) wholeEntry(ctx context.Context, rec *record, seq uint64) (m Mess
 	return m, m.Text, false, nil
 }
 
-// senderName names the sender of an entry for a text.
+// senderName names the sender of an entry for an agent: the handle of an
+// agent, operator for a person, because the agents address the people of
+// a bridge as operator, and system for a system line.
 func senderName(f From) string {
 	switch f.Kind {
 	case KindAgent:
 		return f.Handle
 	case KindPerson:
-		return orWords(f.Display, f.Name)
+		return HandleOperator
 	}
 	return "system"
 }
@@ -460,7 +462,7 @@ func (t *toolSet) list(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) 
 	}
 	sortItems(items)
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s of %s.", plural(len(items), "open bridge", "open bridges"), meta.Principal)
+	fmt.Fprintf(&b, "%s of %s.", plural(len(items), "open bridge", "open bridges"), s.personName(meta.Principal, ""))
 	for _, it := range items {
 		unread := strconv.Itoa(it.Unread)
 		if it.UnreadMore {
@@ -481,12 +483,12 @@ func (t *toolSet) open(ctx context.Context, _ *sdk.CallToolRequest, in OpenSpec)
 		return mcp.ErrorResult(personUses), nil, nil
 	}
 	c := call{meta: meta}
-	by := c.person(HandleManager)
+	by := c.person()
 	if by == nil {
 		return mcp.ErrorResult("Invalid request: your run names no person in _meta, and a bridge opens as a person. Mark the MCP server of the front trusted in tools.mcp of the worker."), nil, nil
 	}
 	mgr := &Manager{Member: fleet.MemberName(meta.Node), Run: meta.Run}
-	rec, err := s.open(fw.WithPrincipal(ctx, by), in, by, mgr)
+	rec, err := s.open(actingAs(fw.WithPrincipal(ctx, by), HandleManager), in, by, mgr)
 	if err != nil {
 		return toolError(err), nil, nil
 	}
@@ -494,7 +496,7 @@ func (t *toolSet) open(ctx context.Context, _ *sdk.CallToolRequest, in OpenSpec)
 	if err != nil {
 		return toolError(err), nil, nil
 	}
-	return mcp.Result(fmt.Sprintf("Opened the bridge %s %q for %s with %s, placement %s. Follow it with bridge_read (bridge %s).", rec.ID, rec.Title, by.Subject, plural(len(rec.Members), "member", "members"), rec.Placement, rec.ID), it), nil, nil
+	return mcp.Result(fmt.Sprintf("Opened the bridge %s %q for %s with %s, placement %s. Follow it with bridge_read (bridge %s).", rec.ID, rec.Title, s.personName(by.Subject, ""), plural(len(rec.Members), "member", "members"), rec.Placement, rec.ID), it), nil, nil
 }
 
 // delegated checks that the run of a call can change its bridge for the
@@ -518,10 +520,10 @@ func (t *toolSet) add(ctx context.Context, _ *sdk.CallToolRequest, in addArgs) (
 	if fail := delegated(c, c.rec.Delegation.Members); fail != nil {
 		return fail, nil, nil
 	}
-	by := c.person(HandleManager)
-	actx := ctx
+	by := c.person()
+	actx := actingAs(ctx, HandleManager)
 	if by != nil {
-		actx = fw.WithPrincipal(ctx, by)
+		actx = fw.WithPrincipal(actx, by)
 	}
 	m, err := s.addMember(actx, c.rec.ID, in.SeatSpec, by)
 	if err != nil {
@@ -538,7 +540,7 @@ func (t *toolSet) remove(ctx context.Context, _ *sdk.CallToolRequest, in removeA
 	if fail := delegated(c, c.rec.Delegation.Members); fail != nil {
 		return fail, nil, nil
 	}
-	m, err := s.fire(ctx, c.rec.ID, strings.TrimSpace(in.Handle), c.person(HandleManager))
+	m, err := s.fire(actingAs(ctx, HandleManager), c.rec.ID, strings.TrimSpace(in.Handle), c.person())
 	if err != nil {
 		return toolError(err), nil, nil
 	}
@@ -554,7 +556,7 @@ func (t *toolSet) close(ctx context.Context, _ *sdk.CallToolRequest, in closeArg
 		return fail, nil, nil
 	}
 	closed := StateClosed
-	rec, asked, err := s.patch(ctx, c.rec.ID, BridgePatch{State: &closed}, c.person(HandleManager))
+	rec, asked, err := s.patch(actingAs(ctx, HandleManager), c.rec.ID, BridgePatch{State: &closed}, c.person())
 	if err != nil {
 		return toolError(err), nil, nil
 	}

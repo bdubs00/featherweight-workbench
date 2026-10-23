@@ -53,7 +53,13 @@ var callers = tokenMap{
 	"carol": {Subject: "carol", Kind: fw.KindUser},
 	"dave":  {Subject: "dave", Kind: fw.KindUser, Groups: []string{"team-a"}},
 	"fleet": {Subject: fw.KindToken, Kind: fw.KindToken},
+	// erin signs in at an issuer that gives a UUID as the subject and the
+	// email as the name.
+	"erin": {Subject: erinSubject, Name: "erin@example.com", Kind: fw.KindUser},
 }
+
+// erinSubject is the subject of erin, an id that the issuer made.
+const erinSubject = "fd1e8a14-ac12-5a00-b4d6-bb6e50d15c10"
 
 // fleetToken is the static token of the fleet that the front sends.
 const fleetToken = "fleet-secret"

@@ -136,6 +136,11 @@ type Store struct {
 	// at a time (newManager).
 	startMu sync.Mutex
 
+	// names holds the names of the people who called a route, by subject
+	// (learn).
+	namesMu sync.Mutex
+	names   map[string]string
+
 	// What this replica knows of the view, for the watch (watch.go).
 	mu       sync.Mutex
 	checked  map[string]uint64    // by run id: the seq of the run at its last read of the ends

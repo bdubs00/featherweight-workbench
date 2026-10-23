@@ -52,6 +52,7 @@ func (rt *routes) store(w http.ResponseWriter, r *http.Request) (*Store, bool) {
 		native.WriteProblem(w, r, http.StatusServiceUnavailable, "the bridges are off in this process")
 		return nil, false
 	}
+	s.learn(fw.PrincipalFrom(r.Context()))
 	return s, true
 }
 

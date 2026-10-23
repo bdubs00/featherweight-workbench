@@ -175,7 +175,7 @@ func (s *Store) addMember(ctx context.Context, id string, spec SeatSpec, by *fw.
 		// The seating of the new seat counts for the guard of a message
 		// that comes before its run (seatingOut).
 		seat.Seatings, seat.Budget, seat.AgainAt = 1, spec.Budget, &now
-		line = system(EventJoined, fmt.Sprintf("%s added %s: %s", nameOf(by), spec.Handle, oneLine(spec.Task, 300)))
+		line = system(EventJoined, fmt.Sprintf("%s added %s: %s", s.nameOf(ctx, by), spec.Handle, oneLine(spec.Task, 300)))
 		line.Seq, line.At = rec.alloc(), now
 		return nil
 	})
@@ -220,7 +220,7 @@ func (s *Store) place(ctx context.Context, rec *record, seats []Member, inputs m
 		}
 		text := fmt.Sprintf("Seat %s with spawn_task, with wait false: the agent %s, the input \"[seat %s] %s\", and the instructions between <<< and >>> word for word.%s Then end your turn with the run id of the child.\n<<<\n%s\n>>>",
 			m.Handle, m.Agent, m.Handle, oneLine(inputOf(m, inputs), maxTaskBytes), budget, s.instructionsOf(ctx, rec, m))
-		content := header(rec, []string{HandleManager}, op) + text
+		content := header(rec, []string{HandleManager}, HandleOperator) + text
 		handle := m.Handle
 		s.submit(&job{
 			name: "the seat " + handle + " of " + rec.ID + " to the manager",
@@ -327,7 +327,7 @@ func (s *Store) fire(ctx context.Context, id, handle string, by *fw.Principal) (
 		}
 		fired = true
 		m.Fired, m.Muted = true, true
-		line = system(EventFired, fmt.Sprintf("%s fired %s", nameOf(by), handle))
+		line = system(EventFired, fmt.Sprintf("%s fired %s", s.nameOf(ctx, by), handle))
 		line.Seq, line.At = rec.alloc(), now
 		return nil
 	})
@@ -430,7 +430,7 @@ func (s *Store) patchMember(ctx context.Context, id, handle string, p MemberPatc
 			if m.Muted {
 				verb = "muted"
 			}
-			lines = append(lines, system(EventMuted, fmt.Sprintf("%s %s %s", nameOf(by), verb, handle)))
+			lines = append(lines, system(EventMuted, fmt.Sprintf("%s %s %s", s.nameOf(ctx, by), verb, handle)))
 		}
 		if p.Task != nil && task != m.Task {
 			m.Task, newTask = task, true
@@ -481,7 +481,7 @@ func (s *Store) giveTask(ctx context.Context, rec *record, m Member, by *fw.Prin
 			if seatingOut(rec.Seats[m.Handle], m, s.now()) {
 				return
 			}
-			_ = s.postLines(ctx, rec.ID, system(EventTask, fmt.Sprintf("%s seated %s again on its task: %s", nameOf(by), m.Handle, oneLine(m.Task, 300))))
+			_ = s.postLines(ctx, rec.ID, system(EventTask, fmt.Sprintf("%s seated %s again on its task: %s", s.nameOf(ctx, by), m.Handle, oneLine(m.Task, 300))))
 		}
 		if err := s.seatAgain(ctx, rec.ID, m.Handle); err != nil {
 			_ = s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The front failed to seat %s again: %s", m.Handle, oneLine(err.Error(), 300))))
@@ -574,16 +574,16 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 		switch {
 		case p.State != nil && *p.State == StateClosed && rec.State == StateOpen:
 			rec.State, rec.ClosedAt = StateClosed, &now
-			l = system(EventClosed, fmt.Sprintf("%s closed the bridge", nameOf(by)))
+			l = system(EventClosed, fmt.Sprintf("%s closed the bridge", s.nameOf(ctx, by)))
 			if rec.Delegation.Report {
 				rec.Report = &reportMark{AskedAt: now}
 				closed = true
 			}
 		case p.State != nil && *p.State == StateOpen && rec.State == StateClosed:
 			rec.State, rec.ClosedAt, rec.Report = StateOpen, nil, nil
-			l = system(EventReopened, fmt.Sprintf("%s opened the bridge again", nameOf(by)))
+			l = system(EventReopened, fmt.Sprintf("%s opened the bridge again", s.nameOf(ctx, by)))
 		case changed:
-			l = system(EventChanged, fmt.Sprintf("%s changed the settings of the bridge", nameOf(by)))
+			l = system(EventChanged, fmt.Sprintf("%s changed the settings of the bridge", s.nameOf(ctx, by)))
 		default:
 			return errNoChange
 		}
@@ -608,7 +608,7 @@ func (s *Store) askReport(ctx context.Context, rec *record) {
 	op := orOperator(rec.Operator)
 	ask := fmt.Sprintf("The operator closed the bridge. Write the report of the bridge in the wiki page %s with pages_write: what each member did, what is done, what is open, and the runs that hold the work. Read the channel with bridge_read (bridge %s) first. Then end your turn.", reportPath(rec.ID), rec.ID)
 	if mgr := s.runOf(s.asFront(ctx), managerRun(rec)); mgr != nil {
-		content := header(rec, []string{HandleManager}, op) + ask
+		content := header(rec, []string{HandleManager}, HandleOperator) + ask
 		s.submit(&job{
 			name: "the report of " + rec.ID,
 			do: func(ctx context.Context) error {
@@ -624,7 +624,7 @@ func (s *Store) askReport(ctx context.Context, rec *record) {
 		_ = s.postLines(ctx, rec.ID, system(EventChanged, "Nobody writes a report: the configuration names no manager"))
 		return
 	}
-	input := header(rec, []string{HandleManager}, op) + ask
+	input := header(rec, []string{HandleManager}, HandleOperator) + ask
 	mgr, err := s.startManager(ctx, rec, input, fmt.Sprintf("bridge:%s:report:%d", rec.ID, rec.LastSeq))
 	if err != nil {
 		_ = s.postLines(ctx, rec.ID, system(EventFailed, "The front failed to ask the manager for the report: "+oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300)))
