@@ -1832,7 +1832,7 @@ connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none';
 form-action 'self'; frame-ancestors 'none'
 ```
 
-The build of the page holds no inline script, no inline style element, and no data URI, and the faces are blob images. The page keeps its token in `sessionStorage["fw.token"]`, as `/ui` does, and sends it as a bearer token. On a 401 with `signin`, it sends the person to `/ui/signin` with `next` set to its own path and fragment, such as `/bossmode/#bridge/01K`, and the callback returns the person there (section 5).
+The build of the page holds no inline script, no inline style element, and no data URI, and the faces are blob images. The page keeps its token in `sessionStorage["fw.token"]`, as `/ui` does, and sends it as a bearer token. On a 401 with `signin`, it sends the person to `/ui/signin` with `next` set to its own path and fragment, such as `/bossmode/#bridge/01K`, and the callback returns the person there (section 5). Each 401 of the front leaves a line in its log with the route, the reason, and the replica (the kernel architecture, section 13.1), so a sign-out that nobody expected has a cause to read.
 
 ### 17.3 The stream
 
