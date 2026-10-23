@@ -2,9 +2,12 @@ package mcp
 
 // This file serves the fleet (docs/ARCHITECTURE.md section 8.6). The tool
 // fleet lists the members. A work tool that names a run of another member
-// sends the request to the native API of that member with the credential
-// of the caller. The resources fw://runs/{id}, its ledger, and its files
-// stay local. Without the fleet, nothing here adds a tool or changes one.
+// sends the request to the native API of that member. For a person, the
+// front decides first, and the request carries the static token and names
+// the person (onMember, fleet.ForStart). The static token and a workload
+// send their own credential. The resources fw://runs/{id}, its ledger, and
+// its files stay local. Without the fleet, nothing here adds a tool or
+// changes one.
 
 import (
 	"bytes"
@@ -108,15 +111,10 @@ var errFleetOff = fmt.Errorf("%w: the fleet is off; set workbench.fleet.subject 
 // withCredential puts the bearer credential of the HTTP request of a call
 // into ctx when ctx has none. Over a legacy session, the context of a call
 // comes from the request that opened the session, and the header of the
-// call itself is the right credential. Every request of a tool to another
-// member takes its context from here. When the server acts for the person
-// of a run (manager.OnBehalf), the credential is the static token, and ctx
-// also names that person for fleet.HeaderOnBehalfOf, so the owner records
-// the person and not the token (docs/ARCHITECTURE.md section 19.2).
+// call itself is the right credential. A request for a person then takes
+// its context from onMember or from fleet.ForStart, which put the static
+// token in place of the credential of a person.
 func withCredential(ctx context.Context, req sdk.Request) context.Context {
-	if act, ok := manager.ActorFrom(ctx); ok && act.ForPerson() {
-		ctx = fleet.WithOnBehalfOf(ctx, act.Person)
-	}
 	if fw.CredentialFrom(ctx) != "" || req == nil {
 		return ctx
 	}
@@ -149,11 +147,15 @@ func (s *server) ownerOf(ctx context.Context, id string) (string, error) {
 	return r.Member, nil
 }
 
-// memberError is an error status from the native API of a member.
+// memberError is an error status from the native API of a member. token
+// is true when the request carried the static token for a person, and the
+// detail then words a refusal of that token for an operator
+// (fleet.RefusedToken).
 type memberError struct {
 	member string
 	status int
 	detail string
+	token  bool
 }
 
 func (e *memberError) Error() string {
@@ -162,6 +164,9 @@ func (e *memberError) Error() string {
 
 // text is the error as a person reads it in a tool result.
 func (e *memberError) text() string {
+	if e.token {
+		return "Forbidden: " + e.detail + "."
+	}
 	switch e.status {
 	case http.StatusUnauthorized:
 		return fmt.Sprintf("Forbidden: the fleet member %s did not accept your credential. Both members need the same issuer and audience, or the same token.", e.member)
@@ -215,7 +220,7 @@ func (s *server) callMember(ctx context.Context, member, method, path string, bo
 		return fmt.Errorf("mcp: read the answer of the member %s: %w", member, err)
 	}
 	if resp.StatusCode >= http.StatusMultipleChoices {
-		return problemOf(member, resp.StatusCode, b)
+		return tokenRefusal(ctx, problemOf(member, resp.StatusCode, b))
 	}
 	if v == nil {
 		return nil
@@ -250,7 +255,7 @@ func (s *server) memberFile(ctx context.Context, member, id, path string) (data 
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		return nil, -1, problemOf(member, resp.StatusCode, b)
+		return nil, -1, tokenRefusal(ctx, problemOf(member, resp.StatusCode, b))
 	}
 	if resp.ContentLength > maxRawBytes {
 		return nil, resp.ContentLength, nil
@@ -281,12 +286,23 @@ func problemOf(member string, status int, b []byte) *memberError {
 	return &memberError{member: member, status: status, detail: truncate(detail, 500)}
 }
 
+// tokenRefusal is e, or a refusal of the static token when the request of
+// ctx carried that token for a person: a 401 or a 403 of the member is
+// then the problem of an operator (fleet.RefusedToken).
+func tokenRefusal(ctx context.Context, e *memberError) *memberError {
+	env := fleet.TokenEnvOf(ctx)
+	if env == "" || (e.status != http.StatusUnauthorized && e.status != http.StatusForbidden) {
+		return e
+	}
+	return &memberError{member: e.member, status: http.StatusForbidden, detail: fleet.RefusedToken(e.member, env, e.status, e.detail), token: true}
+}
+
 // memberErr gives an error answer of a read through fleet.ReadJSON the
 // text of the other requests to a member (memberError).
 func memberErr(err error) error {
 	var me *fleet.MemberError
 	if errors.As(err, &me) {
-		return &memberError{member: me.Member, status: me.Status, detail: me.Detail}
+		return &memberError{member: me.Member, status: me.Status, detail: me.Detail, token: me.Token}
 	}
 	return err
 }
@@ -371,15 +387,16 @@ func (s *server) remoteEmpty(ctx context.Context, member, id string) (eventsResu
 	return pageOf(r, nil, 0), nil
 }
 
-// startOn starts a run on another member through its native API. The call
-// never waits: the client polls run_status, which reaches the member too.
-// For an actor with a person, the run is for that person: the member takes
-// principal and principalKind from the static token, which the request
-// carries (the kernel architecture, section 11.9).
+// startOn starts a run on another member through its native API, in the
+// context of fleet.ForStart. The call never waits: the client polls
+// run_status, which reaches the member too. For a person, the person of an
+// actor or a person who calls with her own credential, the run is for that
+// person: the member takes principal and principalKind from the static
+// token, which the request carries (the kernel architecture, section 11.9).
 func (s *server) startOn(ctx context.Context, member string, in runArgs, act manager.Actor, acting bool) *sdk.CallToolResult {
 	body := map[string]any{"input": in.Input, "wait": false}
-	if acting && act.ForPerson() {
-		body["principal"], body["principalKind"] = act.Person, act.PersonKind
+	if p := fw.PrincipalFrom(ctx); fleet.IsPerson(p) {
+		body["principal"], body["principalKind"] = p.Subject, p.Kind
 	}
 	if in.Agent != "" {
 		body["agent"] = in.Agent
@@ -426,5 +443,5 @@ func fleetInstructions(a *fw.Agent) string {
 	if f == nil {
 		return ""
 	}
-	return fmt.Sprintf("\n\nFleet: this process is the member %s of a fleet of fw processes that share one bus. The fleet tool lists the members. runs_list lists the runs of every member; scope local keeps the runs of this process, and member keeps the runs of one member. run_status, run_events, run_result, run_file, approve, cancel, and send act on a run of any member by its id: the request goes to the member that owns the run with your credential, and that member decides. agent_builder with fromRun reads the run from the member that owns it and starts the builder in this process. run with member starts a run on another member and returns at once. The resources fw://runs/{id} read the runs of this process only.", f.Name())
+	return fmt.Sprintf("\n\nFleet: this process is the member %s of a fleet of fw processes that share one bus. The fleet tool lists the members. runs_list lists the runs of every member; scope local keeps the runs of this process, and member keeps the runs of one member. run_status, run_events, run_result, run_file, approve, cancel, and send act on a run of any member by its id: for a person, the front decides with the rules of what the person sees, and the request goes to the member that owns the run with the token of the fleet; the static token and a workload send their own credential, and that member decides. agent_builder with fromRun reads the run from the member that owns it and starts the builder in this process. run with member starts a run on another member and returns at once. The resources fw://runs/{id} read the runs of this process only.", f.Name())
 }

@@ -95,7 +95,7 @@ func TestSendBudgetAndRunBudget(t *testing.T) {
 // to the fleet member that owns the run.
 func TestRunBudgetReachesTheOwner(t *testing.T) {
 	ctx := testCtx(t)
-	owner := manageAgent(t, newScript(toolUse("c1", "look", `{}`), endTurn("the report"), endTurn("done")).model(),
+	owner := tokenOwner(t, newScript(toolUse("c1", "look", `{}`), endTurn("the report"), endTurn("done")).model(),
 		fw.WithTools(lookTool()), fw.WithSurfaces(native.New()))
 	h, err := owner.Handler()
 	if err != nil {
@@ -115,6 +115,7 @@ func TestRunBudgetReachesTheOwner(t *testing.T) {
 	}}
 	fake.set(&remote)
 	view := attach(manageAgent(t, newScript().model()), fake)
+	fake.rules = view
 	cs := as(t, ctx, serveAgent(t, view, nil).URL, "alice-token")
 
 	res := callTool(t, ctx, cs, toolRunBudget, map[string]any{"runId": remote.ID, "budget": map[string]any{"maxTurns": 3}})
@@ -136,8 +137,12 @@ func TestRunBudgetReachesTheOwner(t *testing.T) {
 	if b, err := owner.RunBudget(ctx, remote.ID); err != nil || b.MaxTurns != 2 || b.Deadline != 30*time.Minute {
 		t.Fatalf("owner budget = %+v, %v", b, err)
 	}
+	// Bob only views reviewer, so the front refuses him, and nothing
+	// reaches the owner.
 	bob := as(t, ctx, serveAgent(t, view, nil).URL, "bob-token")
-	if res := callTool(t, ctx, bob, toolRunBudget, map[string]any{"runId": remote.ID, "budget": map[string]any{"maxTurns": 9}}); !res.IsError || !strings.Contains(textOf(res), "refused") {
+	before := fake.forwards()
+	if res := callTool(t, ctx, bob, toolRunBudget, map[string]any{"runId": remote.ID, "budget": map[string]any{"maxTurns": 9}}); !res.IsError ||
+		!strings.Contains(textOf(res), "Forbidden: bob run.operate needs an operator entry on the agent reviewer") || fake.forwards() != before {
 		t.Fatalf("bob run_budget = %s", textOf(res))
 	}
 }

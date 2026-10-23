@@ -135,14 +135,16 @@ func TestSkillToARunOfTheFront(t *testing.T) {
 	}
 }
 
-// member is a fake fleet member that answers the follow-ups of the front.
+// member is a fake fleet member that answers the follow-ups of the front,
+// and records the body, the credential, and the person of each.
 type member struct {
-	mu     sync.Mutex
-	srv    *httptest.Server
-	bodies []map[string]any
-	auths  []string
-	status int
-	detail string
+	mu      sync.Mutex
+	srv     *httptest.Server
+	bodies  []map[string]any
+	auths   []string
+	persons []string
+	status  int
+	detail  string
 }
 
 func newMember(t *testing.T) *member {
@@ -154,6 +156,7 @@ func newMember(t *testing.T) *member {
 		m.mu.Lock()
 		m.bodies = append(m.bodies, body)
 		m.auths = append(m.auths, r.Header.Get("Authorization"))
+		m.persons = append(m.persons, r.Header.Get(fleet.HeaderOnBehalfOf))
 		status, detail := m.status, m.detail
 		m.mu.Unlock()
 		if status != 0 {
@@ -171,10 +174,21 @@ func newMember(t *testing.T) *member {
 }
 
 // view is a fleet view with one run of the member default/manager-0, whose
-// forwards reach the fake member.
+// forwards reach the fake member. It lets every person operate the run,
+// unless refuse is set (fleet.Authorizer).
 type view struct {
 	target string
+	refuse bool
 }
+
+func (v view) AllowRun(context.Context, string, string) error {
+	if v.refuse {
+		return fmt.Errorf("%w: ada run.operate needs an operator entry on the agent manager", fw.ErrForbidden)
+	}
+	return nil
+}
+
+func (v view) AllowAgent(context.Context, string, string, string) error { return nil }
 
 func (v view) Name() string                                    { return "front" }
 func (v view) Members(context.Context) ([]fleet.Member, error) { return nil, nil }
@@ -192,14 +206,22 @@ func (v view) Forward(ctx context.Context, _ string, req *http.Request) (*http.R
 	}
 	out.Header = req.Header.Clone()
 	out.Header.Set("Authorization", fw.CredentialFrom(ctx))
+	// As the fleet does, the person comes from the context alone.
+	out.Header.Del(fleet.HeaderOnBehalfOf)
+	if who := fleet.OnBehalfOf(ctx); who != "" {
+		out.Header.Set(fleet.HeaderOnBehalfOf, who)
+	}
 	return http.DefaultClient.Do(out)
 }
 
 // A slash command for a run of another member goes through the forward of
-// the fleet with the credential of the person, pinned, and a refusal of
-// the owner to pin it answers 413, a credential that the owner refuses
-// 403, and an owner that fails 502.
+// the fleet, pinned. The front decides for the person, and the message
+// carries the static token and names the person. A refusal of the owner to
+// pin it answers 413, an owner that refuses the token 403 with words for
+// an operator, and an owner that fails 502. A person whom the front
+// refuses gets 403, and nothing reaches the owner.
 func TestSkillToARunOfAMember(t *testing.T) {
+	t.Setenv("FW_API_TOKEN", staticToken)
 	fr := skillsFront(t)
 	m := newMember(t)
 	fleet.Attach(fr.a, view{target: m.srv.URL})
@@ -208,10 +230,10 @@ func TestSkillToARunOfAMember(t *testing.T) {
 		t.Fatalf("skill = %d %s", resp.StatusCode, body)
 	}
 	m.mu.Lock()
-	got, auth := m.bodies[0], m.auths[0]
+	got, auth, person := m.bodies[0], m.auths[0], m.persons[0]
 	m.mu.Unlock()
-	if got["pinned"] != true || got["content"] != "Skill: fix\n\nFix issue 7." || got["from"] != nil || auth != "Bearer ada" {
-		t.Fatalf("forward = %+v with %q", got, auth)
+	if got["pinned"] != true || got["content"] != "Skill: fix\n\nFix issue 7." || got["from"] != nil || auth != "Bearer "+staticToken || person != "ada" {
+		t.Fatalf("forward = %+v with %q for %q", got, auth, person)
 	}
 	for _, c := range []struct {
 		status int
@@ -220,7 +242,7 @@ func TestSkillToARunOfAMember(t *testing.T) {
 		words  string
 	}{
 		{http.StatusBadRequest, "fw: invalid request: the pinned messages of run remote-1 would hold 70000 bytes, and the bound is 65536 bytes (64 KB)", http.StatusRequestEntityTooLarge, "the bound is 65536"},
-		{http.StatusUnauthorized, "no", http.StatusForbidden, "did not accept your credential"},
+		{http.StatusUnauthorized, "no", http.StatusForbidden, "the worker default/manager-0 refused the token of the fleet; check FW_API_TOKEN on that worker"},
 		{http.StatusServiceUnavailable, "the Task wakes", http.StatusBadGateway, "the Task wakes"},
 		{http.StatusForbidden, "not yours", http.StatusForbidden, "not yours"},
 	} {
@@ -231,6 +253,25 @@ func TestSkillToARunOfAMember(t *testing.T) {
 		if resp.StatusCode != c.want || !strings.Contains(body, c.words) {
 			t.Errorf("owner %d = %d %s, want %d with %q", c.status, resp.StatusCode, body, c.want, c.words)
 		}
+	}
+	m.mu.Lock()
+	m.status, m.detail = 0, ""
+	before := len(m.bodies)
+	m.mu.Unlock()
+	fleet.Attach(fr.a, view{target: m.srv.URL, refuse: true})
+	resp, body = send(t, http.MethodPost, fr.url+"/v1/bossmode/runs/remote-1/skill", "ada", `{"name":"fix"}`)
+	m.mu.Lock()
+	after := len(m.bodies)
+	m.mu.Unlock()
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(body, "operator entry on the agent manager") || after != before {
+		t.Fatalf("a refused person = %d %s, the owner got %d requests", resp.StatusCode, body, after-before)
+	}
+	// Without the token, the front acts for no person.
+	fleet.Attach(fr.a, view{target: m.srv.URL})
+	t.Setenv("FW_API_TOKEN", "")
+	resp, body = send(t, http.MethodPost, fr.url+"/v1/bossmode/runs/remote-1/skill", "ada", `{"name":"fix"}`)
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, "the front holds no static token of the fleet") {
+		t.Fatalf("without the token = %d %s", resp.StatusCode, body)
 	}
 }
 

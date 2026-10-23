@@ -6,6 +6,7 @@ package web
 // the same conversation.
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -34,11 +35,12 @@ type builderBody struct {
 // /v1/runs: the principal, the origin, and the header Idempotency-Key
 // apply. It answers 201 with the run object.
 //
-// A fromRun that another fleet member owns is read from that member with
-// the credential of the caller, because a worker serves the native API of
-// the kernel alone and no builder route: the first message comes from the
-// ledger of the owner (dashboard.SaveAsAgentInputOn), on the same terms,
-// and the builder runs in this process.
+// A fromRun that another fleet member owns is read from that member,
+// because a worker serves the native API of the kernel alone and no
+// builder route: the first message comes from the ledger of the owner
+// (dashboard.SaveAsAgentInputOn), on the same terms, and the builder runs
+// in this process. For a person, the front decides the read and reads with
+// the static token that names the person (fleet.ForRun).
 func (s *server) builder(w http.ResponseWriter, r *http.Request) {
 	var body builderBody
 	if !s.decodeFiles(w, r, &body, func() int { return len(body.Files) }) {
@@ -56,7 +58,10 @@ func (s *server) builder(w http.ResponseWriter, r *http.Request) {
 		}
 		var err error
 		if member != "" {
-			input, err = dashboard.SaveAsAgentInputOn(r.Context(), s.a, fleet.Of(s.a), member, fromRun)
+			var ctx context.Context
+			if ctx, err = fleet.ForRun(r.Context(), s.a, fromRun, fw.ActionRunView); err == nil {
+				input, err = dashboard.SaveAsAgentInputOn(ctx, s.a, fleet.Of(s.a), member, fromRun)
+			}
 		} else {
 			input, err = dashboard.SaveAsAgentInput(r.Context(), s.a, fromRun)
 		}
@@ -65,7 +70,7 @@ func (s *server) builder(w http.ResponseWriter, r *http.Request) {
 			problem(w, r, http.StatusNotFound, "no run has the id "+strconv.Quote(fromRun))
 			return
 		case err != nil:
-			s.fail(w, r, err)
+			s.failRemote(w, r, err)
 			return
 		}
 	} else {

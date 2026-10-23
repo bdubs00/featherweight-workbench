@@ -141,6 +141,9 @@ type boss struct {
 // an agent views all of its runs, so each person has an agent of their own.
 func newBoss(t *testing.T, admins ...string) *boss {
 	t.Helper()
+	// The front holds the static token, which a person who calls with her
+	// own credential needs too.
+	t.Setenv("FW_API_TOKEN", "fleet-token")
 	var calls atomic.Int32
 	ocfg := testConfig(t)
 	ocfg.Access.Admins = []string{"kind:token"}
@@ -456,8 +459,9 @@ func TestOnBehalfApproveNamesTheActor(t *testing.T) {
 // Every request of an actor to another member, an action or a read, names
 // the person of the actor in fleet.HeaderOnBehalfOf, with the static token
 // as the credential: approve, send, run_budget, fork, cancel, and
-// run_status. A call without a person names nobody, and so does a person
-// who calls with her own credential.
+// run_status. A call of the token without a person names nobody. A person
+// who calls with her own credential gets the static token that names her
+// too, so her credential never leaves the front.
 func TestOnBehalfNamesThePersonToTheOwner(t *testing.T) {
 	ctx := testCtx(t)
 	b := newBoss(t, "kind:token")
@@ -487,9 +491,10 @@ func TestOnBehalfNamesThePersonToTheOwner(t *testing.T) {
 	// Without a person, the token acts as itself.
 	noPerson := sdk.Meta{MetaRun: "mgr-1", MetaAgent: "manager"}
 	call(token, noPerson, toolRunStatus, map[string]any{"runId": ra.ID}, "Bearer fleet-token", "")
-	// A person who calls with her own credential is no actor.
+	// A person who calls with her own credential is no actor, and the
+	// front decides and names her as for an actor.
 	alice := as(t, ctx, b.url, "alice-token")
-	call(alice, metaFor("bob"), toolRunStatus, map[string]any{"runId": ra.ID}, "Bearer alice-token", "")
+	call(alice, metaFor("bob"), toolRunStatus, map[string]any{"runId": ra.ID}, "Bearer fleet-token", "alice")
 }
 
 // queuedKind returns the kind of the person of a run, as fw.run.queued

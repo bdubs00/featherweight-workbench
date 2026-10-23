@@ -86,12 +86,17 @@ func skillRunRoute(k *native.Kit) http.HandlerFunc {
 			failSkill(k, w, r, err)
 			return
 		}
+		ctx, err := toOwner(r.Context(), a, target)
+		if err != nil {
+			failSkill(k, w, r, err)
+			return
+		}
 		x, err := skills.Prepare(a, skills.Command{Name: body.Name, Args: body.Args}, body.Text)
 		if err != nil {
 			failSkill(k, w, r, err)
 			return
 		}
-		run, err := sendSkill(r.Context(), a, target, x.Message)
+		run, err := sendSkill(ctx, a, target, x.Message)
 		if err != nil {
 			failSkill(k, w, r, err)
 			return
@@ -124,6 +129,8 @@ func failSkill(k *native.Kit, w http.ResponseWriter, r *http.Request, err error)
 		}
 	case errors.Is(err, fleet.ErrNoRoute), errors.Is(err, fleet.ErrNoCredential):
 		native.WriteProblem(w, r, http.StatusBadGateway, skillDetail(err))
+	case errors.Is(err, fleet.ErrNoToken):
+		fleet.Fail(w, r, err)
 	default:
 		k.Fail(w, r, err)
 	}
@@ -141,8 +148,8 @@ func skillDetail(err error) string {
 
 // runTarget finds the run of a slash command for the caller in ctx: a run
 // of this process that the caller can operate, as the kernel decides, or a
-// run of another member that the view shows the caller, whose owner
-// authorizes the caller again when the message arrives.
+// run of another member that the view shows the caller. For such a run,
+// the front decides the message of a person before it goes out (toOwner).
 func runTarget(ctx context.Context, a *fw.Agent, id string) (*fw.Run, error) {
 	// A context without a principal asks the kernel whether the run exists
 	// at all.
@@ -170,13 +177,26 @@ func runTarget(ctx context.Context, a *fw.Agent, id string) (*fw.Run, error) {
 	return run, nil
 }
 
+// toOwner returns the context of the message of a slash command for a run
+// of another member (fleet.ForRun): for a person, the front decides
+// fw.ActionRunOperate, and the message goes with the static token of the
+// fleet and names the person, whom the owner records as the sender. The
+// static token and a workload send their own credential. A run of this
+// process keeps ctx, because the kernel decides there.
+func toOwner(ctx context.Context, a *fw.Agent, run *fw.Run) (context.Context, error) {
+	if run.Member == "" {
+		return ctx, nil
+	}
+	return fleet.ForRun(ctx, a, run.ID, fw.ActionRunOperate)
+}
+
 // sendSkill sends the message of a slash command to the run of runTarget
 // as the caller in ctx, pinned: a run of this process through the kernel,
 // which authorizes the caller, and a run of another member through the
-// forward of the fleet, with the credential of the caller, so the owner
-// authorizes the person and records the person as the sender. It returns
-// the run after the message. A refusal to pin the message wraps
-// ErrPinnedBound.
+// forward of the fleet, with the context of toOwner. It returns the run
+// after the message. A refusal to pin the message wraps ErrPinnedBound. A
+// refusal of the static token by the owner is a 403 with words for an
+// operator (fleet.RefusedToken).
 func sendSkill(ctx context.Context, a *fw.Agent, run *fw.Run, content string) (*fw.Run, error) {
 	id := run.ID
 	msg := fw.Message{Role: fw.RoleUser, Content: []fw.Block{fw.Text(content)}}
@@ -224,6 +244,9 @@ func sendSkill(ctx context.Context, a *fw.Agent, run *fw.Run, content string) (*
 		}
 		if resp.StatusCode == http.StatusBadRequest && pinnedRefusal(detail) {
 			return nil, fmt.Errorf("%w: %s", ErrPinnedBound, detail)
+		}
+		if env := fleet.TokenEnvOf(fctx); env != "" && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+			return nil, &memberError{member: run.Member, status: http.StatusForbidden, detail: fleet.RefusedToken(run.Member, env, resp.StatusCode, detail)}
 		}
 		if len(detail) > 500 {
 			detail = detail[:500]
@@ -299,11 +322,15 @@ func skillSendTool(a *fw.Agent) mcp.Tool {
 		if err != nil {
 			return mcp.ErrorResult(sendWords(err)), nil, nil
 		}
+		fctx, err := toOwner(withCredential(ctx, req), a, target)
+		if err != nil {
+			return mcp.ErrorResult(sendWords(err)), nil, nil
+		}
 		x, err := skills.Prepare(a, cmd, in.Text)
 		if err != nil {
 			return mcp.ErrorResult(sendWords(err)), nil, nil
 		}
-		run, err := sendSkill(withCredential(ctx, req), a, target, x.Message)
+		run, err := sendSkill(fctx, a, target, x.Message)
 		if err != nil {
 			return mcp.ErrorResult(sendWords(err)), nil, nil
 		}
@@ -345,7 +372,7 @@ func sendWords(err error) string {
 		return "Unavailable: " + skillDetail(err) + ". Try again in a few seconds."
 	case errors.As(err, &me):
 		return fmt.Sprintf("The fleet member %s answered %d: %s.", me.member, me.status, me.detail)
-	case errors.Is(err, fw.ErrRunNotFound), errors.Is(err, fw.ErrForbidden), errors.Is(err, fw.ErrAuthzUnavailable), errors.Is(err, fw.ErrInvalidRequest):
+	case errors.Is(err, fw.ErrRunNotFound), errors.Is(err, fw.ErrForbidden), errors.Is(err, fw.ErrAuthzUnavailable), errors.Is(err, fw.ErrInvalidRequest), errors.Is(err, fleet.ErrNoToken):
 		return mcp.Explain(err)
 	}
 	return "The skill did not reach the run: " + skillDetail(err) + "."

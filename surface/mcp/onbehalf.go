@@ -17,7 +17,7 @@ package mcp
 // of a message, the metadata key manager.MetaVia of a run that it starts,
 // and a line of the log for a cancel and a change of a budget. A request
 // to another member names the person in fleet.HeaderOnBehalfOf
-// (withCredential), so the owner records that person and not the token. A
+// (onMember), so the owner records that person and not the token. A
 // manager run that acts on a run of a bridge needs the delegation of the
 // operator of the bridge (manager.Delegated).
 
@@ -89,22 +89,20 @@ func trimForbidden(msg string) string {
 	return msg
 }
 
-// mayOnMember decides, before the server forwards an action of an actor
-// to the member that owns a run, each action for the person of the actor
-// (fleet.AllowRun). The request carries the static token, so the owner
-// decides about the token, and the front decides about the person here.
-// The request names the person (withCredential), so the owner records
-// the person. It returns nil to go on.
-func (s *server) mayOnMember(ctx context.Context, act manager.Actor, acting bool, id string, actions ...string) *sdk.CallToolResult {
-	if !acting || !act.ForPerson() {
-		return nil
+// onMember returns the context of a request of a tool to the member that
+// holds the run id, and a result when the front refuses it
+// (fleet.ForRun). For a person, the front decides each action with the
+// rules of the view first: the person of an actor, and a person who calls
+// with her own credential alike. The request then carries the static
+// token, so the owner decides about the token, and it names the person, so
+// the owner records the person. The static token and a workload keep their
+// own credential.
+func (s *server) onMember(ctx context.Context, id string, actions ...string) (context.Context, *sdk.CallToolResult) {
+	ctx, err := fleet.ForRun(ctx, s.a, id, actions...)
+	if err != nil {
+		return nil, failResult(err)
 	}
-	for _, action := range actions {
-		if err := fleet.AllowRun(ctx, fleet.Of(s.a), id, action); err != nil {
-			return failResult(err)
-		}
-	}
-	return nil
+	return ctx, nil
 }
 
 // viaRefusal is the answer to a caller that names the metadata key of an

@@ -120,10 +120,14 @@ func (s *server) runResultTool(ctx context.Context, req *sdk.CallToolRequest, in
 }
 
 // memberResult builds the result of a run of another member from the run
-// and the events of its owner, read with the credential of the caller. A
+// and the events of its owner, read in the context of fleet.ForRun. A
 // worker serves the native API of the kernel alone and no result route,
 // so the result is built here, as GET /v1/runs/{id}/result builds it.
 func (s *server) memberResult(ctx context.Context, member, id string) (dashboard.Result, error) {
+	ctx, err := fleet.ForRun(ctx, s.a, id, fw.ActionRunView)
+	if err != nil {
+		return dashboard.Result{}, err
+	}
 	run, events, err := fleet.MemberLedger(ctx, fleet.Of(s.a), member, id)
 	if err != nil {
 		return dashboard.Result{}, memberErr(err)
@@ -149,8 +153,11 @@ func (s *server) agentBuilder(ctx context.Context, req *sdk.CallToolRequest, in 
 				// A worker serves no builder route, so the first message
 				// comes from the ledger of the owner, and the builder runs
 				// here.
-				text, err = dashboard.SaveAsAgentInputOn(ctx, s.a, fleet.Of(s.a), member, from)
-				err = memberErr(err)
+				var mctx context.Context
+				if mctx, err = fleet.ForRun(ctx, s.a, from, fw.ActionRunView); err == nil {
+					text, err = dashboard.SaveAsAgentInputOn(mctx, s.a, fleet.Of(s.a), member, from)
+					err = memberErr(err)
+				}
 			}
 		}
 		if err != nil {

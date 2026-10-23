@@ -501,17 +501,17 @@ func (s *server) run(ctx context.Context, req *sdk.CallToolRequest, in runArgs) 
 			if strings.TrimSpace(in.Input) == "" {
 				return errorResult("Invalid request: the argument input is required and must not be empty."), nil, nil
 			}
-			if acting && act.ForPerson() {
-				// The member decides about the token, which the request
-				// carries, and the front decides about the person.
-				if strings.TrimSpace(in.Agent) == "" {
-					return errorResult("Invalid request: name the agent of the run with agent, so the front can check that " + act.Person + " can run it on " + member + "."), nil, nil
-				}
-				if err := fleet.AllowAgent(ctx, f, member, in.Agent, fw.ActionAgentRun); err != nil {
-					return failResult(err), nil, nil
-				}
+			// For a person, the member decides about the token, which the
+			// request carries, and the front decides about the person first
+			// (fleet.ForStart).
+			if p := fw.PrincipalFrom(ctx); fleet.IsPerson(p) && strings.TrimSpace(in.Agent) == "" {
+				return errorResult("Invalid request: name the agent of the run with agent, so the front can check that " + p.Subject + " can run it on " + member + "."), nil, nil
 			}
-			return s.startOn(withCredential(ctx, req), member, in, act, acting), nil, nil
+			fctx, err := fleet.ForStart(withCredential(ctx, req), s.a, member, in.Agent)
+			if err != nil {
+				return failResult(err), nil, nil
+			}
+			return s.startOn(fctx, member, in, act, acting), nil, nil
 		}
 	}
 
@@ -940,6 +940,10 @@ func (s *server) runStatus(ctx context.Context, req *sdk.CallToolRequest, in run
 	r, err := s.a.Get(ctx, in.RunID)
 	if err != nil {
 		if res := s.elsewhere(withCredential(ctx, req), in.RunID, err, func(ctx context.Context, member string) *sdk.CallToolResult {
+			ctx, res := s.onMember(ctx, in.RunID, fw.ActionRunView)
+			if res != nil {
+				return res
+			}
 			return remoteResult(s.memberRun(ctx, member, http.MethodGet, "/v1/runs/"+url.PathEscape(in.RunID), nil, ""))
 		}); res != nil {
 			return res, nil, nil
@@ -1017,8 +1021,8 @@ func (s *server) allowRule(ctx context.Context, in approveArgs) (string, *sdk.Ca
 
 // approveNow records the decision of an approval, on this process or on
 // the member that owns the run. The decider is the caller, and for an
-// actor with a person that person, as the owner of a run of another member
-// records it from fleet.HeaderOnBehalfOf.
+// actor with a person that person. The owner of a run of another member
+// records a person from fleet.HeaderOnBehalfOf (onMember).
 func (s *server) approveNow(ctx context.Context, req *sdk.CallToolRequest, in approveArgs, act manager.Actor, acting bool) *sdk.CallToolResult {
 	d := fw.ApprovalDecision{
 		ApprovalID: in.ApprovalID,
@@ -1029,7 +1033,8 @@ func (s *server) approveNow(ctx context.Context, req *sdk.CallToolRequest, in ap
 	}
 	if err := s.a.Decide(ctx, in.RunID, d); err != nil {
 		if res := s.elsewhere(withCredential(ctx, req), in.RunID, err, func(ctx context.Context, member string) *sdk.CallToolResult {
-			if res := s.mayOnMember(ctx, act, acting, in.RunID, fw.ActionRunOperate); res != nil {
+			ctx, res := s.onMember(ctx, in.RunID, fw.ActionRunOperate)
+			if res != nil {
 				return res
 			}
 			body := map[string]any{"decision": in.Decision}
@@ -1069,7 +1074,8 @@ func (s *server) cancel(ctx context.Context, req *sdk.CallToolRequest, in runIDA
 	}
 	if err := s.a.Cancel(ctx, in.RunID); err != nil {
 		if res := s.elsewhere(withCredential(ctx, req), in.RunID, err, func(ctx context.Context, member string) *sdk.CallToolResult {
-			if res := s.mayOnMember(ctx, act, acting, in.RunID, fw.ActionRunOperate); res != nil {
+			ctx, res := s.onMember(ctx, in.RunID, fw.ActionRunOperate)
+			if res != nil {
 				return res
 			}
 			r, err := s.memberRun(ctx, member, http.MethodPost, "/v1/runs/"+url.PathEscape(in.RunID)+"/cancel", map[string]any{}, "")
@@ -1109,7 +1115,8 @@ func (s *server) fork(ctx context.Context, req *sdk.CallToolRequest, in forkArgs
 		if res := s.elsewhere(withCredential(ctx, req), in.RunID, err, func(ctx context.Context, member string) *sdk.CallToolResult {
 			// A branch needs the operator role on the run and the right to
 			// run its agent, as the kernel decides it.
-			if res := s.mayOnMember(ctx, act, acting, in.RunID, fw.ActionRunOperate, fw.ActionAgentRun); res != nil {
+			ctx, res := s.onMember(ctx, in.RunID, fw.ActionRunOperate, fw.ActionAgentRun)
+			if res != nil {
 				return res
 			}
 			body := map[string]any{"seq": in.Seq, "input": in.Input, "model": in.Model, "metadata": in.Metadata, "spawn": in.Spawn}
@@ -1190,7 +1197,8 @@ func (s *server) send(ctx context.Context, req *sdk.CallToolRequest, in sendArgs
 	}
 	if err := s.a.Send(sendCtx, in.RunID, fw.Message{Role: fw.RoleUser, Content: content}, fw.OriginMCP, opts...); err != nil {
 		if res := s.elsewhere(withCredential(ctx, req), in.RunID, err, func(ctx context.Context, member string) *sdk.CallToolResult {
-			if res := s.mayOnMember(ctx, act, acting, in.RunID, fw.ActionRunOperate); res != nil {
+			ctx, res := s.onMember(ctx, in.RunID, fw.ActionRunOperate)
+			if res != nil {
 				return res
 			}
 			body := map[string]any{"content": text}
@@ -1252,7 +1260,8 @@ func (s *server) runBudget(ctx context.Context, req *sdk.CallToolRequest, in run
 	b, err := s.a.ChangeBudget(ctx, in.RunID, change, fw.OriginMCP)
 	if err != nil {
 		if res := s.elsewhere(withCredential(ctx, req), in.RunID, err, func(ctx context.Context, member string) *sdk.CallToolResult {
-			if res := s.mayOnMember(ctx, act, acting, in.RunID, fw.ActionRunOperate); res != nil {
+			ctx, res := s.onMember(ctx, in.RunID, fw.ActionRunOperate)
+			if res != nil {
 				return res
 			}
 			var out budgetAnswer

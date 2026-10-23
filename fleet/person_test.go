@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/internal/behalf"
 )
 
 // callers maps a bearer token to a principal.
@@ -492,5 +494,87 @@ func TestForPerson(t *testing.T) {
 	t.Setenv("OTHER_TOKEN", "")
 	if _, err := ForPerson(context.Background(), cfg, &fw.Principal{Subject: "alice", Kind: fw.KindUser}); err == nil || !strings.Contains(err.Error(), "OTHER_TOKEN") {
 		t.Fatalf("without the token = %v", err)
+	}
+}
+
+// ForPerson keeps the credential of a call of the static token that acts
+// for the person (behalf.For) and names the person; it needs no token of
+// its own then. The context knows the secret of the token for the words
+// of a refusal.
+func TestForPersonOfTheToken(t *testing.T) {
+	t.Setenv("FW_API_TOKEN", "")
+	cfg := fw.DefaultConfig()
+	token := fw.WithCredential(fw.WithPrincipal(context.Background(), &fw.Principal{Subject: fw.KindToken, Kind: fw.KindToken}), "Bearer the-call")
+	person := &fw.Principal{Subject: "alice", Kind: fw.KindUser}
+	ctx, err := ForPerson(behalf.For(token, person), cfg, person)
+	if err != nil || fw.CredentialFrom(ctx) != "Bearer the-call" || OnBehalfOf(ctx) != "alice" || TokenEnvOf(ctx) != "FW_API_TOKEN" {
+		t.Fatalf("ForPerson for the token = %q %q %q, %v", fw.CredentialFrom(ctx), OnBehalfOf(ctx), TokenEnvOf(ctx), err)
+	}
+	if TokenEnvOf(context.Background()) != "" || TokenEnvOf(WithOnBehalfOf(context.Background(), "bob")) != "FW_API_TOKEN" {
+		t.Fatal("TokenEnvOf names a secret without a person, or none with one")
+	}
+}
+
+// ForRun and ForStart decide for a person with the rules of the view and
+// give the static token that names the person, refuse a person whom the
+// rules refuse, and keep the context of the token and of a workload.
+func TestForRunAndForStart(t *testing.T) {
+	pf := newPersonFront(t)
+	a := pf.m.a
+	ctx, err := ForRun(as("alice"), a, "r1", fw.ActionRunOperate)
+	if err != nil || fw.CredentialFrom(ctx) != "Bearer fleet-secret" || OnBehalfOf(ctx) != "alice" {
+		t.Fatalf("ForRun for alice = %q %q, %v", fw.CredentialFrom(ctx), OnBehalfOf(ctx), err)
+	}
+	carol := fw.WithPrincipal(context.Background(), people["carol-token"])
+	if _, err := ForRun(carol, a, "r1", fw.ActionRunView); err != nil {
+		t.Fatalf("carol reads: %v", err)
+	}
+	if _, err := ForRun(carol, a, "r1", fw.ActionRunOperate); !errors.Is(err, fw.ErrForbidden) {
+		t.Fatalf("carol operates: %v", err)
+	}
+	dave := as("dave")
+	if _, err := ForRun(dave, a, "r4", fw.ActionRunOperate, fw.ActionAgentRun); !errors.Is(err, fw.ErrForbidden) {
+		t.Fatalf("dave branches r4: %v", err)
+	}
+	if _, err := ForRun(as("bob"), a, "r1", fw.ActionRunView); !errors.Is(err, fw.ErrRunNotFound) {
+		t.Fatalf("bob reads a run that he cannot see: %v", err)
+	}
+	if _, err := ForStart(as("alice"), a, "team/rev", "team"); err != nil {
+		t.Fatalf("alice starts team: %v", err)
+	}
+	if _, err := ForStart(carol, a, "team/rev", "team"); !errors.Is(err, fw.ErrForbidden) {
+		t.Fatalf("carol starts team: %v", err)
+	}
+	for _, who := range []string{"fleet-secret", "workload-token"} {
+		in := fw.WithCredential(fw.WithPrincipal(context.Background(), people[who]), "Bearer "+who)
+		for _, out := range []func() (context.Context, error){
+			func() (context.Context, error) { return ForRun(in, a, "r1", fw.ActionRunOperate) },
+			func() (context.Context, error) { return ForStart(in, a, "team/rev", "team") },
+		} {
+			if ctx, err := out(); err != nil || fw.CredentialFrom(ctx) != "Bearer "+who || OnBehalfOf(ctx) != "" {
+				t.Fatalf("%s: %q %q, %v", who, fw.CredentialFrom(ctx), OnBehalfOf(ctx), err)
+			}
+		}
+	}
+}
+
+// A read for a person that the worker refuses is a 403 whose words are for
+// an operator, and the same answer for the token keeps its own words.
+func TestReadJSONWordsARefusedToken(t *testing.T) {
+	pf := newPersonFront(t)
+	pf.answer(http.StatusUnauthorized)
+	ctx, err := ForRun(as("alice"), pf.m.a, "r1", fw.ActionRunView)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = MemberRun(ctx, pf.m.f, "team/rev", "r1")
+	var me *MemberError
+	if !errors.As(err, &me) || !me.Token || me.Status != http.StatusForbidden || !errors.Is(err, fw.ErrForbidden) ||
+		me.Detail != "the worker team/rev refused the token of the fleet; check FW_API_TOKEN on that worker" {
+		t.Fatalf("a refused token = %#v", err)
+	}
+	token := fw.WithCredential(fw.WithPrincipal(context.Background(), people["fleet-secret"]), "Bearer fleet-secret")
+	if _, err = MemberRun(token, pf.m.f, "team/rev", "r1"); !errors.As(err, &me) || me.Token || me.Status != http.StatusUnauthorized {
+		t.Fatalf("a refused credential of the token = %#v", err)
 	}
 }

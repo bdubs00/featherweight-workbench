@@ -117,7 +117,10 @@ func (s *server) result(w http.ResponseWriter, r *http.Request) {
 		if member, oerr := s.ownerOf(r.Context(), id); oerr != nil {
 			err = oerr
 		} else if member != "" {
-			res, err = s.remoteResult(r.Context(), member, id)
+			if res, err = s.remoteResult(r.Context(), member, id); err != nil {
+				s.failRemote(w, r, err)
+				return
+			}
 		}
 	}
 	if err != nil {
@@ -144,9 +147,26 @@ func (s *server) ownerOf(ctx context.Context, id string) (string, error) {
 	return run.Member, nil
 }
 
+// failRemote answers an error of a request to another member: an error of
+// the fleet, or an answer of the member, as the relay answers it
+// (fleet.Fail), and any other error as the kernel answers it.
+func (s *server) failRemote(w http.ResponseWriter, r *http.Request, err error) {
+	var me *fleet.MemberError
+	if errors.As(err, &me) || errors.Is(err, fleet.ErrNoToken) || errors.Is(err, fleet.ErrNoRoute) || errors.Is(err, fleet.ErrNoCredential) {
+		fleet.Fail(w, r, err)
+		return
+	}
+	s.fail(w, r, err)
+}
+
 // remoteResult builds the result of a run of another member from its
-// ledger, read through the fleet with the credential of the caller.
+// ledger, read through the fleet. For a person, the front decides the read
+// and reads with the static token that names the person (fleet.ForRun).
 func (s *server) remoteResult(ctx context.Context, member, id string) (dashboard.Result, error) {
+	ctx, err := fleet.ForRun(ctx, s.a, id, fw.ActionRunView)
+	if err != nil {
+		return dashboard.Result{}, err
+	}
 	run, events, err := fleet.MemberLedger(ctx, fleet.Of(s.a), member, id)
 	if err != nil {
 		return dashboard.Result{}, err
@@ -270,11 +290,17 @@ func transcriptPage(w http.ResponseWriter, r *http.Request) (from, before uint64
 
 // remoteTranscript answers the transcript route for a run of another
 // member from the events of its owner, with the same pages as for a run of
-// this process. The owner authorizes the read with the credential of the
-// caller.
+// this process. For a person, the front decides the read and reads with
+// the static token that names the person (fleet.ForRun). The static token
+// and a workload read with their own credential.
 func (s *server) remoteTranscript(w http.ResponseWriter, r *http.Request, member, id string) {
 	from, before, limit, ok := transcriptPage(w, r)
 	if !ok {
+		return
+	}
+	ctx, err := fleet.ForRun(r.Context(), s.a, id, fw.ActionRunView)
+	if err != nil {
+		s.failRemote(w, r, err)
 		return
 	}
 	f := fleet.Of(s.a)
@@ -282,11 +308,10 @@ func (s *server) remoteTranscript(w http.ResponseWriter, r *http.Request, member
 		run        *fw.Run
 		events     []fw.Event
 		next, prev uint64
-		err        error
 	)
 	switch {
 	case from > 0:
-		run, events, next, err = fleet.MemberEvents(r.Context(), f, member, id, from, limit)
+		run, events, next, err = fleet.MemberEvents(ctx, f, member, id, from, limit)
 		if from > 1 {
 			prev = from
 		}
@@ -297,21 +322,21 @@ func (s *server) remoteTranscript(w http.ResponseWriter, r *http.Request, member
 		if before > uint64(limit) {
 			start = before - uint64(limit)
 		}
-		run, events, _, err = fleet.MemberEvents(r.Context(), f, member, id, start, int(before-start))
+		run, events, _, err = fleet.MemberEvents(ctx, f, member, id, start, int(before-start))
 		if start > 1 {
 			prev = start
 		}
 	case before == 1:
-		run, err = fleet.MemberRun(r.Context(), f, member, id)
+		run, err = fleet.MemberRun(ctx, f, member, id)
 		events = []fw.Event{}
 	default:
-		run, events, _, err = fleet.MemberEvents(r.Context(), f, member, id, 0, limit)
+		run, events, _, err = fleet.MemberEvents(ctx, f, member, id, 0, limit)
 		if len(events) > 0 && events[0].Seq > 1 {
 			prev = events[0].Seq
 		}
 	}
 	if err != nil {
-		s.fail(w, r, err)
+		s.failRemote(w, r, err)
 		return
 	}
 	if before > 0 && before <= run.Seq {

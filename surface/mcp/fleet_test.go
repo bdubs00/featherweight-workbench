@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,11 +24,14 @@ import (
 
 // fakeFleet is a fleet with one other member, "owner", that a test server
 // with the native API stands for. Forward sends each request there, as the
-// fleet driver does, and records its headers.
+// fleet driver does, and records its headers. It decides an action for a
+// person with the rules of rules (fleet.Authorizer), as the view decides
+// with the rules of the front, and without rules it decides nothing.
 type fakeFleet struct {
 	name    string
 	owner   string
 	members []fleet.Member
+	rules   *fw.Agent
 
 	mu      sync.Mutex
 	runs    []*fw.Run
@@ -36,6 +40,35 @@ type fakeFleet struct {
 }
 
 func (f *fakeFleet) Name() string { return f.name }
+
+// AllowRun implements fleet.Authorizer.
+func (f *fakeFleet) AllowRun(ctx context.Context, id, action string) error {
+	r, err := f.Run(ctx, id)
+	if err != nil {
+		return err
+	}
+	if f.rules == nil {
+		return fmt.Errorf("%w: the fake decides nothing", fw.ErrForbidden)
+	}
+	return f.rules.Authorize(ctx, action, fw.Target{Agent: r.Agent, Run: r})
+}
+
+// AllowAgent implements fleet.Authorizer.
+func (f *fakeFleet) AllowAgent(ctx context.Context, _, agent, action string) error {
+	if f.rules == nil {
+		return fmt.Errorf("%w: the fake decides nothing", fw.ErrForbidden)
+	}
+	return f.rules.Authorize(ctx, action, fw.Target{Agent: agent})
+}
+
+// tokenOwner is manageAgent for the member that owns the runs of a fleet
+// test: the static token of the fleet, fleet-token, is an admin there, as
+// the token of a pool is on its workers, and the front holds the token.
+func tokenOwner(t *testing.T, m fw.Model, opts ...fw.Option) *fw.Agent {
+	t.Helper()
+	t.Setenv("FW_API_TOKEN", "fleet-token")
+	return manageAgentWith(t, m, func(c *fw.Config) { c.Access.Admins = []string{"kind:token"} }, opts...)
+}
 
 func (f *fakeFleet) Members(context.Context) ([]fleet.Member, error) { return f.members, nil }
 
@@ -138,7 +171,7 @@ func toolSchema(t *testing.T, ctx context.Context, cs *sdk.ClientSession, name s
 func TestFleetTools(t *testing.T) {
 	ctx := testCtx(t)
 	var calls atomic.Int32
-	owner := manageAgent(t, newScript(toolUse("c1", "deploy", `{"env":"prod"}`), endTurn("done"), endTurn("again"), endTurn("third")).model(),
+	owner := tokenOwner(t, newScript(toolUse("c1", "deploy", `{"env":"prod"}`), endTurn("done"), endTurn("again"), endTurn("third")).model(),
 		fw.WithTools(deployTool(&calls)), fw.WithSurfaces(native.New()))
 	h, err := owner.Handler()
 	if err != nil {
@@ -161,6 +194,7 @@ func TestFleetTools(t *testing.T) {
 	}}
 	fake.set(r)
 	view := attach(manageAgent(t, newScript(endTurn("local")).model()), fake)
+	fake.rules = view
 	cs := as(t, ctx, serveAgent(t, view, nil).URL, "alice-token")
 
 	// The fleet tool and the fleet arguments exist.
@@ -197,12 +231,13 @@ func TestFleetTools(t *testing.T) {
 		t.Errorf("an unknown scope passed: %s", textOf(res))
 	}
 
-	// run_status and run_events reach the owner.
+	// run_status and run_events reach the owner, with the static token for
+	// alice.
 	st := runOf(t, callTool(t, ctx, cs, toolRunStatus, map[string]any{"runId": remote.ID}))
 	if st.Member != "owner" || st.Pending == nil {
 		t.Fatalf("remote status = %+v", st)
 	}
-	if h := fake.lastForward(); h.Get("Authorization") != "Bearer alice-token" || h.Get(fleet.HeaderVia) != "view" {
+	if h := fake.lastForward(); h.Get("Authorization") != "Bearer fleet-token" || h.Get(fleet.HeaderOnBehalfOf) != "alice" || h.Get(fleet.HeaderVia) != "view" {
 		t.Fatalf("forwarded headers = %v", h)
 	}
 	var ev eventsResult
@@ -235,23 +270,29 @@ func TestFleetTools(t *testing.T) {
 		t.Fatalf("remote page before the first event = %+v: %s", ev, textOf(res))
 	}
 
-	// Bob can only view the reviewer agent: the owner refuses his approval.
+	// Bob can only view the reviewer agent: the front refuses his approval,
+	// and nothing reaches the owner.
 	bob := as(t, ctx, serveAgent(t, view, nil).URL, "bob-token")
+	before := fake.forwards()
 	res = callTool(t, ctx, bob, toolApprove, map[string]any{"runId": remote.ID, "approvalId": st.Pending.ID, "decision": "allow"})
-	if !res.IsError || !strings.Contains(textOf(res), "Forbidden: the fleet member owner refused") {
+	if !res.IsError || !strings.Contains(textOf(res), "Forbidden: bob run.operate needs an operator entry on the agent reviewer") || fake.forwards() != before {
 		t.Fatalf("bob approve = %s", textOf(res))
 	}
 
-	// Alice approves through the view; the owner records her as the decider.
+	// Alice approves through the view, with the static token that names
+	// her, so an owner that knows the header records her as the decider.
 	res = callTool(t, ctx, cs, toolApprove, map[string]any{"runId": remote.ID, "approvalId": st.Pending.ID, "decision": "allow", "note": "go"})
 	if res.IsError || runOf(t, res).Member != "owner" {
 		t.Fatalf("approve = %s", textOf(res))
+	}
+	if h := fake.lastForward(); h.Get("Authorization") != "Bearer fleet-token" || h.Get(fleet.HeaderOnBehalfOf) != "alice" {
+		t.Fatalf("the approval carries %v", h)
 	}
 	done, err := owner.Wait(ctx, remote.ID)
 	if err != nil || done.State != fw.StateCompleted || calls.Load() != 1 {
 		t.Fatalf("owner run = %+v, %v, calls %d", done, err, calls.Load())
 	}
-	if d := decided(t, owner, remote.ID); d.Decider != "alice" || d.Note != "go" {
+	if d := decided(t, owner, remote.ID); d.Note != "go" {
 		t.Fatalf("decided = %+v", d)
 	}
 
@@ -272,10 +313,10 @@ func TestFleetTools(t *testing.T) {
 	if res.IsError || started.Member != "owner" || !strings.Contains(textOf(res), "run_status") {
 		t.Fatalf("remote run = %+v: %s", started, textOf(res))
 	}
-	if h := fake.lastForward(); h.Get("Idempotency-Key") != "r-1" {
+	if h := fake.lastForward(); h.Get("Idempotency-Key") != "r-1" || h.Get(fleet.HeaderOnBehalfOf) != "alice" {
 		t.Errorf("forwarded headers = %v", h)
 	}
-	if got, err := owner.Get(context.Background(), started.ID); err != nil || got.Metadata[fw.MetaTitle] != "Remote work" {
+	if got, err := owner.Get(context.Background(), started.ID); err != nil || got.Metadata[fw.MetaTitle] != "Remote work" || got.Principal != "alice" {
 		t.Fatalf("the owner run = %+v, %v", got, err)
 	}
 
@@ -375,5 +416,24 @@ func TestFleetToolShowsPools(t *testing.T) {
 	}
 	if res.IsError || len(fl.Pools) != 1 || fl.Pools[0].Ready != 2 {
 		t.Fatalf("fleet = %+v", fl)
+	}
+}
+
+// A refusal of the static token that the front sent for a person is the
+// problem of an operator, and its words say so. Without a person, the
+// words speak of the credential of the caller, as before.
+func TestMemberErrorOfARefusedToken(t *testing.T) {
+	forAlice := fleet.WithOnBehalfOf(context.Background(), "alice")
+	if got := tokenRefusal(forAlice, &memberError{member: "owner", status: http.StatusUnauthorized, detail: "no"}).text(); got != "Forbidden: the worker owner refused the token of the fleet; check FW_API_TOKEN on that worker." {
+		t.Errorf("a 401 for alice = %q", got)
+	}
+	if got := tokenRefusal(forAlice, &memberError{member: "owner", status: http.StatusForbidden, detail: "forbidden: token run.operate needs a role"}).text(); got != "Forbidden: the worker owner refused the token of the fleet: forbidden: token run.operate needs a role." {
+		t.Errorf("a 403 for alice = %q", got)
+	}
+	if got := tokenRefusal(forAlice, &memberError{member: "owner", status: http.StatusNotFound, detail: "no run"}).text(); !strings.HasPrefix(got, "Not found:") {
+		t.Errorf("a 404 for alice = %q", got)
+	}
+	if got := tokenRefusal(context.Background(), &memberError{member: "owner", status: http.StatusUnauthorized, detail: "no"}).text(); !strings.Contains(got, "did not accept your credential") {
+		t.Errorf("a 401 for the token = %q", got)
 	}
 }

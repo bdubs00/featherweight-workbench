@@ -211,19 +211,9 @@ func (rl *Relay) forPerson(w http.ResponseWriter, r *http.Request, run *fw.Run, 
 			return
 		}
 	}
-	for _, action := range personActions(r) {
-		var err error
-		if action == fw.ActionAgentRun {
-			// A branch is a new run of the agent of the run, so the agent
-			// decides, as the kernel decides it, without the run.
-			err = AllowAgent(ctx, Of(rl.a), run.Member, run.Agent, action)
-		} else {
-			err = AllowRun(ctx, Of(rl.a), run.ID, action)
-		}
-		if err != nil {
-			rl.refuse(w, r, p, err, action, run.Member, run.ID, run.Agent)
-			return
-		}
+	if action, err := decideFor(ctx, Of(rl.a), run, personActions(r)); err != nil {
+		rl.refuse(w, r, p, err, action, run.Member, run.ID, run.Agent)
+		return
 	}
 	body, ok := readBody(w, r)
 	if !ok {
@@ -426,13 +416,16 @@ func (rl *Relay) startFor(w http.ResponseWriter, r *http.Request, member string,
 }
 
 // Forward sends the request to a member with the credential of the caller
-// and relays the answer. The query parameter member stays here.
+// and relays the answer. The query parameter member stays here. It is the
+// path of the static token, a workload, and the process. Take sends the
+// request of a person on its own path, which decides first, and another
+// surface takes ForRun or ForStart for a person.
 func (rl *Relay) Forward(w http.ResponseWriter, r *http.Request, member string) {
 	body, ok := readBody(w, r)
 	if !ok {
 		return
 	}
-	rl.send(r.Context(), w, r, member, body, answer{})
+	rl.send(r.Context(), w, r, member, body, nil)
 }
 
 // sendFor sends the request with body to a member for the person p, after
@@ -445,22 +438,13 @@ func (rl *Relay) sendFor(w http.ResponseWriter, r *http.Request, member string, 
 		fail(w, r, err)
 		return
 	}
-	rl.send(ctx, w, r, member, body, answer{tokenEnv: TokenEnv(rl.a.Config()), can: can})
-}
-
-// answer says how relay copies the answer of a member. tokenEnv names the
-// secret of the static token when the request carried that token for a
-// person, so a refusal of the member is the problem of an operator. can
-// goes into the run object of the answer.
-type answer struct {
-	tokenEnv string
-	can      *Can
+	rl.send(ctx, w, r, member, body, can)
 }
 
 // send sends the request with body to a member, with the credential and
-// the person of ctx, and relays the answer. The query parameter member
-// stays here.
-func (rl *Relay) send(ctx context.Context, w http.ResponseWriter, r *http.Request, member string, body []byte, ans answer) {
+// the person of ctx, and relays the answer, with can in its run object.
+// The query parameter member stays here.
+func (rl *Relay) send(ctx context.Context, w http.ResponseWriter, r *http.Request, member string, body []byte, can *Can) {
 	f := Of(rl.a)
 	if f == nil {
 		native.WriteProblem(w, r, http.StatusBadGateway, "the fleet is off")
@@ -500,7 +484,7 @@ func (rl *Relay) send(ctx context.Context, w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer resp.Body.Close()
-	relay(w, r, member, resp, ans)
+	relay(w, r, member, resp, TokenEnvOf(ctx), can)
 }
 
 // readBody reads the body of a request that goes to a member, and returns
@@ -673,23 +657,17 @@ func (o object) forPerson(pattern string, p *fw.Principal) (agent string, status
 
 // relay copies the answer of a member. An event stream flows through with
 // a flush after each read. A JSON run object, and the run of a page of
-// events, gets the field member, and a run object gets can when ans has
-// it. A 401 of the member becomes a 403, because the caller is signed in
+// events, gets the field member, and a run object gets can when it is not
+// nil. A 401 of the member becomes a 403, because the caller is signed in
 // here and only the member refused the credential. When the request
-// carried the static token for a person, a 401 or a 403 of the member says
-// that the member refused the token of the fleet, which is the problem of
-// an operator and not of the person.
-func relay(w http.ResponseWriter, r *http.Request, member string, resp *http.Response, ans answer) {
-	if ans.tokenEnv != "" {
-		switch resp.StatusCode {
-		case http.StatusUnauthorized:
-			native.WriteProblem(w, r, http.StatusForbidden, fmt.Sprintf("the worker %s refused the token of the fleet; check %s on that worker", member, ans.tokenEnv))
-			return
-		case http.StatusForbidden:
-			b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-			native.WriteProblem(w, r, http.StatusForbidden, fmt.Sprintf("the worker %s refused the token of the fleet: %s", member, errorOf(member, resp.StatusCode, b).Detail))
-			return
-		}
+// carried the static token for a person, tokenEnv names the secret of the
+// token, and a 401 or a 403 of the member says that the member refused the
+// token of the fleet (RefusedToken).
+func relay(w http.ResponseWriter, r *http.Request, member string, resp *http.Response, tokenEnv string, can *Can) {
+	if tokenEnv != "" && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		native.WriteProblem(w, r, http.StatusForbidden, RefusedToken(member, tokenEnv, resp.StatusCode, errorOf(member, resp.StatusCode, b).Detail))
+		return
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		native.WriteProblem(w, r, http.StatusForbidden, fmt.Sprintf("the fleet member %s did not accept your credential; both members need the same issuer and audience, or the same token", member))
@@ -730,7 +708,7 @@ func relay(w http.ResponseWriter, r *http.Request, member string, resp *http.Res
 			return
 		}
 		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(withMemberJSON(b, member, ans.can))
+		_, _ = w.Write(withMemberJSON(b, member, can))
 	default:
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
@@ -773,11 +751,30 @@ func withMemberJSON(b []byte, member string, can *Can) []byte {
 	return append(out, '\n')
 }
 
+// Fail writes the problem document of an error of a request that a
+// surface sends to another member (ForRun, ForStart, ReadJSON), as the
+// relay answers it: ErrNoRoute is 502, ErrNoToken 503, ErrNoCredential and
+// a refusal 403, a run that the view does not give 404, and an error of
+// the kernel the status that the run routes give it.
+func Fail(w http.ResponseWriter, r *http.Request, err error) { fail(w, r, err) }
+
 // fail writes the problem document of an error of the fleet or of the
 // kernel, with the status that the run routes give it.
 func fail(w http.ResponseWriter, r *http.Request, err error) {
 	detail := strings.TrimPrefix(strings.TrimPrefix(err.Error(), "fleet: "), "fw: ")
+	var me *MemberError
 	switch {
+	case errors.As(err, &me) && me.Status != http.StatusServiceUnavailable:
+		// The answer of a member, with its words, as the relay copies it. The
+		// caller is signed in here, so a 401 is a 403.
+		status := me.Status
+		switch {
+		case status == http.StatusUnauthorized:
+			status = http.StatusForbidden
+		case status >= http.StatusInternalServerError:
+			status = http.StatusBadGateway
+		}
+		native.WriteProblem(w, r, status, me.Detail)
 	case errors.Is(err, fw.ErrAuthzUnavailable):
 		w.Header().Set("Retry-After", strconv.Itoa(5))
 		native.WriteProblem(w, r, http.StatusServiceUnavailable, "the authorization service did not answer: "+detail)

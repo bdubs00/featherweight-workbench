@@ -99,12 +99,12 @@ through the front. Section 17.7 of the architecture has the rules.
 
 1. Replace the placeholders that the top of `fw.yaml` names, and set the
    model.
-2. The person who talks to the manager sends their own credential, and the
-   front forwards it to the Task. So the Task checks the tokens of people
-   as the front does: its `fw.auth` names the issuer and the audience of
-   the front, beside `token`. If the Task has no such block, only the
-   static token can start a conversation. A run of the token has no person,
-   so the front then acts as the token for that run.
+2. The person who talks to the manager signs in at the front. The front
+   decides for the person with its rules. It then sends the static token
+   of the fleet to the Task, with the header `Fw-On-Behalf-Of` that names
+   the person. So the Task takes the static token alone: its `fw.auth` is
+   `mode: token`. A run of the token has no person, so the front acts as
+   the token for that run.
 3. Review what the front applies:
 
    ```
@@ -127,8 +127,10 @@ contract of the page says:
 1. The first message starts a run of the manager on its Task:
    `POST /v1/runs?member=<atespace>/manager-0` with
    `{"agent": "manager", "input": "..."}`, with the credential of the
-   operator. `GET /v1/bossmode` names the member and the newest run of
-   the operator.
+   operator. The front decides for the operator and starts the run with
+   the static token, and the run belongs to the operator.
+   `GET /v1/bossmode` names the member and the newest run of the
+   operator.
 2. Each later message is a follow-up: `POST /v1/runs/{id}/messages` with
    `{"content": "..."}`.
 3. A run that failed or was canceled ends the conversation, and the next
@@ -146,9 +148,8 @@ repository featherweight-lab, beside `lab-pool` and `tickets`: the entry
 of `workbench.pools` from this file, with `${FLEET_IMAGE_WORKER}` as the
 image and `${FLEET_MODEL}` as `fw.model`, which `front-config.sh` fills,
 and `workbench.bossmode.manager: manager`. The lab front verifies the
-tokens of people from `http://issuer.fw-fleet.svc.cluster.local`, so the
-pool names that issuer with `insecure: true` and the audience of the
-front. The members of a bridge come from the pool `crew` of the lab.
+tokens of people from `http://issuer.fw-fleet.svc.cluster.local`. The Task
+takes the static token alone, as this file says. The members of a bridge come from the pool `crew` of the lab.
 
 ## How strong the manager is
 

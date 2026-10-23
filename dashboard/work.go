@@ -450,8 +450,9 @@ func SaveAsAgentInput(ctx context.Context, a *fw.Agent, id string) (string, erro
 // SaveAsAgentInputOn is SaveAsAgentInput for a run that another member of
 // the fleet v holds. A worker serves the native API of the kernel alone,
 // so the first message comes from the run and the events of the owner,
-// read with the credential of the caller in ctx, and the builder then runs
-// in this process. The terms are those of SaveAsAgentInput. A run in a
+// read with the credential in ctx, and the builder then runs in this
+// process. For a person, ctx comes from fleet.ForRun: the static token
+// that names the person. The terms are those of SaveAsAgentInput. A run in a
 // Task of its own has no parent in its own ledger, so the parent that the
 // view knows counts too.
 func SaveAsAgentInputOn(ctx context.Context, a *fw.Agent, v fleet.View, member, id string) (string, error) {

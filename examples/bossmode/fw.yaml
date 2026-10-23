@@ -141,15 +141,13 @@ workbench:
         # A member of a spawn bridge runs in a child Task of this Task.
         spawn:
           driver: ax
-        # The operator talks to the manager with the credential of a
-        # person, which the front forwards to the Task, so the Task checks
-        # the tokens of people as the front does. The front reads the Task
-        # with the static token.
+        # The operator talks to the manager through the front. The front
+        # decides for the person and sends the static token of the fleet,
+        # with the header Fw-On-Behalf-Of that names the person, so the
+        # Task takes the static token alone. The front reads the Task with
+        # the same token.
         auth:
-          mode: oidc,token
-          oidc:
-            issuer: https://idp.example.com
-            audience: [https://fleet.example.com/mcp]
+          mode: token
         bus:
           url: ws://nats.fw-fleet.svc.cluster.local:8080
         providers:

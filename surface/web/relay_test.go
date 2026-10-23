@@ -135,6 +135,13 @@ func TestRelayErrors(t *testing.T) {
 	if resp.Header.Get("WWW-Authenticate") != "" {
 		t.Errorf("the 403 carries a challenge")
 	}
+	// The result and the transcript word it in the same way.
+	for _, path := range []string{"/result", "/transcript"} {
+		resp, b = do(t, "GET", p.viewURL+"/v1/runs/"+p.remote.ID+path, "", "Authorization", asAlice)
+		if pr := decodeProblem(t, resp, b, http.StatusForbidden); pr.Detail != "the worker owner refused the token of the fleet; check FW_API_TOKEN on that worker" {
+			t.Errorf("%s: detail = %q", path, pr.Detail)
+		}
+	}
 	// A caller with a credential of its own, the token, gets the words
 	// about its own credential, as before.
 	resp, b = do(t, "GET", p.viewURL+"/v1/runs/"+p.remote.ID, "", "Authorization", asToken)
@@ -187,12 +194,18 @@ func TestRelayReadsFromTheViewWhileTheOwnerSleeps(t *testing.T) {
 	if n := len(p.fleet.forwarded()); n != 0 {
 		t.Fatalf("the reads of a sleeping owner reached it %d times", n)
 	}
-	// The answers that live on the worker go there, one request or more each.
+	// The answers that live on the worker go there, one request or more
+	// each, with the static token for alice.
 	for _, path := range []string{"/result", "/transcript", "/events?limit=2"} {
 		before := len(p.fleet.forwarded())
 		resp, b := do(t, "GET", base+path, "", "Authorization", asAlice, "Accept", "application/json")
 		if resp.StatusCode != http.StatusOK || len(p.fleet.forwarded()) == before {
 			t.Fatalf("%s = %d %s, forwarded %d", path, resp.StatusCode, b, len(p.fleet.forwarded())-before)
+		}
+		for _, h := range p.fleet.forwarded()[before:] {
+			if h.Get("Authorization") != asToken || h.Get(fleet.HeaderOnBehalfOf) != "alice" {
+				t.Fatalf("%s reached the owner with %v", path, h)
+			}
 		}
 	}
 	before := len(p.fleet.forwarded())

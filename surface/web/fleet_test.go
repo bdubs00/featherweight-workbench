@@ -353,7 +353,8 @@ func TestFleetListAndRead(t *testing.T) {
 		t.Errorf("glance = %+v", g)
 	}
 
-	// The chat view of a remote run comes from the owner, with the member.
+	// The chat view of a remote run comes from the owner, with the member,
+	// read with the static token for alice.
 	resp, b = do(t, "GET", p.viewURL+"/v1/runs/"+p.remote.ID+"/transcript", "", "Authorization", asAlice)
 	var chat struct {
 		Run   *fw.Run
@@ -364,7 +365,7 @@ func TestFleetListAndRead(t *testing.T) {
 		chat.Items[0].Text != "clean up" || chat.Items[len(chat.Items)-1].Kind != dashboard.ItemAsk {
 		t.Fatalf("remote transcript = %s", b)
 	}
-	if h := p.fleet.forwarded(); len(h) == 0 || h[len(h)-1].Get("Authorization") != asAlice {
+	if h := p.fleet.forwarded(); len(h) == 0 || h[len(h)-1].Get("Authorization") != asToken || h[len(h)-1].Get(fleet.HeaderOnBehalfOf) != "alice" {
 		t.Fatalf("forwarded headers = %v", h)
 	}
 }
