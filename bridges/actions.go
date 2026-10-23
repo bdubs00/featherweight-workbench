@@ -331,6 +331,9 @@ func (s *Store) fire(ctx context.Context, id, handle string, by *fw.Principal) (
 		}
 		fired = true
 		m.Fired, m.Muted = true, true
+		if sm := rec.Seats[handle]; sm != nil {
+			sm.Ask, sm.AskOpen = 0, false
+		}
 		line = system(EventFired, fmt.Sprintf("%s fired %s", s.nameOf(ctx, by), handle))
 		line.Seq, line.At = rec.alloc(), now
 		return nil

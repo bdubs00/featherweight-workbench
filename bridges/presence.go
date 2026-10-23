@@ -7,6 +7,7 @@ package bridges
 // presence: the routes and the hooks compute it from the view.
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
@@ -37,7 +38,9 @@ import (
 // the bridge (decorate): a seat whose newest run no worker of the fleet
 // holds, as the channel said with the line lost, is idle when the channel
 // holds an end of that run, and in error otherwise; and a seat without a
-// run is waiting when something seats it, and not-started otherwise.
+// run is waiting when something seats it, and not-started otherwise. Last,
+// a seat whose question waits for a person needs you, unless it is fired
+// or in error (ask.go).
 func Presence(m Member, runs []*fw.Run, taskState string) string {
 	if m.Fired {
 		return PresenceFired
@@ -115,6 +118,10 @@ func decorate(rec *record, runs map[string]*fw.Run, states map[string]string) []
 		if p, ok := unseatedPresence(rec, *m, runs); ok {
 			m.Presence = p
 		}
+		// A question of the seat waits for a person (ask.go).
+		if m.Question > 0 && m.Presence != PresenceFired && m.Presence != PresenceError {
+			m.Presence = PresenceNeedsYou
+		}
 	}
 	return out
 }
@@ -190,6 +197,7 @@ func shownKey(m Member) string {
 		b.WriteString("|muted")
 	}
 	b.WriteString("|" + strings.Join(m.Runs, ","))
+	b.WriteString("|question " + strconv.FormatUint(m.Question, 10))
 	return b.String()
 }
 

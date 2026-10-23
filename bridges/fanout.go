@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -88,6 +89,12 @@ type PostSpec struct {
 	ReplyTo *uint64         `json:"replyTo,omitempty"`
 	Pinned  bool            `json:"pinned,omitempty"`
 	Skill   *skills.Command `json:"skill,omitempty"`
+	// Ask makes a message of a seat a question for the people of the
+	// bridge, with the choices that a person picks from (ask.go). Only the
+	// tool bridge_post takes them, so the route of a person refuses them as
+	// unknown fields.
+	Ask     bool     `json:"-"`
+	Choices []string `json:"-"`
 }
 
 // delivery is one follow-up of a message to the newest run of a member.
@@ -171,9 +178,22 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 		return Message{}, invalid("a message addresses at most %d members", maxTo)
 	case spec.Pinned && snd.handle != "":
 		return Message{}, invalid("only a person pins a message")
+	case (spec.Ask || len(spec.Choices) > 0) && (snd.handle == "" || snd.handle == HandleManager):
+		return Message{}, invalid("only a seat asks the operator with ask; the manager asks the person in its own conversation")
+	case len(spec.Choices) > 0 && !spec.Ask:
+		return Message{}, invalid("choices go with ask true")
+	}
+	choices, err := checkChoices(spec.Choices)
+	if err != nil {
+		return Message{}, err
 	}
 	var to []string
 	seen := map[string]bool{}
+	if spec.Ask {
+		// A question goes to the people of the bridge, and to no teammate
+		// unless it names one too.
+		to, seen[HandleOperator] = []string{HandleOperator}, true
+	}
 	for _, h := range spec.To {
 		h = strings.TrimPrefix(strings.TrimSpace(h), "@")
 		if h != "" && !seen[h] {
@@ -192,8 +212,9 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 	var plan []delivery
 	var seats []Member
 	var inputs map[string]string
+	var asked []string // the seats whose question began or ended
 	rec, err := s.b.update(ctx, id, func(rec *record) error {
-		lines, plan, seats, inputs = nil, nil, nil, nil
+		lines, plan, seats, inputs, asked = nil, nil, nil, nil, nil
 		if rec.State != StateOpen {
 			return fmt.Errorf("%w: the bridge %s is closed, so it takes no message", ErrConflict, id)
 		}
@@ -234,7 +255,31 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 			c := cmd.Command
 			msg.Skill = &c
 		}
-		lines, plan, seats, inputs = fanPlan(rec, snd, msg, text, runs, now)
+		delivered := text
+		if snd.handle != "" && rec.member(snd.handle) != nil {
+			// A message of a seat that addresses the people of the bridge
+			// asks them, and any other message of the seat ends the
+			// question that it asked before.
+			question := spec.Ask || asksOperator(to, text)
+			if question {
+				msg.Ask = &Ask{Choices: choices}
+			}
+			if rec.seatPosts(snd.handle, msg.Seq, question, true) {
+				asked = append(asked, snd.handle)
+			}
+		} else if snd.handle == "" {
+			// A message of a person that reaches a seat answers its
+			// question, and a reply to the question says so to the seat.
+			if spec.ReplyTo != nil {
+				for h, sm := range rec.Seats {
+					if sm != nil && sm.Ask == *spec.ReplyTo && (len(to) == 0 || slices.Contains(to, h)) {
+						delivered = fmt.Sprintf("Answer to your question in entry %d: %s", *spec.ReplyTo, text)
+					}
+				}
+			}
+			asked = rec.personAnswers(to, spec.ReplyTo)
+		}
+		lines, plan, seats, inputs = fanPlan(rec, snd, msg, delivered, runs, now)
 		return nil
 	})
 	if err != nil {
@@ -242,6 +287,9 @@ func (s *Store) post(ctx context.Context, id string, snd sender, spec PostSpec) 
 	}
 	s.land(ctx, id, msg)
 	s.land(ctx, id, lines...)
+	for _, h := range asked {
+		emitMember(id, s.memberOf(ctx, rec, h))
+	}
 	for _, d := range plan {
 		s.submit(s.deliveryJob(d))
 	}

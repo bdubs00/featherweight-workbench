@@ -162,6 +162,10 @@ type Member struct {
 	Muted    bool      `json:"muted"`
 	Presence string    `json:"presence"`
 	Activity *Activity `json:"activity"`
+	// Question is the seq of the question of the seat that waits for a
+	// person, or 0 (ask.go). The record keeps it in the bookkeeping of the
+	// seat, and the routes and the hooks give it.
+	Question uint64 `json:"question"`
 }
 
 // newest returns the newest run of the seat, or "".
@@ -222,6 +226,10 @@ type Message struct {
 	// person. The text of the entry is then the line Skill and a summary,
 	// and the runs of the members hold the whole message.
 	Skill *skills.Command `json:"skill,omitempty"`
+	// Ask marks a message of a seat that asks the people of the bridge,
+	// with the choices of the question (ask.go). Whether it still waits is
+	// the ask of the member.
+	Ask *Ask `json:"ask,omitempty"`
 
 	// whole is the whole text of an entry that the channel cuts, up to
 	// maxTextBytes. land keeps it under a key of its own (wholeKey), so
@@ -329,6 +337,12 @@ type seatMark struct {
 	// worker of the fleet holds it (goneLines). The seat is then idle or
 	// in error, and a message or a patch with its task seats it again.
 	Gone string `json:"gone,omitempty"`
+	// Ask is the seq of the question of the seat that waits for a person,
+	// or 0, and AskOpen is true while the turn that asked it during its
+	// work has not ended: the final answer of that turn leaves the
+	// question waiting (ask.go).
+	Ask     uint64 `json:"ask,omitempty"`
+	AskOpen bool   `json:"askOpen,omitempty"`
 }
 
 // SeatBudget is the budget of one seat: the turns and the working time of
@@ -502,6 +516,9 @@ func (r *record) public() Bridge {
 	b.Members = append([]Member(nil), r.Members...)
 	for i := range b.Members {
 		b.Members[i].Runs = append([]string{}, b.Members[i].Runs...)
+		if !b.Members[i].Fired {
+			b.Members[i].Question = r.askOf(b.Members[i].Handle)
+		}
 	}
 	return b
 }

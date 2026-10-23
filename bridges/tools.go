@@ -58,7 +58,9 @@ const (
 
 	postSchema = `{"type":"object","properties":{` + bridgeArg + `,
 		"text":{"type":"string","minLength":1,"description":"The message, in Markdown."},
-		"to":{"type":"array","items":{"type":"string"},"description":"The handles that the message addresses, such as [\"reviewer\"], or [\"operator\"] for the people of the bridge. Without it, the message goes to every active member."}
+		"to":{"type":"array","items":{"type":"string"},"description":"The handles of the teammates that the message addresses, such as [\"reviewer\"]. Without it, the message goes to every active member."},
+		"ask":{"type":"boolean","description":"Ask the operator, the people of the bridge: the message is a question that waits for their answer. It goes to the operator alone unless to names teammates too. The answer reaches you as a message and starts your next turn, so end your turn after you ask."},
+		"choices":{"type":"array","items":{"type":"string","maxLength":60},"minItems":2,"maxItems":4,"description":"With ask, the answers that the operator picks from: two to four short strings, such as [\"Yes\", \"No\"]. Leave it out when the operator answers in words."}
 	},"required":["text"]}`
 
 	listSchema = `{"type":"object","properties":{}}`
@@ -104,9 +106,11 @@ type (
 		Seq    uint64 `json:"seq,omitempty"`
 	}
 	postArgs struct {
-		Bridge string   `json:"bridge,omitempty"`
-		Text   string   `json:"text"`
-		To     []string `json:"to,omitempty"`
+		Bridge  string   `json:"bridge,omitempty"`
+		Text    string   `json:"text"`
+		To      []string `json:"to,omitempty"`
+		Ask     bool     `json:"ask,omitempty"`
+		Choices []string `json:"choices,omitempty"`
 	}
 	addArgs struct {
 		Bridge string `json:"bridge,omitempty"`
@@ -158,7 +162,7 @@ func tools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolPost,
 			Title:       "Post to the channel",
-			Description: "Post a message to the channel of your bridge during your work: to address a teammate with to, or to post an interim status. Your final answer of a turn reaches the channel on its own, so do not post it here. A teammate gets the message as a follow-up. Address the people of the bridge with to [\"operator\"].",
+			Description: "Post a message to the channel of your bridge during your work: to address a teammate with to, or to ask the operator, the people of the bridge, with ask true and, for a pick, choices. A question waits for the operator, and the answer reaches you as a message that starts your next turn, so end your turn with a one-line status after you ask. Your final answer of a turn reaches the channel on its own, so do not post it here. A teammate gets the message as a follow-up.",
 			InputSchema: json.RawMessage(postSchema),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: &no, OpenWorldHint: &no},
 		}, t.post),
@@ -425,9 +429,12 @@ func (t *toolSet) post(ctx context.Context, _ *sdk.CallToolRequest, in postArgs)
 	if !c.seat && !c.manager {
 		return mcp.ErrorResult(fmt.Sprintf("Forbidden: your run %s is no member of the bridge %s and not its manager, so it cannot post there.", c.meta.Run, c.rec.ID)), nil, nil
 	}
-	m, err := s.post(ctx, c.rec.ID, sender{handle: c.handle, run: c.meta.Run}, PostSpec{Text: in.Text, To: in.To})
+	m, err := s.post(ctx, c.rec.ID, sender{handle: c.handle, run: c.meta.Run}, PostSpec{Text: in.Text, To: in.To, Ask: in.Ask, Choices: in.Choices})
 	if err != nil {
 		return toolError(err), nil, nil
+	}
+	if m.Ask != nil {
+		return mcp.Result(fmt.Sprintf("Asked the operator in message %d of the bridge %s. The answer reaches you as a message and starts your next turn: end this turn now with a one-line status.", m.Seq, c.rec.ID), m), nil, nil
 	}
 	return mcp.Result(fmt.Sprintf("Posted message %d to the bridge %s as %s%s.", m.Seq, c.rec.ID, c.handle, toText(m.To)), m), nil, nil
 }

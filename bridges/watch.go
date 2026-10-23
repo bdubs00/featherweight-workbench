@@ -553,6 +553,13 @@ func (s *Store) facts(ctx context.Context, rec *record, r *fw.Run, seat string, 
 			if len(to) > 0 {
 				l.To = to
 			}
+			// An answer that addresses the people of the bridge asks them,
+			// unless it ends the turn that asked during its work; any other
+			// answer ends the question of the seat (ask.go). add gives the
+			// answer the next seq.
+			if asks, _ := rec.seatEnds(seat, rec.LastSeq+1, asksOperator(to, end.output)); asks {
+				l.Ask = &Ask{}
+			}
 			add(l)
 			if m := rec.member(seat); member && rec.State == StateOpen && (m == nil || !m.Fired) {
 				l.Seq = rec.LastSeq
