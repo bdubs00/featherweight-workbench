@@ -65,6 +65,7 @@ var EgressTypes = []string{
 	fw.EvApprovalRequested, fw.EvApprovalDecided, fw.EvRunAnnotated, fw.EvTurnStarted, fw.EvMessageReceived,
 	fw.EvRunChild, fw.EvOutcomeEvaluated,
 	fw.EvToolRequested, fw.EvToolResponded, fw.EvTurnFinished, fw.EvRunReacted,
+	fw.EvRoutineDecided, fw.EvRoutineApplied, fw.EvRoutineCompared,
 }
 
 // EgressMaxBytes is bus.egressMaxBytes of a worker of a pool, unless the
@@ -215,6 +216,10 @@ type platformRun struct {
 	// after it (Decisions).
 	decided  []uint64
 	streamed bool
+	// byRoutine is true once a routine completed the run, and sentBack once
+	// a quality receipt sent it back (tap.go).
+	byRoutine bool
+	sentBack  bool
 	// idx is what the index of the runs holds of the run (index.go).
 	// fromIndex is true while the view knows the run from the index alone:
 	// no event and no read of its member confirmed it since the view
@@ -806,6 +811,7 @@ func (p *platform) onEvent(e fw.Event) error {
 		r.run.Apply(e, p.prices)
 		r.track(e, before)
 		r.noteToolInput(e)
+		r.mark(e)
 		if e.Type == fw.EvApprovalDecided && len(r.decided) < maxDecided {
 			r.decided = append(r.decided, e.Seq)
 		}
@@ -841,6 +847,7 @@ func (p *platform) onEvent(e fw.Event) error {
 		}
 	}
 	p.noteRun(e.Subject, r, now)
+	p.tapped(r, e)
 	return nil
 }
 
