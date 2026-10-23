@@ -2687,7 +2687,7 @@ The kernel checks each body as it checks the routines of a profile (`fw.RoutineP
 
 A body changes only through `PUT`. A body that differs from the body that the store holds gets the next version, `ready` goes false, and the evidence starts again. A live or paused routine whose body changes goes back to `rehearsing`, with a move in its history, and loses `signedOff`, because a new version rehearses again. A paused routine can go live with one move, so a new body of it rehearses first too. Only the store gives a profile its routines: `agent_put`, `PUT /v1/agents/{name}`, and a run request on a queue drop the routines that a caller sends. A write of the body that the store holds already changes nothing. A retired routine takes no new body.
 
-Every write is a compare-and-swap on the revision of the entry, up to eight times (`bucket.Modify`), so two replicas of the front never lose a write. A new routine that an operator proposes is a write that only creates, so it never changes a routine that another writer made in the meantime. The bucket keeps the last ten values of each entry. The front opens its own connection with `bus.url` and the options `credentials` and `token` of the bus. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_ROUTINES.>`. On the bus `mem`, the routines live in the process, and two processes share nothing. On another bus, the front logs once that the routines are off, mounts no route, and offers no tool.
+Every write is a compare-and-swap on the revision of the entry, up to eight times (`bucket.Modify`), so two replicas of the front never lose a write. A new routine that an operator proposes is a write that only creates, so it never changes a routine that another writer made in the meantime. The bucket keeps the last ten values of each entry. The front opens its own connection with `bus.url` and the options `credentials` and `token` of the bus. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_ROUTINES.>`. On the bus `mem`, the routines live in the process, and two processes share nothing. On another bus, the front logs once that the routines are off, mounts no route, and offers no tool. The key `workbench.routines.enabled: false` does the same on any bus (section 21.7).
 
 Other packages use the routines through Go. `routines.Of(a)` returns the `*routines.Store` of an agent, or nil. The store has `List(ctx, agent)`, `Get(ctx, agent, name)`, which adds the evidence, `Put(ctx, PutRequest)`, `Move(ctx, MoveRequest)`, and `Reaching(ctx)` (section 21.3). `routines.Check(ctx, a, agent, action)` decides an action on the routines of an agent as the routes do. `routines.OnChange(func(agent, name string))` registers a hook that gets each change that the store wrote to a record or to its evidence. `routines.Status(cfg)` gives one line for `fw-workbench doctor`, which the line `bossmode` holds.
 
@@ -2848,17 +2848,30 @@ The routines read the block `routines` under the key `workbench` of `fw.yaml`. E
 
 | Key | Variable | Meaning | Default |
 |---|---|---|---|
+| `workbench.routines.enabled` | `FW_WORKBENCH_ROUTINES_ENABLED` | `on` or `off`. Off keeps no store, mounts no route, offers no tool, counts no evidence, and gives the pools no routine. | on, where the bus keeps a store: `nats` or `mem` |
 | `workbench.routines.readyAfter` | `FW_WORKBENCH_ROUTINES_READY_AFTER` | The runs that a rehearsing routine of the current version would have acted on before it is ready, 1 to 1000000 | `200` |
 | `workbench.routines.readyAgreement` | `FW_WORKBENCH_ROUTINES_READY_AGREEMENT` | The share of those runs where it agreed with the agent, above 0 and at most 1 | `0.95` |
 
-A value outside its bound stops the start, and the error names the key. The model that answers the questions of a routine is configured on the workers, in the configuration of their pool (the kernel document `docs/ROUTINES.md`), never on the front.
+A value outside its bound stops the start, and the error names the key. The variable of `enabled` also takes `true`, `false`, `yes`, `no`, `1`, and `0`. The model that answers the questions of a routine is configured on the workers, in the configuration of their pool (the kernel document `docs/ROUTINES.md`), never on the front.
 
 ```yaml
 workbench:
   routines:
+    enabled: true
     readyAfter: 200
     readyAgreement: 0.95
 ```
+
+#### 21.7.1 Turn routines on
+
+A front without routines costs nothing for them. An empty store gives no profile a routine, so the hash of every pool stays, and no Task is replaced. A worker asks a model for the questions of a routine only when its profile has a routine. These steps turn routines on for one agent:
+
+1. Give the workers of its pool a decider: the block `deciders` and the built-in tool `decide` in the configuration of the pool, or the variables `FW_DECIDERS_<NAME>_BASE_URL`, `FW_DECIDERS_<NAME>_MODEL`, and `FW_DECIDERS_<NAME>_API_KEY_ENV` on the workers (the kernel document `docs/ROUTINES.md`, section 3.1). A decider has no default model. A routine without questions needs no decider.
+2. Run the front on the bus `nats`, with `workbench.routines.enabled` absent or true.
+3. Put the routine with `PUT /v1/routines/{agent}/{name}`, in the standing `rehearsing`. The pools give it to the profile with the standing `shadow`, and the Tasks of the pool take it once they are idle.
+4. Read the evidence on the Routines place of the page. When the routine is ready, a person signs it off, and it acts in place of the model.
+
+To stop one routine, pause or retire it. To stop every routine of the front, set `workbench.routines.enabled: false` or `FW_WORKBENCH_ROUTINES_ENABLED=off`. The next pass of the pools then takes the routines of the store away from every profile, as a move out of `live` does, and the profiles keep the routines of their own configuration. The page then says that routines are off.
 
 ### 21.8 Security and bounds
 
@@ -2866,4 +2879,4 @@ workbench:
 - A sign-off is the decision of a person. The process and the static token alone cannot make it.
 - No token and no secret enters a record, its evidence, a log line, or an event. The evidence holds the first line of the input of a run, at most 200 bytes, as the view holds it.
 - A log line of a change names the agent, the routine, the version, the standing, and the writer.
-- The front does not run a replay. A replay runs where the ledgers are, with `fw routine replay`, and a `PUT` with `replay` gives the result to the evidence.
+- The front does not run a replay. A replay runs where the ledgers are, with `fw routine replay`, and a `PUT` with `replay` gives the result to the evidence. A proposal runs there too, with `fw routine propose`. A worker built with the tag `lean` does not carry that verb. `fw` without the tag and `fw-workbench` do.
