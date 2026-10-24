@@ -3035,6 +3035,8 @@ The duties read the block `duties` under the key `workbench` of `fw.yaml`. No va
 | `workbench.duties.secrets` | The variables of the front that a duty can name: `{name, hosts}`. A check sends the value of a variable only to the hosts of its entry, as globs such as `api.example.com`. A webhook can name any variable of the list. | none |
 | `workbench.duties.checkHosts` | The hosts that a check can reach, as globs such as `*.example.com`. When the list is empty, a check reaches any public address. The dialer then refuses a loopback, private, link-local, or unspecified address after the name resolves. | empty |
 
+A glob of a host follows `path.Match` of Go. It matches the host name of the address in lower case, without the port. A `*` matches any run of characters, dots too, so `*.example.com` matches `a.b.example.com` and not `example.com`. The page uses the same rule when it offers a secret for an address.
+
 The owner of an agent writes a duty, so the operator decides which secrets of the front a duty can send, and where. A value that does not fit stops the start, and the error names the key.
 
 ```yaml
