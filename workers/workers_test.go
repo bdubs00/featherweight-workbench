@@ -361,3 +361,20 @@ func TestTools(t *testing.T) {
 		t.Fatalf("pool_delete of no pool = %q", text)
 	}
 }
+
+// The tools of the orphan Tasks call the functions of the routes with the
+// same check: a person without the admin role is refused, and an admin
+// passes the check and reaches the ax API, which does not answer in this
+// test.
+func TestOrphanTools(t *testing.T) {
+	fr := newFront(t)
+	alice, carol := connect(t, fr.a, "alice"), connect(t, fr.a, "carol")
+	for _, name := range []string{ToolOrphansList, ToolOrphansRemove} {
+		if res, text := call(t, alice, name, nil); !res.IsError || !strings.Contains(text, "access.admins") {
+			t.Errorf("%s of alice = %q", name, text)
+		}
+		if res, text := call(t, carol, name, nil); !res.IsError || !strings.Contains(text, "the ax API did not give the Task list of the atespace team") {
+			t.Errorf("%s of carol = %q", name, text)
+		}
+	}
+}
