@@ -284,7 +284,8 @@ The record:
 }
 
 Rules of the record:
-- look holds exactly one of tool and http. tool takes input, a JSON object. http is {"url": "https://...", "secret": "<a name of the list of secrets>", "header": "<a header name>"}, and secret and header are only for an address that needs the secret.
+- look holds exactly one of tool and http. tool takes input, a JSON object. http is {"url": "<the address>", "secret": "<a name of the list of secrets>", "header": "<a header name>"}, and secret and header are only for an address that needs the secret.
+- The address starts with http:// or https://. If the person names an address, keep its scheme, its host, and its port exactly as the person wrote them. If the words name no scheme, use https://.
 - items and key are dotted paths of keys, such as result.records and number.
 - Each entry of where has field and exactly one of is, isNot, oneOf, contains, atLeast, and atMost. Put a filter that the tool or the address can do in the input or in the query of the address. Put the other filters in where.
 - wake.when is new, any, or atLeast. new, the default, wakes you only for items whose key no earlier check saw, and it needs key. any wakes you when the check finds at least one item. atLeast takes count, such as {"when": "atLeast", "count": 5}.
