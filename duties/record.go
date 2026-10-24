@@ -319,11 +319,17 @@ var envPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // headerPattern is the form of the name of a header.
 var headerPattern = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 
+// reservedName is the name that the route GET /v1/duties/options takes.
+const reservedName = "options"
+
 // CheckName returns an error in words for a name that is not the name of
 // a duty.
 func CheckName(name string) error {
 	if !namePattern.MatchString(name) {
 		return fmt.Errorf("the name %q must be 1 to 63 of a-z, 0-9, '-', and '_'", name)
+	}
+	if name == reservedName {
+		return fmt.Errorf("the name %s is taken by the route GET /v1/duties/options: pick another", name)
 	}
 	return nil
 }

@@ -233,7 +233,7 @@ func TestParity(t *testing.T) {
 			names[tool.Name] = true
 		}
 	}
-	if len(names) != 7 {
+	if len(names) != 8 {
 		t.Fatalf("the server has %d tools of the duties: %v", len(names), names)
 	}
 	seen := map[string]bool{}

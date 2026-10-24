@@ -51,6 +51,9 @@ func (q *queueTool) tool() fw.Tool {
 	})
 }
 
+// written is the check that the agent writes.
+const written = `{"look": {"tool": "queue", "input": {"query": "priority<=2"}}, "items": "result.records", "key": "number"}`
+
 // front is one process that serves the duties and takes the queue of the
 // agent triage itself, so a check run of a duty goes through the queue to
 // its own kernel.
@@ -69,15 +72,17 @@ func newFront(t *testing.T) *front {
 	cfg.Access.Default = "closed"
 	cfg.Bus.Intake = "fw.jobs.triage"
 	cfg.Agents = map[string]fw.AgentProfile{
-		"triage": {Access: &fw.Access{Owners: []string{"alice"}}, Policy: &fw.Rules{Ask: []string{"danger"}}},
+		"triage": {Access: &fw.Access{Owners: []string{"alice"}}, Policy: &fw.Rules{Ask: []string{"danger"}}, Budget: &fw.Budget{MaxTurns: 4}},
 	}
 	q := &queueTool{answer: fw.TextResult(`{"result": {"records": [{"number": "INC1", "priority": 1}, {"number": "INC2", "priority": 3}]}}`)}
 	danger := fw.NewTool(fw.ToolSpec{Name: "danger"}, func(context.Context, json.RawMessage) (fw.ToolResult, error) {
 		return fw.TextResult(`{"items": []}`), nil
 	})
 	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(people{}),
+		// A check run calls no model. The run that writes a check gets
+		// this answer.
 		fw.WithModel(fw.ModelFunc{GenerateFn: func(context.Context, *fw.Request) (*fw.Response, error) {
-			return nil, errors.New("a check calls no model")
+			return &fw.Response{Content: []fw.Block{fw.Text(written)}, StopReason: fw.StopEndTurn}, nil
 		}}),
 		fw.WithTools(q.tool(), danger),
 		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithSurfaces(native.New()),
@@ -245,5 +250,40 @@ func TestRequestActsAsTheOwner(t *testing.T) {
 	if err != nil || req.Principal != "alice" || req.PrincipalKind != fw.KindUser || string(req.Check.Steps[0].Input) != `{"n":1}` ||
 		req.Check.Timeout != duties.CheckTimeout || req.Check.MaxBytes != duties.MaxCheckBytes || req.Input != "" {
 		t.Fatalf("the request = %+v, %v", req, err)
+	}
+}
+
+// The agent of a duty writes its check in a run on its own queue, and the
+// front tests the check with a check run through the tool. Neither run is
+// a run that the lists show.
+func TestWriteCheckThroughTheAgent(t *testing.T) {
+	f := newFront(t)
+	req, _ := http.NewRequest(http.MethodPost, f.url+"/v1/duties/incidents/write-check", strings.NewReader(`{"words": "new incidents of priority 1 or 2", "agent": "triage"}`))
+	req.Header.Set("Authorization", "Bearer alice")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var ans duties.WriteCheckAnswer
+	b, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(b, &ans); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("write-check = %d %s", resp.StatusCode, b)
+	}
+	if ans.Check == nil || ans.Check.Count != 2 || ans.CheckFirst.Look.Tool != "queue" || !strings.HasPrefix(ans.Readback, "First it calls the tool queue") {
+		t.Fatalf("the answer = %s", b)
+	}
+	runs, err := f.a.List(context.Background())
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("runs = %d, %v", len(runs), err)
+	}
+	for _, r := range runs {
+		if fleet.Listed(r) {
+			t.Errorf("the lists show the run %s (%v)", r.ID, r.Metadata)
+		}
+		if r.Kind() != fw.RunKindCheck && (r.ID != ans.Run || r.Principal != "alice" || r.State != fw.StateCompleted) {
+			t.Errorf("the run that wrote the check = %+v", r)
+		}
 	}
 }

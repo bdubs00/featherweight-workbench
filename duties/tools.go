@@ -27,13 +27,14 @@ import (
 
 // Names of the tools.
 const (
-	ToolList     = "duties_list"
-	ToolGet      = "duty_get"
-	ToolPut      = "duty_put"
-	ToolRunNow   = "duty_run_now"
-	ToolPause    = "duty_pause"
-	ToolDelete   = "duty_delete"
-	ToolPauseAll = "duties_pause_all"
+	ToolList       = "duties_list"
+	ToolGet        = "duty_get"
+	ToolPut        = "duty_put"
+	ToolRunNow     = "duty_run_now"
+	ToolPause      = "duty_pause"
+	ToolDelete     = "duty_delete"
+	ToolPauseAll   = "duties_pause_all"
+	ToolWriteCheck = "duty_write_check"
 )
 
 const (
@@ -45,7 +46,7 @@ const (
 
 	putSchema = `{"type":"object","properties":{
 		"name":` + nameSchema + `,
-		"duty":{"type":"object","description":"The duty. agent names the agent that does it. when holds one start: say, the words of a schedule such as \"every weekday at 9am\", or schedule, the record {repeat, days, everyWeeks, dayOfMonth, times, every, between, timeZone, start, end}, or webhook {auth: {mode, secret, header}, key}. checkFirst {look: {http: {url, secret, header}}, items, key, where, wake} looks for work first. do.ask.message is the message for the agent, with the placeholders {date}, {time}, {found}, {event}, {last.title}, {last.run}, {last.state}, and {duty}. limits.budget is required, with at least one of maxCostUSD, maxTurns, maxTokens, and maxToolCalls above zero; limits also take perDayUSD, overlap (skip, queue, allow), catchUp, and retries. whileAway, notify, runAs (duty or owner), and paused are optional. A read of duty_get is a valid body."},
+		"duty":{"type":"object","description":"The duty. agent names the agent that does it. when holds one start: say, the words of a schedule such as \"every weekday at 9am\", or schedule, the record {repeat, days, everyWeeks, dayOfMonth, times, every, between, timeZone, start, end}, or webhook {auth: {mode, secret, header}, key}. checkFirst {look: {http: {url, secret, header}} or {tool, input}, items, key, where, wake} looks for work first; duty_write_check writes it from words. do holds one action: ask {message} asks the agent, post {bridge, to, message} posts in a bridge that stays open, open {playbook, goal} opens a bridge from a playbook, and manager {message} asks the manager. A message takes the placeholders {date}, {time}, {found}, {event}, {last.title}, {last.run}, {last.state}, and {duty}. limits.budget is required, with at least one of maxCostUSD, maxTurns, maxTokens, and maxToolCalls above zero; limits also take perDayUSD, overlap (skip, queue, allow), catchUp, and retries. whileAway, notify, runAs (duty or owner), and paused are optional. A read of duty_get is a valid body."},
 		"dryRun":{"type":"boolean","description":"Save nothing, and answer the duty as it would be stored, its readback in words, its next five times, and every problem. Show the readback to the person, and save only after the person agrees."},
 		"test":{"type":"boolean","description":"With dryRun, also run checkFirst once and answer the items that it finds now and whether they wake the agent."},
 		"timeZone":{"type":"string","maxLength":64,"description":"The IANA time zone of a new schedule that names none, such as America/New_York: the time zone of the person. Without it, UTC."}
@@ -55,6 +56,12 @@ const (
 		"name":` + nameSchema + `,
 		"paused":{"type":"boolean","description":"true pauses the duty, and false resumes it. A resume ends the rows of failures, and the times of the pause do not run."}
 	},"required":["name","paused"]}`
+
+	writeCheckSchema = `{"type":"object","properties":{
+		"name":` + nameSchema + `,
+		"words":{"type":"string","minLength":1,"maxLength":2000,"description":"What the check looks for, in the words of the person, such as \"a new P1 or P2 in the Platform Ops queue\"."},
+		"agent":{"type":"string","maxLength":64,"description":"The agent of a duty that does not exist yet. For a saved duty, the agent of the duty writes the check."}
+	},"required":["name","words"]}`
 
 	pauseAllSchema = `{"type":"object","properties":{
 		"paused":{"type":"boolean","description":"true pauses every duty of the fleet, and false lets them run again. Runs that work go on."},
@@ -80,6 +87,11 @@ type (
 	pauseAllArgs struct {
 		Paused bool   `json:"paused"`
 		Reason string `json:"reason,omitempty"`
+	}
+	writeCheckArgs struct {
+		Name  string `json:"name"`
+		Words string `json:"words"`
+		Agent string `json:"agent,omitempty"`
 	}
 	// putResult is the structured result of duty_put: the duty after a
 	// write, with created, or the answer of a dry run.
@@ -160,6 +172,15 @@ func tools(srv *mcp.Server) []mcp.Tool {
 			return deleteTool(ctx, a, in), nil, nil
 		}),
 		mcp.NewTool(&sdk.Tool{
+			Name:        ToolWriteCheck,
+			Title:       "Write the check of a duty",
+			Description: "Turn the words of a person into the check of a duty, the record checkFirst, which looks for work before the duty wakes the agent. The agent of the duty writes it with its own tools, in one run within its budget, and the front tests it once. The answer is the record, its readback in words, and what the check finds now. It saves nothing: put the record in checkFirst with duty_put. It needs the owner role on the agent, and an agent without a budget does not run.",
+			InputSchema: json.RawMessage(writeCheckSchema),
+			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(false), IdempotentHint: false, OpenWorldHint: ptr(true)},
+		}, func(ctx context.Context, _ *sdk.CallToolRequest, in writeCheckArgs) (*sdk.CallToolResult, any, error) {
+			return writeCheckTool(ctx, a, in), nil, nil
+		}),
+		mcp.NewTool(&sdk.Tool{
 			Name:        ToolPauseAll,
 			Title:       "Pause every duty",
 			Description: "The kill switch: pause every duty of the fleet, or let them run again. It needs the admin role of the process. Runs that work go on unless somebody also cancels them.",
@@ -185,6 +206,12 @@ func explain(err error) string {
 		return "Conflict: " + reason(err) + "."
 	case errors.Is(err, ErrUpstream):
 		return "Bad gateway: " + reason(err) + "."
+	case errors.Is(err, ErrNoAnswer):
+		return "Timeout: " + reason(err) + "."
+	}
+	var ce *CheckError
+	if errors.As(err, &ce) {
+		return "Unprocessable: " + ce.Reason
 	}
 	return mcp.Explain(err)
 }
@@ -432,4 +459,29 @@ func pauseAllTool(ctx context.Context, a *fw.Agent, in pauseAllArgs) *sdk.CallTo
 		text = "Every duty is paused. Runs that work go on."
 	}
 	return mcp.Result(text, sw)
+}
+
+// writeCheckTool is the tool duty_write_check.
+func writeCheckTool(ctx context.Context, a *fw.Agent, in writeCheckArgs) *sdk.CallToolResult {
+	ctx, _, _ = manager.OnBehalf(ctx)
+	s := Of(a)
+	if s == nil {
+		return off()
+	}
+	ans, err := s.WriteCheck(ctx, in.Name, WriteCheckBody{Words: in.Words, Agent: in.Agent})
+	if err != nil {
+		return mcp.ErrorResult(explain(err))
+	}
+	var b strings.Builder
+	b.WriteString("The check of the duty " + in.Name + ", which nothing saved yet: " + ans.Readback)
+	switch c := ans.Check; {
+	case c == nil:
+		b.WriteString("\nThe front cannot run this look yet, so it did not test the check.")
+	case c.Wakes:
+		fmt.Fprintf(&b, "\nNow the check finds %s, and they wake the agent.", itemsWords(c.Count))
+	default:
+		b.WriteString("\nNow: " + c.Reason)
+	}
+	b.WriteString("\nShow the readback to the person, and put checkFirst in the duty with duty_put after the person agrees.")
+	return mcp.Result(b.String(), ans)
 }

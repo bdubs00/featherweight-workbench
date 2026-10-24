@@ -525,20 +525,32 @@ func (s *Service) contextProblems(ctx context.Context, d *Duty) []string {
 			p = append(p, act.Check(ctx, s.a, d)...)
 		}
 	}
-	if c := d.CheckFirst; c != nil && c.Look.HTTP != nil && c.Look.Tool == "" && hostOf(c.Look.HTTP.URL) != "" {
-		h := c.Look.HTTP
-		p = append(p, s.cfg.lookProblems(h)...)
-		if h.Secret != "" && s.cfg.secretRule(h.Secret) != nil {
-			if _, err := s.secret(ctx, h.Secret); err != nil {
-				p = append(p, problem("checkFirst.look.http.secret", "%s holds no secret in this front.", h.Secret))
-			}
-		}
-	}
+	p = append(p, s.checkContextProblems(ctx, d.CheckFirst)...)
 	if w := d.When.Webhook; w != nil && w.Auth.Secret != "" && envPattern.MatchString(w.Auth.Secret) {
 		p = append(p, s.cfg.webhookProblems(w)...)
 		if s.cfg.secretRule(w.Auth.Secret) != nil {
 			if _, err := s.secret(ctx, w.Auth.Secret); err != nil {
 				p = append(p, problem("when.webhook.auth.secret", "%s holds no secret in this front.", w.Auth.Secret))
+			}
+		}
+	}
+	return p
+}
+
+// checkContextProblems lists what the rules of the operator refuse in a
+// check: a secret or a host of an address that the rules refuse. A write
+// keeps a look that this front does not serve yet, and its test says so.
+func (s *Service) checkContextProblems(ctx context.Context, c *CheckFirst) []string {
+	var p []string
+	if c == nil {
+		return nil
+	}
+	if c.Look.HTTP != nil && c.Look.Tool == "" && hostOf(c.Look.HTTP.URL) != "" {
+		h := c.Look.HTTP
+		p = append(p, s.cfg.lookProblems(h)...)
+		if h.Secret != "" && s.cfg.secretRule(h.Secret) != nil {
+			if _, err := s.secret(ctx, h.Secret); err != nil {
+				p = append(p, problem("checkFirst.look.http.secret", "%s holds no secret in this front.", h.Secret))
 			}
 		}
 	}

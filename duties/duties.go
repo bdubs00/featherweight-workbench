@@ -110,6 +110,12 @@ type Service struct {
 	runs    func(ctx context.Context, name string) (map[string]*fw.Run, error)
 	secret  func(ctx context.Context, name string) (string, error)
 
+	// The seams of a write of a check (writecheck.go): the wait for a run
+	// that the front put on a queue, its cancel, and the longest wait.
+	await     func(ctx context.Context, id string) (*fw.Run, error)
+	stopRun   func(ctx context.Context, id string) error
+	writeWait time.Duration
+
 	mu      sync.Mutex
 	cursors map[string]time.Time       // per duty, the newest time of its schedule that this replica handled
 	open    map[string]map[string]bool // per duty, the dates of its history with a start that works
@@ -191,6 +197,9 @@ func newService(a *fw.Agent, st *Store, cfg Config, log *slog.Logger) *Service {
 		return fleet.EnqueueFor(ctx, a, agent, pool, reqs)
 	}
 	s.runs = s.runsOfFleet
+	s.await = func(ctx context.Context, id string) (*fw.Run, error) { return fleet.Await(ctx, a, id) }
+	s.stopRun = func(ctx context.Context, id string) error { return fleet.CancelRun(ctx, a, id) }
+	s.writeWait = WriteCheckTimeout
 	s.secret = func(ctx context.Context, name string) (string, error) {
 		secrets := a.Secrets()
 		if secrets == nil {
