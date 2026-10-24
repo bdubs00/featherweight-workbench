@@ -3,6 +3,7 @@ package duties
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -203,5 +204,41 @@ func TestAwayHandlerTakesNeedsYou(t *testing.T) {
 	}
 	if h := f.history(t, "asks"); h[0].State != string(fw.StateInputRequired) {
 		t.Fatalf("history = %+v", h[0])
+	}
+}
+
+// A notify list names a shared channel as channel:<name>. A write checks
+// the name through the hook of the notifications, and a notice carries
+// the entry to the notifications, which reach the channel without a
+// person.
+func TestNotifyChannel(t *testing.T) {
+	f := newFront(t, "", nil)
+	d := daily("report")
+	d.Notify = &Notify{Failure: []string{"owner", " channel: ops-room "}, NeedsYou: []string{"owner"}}
+	_, err := f.s.Put(as("alice"), "report", DutyBody{Duty: d}, PutOptions{})
+	var pe *ProblemsError
+	if !errors.As(err, &pe) || len(pe.Problems) != 1 || !strings.HasPrefix(pe.Problems[0], "notify.failure: Not available yet") {
+		t.Fatalf("a shared channel without the notifications = %v", err)
+	}
+	RegisterChannels(func(_ *fw.Agent, name string) bool { return name == "ops-room" })
+	t.Cleanup(func() { RegisterChannels(nil) })
+	v := f.put(t, "alice", d)
+	if got := v.Notify.Failure; !slices.Equal(got, []string{"owner", "channel:ops-room"}) {
+		t.Fatalf("notify.failure = %q", got)
+	}
+	d.Notify.NeedsYou = []string{"channel:nowhere"}
+	_, err = f.s.Put(as("alice"), "report", DutyBody{Duty: d}, PutOptions{})
+	if !errors.As(err, &pe) || len(pe.Problems) != 1 || pe.Problems[0] != "notify.needsYou: channel:nowhere is not a shared channel of this front. An operator names it in workbench.notifications.shared." {
+		t.Fatalf("an unknown shared channel = %v", err)
+	}
+	if err := f.s.Tell(context.Background(), NoticeFailed, "report", "", "It failed."); err != nil {
+		t.Fatal(err)
+	}
+	list := allNotices.of(f.a, "report")
+	if len(list) != 1 || !slices.Equal(list[0].Who, []string{"alice", "channel:ops-room"}) {
+		t.Fatalf("notices = %+v", list)
+	}
+	if name, ok := ChannelOf(list[0].Who[1]); !ok || name != "ops-room" {
+		t.Fatalf("ChannelOf = %q, %v", name, ok)
 	}
 }

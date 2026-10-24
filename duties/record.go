@@ -278,10 +278,23 @@ type WhileAway struct {
 }
 
 // Notify names who hears of a failed run and of a question of a run:
-// "owner", or the subject of a person.
+// "owner", the subject of a person, or channel:<name> for a shared
+// channel of the operator (workbench.notifications.shared), which the
+// notification reaches without a person.
 type Notify struct {
 	Failure  []string `json:"failure,omitempty"`
 	NeedsYou []string `json:"needsYou,omitempty"`
+}
+
+// NotifyChannelPrefix starts an entry of a notify list that names a shared
+// channel of the operator, such as channel:ops-room.
+const NotifyChannelPrefix = "channel:"
+
+// ChannelOf returns the name of the shared channel that an entry of a
+// notify list names, and reports whether it names one.
+func ChannelOf(who string) (string, bool) {
+	name, ok := strings.CutPrefix(who, NotifyChannelPrefix)
+	return name, ok
 }
 
 // Principals of the runs of a duty.
@@ -431,6 +444,13 @@ func (d *Duty) normalize(zone string) {
 	}
 	if d.Notify == nil {
 		d.Notify = &Notify{Failure: []string{RunAsOwner}, NeedsYou: []string{RunAsOwner}}
+	}
+	for _, list := range [][]string{d.Notify.Failure, d.Notify.NeedsYou} {
+		for i, who := range list {
+			if name, ok := ChannelOf(strings.TrimSpace(who)); ok {
+				list[i] = NotifyChannelPrefix + strings.TrimSpace(name)
+			}
+		}
 	}
 	d.RunAs = strings.ToLower(strings.TrimSpace(d.RunAs))
 	if d.RunAs == "" {
@@ -600,8 +620,14 @@ func (d *Duty) problems() []string {
 				add(f.path, "The list names %d people, and the most is %d.", len(f.list), maxNotify)
 			}
 			for _, who := range f.list {
+				if name, ok := ChannelOf(who); ok {
+					if !namePattern.MatchString(name) {
+						add(f.path, "%q is not a shared channel. Write channel: and the name of a shared channel, such as channel:ops-room.", who)
+					}
+					continue
+				}
 				if strings.TrimSpace(who) == "" || len(who) > 256 || strings.ContainsAny(who, "\r\n\t") {
-					add(f.path, "%q is not owner or the subject of a person.", who)
+					add(f.path, "%q is not owner, the subject of a person, or channel: and the name of a shared channel.", who)
 				}
 			}
 		}
