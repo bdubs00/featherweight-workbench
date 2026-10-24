@@ -41,6 +41,7 @@ import (
 	_ "github.com/bdubs00/featherweight-workbench/duties/looks"
 	_ "github.com/bdubs00/featherweight-workbench/faces"
 	_ "github.com/bdubs00/featherweight-workbench/pages"
+	_ "github.com/bdubs00/featherweight-workbench/playbooks"
 	_ "github.com/bdubs00/featherweight-workbench/routines"
 	_ "github.com/bdubs00/featherweight-workbench/surface/web"
 	_ "github.com/bdubs00/featherweight-workbench/titles"
