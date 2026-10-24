@@ -268,9 +268,11 @@ func (d *day) spent() float64 {
 }
 
 // seenKeys are the keys that the checks of a duty saw, with the time of
-// the check that saw each last.
+// the check that saw each last. By names the start that woke the agent
+// for each key, so a start that fails for good gives its keys back.
 type seenKeys struct {
 	Keys map[string]time.Time `json:"keys"`
+	By   map[string]string    `json:"by,omitempty"`
 }
 
 // Store keeps the duties in their buckets. Build it with NewStore.
@@ -654,9 +656,10 @@ func (s *Store) seenOf(ctx context.Context, name string) (map[string]time.Time, 
 	return sk.Keys, nil
 }
 
-// remember adds the keys to the seen keys of a duty. A key that no check
-// saw for HistoryFor goes, and beyond maxSeen the oldest keys go.
-func (s *Store) remember(ctx context.Context, name string, keys []string) error {
+// remember adds the keys to the seen keys of a duty, for the start that
+// woke the agent for them. A key that no check saw for HistoryFor goes,
+// and beyond maxSeen the oldest keys go.
+func (s *Store) remember(ctx context.Context, name string, keys []string, start string) error {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -669,8 +672,14 @@ func (s *Store) remember(ctx context.Context, name string, keys []string) error 
 		if sk.Keys == nil {
 			sk.Keys = map[string]time.Time{}
 		}
+		if sk.By == nil {
+			sk.By = map[string]string{}
+		}
 		for _, k := range keys {
 			sk.Keys[k] = now
+			if start != "" {
+				sk.By[k] = start
+			}
 		}
 		for k, at := range sk.Keys {
 			if now.Sub(at) > HistoryFor {
@@ -691,10 +700,46 @@ func (s *Store) remember(ctx context.Context, name string, keys []string) error 
 				delete(sk.Keys, x.k)
 			}
 		}
+		for k := range sk.By {
+			if _, ok := sk.Keys[k]; !ok {
+				delete(sk.By, k)
+			}
+		}
 		return json.Marshal(sk)
 	})
 	if err != nil {
 		return fmt.Errorf("duties: write the seen keys of %s: %w", name, err)
+	}
+	return nil
+}
+
+// forget gives back the keys of a start that failed for good, so the next
+// check wakes the agent for its items again.
+func (s *Store) forget(ctx context.Context, name, start string) error {
+	if start == "" {
+		return nil
+	}
+	_, err := bucket.Modify(ctx, s.seen, "check."+name, storeAttempts, func(value []byte, exists bool) ([]byte, error) {
+		if !exists {
+			return nil, nil
+		}
+		var sk seenKeys
+		_ = json.Unmarshal(value, &sk)
+		gone := 0
+		for k, by := range sk.By {
+			if by == start {
+				delete(sk.Keys, k)
+				delete(sk.By, k)
+				gone++
+			}
+		}
+		if gone == 0 {
+			return nil, nil
+		}
+		return json.Marshal(sk)
+	})
+	if err != nil {
+		return fmt.Errorf("duties: give back the seen keys of %s: %w", name, err)
 	}
 	return nil
 }

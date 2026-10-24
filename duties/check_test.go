@@ -338,3 +338,36 @@ func TestCheckTool(t *testing.T) {
 		t.Fatalf("the input = %q", req.Input)
 	}
 }
+
+// The items of a start that fails for good go back to the check, so the
+// next check wakes the agent for them again. A start that reached its run
+// keeps them.
+func TestCheckGivesBackTheItemsOfAFailedStart(t *testing.T) {
+	q := &incidents{}
+	srv := httptest.NewServer(q)
+	defer srv.Close()
+	f := newFront(t, checkBlock, nil)
+	f.sec["SNOW_KEY"] = "s3cret"
+	q.set(0, inc("INC1", "1"))
+	f.put(t, "alice", triageDuty(srv.URL))
+	f.queue.setFail(errDown)
+	slot := t0.Add(15 * time.Minute)
+	f.clock.Set(slot.Add(time.Second))
+	f.pass(t)
+	f.clock.Set(slot.Add(retryPause + 2*time.Second))
+	f.pass(t)
+	if h := f.history(t, "incidents"); h[0].State != StateFailed || !h[0].Woke {
+		t.Fatalf("history = %+v", h[0])
+	}
+	f.queue.setFail(nil)
+	f.clock.Set(slot.Add(15*time.Minute + time.Second))
+	f.pass(t)
+	if req := f.queue.last(t); !strings.Contains(req.Input, "INC1") {
+		t.Fatalf("the input = %q", req.Input)
+	}
+	f.clock.Set(slot.Add(30*time.Minute + time.Second))
+	f.pass(t)
+	if n := len(f.queue.list()); n != 1 {
+		t.Fatalf("the items of a start that reached its run woke the agent again: %d runs", n)
+	}
+}

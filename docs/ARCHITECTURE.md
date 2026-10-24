@@ -3110,7 +3110,7 @@ The front sends a GET with the poll of the sources (section 13.5). The value of 
 
 - `items` is the dotted path of the list of items in the answer. Each item is a JSON object.
 - `where` keeps the items that pass every filter. Each filter has a dotted `field` and one of `is`, `isNot`, `oneOf`, `contains`, `atLeast`, and `atMost`. Two numbers compare as numbers. This rule also holds for a number in text, such as `"1"` against `1`. Other values compare as text, so dates in the form `2006-01-02` order too. `contains` finds a text in a text, without case, or a value in a list.
-- `wake.when` is `new`, `any`, or `atLeast` with `count`. With `new`, the default, only the items whose `key` no earlier check saw wake the agent. The front remembers those keys once their run is on the queue.
+- `wake.when` is `new`, `any`, or `atLeast` with `count`. With `new`, the default, only the items whose `key` no earlier check saw wake the agent. The front remembers those keys once their run is on the queue. If the start then fails after its retries, the front forgets its keys, so the next check wakes the agent for the same items. A start that its run reached, or that somebody canceled, keeps them.
 
 The run gets the items that woke it through `{found}`: one item as compact JSON per line, within 8 KB. A check that finds no work writes a start with the state `quiet` and starts no run. A check that fails writes `check-failed`, and the model does not wake. When three checks fail in a row, the duty pauses itself. A check that works ends the row.
 

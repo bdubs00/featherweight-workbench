@@ -628,7 +628,7 @@ func (s *Service) carry(ctx context.Context, st *stored, date string, e entry) O
 	if len(keys) > 0 && (out.Run != "" || out.retrying) {
 		// The run, or its retry, has the items, so a later check does not
 		// wake the agent for them again.
-		if err := s.st.remember(ctx, d.Name, keys); err != nil {
+		if err := s.st.remember(ctx, d.Name, keys, e.ID); err != nil {
 			s.log.Warn("duties: the seen keys of a check did not land", "duty", d.Name, "error", err)
 		}
 	}
@@ -831,6 +831,11 @@ func (s *Service) failed(ctx context.Context, st *stored, e entry, reason string
 	})
 	if err != nil {
 		s.log.Warn("duties: the counters of a duty did not change", "duty", st.Duty.Name, "error", err)
+	}
+	// The items of the start did not reach the agent, so the next check
+	// wakes it for them again.
+	if err := s.st.forget(ctx, st.Duty.Name, e.ID); err != nil {
+		s.log.Warn("duties: the seen keys of a failed start stay", "duty", st.Duty.Name, "error", err)
 	}
 	s.notify(ctx, st, Notice{Kind: NoticeFailed, Run: e.Run, Slot: e.Slot, Reason: reason})
 	if c.FailuresInRow >= breakerAfter {
@@ -1186,7 +1191,6 @@ func sameEntry(a, b entry) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-// oneLine cuts a text to one line of at most n bytes.
 // htmlTag matches a tag of HTML, such as <center> or </body>, in an error
 // that quotes the page of a proxy.
 var htmlTag = regexp.MustCompile(`</?[a-zA-Z][a-zA-Z0-9]*(\s[^<>]*)?/?>`)
@@ -1197,6 +1201,7 @@ func errorLine(s string, n int) string {
 	return oneLine(htmlTag.ReplaceAllString(s, " "), n)
 }
 
+// oneLine cuts a text to one line of at most n bytes.
 func oneLine(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if s == "" {

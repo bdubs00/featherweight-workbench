@@ -90,7 +90,7 @@ func TestStoreDuties(t *testing.T) {
 	if _, err := st.modifyCounters(ctx, "report", func(c *counters) bool { c.FailuresInRow = 2; return true }); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.remember(ctx, "report", []string{"INC1"}); err != nil {
+	if err := st.remember(ctx, "report", []string{"INC1"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	cur, _ := st.get(ctx, "report")
@@ -197,11 +197,11 @@ func TestStoreState(t *testing.T) {
 	if sw, _ := st.killSwitch(ctx); !sw.Paused || sw.Reason != "storm" {
 		t.Fatalf("the switch = %+v", sw)
 	}
-	if err := st.remember(ctx, "report", []string{"A", "B"}); err != nil {
+	if err := st.remember(ctx, "report", []string{"A", "B"}, "s1"); err != nil {
 		t.Fatal(err)
 	}
 	c.Add(HistoryFor + time.Hour)
-	if err := st.remember(ctx, "report", []string{"C"}); err != nil {
+	if err := st.remember(ctx, "report", []string{"C"}, "s2"); err != nil {
 		t.Fatal(err)
 	}
 	seen, _ := st.seenOf(ctx, "report")
