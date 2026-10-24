@@ -1149,7 +1149,7 @@ func (s *Service) settle(ctx context.Context, st *stored, date string, e entry, 
 			x.State, x.Reason = StateCanceled, "Somebody canceled the run."
 			x.FoundText, x.Event = "", ""
 		case r.State == fw.StateFailed:
-			reason = "The run failed: " + strings.TrimSuffix(errorLine(r.Error, 300), ".") + "."
+			reason = failReason(r.Error)
 			if x.Attempt <= d.retries() && !stopped {
 				x.State, x.RetryAt, x.SpentUSD, x.Reason = StateRetrying, now.Add(retryPause).UTC(), x.CostUSD, reason+" It goes again."
 			} else {
@@ -1194,6 +1194,28 @@ func sameEntry(a, b entry) bool {
 // htmlTag matches a tag of HTML, such as <center> or </body>, in an error
 // that quotes the page of a proxy.
 var htmlTag = regexp.MustCompile(`</?[a-zA-Z][a-zA-Z0-9]*(\s[^<>]*)?/?>`)
+
+// limitWords say the limits of a budget that the kernel names when a
+// limit stops a run, as "budget exceeded: <limit>".
+var limitWords = map[string]string{
+	"maxTurns":     "its limit of turns",
+	"maxToolCalls": "its limit of tool calls",
+	"maxTokens":    "its limit of tokens",
+	"maxCostUSD":   "its limit of cost",
+	"deadline":     "its limit of working time",
+	"maxRepeats":   "its limit of repeated calls",
+}
+
+// failReason says why a run failed. A run that a limit of its own budget
+// stopped says which limit in words, and where the person raises it.
+func failReason(err string) string {
+	if rest, ok := strings.CutPrefix(strings.TrimSpace(err), "budget exceeded: "); ok {
+		if w, ok := limitWords[strings.TrimSpace(rest)]; ok {
+			return "The run reached " + w + ", so it stopped. Raise the limit under Limits if the work needs more."
+		}
+	}
+	return "The run failed: " + strings.TrimSuffix(errorLine(err, 300), ".") + "."
+}
 
 // errorLine returns the error of a run as one line of words, without the
 // tags of an HTML page that a proxy answered, cut to n bytes.

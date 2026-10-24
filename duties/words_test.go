@@ -39,3 +39,19 @@ func TestTitleNamesTheEventAndCountsTheItems(t *testing.T) {
 		}
 	}
 }
+
+// A run that a limit of its budget stopped says the limit in words. Any
+// other error keeps its own words.
+func TestFailReasonSaysTheLimit(t *testing.T) {
+	cases := map[string]string{
+		"budget exceeded: maxCostUSD": "The run reached its limit of cost, so it stopped. Raise the limit under Limits if the work needs more.",
+		"budget exceeded: deadline":   "The run reached its limit of working time, so it stopped. Raise the limit under Limits if the work needs more.",
+		"budget exceeded: maxCostUSD of the run tree (this run and the runs under it used $0.20 of $0.20)": "The run failed: budget exceeded: maxCostUSD of the run tree (this run and the runs under it used $0.20 of $0.20).",
+		"the model refused": "The run failed: the model refused.",
+	}
+	for err, want := range cases {
+		if got := failReason(err); got != want {
+			t.Errorf("failReason(%q) = %q, want %q", err, got, want)
+		}
+	}
+}
