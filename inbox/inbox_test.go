@@ -153,10 +153,15 @@ func TestInbox(t *testing.T) {
 	for _, it := range ans.Items {
 		kinds = append(kinds, it.Kind)
 	}
-	if strings.Join(kinds, ",") != "approval,question,failure,failure,failure,paused" {
+	// The approval and the question begin to wait within a few
+	// microseconds, so either can come first.
+	if k := strings.Join(kinds, ","); k != "approval,question,failure,failure,failure,paused" && k != "question,approval,failure,failure,failure,paused" {
 		t.Fatalf("the kinds = %v\n%+v", kinds, ans.Items)
 	}
 	ap, q, fail, paused := ans.Items[0], ans.Items[1], ans.Items[2], ans.Items[5]
+	if ap.Kind == KindQuestion {
+		ap, q = q, ap
+	}
 	if pending, _ := a.Get(context.Background(), r1.ID); pending == nil || pending.Pending == nil || ap.Approval != pending.Pending.ID || ap.Approval == "" {
 		t.Fatalf("the approval id of the item = %q, want the pending approval of %s", ap.Approval, r1.ID)
 	}
@@ -200,7 +205,7 @@ func TestInbox(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("the tool = %+v, %v", res, err)
 	}
-	if txt := res.Content[0].(*sdk.TextContent).Text; !strings.HasPrefix(txt, "6 items need you:\n- approval: ") || !strings.Contains(txt, "(run "+r1.ID+")") {
+	if txt := res.Content[0].(*sdk.TextContent).Text; !strings.HasPrefix(txt, "6 items need you:\n- ") || !strings.Contains(txt, "\n- approval: ") || !strings.Contains(txt, "(run "+r1.ID+")") {
 		t.Fatalf("the text of the tool = %s", txt)
 	}
 	other, err := For(as("bob"), a, time.Now())
