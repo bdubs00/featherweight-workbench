@@ -10,6 +10,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/duties"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
 )
 
@@ -34,7 +35,7 @@ func TestManagerDecides(t *testing.T) {
 		}
 	}
 	if q.Agent != "manager" || q.Principal != "alice" || q.PrincipalKind != fw.KindUser || q.Budget == nil || q.Budget.MaxCostUSD != 0.5 ||
-		q.Metadata[MetaVerdict] != run+"/A1" || q.IdempotencyKey != "duty-away/"+run+"/A1" {
+		q.Metadata[MetaVerdict] != run+"/A1" || q.IdempotencyKey != "duty-away/"+run+"/A1" || q.Metadata[fleet.MetaInternal] != "duty-verdict:report" {
 		t.Fatalf("the request of the manager = %+v", q)
 	}
 	if w := entryOf(t, b, run, "A1"); w.Route != RouteManager || w.Manager != q.ID || w.State != stateOpen || w.Claim != "" {

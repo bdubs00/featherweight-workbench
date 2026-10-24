@@ -20,11 +20,18 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/duties"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
 // MetaVerdict is the metadata key of a run of the manager that gives a
 // verdict: <run>/<approval> of the approval that it decides.
 const MetaVerdict = "workbench.dutyVerdict"
+
+// PurposeVerdict starts the value of fleet.MetaInternal of a run of the
+// manager that gives a verdict, before the name of the duty. The run
+// carries the owner as its person, and the mark keeps it out of the
+// conversations of the owner.
+const PurposeVerdict = "duty-verdict"
 
 // Bounds of the message and of the verdict.
 const (
@@ -122,7 +129,7 @@ func (s *Service) askManager(ctx context.Context, svc *duties.Service, w *wait, 
 	req := fw.RunRequest{
 		ID:             w.Manager,
 		Input:          message(&d, w, r),
-		Metadata:       map[string]string{MetaVerdict: w.Run + "/" + w.Approval, fw.MetaTitle: "Decide for the duty " + d.Name},
+		Metadata:       map[string]string{MetaVerdict: w.Run + "/" + w.Approval, fw.MetaTitle: "Decide for the duty " + d.Name, fleet.MetaInternal: PurposeVerdict + ":" + d.Name},
 		IdempotencyKey: "duty-away/" + w.Run + "/" + w.Approval,
 	}
 	if d.Owner != "" {
