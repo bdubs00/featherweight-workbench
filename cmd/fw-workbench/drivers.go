@@ -18,6 +18,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/duties"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/manager"
+	"github.com/bdubs00/featherweight-workbench/notify"
 	"github.com/bdubs00/featherweight-workbench/sources"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 
@@ -42,7 +43,6 @@ import (
 	_ "github.com/bdubs00/featherweight-workbench/duties/events"
 	_ "github.com/bdubs00/featherweight-workbench/faces"
 	_ "github.com/bdubs00/featherweight-workbench/inbox"
-	_ "github.com/bdubs00/featherweight-workbench/notify"
 	_ "github.com/bdubs00/featherweight-workbench/pages"
 	_ "github.com/bdubs00/featherweight-workbench/routines"
 	_ "github.com/bdubs00/featherweight-workbench/surface/web"
@@ -67,6 +67,7 @@ func init() {
 	cli.RegisterDoctorCheck(fleet.DoctorCheck)
 	cli.RegisterDoctorCheck(sources.DoctorCheck)
 	cli.RegisterDoctorCheck(duties.DoctorCheck)
+	cli.RegisterDoctorCheck(notify.DoctorCheck)
 	cli.RegisterDoctorCheck(bossmode.DoctorCheck)
 	cli.RegisterDoctorCheck(manager.DoctorCheck)
 	// With workbench.access.external, a control plane decides who can do

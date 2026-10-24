@@ -351,3 +351,17 @@ func TestNobody(t *testing.T) {
 		t.Fatalf("Get without a person = %v", err)
 	}
 }
+
+// The doctor line names where the settings live and the server of the
+// front, and a configuration that does not fit fails it.
+func TestDoctorCheck(t *testing.T) {
+	cfg := fw.DefaultConfig()
+	cfg.Extensions = workbench(t, "notifications:\n  ntfy:\n    server: https://ntfy.lab.internal\n")
+	if ok, line := DoctorCheck(context.Background(), cfg, nil, 0); !ok || !strings.Contains(line, "the server of the front is ntfy.lab.internal") || !strings.Contains(line, "any server on a public address") {
+		t.Fatalf("doctor = %v, %q", ok, line)
+	}
+	cfg.Extensions = workbench(t, "notifications:\n  ntfy:\n    server: nope\n")
+	if ok, _ := DoctorCheck(context.Background(), cfg, nil, 0); ok {
+		t.Fatal("a server that does not read passed the doctor")
+	}
+}
