@@ -76,3 +76,34 @@ func TestOpenForAndPostFor(t *testing.T) {
 		t.Fatal("Peek of no bridge has a state")
 	}
 }
+
+// A bridge that a duty opens for its owner is in the list of the owner,
+// as a bridge of the operator is, and not in the list of another person.
+func TestOpenForListsTheOwner(t *testing.T) {
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	captureQueues(t, a, "fw.jobs.migrator")
+	duty := &fw.Principal{Subject: "duty:weekly", Kind: fw.KindWorkload}
+	ctx := context.Background()
+	it, err := s.OpenFor(ctx, OpenSpec{Title: "weekly: 2026-10-23", Goal: "Patch.", Owner: "alice", Members: []SeatSpec{{Handle: "patcher", Agent: "migrator", Task: "Patch the hosts."}}}, duty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := s.b.get(ctx, it.ID)
+	if err != nil || rec.Owner != "alice" {
+		t.Fatalf("the record = %+v, %v", rec, err)
+	}
+	for who, want := range map[string]bool{"alice": true, "duty:weekly": true, "bob": false} {
+		got := rec.operatedBy(who)
+		if got != want {
+			t.Errorf("operatedBy(%s) = %v, want %v", who, got, want)
+		}
+	}
+	if rec.operatedBy("") {
+		t.Error("an empty subject operates the bridge")
+	}
+	alice := fw.WithPrincipal(ctx, &fw.Principal{Subject: "alice", Kind: fw.KindUser})
+	if ok, err := s.listed(alice, rec, false); err != nil || !ok {
+		t.Fatalf("the list of the owner = %v, %v", ok, err)
+	}
+}

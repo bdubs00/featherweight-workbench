@@ -318,6 +318,10 @@ type record struct {
 	// OperatorKind is the kind of the principal of the operator, for the
 	// runs that the bridge starts as the operator.
 	OperatorKind string `json:"operatorKind,omitempty"`
+	// Owner is the person who owns the duty that opened the bridge, when
+	// the operator is the duty. The owner sees and uses the bridge as the
+	// operator does.
+	Owner string `json:"owner,omitempty"`
 	// Teams holds the teams of the operator at the open, so the teammates
 	// of the operator find the bridge in their list.
 	Teams []string `json:"teams,omitempty"`

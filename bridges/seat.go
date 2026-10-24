@@ -60,6 +60,10 @@ type OpenSpec struct {
 	Members    []SeatSpec       `json:"members"`
 	Delegation *DelegationPatch `json:"delegation,omitempty"`
 	Caps       *CapsPatch       `json:"caps,omitempty"`
+	// Owner is the person who owns the duty that opens the bridge through
+	// OpenFor. The owner sees and uses the bridge as its operator does. A
+	// body of a route never sets it.
+	Owner string `json:"-"`
 }
 
 // SeatSpec is one seat of the plan: the handle, the agent behind it, its
@@ -224,6 +228,7 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 		Delegation: delegation,
 		Caps:       caps,
 	}}
+	rec.Owner = strings.TrimSpace(spec.Owner)
 	if by != nil {
 		rec.Operator, rec.OperatorKind = by.Subject, by.Kind
 		rec.Teams = teams.Of(teams.Patterns(s.a.Config()), by)

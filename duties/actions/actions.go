@@ -202,6 +202,7 @@ func startOpen(ctx context.Context, a *fw.Agent, d *duties.Duty, req fw.RunReque
 		return duties.Started{}, fmt.Errorf("the playbook %s: %s", name, words(err))
 	}
 	spec := pb.Spec(Title(d, slotOf(req)))
+	spec.Owner = d.Owner
 	if goal := strings.TrimSpace(req.Input); goal != "" {
 		spec.Goal = goal
 	}

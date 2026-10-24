@@ -19,13 +19,13 @@ import (
 )
 
 // allows decides whether the caller in ctx can see and change a bridge: the
-// process itself, the operator of the bridge, and anyone with the
-// operator role on every agent of its members, as the page at /ui decides
-// for a run. It returns nil to allow, and an error that wraps
+// process itself, the operator of the bridge, the owner of the duty that
+// opened it, and anyone with the operator role on every agent of its
+// members, as the page at /ui decides for a run. It returns nil to allow, and an error that wraps
 // fw.ErrForbidden, or the error of a decision point that did not answer.
 func (s *Store) allows(ctx context.Context, rec *record) error {
 	p := fw.PrincipalFrom(ctx)
-	if p == nil || (p.Subject != "" && p.Subject == rec.Operator) {
+	if p == nil || rec.operatedBy(p.Subject) {
 		return nil
 	}
 	seen := map[string]bool{}
@@ -45,13 +45,19 @@ func (s *Store) allows(ctx context.Context, rec *record) error {
 	return nil
 }
 
+// operatedBy reports whether subject is the operator of the bridge, or
+// the owner of the duty that opened it.
+func (rec *record) operatedBy(subject string) bool {
+	return subject != "" && (subject == rec.Operator || subject == rec.Owner)
+}
+
 // listed reports whether the list of the caller in ctx holds a bridge:
 // a bridge of the caller, of a team of the caller that the caller can
 // see, or, when admin is true, any bridge that the caller can see. The
 // caller of a list decides admin once, with isAdmin.
 func (s *Store) listed(ctx context.Context, rec *record, admin bool) (bool, error) {
 	p := fw.PrincipalFrom(ctx)
-	if p == nil || (p.Subject != "" && p.Subject == rec.Operator) {
+	if p == nil || rec.operatedBy(p.Subject) {
 		return true, nil
 	}
 	if !admin && !teams.Shares(rec.Teams, teams.Of(teams.Patterns(s.a.Config()), p)) {

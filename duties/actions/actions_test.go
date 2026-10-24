@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -261,6 +262,11 @@ func TestOpenFromAPlaybook(t *testing.T) {
 	}
 	if reqs := f.queued("migrator", 1); len(reqs) != 1 || reqs[0].Principal != "duty:weekly" {
 		t.Fatalf("the seat requests = %+v", reqs)
+	}
+	// The owner finds the bridge in the list, as its operator would.
+	_, list := f.send(t, http.MethodGet, "/v1/bridges", "alice", "")
+	if !strings.Contains(fmt.Sprint(list["bridges"]), m[1]) {
+		t.Fatalf("the list of the owner = %v", list)
 	}
 	for _, c := range []struct{ do, want string }{
 		{`{"open": {"playbook": "none"}}`, "do.open.playbook: No playbook that you can read is named none."},
