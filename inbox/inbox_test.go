@@ -176,9 +176,16 @@ func TestInbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var routed Answer
+	var routed struct {
+		Items []map[string]any `json:"items"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&routed); err != nil || resp.StatusCode != http.StatusOK || len(routed.Items) != 6 {
 		t.Fatalf("GET /v1/inbox = %d %+v %v", resp.StatusCode, routed, err)
+	}
+	for _, key := range []string{"kind", "run", "duty", "agent", "bridge", "text", "since"} {
+		if _, ok := routed.Items[5][key]; !ok {
+			t.Errorf("an item of the route lacks %s: %v", key, routed.Items[5])
+		}
 	}
 	resp.Body.Close()
 

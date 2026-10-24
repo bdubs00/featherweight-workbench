@@ -50,14 +50,14 @@ const (
 const FailuresFor = 24 * time.Hour
 
 // Item is one thing that needs the caller: its kind, the run, the duty,
-// the agent, and the bridge that it concerns, as far as they apply, a
-// text in words, and since when it waits.
+// the agent, and the bridge that it concerns, each "" when it does not
+// apply, a text in words, and since when it waits.
 type Item struct {
 	Kind   string    `json:"kind"`
-	Run    string    `json:"run,omitempty"`
-	Duty   string    `json:"duty,omitempty"`
-	Agent  string    `json:"agent,omitempty"`
-	Bridge string    `json:"bridge,omitempty"`
+	Run    string    `json:"run"`
+	Duty   string    `json:"duty"`
+	Agent  string    `json:"agent"`
+	Bridge string    `json:"bridge"`
 	Text   string    `json:"text"`
 	Since  time.Time `json:"since"`
 }
