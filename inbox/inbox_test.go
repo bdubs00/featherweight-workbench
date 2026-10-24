@@ -157,6 +157,12 @@ func TestInbox(t *testing.T) {
 		t.Fatalf("the kinds = %v\n%+v", kinds, ans.Items)
 	}
 	ap, q, fail, paused := ans.Items[0], ans.Items[1], ans.Items[2], ans.Items[5]
+	if pending, _ := a.Get(context.Background(), r1.ID); pending == nil || pending.Pending == nil || ap.Approval != pending.Pending.ID || ap.Approval == "" {
+		t.Fatalf("the approval id of the item = %q, want the pending approval of %s", ap.Approval, r1.ID)
+	}
+	if q.Approval == "" {
+		t.Fatalf("the question has no approval id: %+v", q)
+	}
 	if ap.Run != r1.ID || ap.Duty != "report" || ap.Bridge != "B1" || ap.Agent != "triage" || !strings.Contains(ap.Text, "the agent triage asks to run deploy. Rule: ask destructive.") || ap.Since.IsZero() {
 		t.Fatalf("the approval = %+v", ap)
 	}
@@ -182,7 +188,7 @@ func TestInbox(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&routed); err != nil || resp.StatusCode != http.StatusOK || len(routed.Items) != 6 {
 		t.Fatalf("GET /v1/inbox = %d %+v %v", resp.StatusCode, routed, err)
 	}
-	for _, key := range []string{"kind", "run", "duty", "agent", "bridge", "text", "since"} {
+	for _, key := range []string{"kind", "run", "duty", "agent", "bridge", "approval", "text", "since"} {
 		if _, ok := routed.Items[5][key]; !ok {
 			t.Errorf("an item of the route lacks %s: %v", key, routed.Items[5])
 		}

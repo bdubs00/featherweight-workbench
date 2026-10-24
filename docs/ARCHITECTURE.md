@@ -3250,7 +3250,7 @@ A read is a valid body. A write replaces the settings. A field of `send` that th
 `GET /v1/inbox` and the MCP tool `inbox` answer what needs the caller now, the items of Activity:
 
 ```json
-{"items": [{"kind": "approval", "run": "01K...", "duty": "daily-report", "agent": "triage", "bridge": "", "text": "Daily report: the agent triage asks to run git.push. Rule: ask git.*.", "since": "2026-10-23T13:05:00Z"}]}
+{"items": [{"kind": "approval", "run": "01K...", "duty": "daily-report", "agent": "triage", "bridge": "", "approval": "ap-1", "text": "Daily report: the agent triage asks to run git.push. Rule: ask git.*.", "since": "2026-10-23T13:05:00Z"}]}
 ```
 
 | Kind | Source |
@@ -3260,7 +3260,7 @@ A read is a valid body. A write replaces the settings. A field of `send` that th
 | `failure` | A failed run of a duty in the last day, of a duty that the caller owns or whose `notify.failure` names the caller |
 | `paused` | A duty that the caller owns and that paused itself |
 
-The inbox keeps no truth of its own. The runs come from the list `needsYou` of the home of the dashboard (`dashboard.HomeOf`), which every surface shows. A run of a duty acts as the duty, so the home of the owner does not hold it: the inbox adds each run of a duty that waits to the inbox of the people of its `notify.needsYou` and of its owner. The questions of the seats come from `bridges.Store.Waiting`, the seats whose presence is `needs-you`, as the count `needsYou` of a bridge counts them. The duties come from their store. A duty that a person paused does not need the person, so it is no item. Approvals and questions come first, the oldest first, then the failures, and then the paused duties. The existing tools `approve` and `send` answer the items.
+The inbox keeps no truth of its own. The runs come from the list `needsYou` of the home of the dashboard (`dashboard.HomeOf`), which every surface shows. A run of a duty acts as the duty, so the home of the owner does not hold it: the inbox adds each run of a duty that waits to the inbox of the people of its `notify.needsYou` and of its owner. The questions of the seats come from `bridges.Store.Waiting`, the seats whose presence is `needs-you`, as the count `needsYou` of a bridge counts them. The duties come from their store. A duty that a person paused does not need the person, so it is no item. Approvals and questions come first, the oldest first, then the failures, and then the paused duties. The existing tools `approve` and `send` answer the items. `approval` is the id of the approval that the run waits for, so a surface decides it without a read of the run. A question of a seat of a bridge has no such id, and its `approval` is `""`.
 
 ### 23.4 The decisions while away
 

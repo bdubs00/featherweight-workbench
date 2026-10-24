@@ -53,13 +53,17 @@ const FailuresFor = 24 * time.Hour
 // the agent, and the bridge that it concerns, each "" when it does not
 // apply, a text in words, and since when it waits.
 type Item struct {
-	Kind   string    `json:"kind"`
-	Run    string    `json:"run"`
-	Duty   string    `json:"duty"`
-	Agent  string    `json:"agent"`
-	Bridge string    `json:"bridge"`
-	Text   string    `json:"text"`
-	Since  time.Time `json:"since"`
+	Kind   string `json:"kind"`
+	Run    string `json:"run"`
+	Duty   string `json:"duty"`
+	Agent  string `json:"agent"`
+	Bridge string `json:"bridge"`
+	// Approval is the id of the approval that the run waits for, so a
+	// surface decides it without a read of the run. A question of a seat
+	// of a bridge has none.
+	Approval string    `json:"approval"`
+	Text     string    `json:"text"`
+	Since    time.Time `json:"since"`
 }
 
 // Answer is the inbox of the caller: approvals and questions first, the
@@ -141,6 +145,7 @@ func runItem(r *fw.Run) Item {
 		it.Text = title + ": the run waits for you."
 		return it
 	}
+	it.Approval = p.ID
 	if !p.RequestedAt.IsZero() {
 		it.Since = p.RequestedAt
 	}
@@ -167,6 +172,7 @@ func seatItem(w bridges.Waiting) Item {
 		it.Text = fmt.Sprintf("%s asks in %s: %s", w.Handle, w.Title, oneLine(w.Text, 300))
 		return it
 	}
+	it.Approval = w.Approval
 	it.Text = fmt.Sprintf("%s in %s waits for a decision.", w.Handle, w.Title)
 	return it
 }
@@ -267,7 +273,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 	return []mcp.Tool{mcp.NewTool(&sdk.Tool{
 		Name:        ToolInbox,
 		Title:       "What needs me",
-		Description: "List what needs the person now, the items of Activity: each run that waits for an approval or an answer, each question of a seat of a bridge, each failed run of a duty of the person in the last day, and each duty of the person that paused itself. Answer an approval with approve and a question with approve or send. Each item has kind (approval, question, failure, paused), run, duty, agent, bridge, text, and since.",
+		Description: "List what needs the person now, the items of Activity: each run that waits for an approval or an answer, each question of a seat of a bridge, each failed run of a duty of the person in the last day, and each duty of the person that paused itself. Answer an approval with approve and a question with approve or send. Each item has kind (approval, question, failure, paused), run, duty, agent, bridge, approval (the id of the approval that the run waits for), text, and since.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {

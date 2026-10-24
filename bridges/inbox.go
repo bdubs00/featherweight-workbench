@@ -13,7 +13,7 @@ import (
 // Waiting is a seat of an open bridge that needs a person: the bridge and
 // its title, the seat, its agent, and its newest run. Question is the seq
 // of the question of the seat, or 0 when its run waits for an approval
-// instead. Text is the text of the question, and At when it came, or when
+// instead, with the id of the approval in Approval. Text is the text of the question, and At when it came, or when
 // the run began to wait.
 type Waiting struct {
 	Bridge   string    `json:"bridge"`
@@ -21,6 +21,7 @@ type Waiting struct {
 	Handle   string    `json:"handle"`
 	Agent    string    `json:"agent"`
 	Run      string    `json:"run,omitempty"`
+	Approval string    `json:"approval,omitempty"`
 	Question uint64    `json:"question,omitempty"`
 	Text     string    `json:"text,omitempty"`
 	At       time.Time `json:"at"`
@@ -62,8 +63,11 @@ func (s *Store) Waiting(ctx context.Context) ([]Waiting, error) {
 				}
 			} else if r := runs[w.Run]; r != nil {
 				w.At = r.UpdatedAt
-				if r.Pending != nil && !r.Pending.RequestedAt.IsZero() {
-					w.At = r.Pending.RequestedAt
+				if r.Pending != nil {
+					w.Approval = r.Pending.ID
+					if !r.Pending.RequestedAt.IsZero() {
+						w.At = r.Pending.RequestedAt
+					}
 				}
 			}
 			out = append(out, w)
