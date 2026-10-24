@@ -41,6 +41,7 @@ import (
 	_ "github.com/bdubs00/featherweight-workbench/duties/away"
 	_ "github.com/bdubs00/featherweight-workbench/duties/events"
 	_ "github.com/bdubs00/featherweight-workbench/faces"
+	_ "github.com/bdubs00/featherweight-workbench/inbox"
 	_ "github.com/bdubs00/featherweight-workbench/notify"
 	_ "github.com/bdubs00/featherweight-workbench/pages"
 	_ "github.com/bdubs00/featherweight-workbench/routines"
