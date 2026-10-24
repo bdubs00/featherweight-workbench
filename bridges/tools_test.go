@@ -53,9 +53,15 @@ func TestToolsAreListed(t *testing.T) {
 	if !strings.Contains(tools[ToolList].Description, "before you propose or open work") || !strings.Contains(tools[ToolOpen].Description, "Read the open bridges with bridge_list first") {
 		t.Fatalf("bridge_list = %q, bridge_open = %q", tools[ToolList].Description, tools[ToolOpen].Description)
 	}
-	// A run never pins a message: only a person does, on the route.
-	if schema, err := json.Marshal(tools[ToolPost].InputSchema); err != nil || strings.Contains(string(schema), "pinned") {
-		t.Fatalf("bridge_post takes pinned: %s %v", schema, err)
+	// A run never pins a message or sends files: only a person does.
+	if schema, err := json.Marshal(tools[ToolPost].InputSchema); err != nil || !strings.Contains(string(schema), `"pinned":{"description":"For a person:`) ||
+		!strings.Contains(string(schema), `"files":{"description":"For a person:`) {
+		t.Fatalf("bridge_post = %s %v", schema, err)
+	}
+	for _, name := range []string{ToolPatch, ToolMemberPatch, ToolReact, ToolMarkRead} {
+		if tools[name] == nil || !strings.HasPrefix(tools[name].Description, "For a person:") {
+			t.Fatalf("tool %s = %+v", name, tools[name])
+		}
 	}
 }
 
@@ -110,16 +116,20 @@ func TestToolsOfASeat(t *testing.T) {
 	}{
 		{"a run of no bridge", map[string]any{"text": "hi"}, metaOf("r-stranger", "migrator", ""), "name the bridge"},
 		{"a run of no seat", map[string]any{"bridge": it.ID, "text": "hi"}, metaOf("r-stranger", "migrator", ""), "no member of the bridge"},
-		{"no run in _meta", map[string]any{"bridge": it.ID, "text": "hi"}, nil, "A person uses the routes"},
+		{"the token with no run in _meta, as the route decides", map[string]any{"bridge": it.ID, "text": "hi"}, nil, "Forbidden: the bridge " + it.ID + " needs its operator"},
+		{"a run that sends files", map[string]any{"text": "hi", "files": []map[string]any{{"name": "a.txt", "data": "aGk="}}}, metaOf("r-mig", "migrator", ""), "files are for a person"},
 	} {
 		res := callTool(t, fleetMCP, ToolPost, c.args, c.meta)
 		if !res.IsError || !strings.Contains(textOf(res), c.want) {
 			t.Errorf("%s = %s", c.name, textOf(res))
 		}
 	}
-	// A person who sends the keys of a run is no run.
+	// A person who sends the keys of a run is no run: the post is the post
+	// of the person, as on the route.
 	bob := connectMCP(t, a, "bob")
-	if res := callTool(t, bob, ToolPost, map[string]any{"bridge": it.ID, "text": "hi"}, metaOf("r-mig", "migrator", "")); !res.IsError || !strings.Contains(textOf(res), "A person uses the routes") {
+	res = callTool(t, bob, ToolPost, map[string]any{"bridge": it.ID, "text": "hi"}, metaOf("r-mig", "migrator", ""))
+	structured(t, res, &m)
+	if res.IsError || m.From.Kind != KindPerson || m.From.Name != "bob" {
 		t.Fatalf("a person with _meta = %s", textOf(res))
 	}
 }

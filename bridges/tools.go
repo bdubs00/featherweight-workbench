@@ -2,11 +2,15 @@ package bridges
 
 // This file holds the MCP tools of the bridges (docs/ARCHITECTURE.md
 // section 18.11), which the package adds to the MCP server of the
-// workbench through mcp.RegisterTools. They are for the runs of the fleet:
+// workbench through mcp.RegisterTools. Most are for the runs of the fleet:
 // the MCP client of a worker names its run in _meta, and the server trusts
 // _meta only from the static token of the fleet (mcp.CallRun). A seat
 // reads and posts in its own bridge, and the manager opens bridges and
-// changes them as far as the operator delegates. A person uses the routes.
+// changes them as far as the operator delegates. A person who calls the
+// server with a credential of its own posts with bridge_post, with files
+// and replies, and does with bridge_patch, bridge_member_patch,
+// bridge_react, and bridge_mark_read what the page does through the
+// routes, with the same Go functions (people.go, section 24.5).
 
 import (
 	"context"
@@ -17,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -31,6 +36,10 @@ const (
 	ToolAddMember    = "bridge_add_member"
 	ToolRemoveMember = "bridge_remove_member"
 	ToolClose        = "bridge_close"
+	ToolPatch        = "bridge_patch"
+	ToolMemberPatch  = "bridge_member_patch"
+	ToolReact        = "bridge_react"
+	ToolMarkRead     = "bridge_mark_read"
 )
 
 const bridgeArg = `"bridge":{"type":"string","description":"The id of the bridge. Without it, the bridge of your run: the batch bridge:<id> of the run, or the one bridge that your run manages."}`
@@ -60,7 +69,10 @@ const (
 		"text":{"type":"string","minLength":1,"description":"The message, in Markdown."},
 		"to":{"type":"array","items":{"type":"string"},"description":"The handles of the teammates that the message addresses, such as [\"reviewer\"]. Without it, the message goes to every active member."},
 		"ask":{"type":"boolean","description":"Ask the operator, the people of the bridge: the message is a question that waits for their answer. It goes to the operator alone unless to names teammates too. The answer reaches you as a message and starts your next turn, so end your turn after you ask."},
-		"choices":{"type":"array","items":{"type":"string","maxLength":60},"minItems":2,"maxItems":4,"description":"With ask, the answers that the operator picks from: two to four short strings, such as [\"Yes\", \"No\"]. Leave it out when the operator answers in words."}
+		"choices":{"type":"array","items":{"type":"string","maxLength":60},"minItems":2,"maxItems":4,"description":"With ask, the answers that the operator picks from: two to four short strings, such as [\"Yes\", \"No\"]. Leave it out when the operator answers in words."},
+		"replyTo":{"type":"integer","minimum":1,"description":"For a person: the seq of the entry that the message answers, such as a question of a seat."},
+		"pinned":{"type":"boolean","description":"For a person: pin the message, so it survives every compaction of the runs of the seats."},
+		"files":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","description":"The name of the file, such as notes.md."},"data":{"type":"string","contentEncoding":"base64","description":"The bytes of the file in base64."}},"required":["name","data"]},"description":"For a person: files that the message carries to the members, as the page sends them."}
 	},"required":["text"]}`
 
 	listSchema = `{"type":"object","properties":{}}`
@@ -97,6 +109,32 @@ const (
 	},"required":["handle"]}`
 
 	closeSchema = `{"type":"object","properties":{` + bridgeArg + `}}`
+
+	personBridgeArg = `"bridge":{"type":"string","minLength":1,"description":"The id of the bridge, as bridge_list or the page names it."}`
+
+	patchSchema = `{"type":"object","properties":{` + personBridgeArg + `,
+		"title":{"type":"string","description":"A new title."},
+		"state":{"type":"string","enum":["open","closed"],"description":"closed closes the bridge, and open opens it again. A close cancels nothing."},
+		"delegation":{"type":"object","properties":{"approve":{"type":"boolean"},"budget":{"type":"boolean"},"members":{"type":"boolean"},"report":{"type":"boolean"}},"description":"What the manager can do in the bridge. A missing key stays."},
+		"caps":{"type":"object","properties":{"maxMessages":{"type":"integer","minimum":1},"maxFanoutPerMinute":{"type":"integer","minimum":1},"maxPairMessages":{"type":"integer","minimum":1},"maxTurns":{"type":"integer","minimum":1}},"description":"The caps of the fan-out. A missing key stays, and a raised cap delivers again."}
+	},"required":["bridge"]}`
+
+	memberPatchSchema = `{"type":"object","properties":{` + personBridgeArg + `,
+		"handle":{"type":"string","minLength":1,"description":"The handle of the seat."},
+		"muted":{"type":"boolean","description":"true mutes the seat, so no message reaches it, and false unmutes it."},
+		"task":{"type":"string","description":"A new task for the seat. A seat whose run failed or was canceled gets a new run, also with the same task."},
+		"continue":{"type":"boolean","description":"Continue the newest run of a seat that stopped at a limit of its budget."}
+	},"required":["bridge","handle"]}`
+
+	reactSchema = `{"type":"object","properties":{` + personBridgeArg + `,
+		"seq":{"type":"integer","minimum":1,"description":"The seq of the entry."},
+		"reaction":{"type":"string","enum":["up","down","heart"],"description":"The reaction."},
+		"note":{"type":"string","description":"A short note with the reaction, for the agent that wrote the entry."}
+	},"required":["bridge","seq","reaction"]}`
+
+	markReadSchema = `{"type":"object","properties":{` + personBridgeArg + `,
+		"seq":{"type":"integer","minimum":0,"description":"The newest entry that you read. A seq past the newest entry marks the newest one."}
+	},"required":["bridge","seq"]}`
 )
 
 type (
@@ -107,11 +145,32 @@ type (
 		Seq    uint64 `json:"seq,omitempty"`
 	}
 	postArgs struct {
-		Bridge  string   `json:"bridge,omitempty"`
-		Text    string   `json:"text"`
-		To      []string `json:"to,omitempty"`
-		Ask     bool     `json:"ask,omitempty"`
-		Choices []string `json:"choices,omitempty"`
+		Bridge  string            `json:"bridge,omitempty"`
+		Text    string            `json:"text"`
+		To      []string          `json:"to,omitempty"`
+		Ask     bool              `json:"ask,omitempty"`
+		Choices []string          `json:"choices,omitempty"`
+		ReplyTo *uint64           `json:"replyTo,omitempty"`
+		Pinned  bool              `json:"pinned,omitempty"`
+		Files   []native.FileBody `json:"files,omitempty"`
+	}
+	patchArgs struct {
+		Bridge string `json:"bridge"`
+		BridgePatch
+	}
+	memberPatchArgs struct {
+		Bridge string `json:"bridge"`
+		Handle string `json:"handle"`
+		MemberPatch
+	}
+	reactArgs struct {
+		Bridge string `json:"bridge"`
+		Seq    uint64 `json:"seq"`
+		ReactSpec
+	}
+	markReadArgs struct {
+		Bridge string `json:"bridge"`
+		Seq    uint64 `json:"seq"`
 	}
 	addArgs struct {
 		Bridge string `json:"bridge,omitempty"`
@@ -136,6 +195,10 @@ type (
 	}
 	listResult struct {
 		Bridges []Item `json:"bridges"`
+	}
+	markReadResult struct {
+		Bridge string `json:"bridge"`
+		Read   uint64 `json:"read"`
 	}
 )
 
@@ -163,7 +226,7 @@ func tools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolPost,
 			Title:       "Post to the channel",
-			Description: "Post a message to the channel of your bridge during your work: to address a teammate with to, or to ask the operator, the people of the bridge, with ask true and, for a pick, choices. A question waits for the operator, and the answer reaches you as a message that starts your next turn, so end your turn with a one-line status after you ask. Your final answer of a turn reaches the channel on its own, so do not post it here. A teammate gets the message as a follow-up.",
+			Description: "Post a message to the channel of your bridge during your work: to address a teammate with to, or to ask the operator, the people of the bridge, with ask true and, for a pick, choices. A question waits for the operator, and the answer reaches you as a message that starts your next turn, so end your turn with a one-line status after you ask. Your final answer of a turn reaches the channel on its own, so do not post it here. A teammate gets the message as a follow-up. A person who calls with a credential of its own posts as the page does: it names the bridge, and it can add replyTo, pinned, and files.",
 			InputSchema: json.RawMessage(postSchema),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: &no, OpenWorldHint: &no},
 		}, t.post),
@@ -195,6 +258,34 @@ func tools(s *mcp.Server) []mcp.Tool {
 			InputSchema: json.RawMessage(removeSchema),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: &yes, IdempotentHint: true, OpenWorldHint: &no},
 		}, t.remove),
+		mcp.NewTool(&sdk.Tool{
+			Name:        ToolPatch,
+			Title:       "Change a bridge",
+			Description: "For a person: change a bridge as the page does. Change its title, close it or open it again, change what the manager can do (delegation), or change the caps of its fan-out. A close cancels nothing. It needs the operator of the bridge, or the operator role on the agent of each seat.",
+			InputSchema: json.RawMessage(patchSchema),
+			Annotations: &sdk.ToolAnnotations{DestructiveHint: &yes, IdempotentHint: true, OpenWorldHint: &no},
+		}, t.patchBridge),
+		mcp.NewTool(&sdk.Tool{
+			Name:        ToolMemberPatch,
+			Title:       "Change a seat",
+			Description: "For a person: change a seat of a bridge as the page does. Mute or unmute it, give it a new task, or continue its run that stopped at a limit of its budget.",
+			InputSchema: json.RawMessage(memberPatchSchema),
+			Annotations: &sdk.ToolAnnotations{DestructiveHint: &no, OpenWorldHint: &no},
+		}, t.patchMember),
+		mcp.NewTool(&sdk.Tool{
+			Name:        ToolReact,
+			Title:       "React to an entry",
+			Description: "For a person: react to an entry of the channel of a bridge with up, down, or heart, and an optional note. A second reaction of the same kind changes nothing.",
+			InputSchema: json.RawMessage(reactSchema),
+			Annotations: &sdk.ToolAnnotations{DestructiveHint: &no, IdempotentHint: true, OpenWorldHint: &no},
+		}, t.react),
+		mcp.NewTool(&sdk.Tool{
+			Name:        ToolMarkRead,
+			Title:       "Mark a channel read",
+			Description: "For a person: mark the channel of a bridge read up to an entry, so its unread count goes down, as the page does. A smaller seq than the mark leaves the mark.",
+			InputSchema: json.RawMessage(markReadSchema),
+			Annotations: &sdk.ToolAnnotations{DestructiveHint: &no, IdempotentHint: true, OpenWorldHint: &no},
+		}, t.markRead),
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolClose,
 			Title:       "Close bridge",
@@ -425,6 +516,12 @@ func toText(to []string) string {
 }
 
 func (t *toolSet) post(ctx context.Context, _ *sdk.CallToolRequest, in postArgs) (*sdk.CallToolResult, any, error) {
+	if _, ok := mcp.CallRun(ctx); !ok {
+		return t.postAsPerson(ctx, in), nil, nil
+	}
+	if in.ReplyTo != nil || in.Pinned || len(in.Files) > 0 {
+		return mcp.ErrorResult("Invalid request: replyTo, pinned, and files are for a person; a run posts text, to teammates or as a question."), nil, nil
+	}
 	s, c, fail := t.resolve(ctx, in.Bridge)
 	if fail != nil {
 		return fail, nil, nil
@@ -580,4 +677,101 @@ func (t *toolSet) close(ctx context.Context, _ *sdk.CallToolRequest, in closeArg
 		return toolError(err), nil, nil
 	}
 	return mcp.Result(fmt.Sprintf("Closed the bridge %s. Nothing was canceled. Write the report in the wiki page %s with pages_write.", rec.ID, reportPath(rec.ID)), it), nil, nil
+}
+
+// runUses is the answer of a tool of a person to a call of a run of the
+// fleet.
+const runUses = "This tool does what a person does on the page of a bridge, with the credential of the person. A run of the fleet changes a bridge with bridge_post, bridge_close, bridge_add_member, and bridge_remove_member, as far as the operator delegates."
+
+// person returns the bridges for a call of a person, who calls with a
+// credential of its own, or an error result for a call of a run of the
+// fleet.
+func (t *toolSet) person(ctx context.Context) (*Store, *sdk.CallToolResult) {
+	s := Of(t.a)
+	if s == nil {
+		return nil, mcp.ErrorResult("The bridges are off in this process.")
+	}
+	if _, ok := mcp.CallRun(ctx); ok {
+		return nil, mcp.ErrorResult(runUses)
+	}
+	s.learn(fw.PrincipalFrom(ctx))
+	return s, nil
+}
+
+// postAsPerson is bridge_post for a person: the post of the route, with
+// replies, pins, and files, in the bridge that the call names.
+func (t *toolSet) postAsPerson(ctx context.Context, in postArgs) *sdk.CallToolResult {
+	s, fail := t.person(ctx)
+	if fail != nil {
+		return fail
+	}
+	id := strings.TrimSpace(in.Bridge)
+	switch {
+	case id == "":
+		return mcp.ErrorResult("Invalid request: name the bridge with the argument bridge. bridge_list and the page name the bridges.")
+	case in.Ask || len(in.Choices) > 0:
+		return mcp.ErrorResult("Invalid request: ask and choices are for a seat that asks the operator; a person answers a question with replyTo.")
+	}
+	m, err := s.Post(ctx, id, PostSpec{Text: in.Text, To: in.To, ReplyTo: in.ReplyTo, Pinned: in.Pinned, Files: in.Files})
+	if err != nil {
+		return toolError(err)
+	}
+	text := fmt.Sprintf("Posted message %d to the bridge %s%s.", m.Seq, id, toText(m.To))
+	if n := len(m.Files); n > 0 {
+		text += fmt.Sprintf(" It carries %s.", plural(n, "file", "files"))
+	}
+	return mcp.Result(text, m)
+}
+
+func (t *toolSet) patchBridge(ctx context.Context, _ *sdk.CallToolRequest, in patchArgs) (*sdk.CallToolResult, any, error) {
+	s, fail := t.person(ctx)
+	if fail != nil {
+		return fail, nil, nil
+	}
+	it, err := s.Patch(ctx, strings.TrimSpace(in.Bridge), in.BridgePatch)
+	if err != nil {
+		return toolError(err), nil, nil
+	}
+	return mcp.Result(fmt.Sprintf("The bridge %s %q is %s, with %s.", it.ID, it.Title, it.State, plural(it.MemberCount, "member", "members")), it), nil, nil
+}
+
+func (t *toolSet) patchMember(ctx context.Context, _ *sdk.CallToolRequest, in memberPatchArgs) (*sdk.CallToolResult, any, error) {
+	s, fail := t.person(ctx)
+	if fail != nil {
+		return fail, nil, nil
+	}
+	m, err := s.PatchMember(ctx, strings.TrimSpace(in.Bridge), strings.TrimSpace(in.Handle), in.MemberPatch)
+	if err != nil {
+		return toolError(err), nil, nil
+	}
+	state := "unmuted"
+	if m.Muted {
+		state = "muted"
+	}
+	return mcp.Result(fmt.Sprintf("The seat %s (%s) of the bridge %s is %s, %s. Its task: %s", m.Handle, m.Agent, in.Bridge, m.Presence, state, oneLine(m.Task, 300)), m), nil, nil
+}
+
+func (t *toolSet) react(ctx context.Context, _ *sdk.CallToolRequest, in reactArgs) (*sdk.CallToolResult, any, error) {
+	s, fail := t.person(ctx)
+	if fail != nil {
+		return fail, nil, nil
+	}
+	m, err := s.React(ctx, strings.TrimSpace(in.Bridge), in.Seq, in.ReactSpec)
+	if err != nil {
+		return toolError(err), nil, nil
+	}
+	return mcp.Result(fmt.Sprintf("Reacted %s to entry %d of the bridge %s.", strings.ToLower(strings.TrimSpace(in.Reaction)), m.Seq, in.Bridge), m), nil, nil
+}
+
+func (t *toolSet) markRead(ctx context.Context, _ *sdk.CallToolRequest, in markReadArgs) (*sdk.CallToolResult, any, error) {
+	s, fail := t.person(ctx)
+	if fail != nil {
+		return fail, nil, nil
+	}
+	id := strings.TrimSpace(in.Bridge)
+	read, err := s.MarkRead(ctx, id, in.Seq)
+	if err != nil {
+		return toolError(err), nil, nil
+	}
+	return mcp.Result(fmt.Sprintf("You read the bridge %s up to entry %d.", id, read), markReadResult{Bridge: id, Read: read}), nil, nil
 }
