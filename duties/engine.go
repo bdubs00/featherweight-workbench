@@ -724,7 +724,7 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 	slot := e.Slot.UTC().Format(time.RFC3339Nano)
 	input := fill(d.Do.Message(), placeholders(d, e, last))
 	md := map[string]string{MetaDuty: d.Name, MetaSlot: slot, fw.MetaBatch: BatchOf(d.Name)}
-	if title := fw.TitleFrom(input); title != "" {
+	if title := fw.TitleFrom(fill(d.Do.Message(), titleValues(d, e, last))); title != "" {
 		md[fw.MetaTitle] = title
 	}
 	key := "duty/" + d.Name + "/" + e.ID

@@ -8,6 +8,7 @@ package duties
 // comes from the record alone.
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -40,6 +41,36 @@ func placeholders(d *Duty, e entry, last *RunEntry) map[string]string {
 		v["{last.title}"], v["{last.run}"], v["{last.state}"] = orNone(last.Title), last.Run, last.State
 	}
 	return v
+}
+
+// titleValues are the values of the placeholders for the title of a run.
+// The agent reads {found} and {event} as JSON, but a person reads the
+// title, so the title takes the count of the items and the name of the
+// event instead.
+func titleValues(d *Duty, e entry, last *RunEntry) map[string]string {
+	v := placeholders(d, e, last)
+	if e.Found > 0 {
+		v["{found}"] = fmt.Sprintf("%d %s", e.Found, plural(e.Found, "item", "items"))
+	}
+	v["{event}"] = eventName(e.Event)
+	return v
+}
+
+// eventName names an event in a few words: the first of its title, path,
+// name, and kind, else "an event".
+func eventName(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return none
+	}
+	var body map[string]any
+	if json.Unmarshal([]byte(raw), &body) == nil {
+		for _, k := range []string{"title", "path", "name", "kind"} {
+			if s, ok := body[k].(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return "an event"
 }
 
 func orNone(s string) string {
