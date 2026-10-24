@@ -209,6 +209,14 @@ func TestWriteRules(t *testing.T) {
 			t.Errorf("problems of %+v = %q, want %q", c.ch, got, c.want)
 		}
 	}
+	// A webhook on a host that the operator lists can use http, and one on
+	// another host cannot.
+	if _, err := f.s.Put(as("bob"), Body{Channels: []Channel{{Kind: KindWebhook, URL: new("http://sink.lab.internal:8080/hook")}}}, ""); err != nil {
+		t.Errorf("an http webhook on a listed host = %v", err)
+	}
+	if got := f.problems(t, "alice", Body{Channels: []Channel{{Kind: KindWebhook, URL: new("http://example.com/hook")}}}); len(got) != 1 || got[0] != "channels[0].url: Write an https address." {
+		t.Errorf("an http webhook on a public host = %q", got)
+	}
 	two := []Channel{{ID: "x", Kind: KindSlack, URL: new(slackURL)}, {ID: "x", Kind: KindSlack, URL: new(slackURL)}}
 	if got := f.problems(t, "alice", Body{Channels: two}); len(got) != 1 || got[0] != "channels[1].id: The id x names two channels." {
 		t.Errorf("two channels of one id = %q", got)

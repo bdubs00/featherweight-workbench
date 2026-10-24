@@ -682,10 +682,12 @@ func keep(v, stored *string) string {
 // fit, in words, or "". Slack is on hooks.slack.com, Discord on
 // discord.com or discordapp.com under /api/webhooks/, and each of the
 // four kinds uses https. A host on a private address needs a glob of
-// workbench.notifications.hosts.
+// workbench.notifications.hosts. A webhook or a Teams workflow on such a
+// host can also use http, because the operator vouches for its network.
 func (s *Service) addressProblem(kind, raw string) string {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+	plain := err == nil && u.Scheme == "http" && (kind == KindWebhook || kind == KindTeams) && s.cfg.listed(strings.ToLower(u.Hostname()))
+	if err != nil || (u.Scheme != "https" && !plain) || u.Hostname() == "" {
 		switch kind {
 		case KindSlack:
 			return "Write the https address of an incoming webhook of Slack, on hooks.slack.com."
