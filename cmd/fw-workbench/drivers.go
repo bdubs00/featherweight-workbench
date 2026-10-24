@@ -39,6 +39,7 @@ import (
 	_ "github.com/bdubs00/featherweight-kernel/authn/oidc"
 	_ "github.com/bdubs00/featherweight-workbench/bridges"
 	_ "github.com/bdubs00/featherweight-workbench/duties/away"
+	_ "github.com/bdubs00/featherweight-workbench/duties/events"
 	_ "github.com/bdubs00/featherweight-workbench/faces"
 	_ "github.com/bdubs00/featherweight-workbench/notify"
 	_ "github.com/bdubs00/featherweight-workbench/pages"
