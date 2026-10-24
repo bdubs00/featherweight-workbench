@@ -87,6 +87,23 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 		items = append(items, runItem(it.Run))
 		seen[it.ID] = true
 	}
+	var mine []Item
+	asks := map[string]bool{}
+	if svc := duties.Of(a); svc != nil {
+		if p := fw.PrincipalFrom(ctx); p != nil && p.Subject != "" {
+			if mine, asks, err = dutyItems(ctx, svc, p.Subject, now); err != nil {
+				return Answer{}, err
+			}
+		}
+	}
+	// A run of a duty acts as the duty, so the home of the owner does not
+	// hold it. Its questions go to the people of notify.needsYou.
+	for _, r := range runs {
+		if !seen[r.ID] && r.Parent == "" && asks[duties.NameOf(r)] && dashboard.StatusOf(r) == dashboard.StatusNeedsYou {
+			items = append(items, runItem(r))
+			seen[r.ID] = true
+		}
+	}
 	if st := bridges.Of(a); st != nil {
 		waiting, err := st.Waiting(ctx)
 		if err != nil {
@@ -102,15 +119,7 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 			}
 		}
 	}
-	if svc := duties.Of(a); svc != nil {
-		if p := fw.PrincipalFrom(ctx); p != nil && p.Subject != "" {
-			mine, err := dutyItems(ctx, svc, p.Subject, now)
-			if err != nil {
-				return Answer{}, err
-			}
-			items = append(items, mine...)
-		}
-	}
+	items = append(items, mine...)
 	sort.SliceStable(items, func(i, j int) bool {
 		if rank[items[i].Kind] != rank[items[j].Kind] {
 			return rank[items[i].Kind] < rank[items[j].Kind]
@@ -164,15 +173,21 @@ func seatItem(w bridges.Waiting) Item {
 
 // dutyItems lists the failed runs of the last day and the duties that
 // paused themselves, of the duties that the person owns or whose
-// notify.failure names the person.
-func dutyItems(ctx context.Context, svc *duties.Service, subject string, now time.Time) ([]Item, error) {
+// notify.failure names the person. It also returns the duties whose
+// questions go to the person: the person owns them, or their
+// notify.needsYou names the person.
+func dutyItems(ctx context.Context, svc *duties.Service, subject string, now time.Time) ([]Item, map[string]bool, error) {
 	recs, err := svc.Records(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var out []Item
+	asks := map[string]bool{}
 	for _, r := range recs {
 		d := r.Duty
+		if d.Owner == subject || (d.Notify != nil && slices.Contains(d.Notify.NeedsYou, subject)) {
+			asks[d.Name] = true
+		}
 		if !concerns(d, subject) {
 			continue
 		}
@@ -181,7 +196,7 @@ func dutyItems(ctx context.Context, svc *duties.Service, subject string, now tim
 		}
 		starts, err := svc.Starts(ctx, d.Name, now.Add(-FailuresFor))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, e := range starts {
 			if e.State != duties.StateFailed {
@@ -194,7 +209,7 @@ func dutyItems(ctx context.Context, svc *duties.Service, subject string, now tim
 			out = append(out, Item{Kind: KindFailure, Run: e.Run, Duty: d.Name, Agent: d.Agent, Text: text, Since: e.At})
 		}
 	}
-	return out, nil
+	return out, asks, nil
 }
 
 // concerns reports whether the failures of a duty concern a person: the

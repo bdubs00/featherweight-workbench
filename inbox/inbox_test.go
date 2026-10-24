@@ -115,7 +115,9 @@ func TestInbox(t *testing.T) {
 		defer cancel()
 		a.Close(ctx)
 	})
-	r1, err := a.Start(as("alice"), "", fw.WithRequest(fw.RunRequest{Agent: "triage", Input: "deploy the site", Metadata: map[string]string{duties.MetaDuty: "report", fw.MetaBatch: "bridge:B1"}}))
+	// A run of the duty acts as the duty, not as alice.
+	r1, err := a.Start(context.Background(), "", fw.WithRequest(fw.RunRequest{Agent: "triage", Input: "deploy the site", Principal: "duty:report", PrincipalKind: fw.KindWorkload,
+		Metadata: map[string]string{duties.MetaDuty: "report", fw.MetaBatch: "bridge:B1"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
