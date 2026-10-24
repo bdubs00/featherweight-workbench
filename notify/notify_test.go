@@ -106,6 +106,11 @@ func TestSettingsRoutes(t *testing.T) {
 	if rec.channel("phone").Ntfy.Token != "tk_secret" || *rec.channel("ha").URL != "https://ha.example.com/api/webhook/fw-abc123" || *rec.channel("ha").Secret != "hmac_secret" || rec.Kind != fw.KindUser {
 		t.Fatalf("the record after set = %+v", rec)
 	}
+	// Another value replaces a write-only field.
+	f.set(t, "alice", Body{Channels: []Channel{*rec.channel("phone"), {ID: "ha", Kind: KindWebhook, Send: on, URL: new(SetValue), Secret: new("hmac_2")}}})
+	if rec, _ := f.s.load(context.Background(), "alice"); *rec.channel("ha").Secret != "hmac_2" || rec.channel("phone").Ntfy.Token != "tk_secret" {
+		t.Fatalf("the record after a new secret = %+v", rec)
+	}
 	// "" clears a write-only field.
 	f.set(t, "alice", Body{Channels: []Channel{{ID: "phone", Kind: KindNtfy, Send: on, Ntfy: &Ntfy{Topic: "alice-fw-8f3k", Token: ""}}, {ID: "ha", Kind: KindWebhook, Send: on, URL: new(SetValue), Secret: new("")}}})
 	rec, _ = f.s.load(context.Background(), "alice")

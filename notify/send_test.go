@@ -462,3 +462,17 @@ func TestSharedNtfy(t *testing.T) {
 		t.Fatalf("the publish = %+v %v", got, tokens)
 	}
 }
+
+// The text of Slack escapes the characters that Slack reserves, and the
+// content of Discord stays within its bound with the link whole.
+func TestBodies(t *testing.T) {
+	m := &message{Title: "Duty <a&b> failed", Text: "x > y"}
+	if got := slackBody(m, "")["text"]; got != "*Duty &lt;a&amp;b&gt; failed*\nx &gt; y" {
+		t.Fatalf("the text of Slack = %q", got)
+	}
+	long := &message{Title: "Duty report failed", Text: strings.Repeat("é", 3000)}
+	content := discordBody(long, "https://fleet.example.com/bossmode/#duties/report")["content"].(string)
+	if n := len([]rune(content)); n != discordMax || !strings.HasSuffix(content, "…\nhttps://fleet.example.com/bossmode/#duties/report") {
+		t.Fatalf("the content of Discord has %d characters and ends %q", n, content[len(content)-60:])
+	}
+}
