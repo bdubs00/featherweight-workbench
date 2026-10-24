@@ -539,13 +539,22 @@ func TestConfig(t *testing.T) {
 	}
 }
 
-// The doctor line names where the settings live and the server of the
-// front, and a configuration that does not fit fails it.
+// The doctor line names where the settings live, the kinds, the ntfy
+// server of the front, the hosts, the link, and the shared channels. A
+// configuration that does not fit, and a variable that holds no value,
+// fail it.
 func TestDoctorCheck(t *testing.T) {
 	cfg := fw.DefaultConfig()
-	cfg.Extensions = workbench(t, "notifications:\n  ntfy:\n    server: https://ntfy.lab.internal\n")
-	if ok, line := DoctorCheck(context.Background(), cfg, nil, 0); !ok || !strings.Contains(line, "the server of the front is ntfy.lab.internal") || !strings.Contains(line, "any server on a public address") {
+	cfg.Extensions = workbench(t, "notifications:\n  ntfy:\n    server: https://ntfy.lab.internal\n  shared:\n    - {name: ops, kind: slack, urlEnv: FW_TEST_OPS_URL}\n")
+	t.Setenv("FW_TEST_OPS_URL", "https://hooks.slack.com/services/x")
+	ok, line := DoctorCheck(context.Background(), cfg, nil, 0)
+	if !ok || !strings.Contains(line, "the ntfy server of the front is ntfy.lab.internal") || !strings.Contains(line, "a channel reaches public hosts only") ||
+		!strings.Contains(line, "a person picks ntfy, slack, discord, teams, webhook, shared") || !strings.Contains(line, "the shared channel ops (slack)") || strings.Contains(line, "services/x") {
 		t.Fatalf("doctor = %v, %q", ok, line)
+	}
+	t.Setenv("FW_TEST_OPS_URL", "")
+	if ok, line := DoctorCheck(context.Background(), cfg, nil, 0); ok || !strings.Contains(line, "FW_TEST_OPS_URL holds no address") {
+		t.Fatalf("doctor without the address = %v, %q", ok, line)
 	}
 	cfg.Extensions = workbench(t, "notifications:\n  ntfy:\n    server: nope\n")
 	if ok, _ := DoctorCheck(context.Background(), cfg, nil, 0); ok {
