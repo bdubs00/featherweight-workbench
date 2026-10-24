@@ -83,7 +83,7 @@ func TestCapsConfig(t *testing.T) {
 	}
 }
 
-// A start on an event carries its depth in the chain; a start deeper than
+// A start on an event carries its depth in the chain. A start deeper than
 // MaxChain, and a start past MaxEventStartsPerHour in an hour, do not run,
 // and the history says why.
 func TestFireChain(t *testing.T) {

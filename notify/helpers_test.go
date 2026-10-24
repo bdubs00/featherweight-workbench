@@ -102,7 +102,7 @@ func (people) Challenge(w http.ResponseWriter, _ *http.Request) {
 // front is a process with the duties and the notifications in memory,
 // served on the native surface. alice owns the agent triage. The loop of
 // the notifications does not run: a test calls pass. With real, the
-// notifications post to ntfy for real; else the posts land in out.
+// notifications post to ntfy for real. Else the posts land in out.
 type front struct {
 	a     *fw.Agent
 	s     *Service
