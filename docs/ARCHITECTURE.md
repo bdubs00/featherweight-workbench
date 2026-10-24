@@ -3229,6 +3229,7 @@ No one service holds the notifications. A person keeps a list of channels. A cha
               {"kind": "webhook", "label": "Webhook"}, {"kind": "email", "label": "Email"},
               {"kind": "agent", "label": "Agent"}, {"kind": "shared", "label": "Shared channel"}],
   "shared": [{"name": "ops-room", "kind": "slack", "label": "Ops room"}],
+  "serverDefault": "https://ntfy.lab.internal",
   "off": ""
 }
 ```
@@ -3244,9 +3245,10 @@ No one service holds the notifications. A person keeps a list of channels. A cha
 | `quietHours.timeZone` | The time zone of the person, for the quiet hours, the digest, and the day of the runs of the kind `agent`. The default is the header `X-Time-Zone` of the write, else `UTC`. |
 | `offered` | Read only. The kinds that this front serves now. The page offers no other kind. |
 | `shared` | Read only. The shared channels of the operator, by name, kind, and label. A read never holds their addresses. |
+| `serverDefault` | Read only. The ntfy server of a channel that names none: `workbench.notifications.ntfy.server`, or `""`. |
 | `off` | Read only. When no channel reaches the person, the reason in words. Otherwise `""`. |
 
-A write takes `offered`, `shared`, and `off`, and leaves them out. The fields `url`, `secret`, and `ntfy.token` are write only. A read answers `"set"` or `""`. In a write, `"set"` keeps the stored value of the channel with the same id, `""` clears it, and any other value replaces it. A write-only field that a write leaves out is `""`. A field of another kind is taken and left out.
+A write takes `offered`, `shared`, `serverDefault`, and `off`, and leaves them out. A write keeps the order of `channels`, and so does the read after it. The fields `url`, `secret`, and `ntfy.token` are write only. A read answers `"set"` or `""`. In a write, `"set"` keeps the stored value of the channel with the same id, `""` clears it, and any other value replaces it. A write-only field that a write leaves out is `""`. A field of another kind is taken and left out.
 
 A switch sends these notices:
 

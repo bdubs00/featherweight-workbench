@@ -68,7 +68,7 @@ func noSecrets(t *testing.T, where, text string, secrets ...string) {
 func TestSettingsRoutes(t *testing.T) {
 	f := newFront(t, ntfyBlock, false)
 	resp, body := send(t, http.MethodGet, f.url+"/v1/notifications", "alice", "")
-	if resp.StatusCode != http.StatusOK || body != `{"channels":[],"quietHours":{"from":"","to":"","timeZone":"UTC"},"offered":[{"kind":"ntfy","label":"ntfy"},{"kind":"slack","label":"Slack"},{"kind":"discord","label":"Discord"},{"kind":"teams","label":"Microsoft Teams"},{"kind":"webhook","label":"Webhook"}],"shared":[],"off":"You have no channel. Add one, such as ntfy, Slack, or a webhook, and the front tells you of questions, failures, and the daily digest. Activity in the page always shows what needs you."}`+"\n" {
+	if resp.StatusCode != http.StatusOK || body != `{"channels":[],"quietHours":{"from":"","to":"","timeZone":"UTC"},"offered":[{"kind":"ntfy","label":"ntfy"},{"kind":"slack","label":"Slack"},{"kind":"discord","label":"Discord"},{"kind":"teams","label":"Microsoft Teams"},{"kind":"webhook","label":"Webhook"}],"shared":[],"serverDefault":"https://ntfy.example.com","off":"You have no channel. Add one, such as ntfy, Slack, or a webhook, and the front tells you of questions, failures, and the daily digest. Activity in the page always shows what needs you."}`+"\n" {
 		t.Fatalf("a first read = %d %s", resp.StatusCode, body)
 	}
 	put := `{"channels": [

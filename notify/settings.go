@@ -133,28 +133,32 @@ type SharedChannel struct {
 }
 
 // Answer is a read of the settings of the caller: the channels with each
-// write-only field as SetValue or "", the quiet hours, and three fields
+// write-only field as SetValue or "", the quiet hours, and four fields
 // that a write takes and leaves out: Offered, the kinds that this front
-// serves now, Shared, the shared channels of the operator, and Off, the
-// reason in words why no channel reaches the caller, or "".
+// serves now, Shared, the shared channels of the operator, ServerDefault,
+// the ntfy server of a channel that names none (workbench.notifications.
+// ntfy.server, or ""), and Off, the reason in words why no channel
+// reaches the caller, or "".
 type Answer struct {
-	Channels   []Channel       `json:"channels"`
-	QuietHours *QuietHours     `json:"quietHours"`
-	Offered    []Offer         `json:"offered"`
-	Shared     []SharedChannel `json:"shared"`
-	Off        string          `json:"off"`
+	Channels      []Channel       `json:"channels"`
+	QuietHours    *QuietHours     `json:"quietHours"`
+	Offered       []Offer         `json:"offered"`
+	Shared        []SharedChannel `json:"shared"`
+	ServerDefault string          `json:"serverDefault"`
+	Off           string          `json:"off"`
 }
 
 // Body is the body of a write: the shape of a read, so a read is a valid
 // body. Channels replaces the channels, and a body without channels keeps
 // them. QuietHours replaces the quiet hours, and a body without quietHours
-// keeps them. Offered, Shared, and Off are taken and left out.
+// keeps them. Offered, Shared, ServerDefault, and Off are taken and left out.
 type Body struct {
-	Channels   []Channel       `json:"channels"`
-	QuietHours *QuietHours     `json:"quietHours,omitempty"`
-	Offered    json.RawMessage `json:"offered,omitempty"`
-	Shared     json.RawMessage `json:"shared,omitempty"`
-	Off        json.RawMessage `json:"off,omitempty"`
+	Channels      []Channel       `json:"channels"`
+	QuietHours    *QuietHours     `json:"quietHours,omitempty"`
+	Offered       json.RawMessage `json:"offered,omitempty"`
+	Shared        json.RawMessage `json:"shared,omitempty"`
+	ServerDefault json.RawMessage `json:"serverDefault,omitempty"`
+	Off           json.RawMessage `json:"off,omitempty"`
 }
 
 // Errors of the functions of the notifications.
@@ -340,7 +344,7 @@ func masked(v string) *string {
 // answer turns settings into a read: each channel with the fields of its
 // kind alone, and each write-only field as SetValue or "".
 func (s *Service) answer(st Settings) Answer {
-	a := Answer{Channels: []Channel{}, Offered: s.cfg.offered(), Shared: []SharedChannel{}, Off: s.off(st)}
+	a := Answer{Channels: []Channel{}, Offered: s.cfg.offered(), Shared: []SharedChannel{}, ServerDefault: s.cfg.Ntfy.Server, Off: s.off(st)}
 	for _, ch := range st.Channels {
 		out := Channel{ID: ch.ID, Kind: ch.Kind, Label: ch.Label, Send: ch.Send}
 		switch ch.Kind {
