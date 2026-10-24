@@ -95,6 +95,12 @@ routines/               the routines of the agents: the store, the standings, th
 duties/                 the duties: the record, the store, the engine, the check first, the call
                         of a webhook, the routes, and the tools (section 22); schedule/ holds the
                         schedule in words, its next times, its readback, and its grammar
+duties/away/            the decisions while away: the verdict of the manager, the question that
+                        waits for the person, and the timeout (section 23.4)
+duties/events/          the starts of the duties on events of the fleet (section 23.5)
+notify/                 the notifications of the duties by ntfy, per person: the settings, the
+                        outbox, the quiet hours, and the daily digest (section 23.1)
+inbox/                  what needs the caller now: GET /v1/inbox and the tool inbox (section 23.3)
 internal/bucket/        the key-value bucket under the stores of the front: a bucket of the
                         NATS server of the bus, or the memory of the process
 bossmode/               the page of bossmode at /bossmode, its settings, its stream of events,
@@ -3166,3 +3172,220 @@ The later parts of the feature plug into the package without an edit of the engi
 - The call of a webhook takes no credential of the native API. Prefer `hmac`, and limit who reaches `/v1/duties/` with the gateway.
 - The content of an event or of an item of a check becomes the input of a run. Give the agent of a duty only the tools that its work needs, and make the tools that change things ask first.
 - Unattended runs make the open item of the ax API urgent: the ax API and the router take the static token with no other check.
+
+## 23. Attention and decisions
+
+The duties work while nobody watches. This section says how they reach a person, and how the front decides while the person is away. Four packages do it, each beside the package `duties`:
+
+| Package | Work |
+|---|---|
+| `notify` | The notifications by ntfy, per person: the settings, the outbox, the quiet hours, and the daily digest |
+| `inbox` | What needs the caller now: the route `GET /v1/inbox` and the MCP tool `inbox` |
+| `duties/away` | The decisions while away: `whileAway` of a duty |
+| `duties/events` | The starts of a duty on an event of the fleet: `when.event` |
+
+The engine of the duties also keeps two more caps: a daily cap per agent and a daily cap for the fleet (section 23.6).
+
+### 23.1 Notifications
+
+A person picks where the notifications go, which kinds go, and the quiet hours. The first channel is ntfy. The settings of a person have this shape:
+
+```json
+{
+  "ntfy": {"server": "https://ntfy.example.com", "topic": "alice-fw-8f3k", "token": "set"},
+  "send": {"questions": true, "failures": true, "digest": false},
+  "quietHours": {"from": "22:00", "to": "07:00", "timeZone": "America/New_York"}
+}
+```
+
+| Field | Rule |
+|---|---|
+| `ntfy.server` | An `http` or `https` address without a user, a query, or a fragment. Empty takes `workbench.notifications.ntfy.server`. |
+| `ntfy.topic` | 1 to 64 of `A-Z`, `a-z`, `0-9`, `-`, and `_` |
+| `ntfy.token` | The access token of the server. A read answers `"set"` or `""` and never the token. In a write, `"set"` keeps the token, `""` clears it, and any other value replaces it. |
+| `send.questions` | A run of a duty that waits for the person, and a decision of the front while the person was away. The default is `true`. |
+| `send.failures` | A failed run, a duty that paused itself, and a duty at a daily cap. The default is `true`. |
+| `send.digest` | The daily digest. The default is `false`. |
+| `quietHours.from`, `quietHours.to` | Two times `HH:MM`, or both empty for no quiet hours. From 22:00 to 07:00 crosses midnight. |
+| `quietHours.timeZone` | The time zone of the person, for the quiet hours and the digest. The default is the header `X-Time-Zone` of the write, else `UTC`. |
+
+The front never picks a public server by itself. Without a server of the person and without `workbench.notifications.ntfy.server`, the notifications of the person are off. A read then says why in the field `off`. A person without a topic, and a person who turned every kind off, get `off` too.
+
+The package gets each notice of the duties through `duties.OnNotice`. It reads the settings of each person of the notice, `Notice.Who`, and puts one notification per person in the outbox. The kind of the notice picks the switch of `send`:
+
+| Notice | Switch | Title |
+|---|---|---|
+| `needs-you` | `questions` | `Duty <name> needs you` |
+| `decided` | `questions` | `Duty <name>: decided while you were away` |
+| `failed` | `failures` | `Duty <name> failed` |
+| `paused` | `failures` | `Duty <name> paused itself` |
+| `cap` | `failures` | `Duty <name> reached a daily cap` |
+
+The text of a notification is the reason of the notice in plain words, such as "The agent triage asks to run git.push. Decide in Activity, or with approve. Without an answer within 2h, the front denies it."
+
+The outbox lives in the bucket of the settings, so a restart of a replica loses no notification. Every replica reads the outbox. A replica claims a notification with a compare-and-swap before it sends it, as the engine claims a time, so one replica sends each one. A notification during the quiet hours of its person waits until they end. A notification that the server refuses goes again after 1, 2, 4, and 8 minutes. After five tries, or after three days, the front drops it and the log says why.
+
+A notification goes as a JSON publish of ntfy: a `POST` to the address of the server with `topic`, `title`, `message`, and `priority`. The token goes as a bearer token. A question, a failed run, and a duty that paused itself have the priority 4. A decision and a cap have 3, and the digest has 2.
+
+The digest goes once a day for each person whose settings send it. It goes at the end of the quiet hours, or at 08:00 in the time zone of the person without quiet hours. A front that did not run at that time sends it up to six hours later. It lists the starts of the duties of the person in the last day, each with its time, its outcome, and its cost, then the starts that did not run as one count, and the duties that paused themselves. The duties of a person are those that the person owns and those whose `notify` lists name the person. A person with no duty gets no digest. One replica sends each digest: it claims the day of the person in the bucket.
+
+### 23.2 The routes and the tools of the notifications
+
+Each route acts for the caller alone. Each tool calls the same Go function as its route. A call through a run of the fleet acts for the person of the run (`manager.OnBehalf`).
+
+| Route | Tool | Answer |
+|---|---|---|
+| `GET /v1/notifications` | `notifications_get` | The settings with `serverDefault`, the value of `workbench.notifications.ntfy.server` or `""`, and `off` when no notification reaches the caller |
+| `PUT /v1/notifications` | `notifications_put` | The same body, and the same answer after the write. A body that does not fit gets 400 with `{"problems": ["ntfy.topic: ...", ...]}`. |
+| `POST /v1/notifications/test` | `notification_test` | 200 `{"sent": true}`, or 502 `{"error": "<reason in words>"}` |
+
+A read is a valid body. A write replaces the settings. A field of `send` that the body leaves out takes its default. `serverDefault` and `off` in a body are taken and left out. The tool `notifications_put` takes `ntfy`, `send`, `quietHours`, and `timeZone`, the time zone of quiet hours that name none. A test goes also during the quiet hours. A call without a person gets 403.
+
+### 23.3 The inbox
+
+`GET /v1/inbox` and the MCP tool `inbox` answer what needs the caller now, the items of Activity:
+
+```json
+{"items": [{"kind": "approval", "run": "01K...", "duty": "daily-report", "agent": "triage", "bridge": "", "text": "Daily report: the agent triage asks to run git.push. Rule: ask git.*.", "since": "2026-10-23T13:05:00Z"}]}
+```
+
+| Kind | Source |
+|---|---|
+| `approval` | A run that waits for a decision to call a tool. A connect counts as an approval. |
+| `question` | A run that waits for an answer, or a seat of a bridge that asked the people of the bridge |
+| `failure` | A failed run of a duty in the last day, of a duty that the caller owns or whose `notify.failure` names the caller |
+| `paused` | A duty that the caller owns and that paused itself |
+
+The inbox keeps no truth of its own. The runs come from the list `needsYou` of the home of the dashboard (`dashboard.HomeOf`), which every surface shows. A run of a duty acts as the duty, so the home of the owner does not hold it: the inbox adds each run of a duty that waits to the inbox of the people of its `notify.needsYou` and of its owner. The questions of the seats come from `bridges.Store.Waiting`, the seats whose presence is `needs-you`, as the count `needsYou` of a bridge counts them. The duties come from their store. A duty that a person paused does not need the person, so it is no item. Approvals and questions come first, the oldest first, then the failures, and then the paused duties. The existing tools `approve` and `send` answer the items.
+
+### 23.4 The decisions while away
+
+The front applies `whileAway` of a duty. The kernel needs no change. Each replica watches the runs that carry `workbench.duty` and wait for a person. For each approval that waits, one replica creates its entry in the bucket `<stream>_DUTY_AWAY`. Every later step of the approval is a compare-and-swap on that entry, so one replica does each step. A replica that stops in the middle of a step leaves a claim that another replica takes over after two minutes.
+
+The entry picks who decides:
+
+| Approval | Who decides |
+|---|---|
+| A question, an approval with a form schema | The person, never the manager |
+| A connect of a service | The person |
+| A tool that the policy marks destructive | The person, never the manager. The policy marks a tool so when the rule `ask destructive` asked for it, or when the spec of the tool on the front says `destructive`. |
+| `whileAway.decider` is `nobody` | The person |
+| A front without a manager (`workbench.bossmode.manager`) | The person |
+| Any other approval | The manager |
+
+When the person decides, the front sends a notice of kind `needs-you` through the duties (`duties.Service.Tell`). It names the agent, the tool, why the manager does not decide, and what happens without an answer. While a package handles `whileAway`, the engine sends no needs-you notice of its own (`duties.SetAwayHandler`).
+
+When the manager decides, the front puts one run of the profile of the manager on its queue. The message names the duty, its owner, the agent, the run, the tool, the reason of the policy, the input of the call as data, and the message of the duty. It asks for one JSON object and nothing else:
+
+```json
+{"verdict": "allow", "reason": "The push serves the report of the duty."}
+```
+
+The run acts as the owner of the duty, with the budget of the duty, the metadata `workbench.dutyVerdict` (`<run>/<approval>`), and the idempotency key `duty-away/<run>/<approval>`. The front reads the answer strictly (`away.ParseVerdict`): one object with `verdict` `allow` or `deny`, a `reason` of at most 500 bytes, no other field, and no other text. One code fence around the whole answer is taken off. The front then applies the verdict with its own authority, through the route of a decision: `POST /v1/runs/{id}/approvals/{approval}` on the member that holds the run, with the static token of the fleet, or the kernel for a run of the front. The note of the decision says that the manager decided for the duty while its owner was away, with the reason. The manager gets no right to approve. A verdict that does not read, a run of the manager that failed, a queue that did not take the question, and a manager that took no question within 15 minutes all send the approval to the person.
+
+After `whileAway.timeout` without a decision, the front applies `whileAway.then`. With `deny`, it denies the call through the route of a decision. With `cancel`, it cancels the run through the route of a cancel. Then it tells the people of `notify.needsYou` with a notice of kind `decided`, and it stops a run of the manager that still works.
+
+The person can always decide first, in Activity or with `approve`. Then the front does nothing more. It reads who decided from the ledger of the run and stops a run of the manager that still works.
+
+Each decision lands in the history of the duty, on the start of its run, in the field `decided`:
+
+```json
+"decided": [{"at": "2026-10-23T15:05:00Z", "by": "manager", "verdict": "allow", "tool": "git.push", "reason": "The push serves the report."}]
+```
+
+`by` is `manager`, `timeout`, or the subject of a person. `verdict` is `allow`, `deny`, or `cancel`. A start keeps its last 20 decisions.
+
+### 23.5 Starts on events of the fleet
+
+The package `duties/events` serves `when.event` for these kinds:
+
+| Kind | Source | `agent` | `path` |
+|---|---|---|---|
+| `run.failed` | A top-level run that failed in the last 15 minutes, from the runs of the front and of the view of the fleet. A failed run that the intake of the kernel retries does not count. | The agent of the run | No |
+| `question.waiting` | A run that waits for a person, once it waited for `after`, and only while it still waits | The agent of the run | No |
+| `page.changed` | A write of a page of the wiki (`pages.OnChange`) | The profile of the run that wrote, from `agent:<profile>` | A glob of the path, such as `reports/*.md`, or a folder with a slash at its end |
+| `bridge.closed` | The close of a bridge (`bridges.OnMessage`) | No | No |
+| `routine.ready` | A routine that may go live (`routines.OnChange`) | The agent of the routine | No |
+| `cap.reached` | A duty at a daily cap (`duties.OnNotice`) | The agent of that duty | No |
+
+`after` is a span from 0 to 24h. For `question.waiting` it is how long the question waited. For the other kinds the duty starts that long after the event. The check of a write answers each problem as `when.event.<field>: text`.
+
+For each event that a duty waits for, a replica creates the start of that duty and that event in the bucket `<stream>_DUTY_EVENTS`, under a key of the duty and the id of the event. Of two replicas that see one event, one creates it. When the start is due, one replica claims it with a compare-and-swap and calls `duties.Service.FireChain`. So each event starts each duty once. The text of the event, in JSON, fills `{event}`.
+
+A duty never starts itself through its own run: a run of a duty that fails does not start that duty through `run.failed`, and the same holds for the other kinds. An event before the duty existed starts nothing.
+
+### 23.6 Guardrails
+
+| Guardrail | Rule |
+|---|---|
+| A cap per agent per day | `workbench.duties.caps.perAgentUSD`: when the starts of the duties of an agent since midnight cost that much or more, a duty of that agent skips until midnight. |
+| A cap for the fleet per day | `workbench.duties.caps.fleetUSD`: the same across every duty |
+| The loop guard | A run that an event started carries the metadata `workbench.dutyChain`, its depth in the chain. An event of such a run starts the next duty one deeper. A start deeper than 3 does not run. A duty that events start runs at most 60 times in an hour. The history says why a start did not run. |
+| Audit | The log of the front names each run that a duty started, with its time, its kind of start, and its attempt. It names each decision while away, and each change of the settings of a person. |
+
+Today starts at midnight in the time zone of the duty that starts. A start counts by its slot. At a cap, the history says which cap stopped the start, and the owner hears of it once that day with a notice of kind `cap`. A cap that is not set is no cap. Each duty still has its required budget and its own `perDayUSD`.
+
+### 23.7 Configuration
+
+| Key | Meaning | Default |
+|---|---|---|
+| `workbench.notifications.ntfy.server` | The ntfy server of a person who names none, such as `https://ntfy.example.com` | none, so the notifications of such a person are off |
+| `workbench.notifications.ntfy.hosts` | The hosts that a person may name as a server, as globs. When the list is empty, a person may name any host on a public address, and never a loopback, private, or link-local address after the name resolves. The host of the server of the front is always allowed. | empty |
+| `workbench.duties.caps.perAgentUSD` | The daily cap of the duties of one agent | 0, no cap |
+| `workbench.duties.caps.fleetUSD` | The daily cap of every duty | 0, no cap |
+
+```yaml
+workbench:
+  notifications:
+    ntfy:
+      server: https://ntfy.lab.internal
+      hosts: ["ntfy.example.com"]
+  duties:
+    caps:
+      perAgentUSD: 5
+      fleetUSD: 20
+```
+
+A value that does not fit stops the start, and the error names the key. `fw-workbench doctor` has a line `notify`. It names where the settings live, the server of the front, and the hosts that a person may name.
+
+### 23.8 The buckets
+
+| Bucket | Keys | Forgets |
+|---|---|---|
+| `<stream>_NOTIFY` | `person.<subject in base64url>`: the settings of a person, with the token. `out.<id>`: a notification that waits. `digest.<subject in base64url>`: the day of the last digest. | Never. A notification leaves the outbox once it went out or the front dropped it. |
+| `<stream>_DUTY_AWAY` | `wait.<run>.<approval>`: an approval of a run of a duty, who decides it, the run of the manager, and what the front did | 8 days after the last write |
+| `<stream>_DUTY_EVENTS` | `start.<duty>.<hash>`: an event that starts a duty, its time, the depth of its chain, and what the start did | 8 days after the last write |
+
+On the bus `mem` they live in the memory of the process. On another bus each package logs once that it is off. Without the package `duties/away`, the engine sends a needs-you notice of its own, once per start.
+
+### 23.9 The seams
+
+| Function | Use |
+|---|---|
+| `duties.Service.Records(ctx)`, `RecordOf(ctx, name)` | Every duty, or one, for the front itself, with the kind of its owner, why it paused itself, and its moments |
+| `duties.Service.Starts(ctx, name, since)` | The starts of a duty that began or changed since a moment, newest first |
+| `duties.Service.RecordDecision(ctx, name, run, decided)` | Adds a decision to the start of a run |
+| `duties.Service.Tell(ctx, kind, name, run, reason)` | Sends a notice of a duty to the hooks of `OnNotice`, as the engine does |
+| `duties.Service.FireChain(ctx, name, event, chain)` | `Fire` at a depth of a chain, with the loop guard |
+| `duties.SetAwayHandler(on)` | Says that a package tells of each question itself |
+| `duties.MetaChain`, `duties.NoticeDecided`, `duties.DecidedByManager`, `duties.DecidedByTimeout` | The key of the chain, the kind of the notice of a decision, and the deciders that are no person |
+| `bridges.Store.Waiting(ctx)` | The seats of the open bridges that need the caller |
+| `inbox.For(ctx, agent, now)` | The inbox of the caller |
+| `notify.Of(agent).Get`, `Put`, `Test` | The settings of the caller |
+| `away.ParseVerdict(answer)` | Reads a verdict of the manager strictly |
+
+### 23.10 Security
+
+- The token of a person lives in the bucket of the settings. No answer, log line, or error holds it. An error of a send names the host of the server, never the topic.
+- A server that a person names gets the same rule as a check of a duty: no loopback, private, or link-local address after the name resolves, unless the operator lists the host. The front follows no redirect of an ntfy server.
+- The manager never decides a question, a connect, or a destructive tool. Its verdict is data that the front reads strictly, and the front applies it with its own authority. The input of the call reaches the manager as data. Prompt injection in the input can still sway the manager on a tool that is not destructive, so mark each tool that changes what matters destructive, or ask for it in a rule of the policy.
+- A run of the manager that decides acts as the owner of the duty, with the budget of the duty. The front never fills a paid default.
+- A chain of duties that events start stops at a depth of 3, and a duty that events start runs at most 60 times in an hour.
+
+### 23.11 What this build leaves out
+
+- Other channels than ntfy, such as Slack, email, and a plain webhook.
+- A notification when the manager decides. The history records it, and the digest lists the run.
+- A digest that a run of the manager writes into the wiki. The front writes the digest itself.
+- An approval with a deadline and a default in the kernel. The front applies the default with the route that a person uses.
+- The manager as dispatcher with the duty tools (phase 3 of the design).
