@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -789,13 +790,15 @@ func (s *Service) endEntry(ctx context.Context, st *stored, date string, e entry
 	return wrote
 }
 
-// failAttempt ends an attempt that did not reach a run, or whose run
-// failed: the start goes again after retryPause while it has retries and
+// failAttempt ends an attempt that did not reach a run: the start goes again after retryPause while it has retries and
 // the duty runs, else it fails, which counts for the breaker.
 func (s *Service) failAttempt(ctx context.Context, st *stored, date string, e entry, from []string, reason string, stopped bool) Outcome {
 	d := &st.Duty
 	now := s.now()
 	after, wrote, err := s.st.setEntry(ctx, d.Name, date, e.ID, from, func(x *entry) bool {
+		// Each caller failed before a queue took the run, so no run of the
+		// attempt exists and the start names none.
+		x.Run = ""
 		if x.Attempt <= d.retries() && !stopped {
 			x.State, x.RetryAt, x.Reason = StateRetrying, now.Add(retryPause).UTC(), reason+" It goes again."
 		} else {
@@ -1141,7 +1144,7 @@ func (s *Service) settle(ctx context.Context, st *stored, date string, e entry, 
 			x.State, x.Reason = StateCanceled, "Somebody canceled the run."
 			x.FoundText, x.Event = "", ""
 		case r.State == fw.StateFailed:
-			reason = "The run failed: " + strings.TrimSuffix(oneLine(r.Error, 300), ".") + "."
+			reason = "The run failed: " + strings.TrimSuffix(errorLine(r.Error, 300), ".") + "."
 			if x.Attempt <= d.retries() && !stopped {
 				x.State, x.RetryAt, x.SpentUSD, x.Reason = StateRetrying, now.Add(retryPause).UTC(), x.CostUSD, reason+" It goes again."
 			} else {
@@ -1184,6 +1187,16 @@ func sameEntry(a, b entry) bool {
 }
 
 // oneLine cuts a text to one line of at most n bytes.
+// htmlTag matches a tag of HTML, such as <center> or </body>, in an error
+// that quotes the page of a proxy.
+var htmlTag = regexp.MustCompile(`</?[a-zA-Z][a-zA-Z0-9]*(\s[^<>]*)?/?>`)
+
+// errorLine returns the error of a run as one line of words, without the
+// tags of an HTML page that a proxy answered, cut to n bytes.
+func errorLine(s string, n int) string {
+	return oneLine(htmlTag.ReplaceAllString(s, " "), n)
+}
+
 func oneLine(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if s == "" {

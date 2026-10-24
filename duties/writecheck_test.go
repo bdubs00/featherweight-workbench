@@ -140,7 +140,7 @@ func TestWriteCheckRefusals(t *testing.T) {
 		{fw.StateCompleted, `{"look": {"tool": "q"}} {"more": 1}`, "holds more than the JSON object"},
 		{fw.StateCompleted, `{"look": {"tool": "q"}, "wake": "new"}`, "checkFirst.key: A key is required with wake new"},
 		{fw.StateCompleted, `{"look": {"http": {"url": "https://example.com/q", "secret": "OTHER"}}, "key": "id"}`, "OTHER is not in workbench.duties.secrets"},
-		{fw.StateFailed, "", "ended failed and wrote no check: the model failed."},
+		{fw.StateFailed, "", "wrote no check. Its run"},
 		{fw.StateInputRequired, "", "asked a person to allow a tool"},
 	} {
 		f.answering(c.state, c.output)

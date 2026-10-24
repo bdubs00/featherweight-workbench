@@ -185,7 +185,7 @@ func (s *Service) WriteCheck(ctx context.Context, name string, body WriteCheckBo
 		_ = s.stopRun(context.WithoutCancel(ctx), req.ID)
 		return WriteCheckAnswer{}, &CheckError{Reason: fmt.Sprintf("The agent %s asked a person to allow a tool while it wrote the check, so the front canceled its run %s. Say the check in other words, or give the agent a tool that only reads.", d.Agent, r.ID)}
 	default:
-		return WriteCheckAnswer{}, &CheckError{Reason: fmt.Sprintf("The run %s of the agent %s ended %s and wrote no check: %s.", r.ID, d.Agent, r.State, strings.TrimSuffix(orWords(r.Error, "no reason"), "."))}
+		return WriteCheckAnswer{}, &CheckError{Reason: fmt.Sprintf("The agent %s wrote no check. Its run %s ended %s: %s.", d.Agent, r.ID, r.State, strings.TrimSuffix(errorLine(orWords(r.Error, "no reason"), 300), "."))}
 	}
 	c, err := parseCheck(r.Output)
 	if err != nil {

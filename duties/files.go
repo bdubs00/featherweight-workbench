@@ -40,7 +40,7 @@ func (s *Service) fileOf(name string) *View {
 // fileView shows one source as a duty.
 func fileView(src sources.Source) View {
 	d := Duty{Name: src.Name, Agent: src.Agent, Pool: src.Pool, RunAs: src.RunAs}
-	const where = " It is set in fw.yaml, under workbench.sources, so it changes there."
+	const where = " An operator sets it in the settings of the front, so it changes there."
 	var readback string
 	if p := src.Poll; p != nil {
 		d.CheckFirst = &CheckFirst{
@@ -51,7 +51,7 @@ func fileView(src sources.Source) View {
 		readback = fmt.Sprintf("Every %s, it looks at %s, and each new item starts a run of %s.", durText(p.Every), addressWords(p.URL), src.Agent) + where
 	} else {
 		d.When.Webhook = &Webhook{Auth: WebhookAuth{Mode: src.Auth.Mode, Secret: src.Auth.Secret, Header: src.Auth.Header}}
-		readback = fmt.Sprintf("When another app calls POST /v1/sources/%s, each new event starts a run of %s.", src.Name, src.Agent) + where
+		readback = fmt.Sprintf("When another app calls the address of this source, each new event starts a run of %s.", src.Agent) + where
 	}
 	return View{Duty: d, Source: SourceFile, Readback: readback, Next: []time.Time{}}
 }

@@ -311,7 +311,7 @@ func TestQueueFailureAndCancel(t *testing.T) {
 	f.queue.setFail(errDown)
 	f.clock.Set(nine.Add(time.Second))
 	f.pass(t)
-	if h := f.history(t, "report"); h[0].State != StateRetrying || !strings.Contains(h[0].Reason, "The queue did not take the run: the bus is down. It goes again.") {
+	if h := f.history(t, "report"); h[0].State != StateRetrying || h[0].Run != "" || !strings.Contains(h[0].Reason, "The queue did not take the run: the bus is down. It goes again.") {
 		t.Fatalf("after a failed publish = %+v", h[0])
 	}
 	f.queue.setFail(nil)
@@ -675,5 +675,18 @@ func TestMaxWorking(t *testing.T) {
 		if i >= maxWorking && out.Skipped != "40 runs of the duty work now, the most at one time." {
 			t.Fatalf("start %d = %+v", i, out)
 		}
+	}
+}
+
+// The error of a run loses the tags of an HTML page that a proxy answered,
+// and keeps a placeholder in angle brackets.
+func TestErrorLine(t *testing.T) {
+	in := "model: openai: POST http://m/v1: HTTP 502 Bad Gateway: <html> <head><title>502 Bad Gateway</title></head> <body> <center><h1>502 Bad Gateway</h1></center> <hr><center>nginx</center> </body> </html>"
+	got := errorLine(in, 300)
+	if strings.ContainsAny(got, "<>") || !strings.HasPrefix(got, "model: openai: POST http://m/v1: HTTP 502 Bad Gateway: 502 Bad Gateway 502 Bad Gateway nginx") {
+		t.Fatalf("errorLine = %q", got)
+	}
+	if got := errorLine("set <NODE_MIRROR_URL> first", 300); got != "set <NODE_MIRROR_URL> first" {
+		t.Fatalf("a placeholder = %q", got)
 	}
 }

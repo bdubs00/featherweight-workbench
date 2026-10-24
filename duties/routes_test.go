@@ -206,7 +206,7 @@ sources:
 	var list ListAnswer
 	decodeJSON(t, b, &list)
 	if resp.StatusCode != http.StatusOK || len(list.Duties) != 1 || list.Duties[0].Name != "tickets" || list.Duties[0].Source != SourceFile ||
-		!strings.Contains(list.Duties[0].Readback, "POST /v1/sources/tickets") || strings.Contains(b, "{{") {
+		!strings.Contains(list.Duties[0].Readback, "When another app calls the address of this source") || strings.Contains(list.Duties[0].Readback, "/v1/") || strings.Contains(b, "{{") {
 		t.Fatalf("the list = %d %s", resp.StatusCode, b)
 	}
 	_, b = send(t, http.MethodGet, base+"/alerts", "dave", "")
