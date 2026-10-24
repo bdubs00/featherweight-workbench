@@ -19,7 +19,6 @@ import (
 	"strings"
 	"text/template"
 	"time"
-	"unicode/utf8"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/fleet"
@@ -127,29 +126,10 @@ func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", fw.ErrInvalidRequest, fmt.Sprintf(format, args...))
 }
 
-// checkSeat checks one seat of a plan.
+// checkSeat checks one seat of a plan (seatProblems).
 func checkSeat(m SeatSpec) error {
-	switch {
-	case !handlePattern.MatchString(m.Handle):
-		return invalid("the handle %q must be lower-case letters, digits, dots, dashes, or underscores, at most 32, and start with a letter or a digit", m.Handle)
-	case m.Handle == HandleOperator || m.Handle == HandleManager:
-		return invalid("the handle %s is reserved: %s addresses the people of a bridge, and %s names its manager", m.Handle, HandleOperator, HandleManager)
-	case !agentPattern.MatchString(m.Agent):
-		return invalid("the seat %s needs an agent, the name of a profile, not %q", m.Handle, m.Agent)
-	case strings.TrimSpace(m.Task) == "":
-		return invalid("the seat %s needs a task", m.Handle)
-	case len(m.Task) > maxTaskBytes:
-		return invalid("the task of the seat %s holds more than %d bytes", m.Handle, maxTaskBytes)
-	}
-	if b := m.Budget; b != nil {
-		if b.MaxTurns < 0 {
-			return invalid("the budget of the seat %s has a negative maxTurns", m.Handle)
-		}
-		if b.Deadline != "" {
-			if d, err := time.ParseDuration(b.Deadline); err != nil || d <= 0 {
-				return invalid("the deadline of the seat %s must be a duration such as 30m, not %q", m.Handle, b.Deadline)
-			}
-		}
+	if p := seatProblems(m); len(p) > 0 {
+		return invalid("%s", p[0].Text)
 	}
 	return nil
 }
@@ -206,37 +186,17 @@ func (s *Store) poolOf(ctx context.Context, agent, pool string) string {
 // members. mgr names the manager run when the manager opens the bridge
 // through bridge_open.
 func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *Manager) (*record, error) {
-	title := strings.TrimSpace(spec.Title)
-	switch {
-	case title == "":
-		return nil, invalid("a bridge needs a title")
-	case utf8.RuneCountInString(title) > maxTitleRunes:
-		return nil, invalid("the title of a bridge holds at most %d characters", maxTitleRunes)
-	case len(spec.Goal) > maxGoalBytes:
-		return nil, invalid("the goal of a bridge holds at most %d bytes", maxGoalBytes)
-	case len(spec.Members) == 0:
-		return nil, invalid("a bridge needs at least one member")
-	case len(spec.Members) > s.cfg.MaxMembers:
-		return nil, invalid("a bridge holds at most %d members (workbench.bridges.maxMembers)", s.cfg.MaxMembers)
+	if p := checkPlan(spec, s.cfg, true); len(p) > 0 {
+		return nil, invalid("%s", p[0].Text)
 	}
+	title := strings.TrimSpace(spec.Title)
 	placement := strings.ToLower(strings.TrimSpace(spec.Placement))
 	if placement == "" {
 		placement = s.cfg.Placement
 	}
-	if placement != PlacementQueue && placement != PlacementSpawn {
-		return nil, invalid("the placement of a bridge is queue or spawn, not %q", spec.Placement)
-	}
-	seen := map[string]bool{}
 	for i := range spec.Members {
 		m := &spec.Members[i]
 		m.Handle, m.Agent, m.Task, m.Pool = strings.TrimSpace(m.Handle), strings.TrimSpace(m.Agent), strings.TrimSpace(m.Task), strings.TrimSpace(m.Pool)
-		if err := checkSeat(*m); err != nil {
-			return nil, err
-		}
-		if seen[m.Handle] {
-			return nil, invalid("the handle %s is taken twice", m.Handle)
-		}
-		seen[m.Handle] = true
 	}
 	for _, m := range spec.Members {
 		ok, err := s.operates(ctx, m.Agent, m.Pool)
@@ -249,9 +209,6 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 	}
 	caps := s.cfg.caps()
 	spec.Caps.apply(&caps)
-	if problem := checkCaps(caps); problem != "" {
-		return nil, invalid("the caps of the bridge: %s", problem)
-	}
 	delegation := Delegation{Report: true}
 	spec.Delegation.apply(&delegation)
 

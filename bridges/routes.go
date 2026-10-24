@@ -171,13 +171,13 @@ func (rt *routes) open(w http.ResponseWriter, r *http.Request) {
 	if !rt.k.Decode(w, r, &spec) {
 		return
 	}
-	rec, err := s.open(r.Context(), spec, fw.PrincipalFrom(r.Context()), nil)
+	it, err := s.Open(r.Context(), spec)
 	if err != nil {
 		rt.fail(w, r, err)
 		return
 	}
-	w.Header().Set("Location", "/v1/bridges/"+rec.ID)
-	rt.answer(w, r, s, rec, http.StatusCreated, false)
+	w.Header().Set("Location", "/v1/bridges/"+it.ID)
+	native.WriteJSON(w, http.StatusCreated, it)
 }
 
 // get answers GET /v1/bridges/{id}: the record with the presence of each
