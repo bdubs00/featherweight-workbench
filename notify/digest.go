@@ -1,8 +1,9 @@
 package notify
 
-// This file sends the daily digest: once a day for each person whose
-// settings send it, at the end of the quiet hours of the person, or at
-// 08:00 in the time zone of the person without quiet hours. It lists the
+// This file sends the daily digest: once a day for each person with a
+// channel whose switches send it, to each such channel, at the end of the
+// quiet hours of the person, or at 08:00 in the time zone of the person
+// without quiet hours. It lists the
 // starts of the duties of the person in the last day, each with its
 // outcome and its cost. The duties of a person are the duties that the
 // person owns and the duties whose notify lists name the person. One
@@ -83,7 +84,16 @@ func (s *Service) digests(ctx context.Context) {
 			continue
 		}
 		var rec record
-		if json.Unmarshal(e.Value, &rec) != nil || !rec.Settings.Send.Digest || s.off(rec.Settings) != "" {
+		if json.Unmarshal(e.Value, &rec) != nil {
+			continue
+		}
+		var to []Channel
+		for _, ch := range rec.Settings.Channels {
+			if ch.Send.Digest && s.unusable(ch) == "" {
+				to = append(to, ch)
+			}
+		}
+		if len(to) == 0 {
 			continue
 		}
 		at := digestAt(rec.Settings.QuietHours, now)
@@ -104,8 +114,11 @@ func (s *Service) digests(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		if err := s.put(ctx, &message{To: rec.Subject, Kind: KindDigest, Title: "Your duties: the last day", Text: text, Priority: 2}); err != nil {
-			s.log.Warn("notify: a digest did not reach the outbox", "to", rec.Subject, "error", err)
+		for _, ch := range to {
+			m := &message{To: rec.Subject, Channel: ch.ID, Kind: EventDigest, Title: "Your duties: the last day", Text: text, Priority: 2, At: now.UTC()}
+			if err := s.put(ctx, m); err != nil {
+				s.log.Warn("notify: a digest did not reach the outbox", "to", rec.Subject, "channel", ch.ID, "error", err)
+			}
 		}
 	}
 }

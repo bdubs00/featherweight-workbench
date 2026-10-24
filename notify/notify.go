@@ -1,35 +1,41 @@
-// Package notify sends the notifications of the duties by ntfy, per person
-// (docs/ARCHITECTURE.md section 23). Each person picks a server and a
-// topic, the kinds that reach them, and quiet hours. The front tells a
-// person of a question of a run of a duty, of a failed run, of a duty
-// that paused itself, of a cap that a duty reached, of a decision while
-// the person was away, and once a day of what the duties did.
+// Package notify sends the notifications of the duties to the channels of
+// each person (docs/ARCHITECTURE.md section 23). A person keeps a list of
+// channels: ntfy, Slack, Discord, a Teams workflow, a webhook, a mail, a
+// run of an agent, or a shared channel of the operator. Each channel has
+// its own switches, and the quiet hours hold every channel of the person.
+// The front tells a person of a question of a run of a duty, of a failed
+// run, of a duty that paused itself, of a cap that a duty reached, of a
+// decision while the person was away, and once a day of what the duties
+// did. A duty can also name a shared channel in its notify lists, as
+// channel:<name>, to reach it without a person.
 //
 // The package runs as a service of the kernel (fw.RegisterService). On a
 // NATS bus the settings live in the key-value bucket <stream>_NOTIFY, so
 // every replica of the front reads one truth. On the bus mem they live in
-// the memory of the process. The notifications wait in the same bucket
-// until a replica sends them, so a restart loses none, and a replica
-// claims each one before it sends it, so only one replica sends it. The
-// package gets the notices of the duties through duties.OnNotice. It
-// mounts GET and PUT /v1/notifications and POST /v1/notifications/test on
-// the native surface and adds the MCP tools notifications_get,
-// notifications_put, and notification_test, which call the same Go
-// functions.
+// the memory of the process. The notifications wait in the same bucket,
+// one per channel, until a replica sends them, so a restart loses none,
+// and a replica claims each one before it sends it, so only one replica
+// sends it. The package gets the notices of the duties through
+// duties.OnNotice. It mounts GET and PUT /v1/notifications and POST
+// /v1/notifications/test on the native surface and adds the MCP tools
+// notifications_get, notifications_put, and notification_test, which call
+// the same Go functions.
 //
-// The front never picks a public server by itself. Without a server of
-// the person and without workbench.notifications.ntfy.server, the
-// notifications of that person are off, and a read says why.
+// Nothing goes out by default. A new person has no channel and gets
+// nothing. The front never picks a public ntfy server, an SMTP server, or
+// an agent by itself, and a channel of the kind agent needs a budget.
 package notify
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,12 +52,23 @@ func init() {
 	native.Extend(mount)
 	mcp.RegisterTools(tools)
 	duties.OnNotice(onNotice)
+	duties.RegisterChannels(hasShared)
+}
+
+// hasShared reports whether the configuration of a names the shared
+// channel name, for a duty that names channel:<name>.
+func hasShared(a *fw.Agent, name string) bool {
+	if s := Of(a); s != nil {
+		return s.cfg.sharedNamed(name) != nil
+	}
+	c, err := LoadConfig(a.Config())
+	return err == nil && c.sharedNamed(name) != nil
 }
 
 // notifyBucket is the bucket of the settings and of the outbox.
 var notifyBucket = bucket.Config{
 	Name:        "NOTIFY",
-	Description: "The notifications of a featherweight fleet: the settings of each person under person.<subject>, the notifications that wait under out.<id>, and the day of the last digest of each person under digest.<subject>.",
+	Description: "The notifications of a featherweight fleet: the settings of each person under person.<subject>, the notifications that wait under out.<id>, the day of the last digest of each person under digest.<subject>, and the runs of the kind agent of each person on one day under agents.<subject>.",
 	History:     1,
 	MaxValue:    64 << 10,
 }
@@ -95,8 +112,17 @@ type Service struct {
 	every   time.Duration
 
 	listed, public *http.Client
-	// postFn replaces the post to ntfy in a test.
-	postFn func(ctx context.Context, st Settings, m *message) error
+	// sendFn replaces the send to a channel in a test.
+	sendFn func(ctx context.Context, t target, m *message) error
+	// enqueue puts the run of a channel of the kind agent on the queue of
+	// its agent, fleet.EnqueueFor, or a queue of a test.
+	enqueue func(ctx context.Context, agent, pool string, reqs []fw.RunRequest) (string, int, error)
+	// secret reads a variable of the front: the address of a shared
+	// channel, its secret, and the password of the mail server.
+	secret func(ctx context.Context, name string) (string, error)
+	// smtpTLS gives the TLS configuration of STARTTLS, or nil for the
+	// roots of the system.
+	smtpTLS func(host string) *tls.Config
 
 	mu         sync.Mutex
 	lastDigest time.Time
@@ -140,7 +166,11 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	if cfg.Ntfy.Server != "" {
 		server = hostOf(cfg.Ntfy.Server)
 	}
-	log.Info("notify: the notifications are on", "store", where, "server", server)
+	var offered []string
+	for _, o := range cfg.offered() {
+		offered = append(offered, o.Kind)
+	}
+	log.Info("notify: the notifications are on", "store", where, "kinds", strings.Join(offered, " "), "ntfyServer", server, "shared", len(cfg.Shared))
 	return s, nil
 }
 
@@ -151,6 +181,20 @@ func newService(a *fw.Agent, b bucket.Bucket, cfg Config, log *slog.Logger) *Ser
 	}
 	s := &Service{a: a, b: b, cfg: cfg, log: log, now: time.Now, replica: replicaOf(a), every: defaultEvery, poke: make(chan struct{}, 1)}
 	s.listed, s.public = cfg.clients()
+	s.enqueue = func(ctx context.Context, agent, pool string, reqs []fw.RunRequest) (string, int, error) {
+		return fleet.EnqueueFor(ctx, a, agent, pool, reqs)
+	}
+	s.secret = func(ctx context.Context, name string) (string, error) {
+		var secrets fw.Secrets = fw.EnvSecrets{}
+		if a != nil && a.Secrets() != nil {
+			secrets = a.Secrets()
+		}
+		v, err := secrets.Get(ctx, name)
+		if err == nil && strings.TrimSpace(v) == "" {
+			err = fw.ErrSecretNotFound
+		}
+		return strings.TrimSpace(v), err
+	}
 	return s
 }
 
