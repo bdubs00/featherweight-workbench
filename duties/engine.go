@@ -598,7 +598,7 @@ func (s *Service) actRegistered(ctx context.Context, st *stored, date string, e 
 		return s.failAttempt(ctx, st, date, e, []string{StateStarting}, "The action "+name+" failed: "+reasonOf(err)+".", false)
 	}
 	if started.Run == "" {
-		s.endEntry(ctx, st, date, e, []string{StateStarting}, StateCompleted, started.Note)
+		s.endWithoutRun(ctx, st, date, e, started.Note)
 		return Outcome{}
 	}
 	s.queued(ctx, st, date, e, started.Run)

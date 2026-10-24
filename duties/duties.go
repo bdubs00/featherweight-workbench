@@ -418,6 +418,23 @@ func eventsCheck() func(e *Event) []string {
 	return hooks.events
 }
 
+// endWithoutRun ends a start whose registered action started no run, such
+// as a post in a bridge: the start names no run, so its history links to
+// none, and its reason says what the action did.
+func (s *Service) endWithoutRun(ctx context.Context, st *stored, date string, e entry, note string) {
+	_, wrote, err := s.st.setEntry(ctx, st.Duty.Name, date, e.ID, []string{StateStarting}, func(x *entry) bool {
+		x.State, x.Reason, x.Run = StateCompleted, note, ""
+		x.FoundText, x.Event = "", ""
+		return true
+	})
+	if err != nil {
+		s.log.Warn("duties: the history of a duty did not change", "duty", st.Duty.Name, "error", err)
+	}
+	if wrote {
+		changed(st.Duty.Name)
+	}
+}
+
 // notify calls the OnNotice hooks.
 func (s *Service) notify(ctx context.Context, st *stored, n Notice) {
 	d := &st.Duty

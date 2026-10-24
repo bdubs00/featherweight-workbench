@@ -170,12 +170,19 @@ func (s *Store) PostFor(ctx context.Context, id string, spec PostSpec, by *fw.Pr
 	return s.post(fctx, id, snd, spec)
 }
 
-// State returns the state of a bridge, open or closed, for the front
-// itself, or an error that wraps ErrNotFound.
-func (s *Store) State(ctx context.Context, id string) (string, error) {
+// Peek returns the state of a bridge, open or closed, and the handles of
+// its seats that are not fired, for the front itself, or an error that
+// wraps ErrNotFound.
+func (s *Store) Peek(ctx context.Context, id string) (string, []string, error) {
 	rec, _, err := s.b.get(s.asFront(ctx), id)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return rec.State, nil
+	var handles []string
+	for _, m := range rec.Members {
+		if !m.Fired {
+			handles = append(handles, m.Handle)
+		}
+	}
+	return rec.State, handles, nil
 }

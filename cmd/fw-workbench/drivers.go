@@ -38,6 +38,7 @@ import (
 
 	_ "github.com/bdubs00/featherweight-kernel/authn/oidc"
 	_ "github.com/bdubs00/featherweight-workbench/bridges"
+	_ "github.com/bdubs00/featherweight-workbench/duties/actions"
 	_ "github.com/bdubs00/featherweight-workbench/duties/looks"
 	_ "github.com/bdubs00/featherweight-workbench/faces"
 	_ "github.com/bdubs00/featherweight-workbench/pages"

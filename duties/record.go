@@ -451,6 +451,11 @@ func (d *Duty) zone() *time.Location {
 	return time.UTC
 }
 
+// Location returns the time zone of the days of a duty: the zone of its
+// schedule, else UTC. A start of the duty has its date in this zone, as
+// the title of a bridge that the duty opens names it.
+func (d *Duty) Location() *time.Location { return d.zone() }
+
 // starts counts the starts of when.
 func (w When) starts() int {
 	n := 0

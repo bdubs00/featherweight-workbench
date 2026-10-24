@@ -37,7 +37,7 @@ func TestCheckPlanNamesTheField(t *testing.T) {
 
 // OpenFor opens a bridge as the front for its operator, whose runs act as
 // the operator, and PostFor posts in it as the front for a sender with a
-// name. A closed bridge takes no post, and State tells it.
+// name. A closed bridge takes no post, and Peek tells it.
 func TestOpenForAndPostFor(t *testing.T) {
 	a := newAgent(t, nil)
 	s := newStore(t, a, nil)
@@ -56,15 +56,15 @@ func TestOpenForAndPostFor(t *testing.T) {
 	if err != nil || m.From.Kind != KindPerson || m.From.Name != "duty:weekly" || m.From.Display != "the duty weekly" || len(m.To) != 1 {
 		t.Fatalf("PostFor = %+v, %v", m, err)
 	}
-	if state, err := s.State(ctx, it.ID); err != nil || state != StateOpen {
-		t.Fatalf("State = %s, %v", state, err)
+	if state, handles, err := s.Peek(ctx, it.ID); err != nil || state != StateOpen || len(handles) != 1 || handles[0] != "patcher" {
+		t.Fatalf("Peek = %s %v, %v", state, handles, err)
 	}
 	closed := StateClosed
 	if _, _, err := s.patch(ctx, it.ID, BridgePatch{State: &closed}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if state, _ := s.State(ctx, it.ID); state != StateClosed {
-		t.Fatalf("State after the close = %s", state)
+	if state, _, _ := s.Peek(ctx, it.ID); state != StateClosed {
+		t.Fatalf("Peek after the close = %s", state)
 	}
 	if _, err := s.PostFor(ctx, it.ID, PostSpec{Text: "late"}, duty, "the duty weekly"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("a post to a closed bridge = %v", err)
@@ -72,7 +72,7 @@ func TestOpenForAndPostFor(t *testing.T) {
 	if _, err := s.PostFor(ctx, "01nobridge", PostSpec{Text: "x"}, duty, ""); err == nil {
 		t.Fatal("a post to no bridge went out")
 	}
-	if _, err := s.State(ctx, "01nobridge"); err == nil {
-		t.Fatal("State of no bridge has a state")
+	if _, _, err := s.Peek(ctx, "01nobridge"); err == nil {
+		t.Fatal("Peek of no bridge has a state")
 	}
 }
