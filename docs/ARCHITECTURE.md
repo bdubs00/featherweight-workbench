@@ -2995,6 +2995,8 @@ Each start in `lastRun` and `history` has `at`, `slot`, `run`, `state`, and `cos
 
 The message of `ask` is plain text with these placeholders, which the front replaces before the run goes on the queue: `{date}`, `{time}`, `{found}`, `{event}`, `{last.title}`, `{last.run}`, `{last.state}`, and `{duty}`. The date and the time are those of the start in the time zone of the duty. `{last.*}` names the newest earlier run of the duty. A placeholder without a value becomes `none`. No other text is a placeholder.
 
+The title of the run comes from the same message, because a person reads it in Activity and in the history. In the title, `{found}` becomes the count of the items, such as "2 items". `{event}` becomes the title, the path, the name, or the kind of the event, in that order. The message to the agent keeps the JSON of both.
+
 ### 22.2 The schedule in words
 
 The package `duties/schedule` holds the schedule. It reads no clock and calls no model.
@@ -3377,7 +3379,7 @@ When the manager decides, the front puts one run of the profile of the manager o
 {"verdict": "allow", "reason": "The push serves the report of the duty."}
 ```
 
-The run acts as the owner of the duty, with the budget of the duty, the metadata `workbench.dutyVerdict` (`<run>/<approval>`), and the idempotency key `duty-away/<run>/<approval>`. The front reads the answer strictly (`away.ParseVerdict`): one object with `verdict` `allow` or `deny`, a `reason` of at most 500 bytes, no other field, and no other text. One code fence around the whole answer is taken off. The front then applies the verdict with its own authority, through the route of a decision: `POST /v1/runs/{id}/approvals/{approval}` on the member that holds the run, with the static token of the fleet, or the kernel for a run of the front. The note of the decision says that the manager decided for the duty while its owner was away, with the reason. The manager gets no right to approve. A verdict that does not read, a run of the manager that failed, a queue that did not take the question, and a manager that took no question within 15 minutes all send the approval to the person.
+The run acts as the owner of the duty, with the budget of the duty, the metadata `workbench.dutyVerdict` (`<run>/<approval>`), and the idempotency key `duty-away/<run>/<approval>`. It also carries `workbench.internal` with `duty-verdict:<name>`, so the conversations of the owner leave it out. The front reads the answer strictly (`away.ParseVerdict`): one object with `verdict` `allow` or `deny`, a `reason` of at most 500 bytes, no other field, and no other text. One code fence around the whole answer is taken off. The front then applies the verdict with its own authority, through the route of a decision: `POST /v1/runs/{id}/approvals/{approval}` on the member that holds the run, with the static token of the fleet, or the kernel for a run of the front. The note of the decision says that the manager decided for the duty while its owner was away, with the reason. The manager gets no right to approve. A verdict that does not read, a run of the manager that failed, a queue that did not take the question, and a manager that took no question within 15 minutes all send the approval to the person.
 
 After `whileAway.timeout` without a decision, the front applies `whileAway.then`. With `deny`, it denies the call through the route of a decision. With `cancel`, it cancels the run through the route of a cancel. Then it tells the people of `notify.needsYou` with a notice of kind `decided`, and it stops a run of the manager that still works.
 
@@ -3657,7 +3659,7 @@ The test `TestParity` of `cmd/fw-workbench` reads the source of the workbench wi
 
 ### 24.6 The runs that the lists leave out
 
-The front starts some runs for itself: the check runs of 24.3 and the run that writes a check. `fleet.Listed(run)` is false for a run with `fw.kind: check` or with the metadata `workbench.internal`, and only the front sets that key. The lists of the workbench leave such a run out:
+The front starts some runs for itself: the check runs of 24.3 and the run that writes a check. The run of the manager that gives a verdict (section 23.4) is one too. `fleet.Listed(run)` is false for a run with `fw.kind: check` or with the metadata `workbench.internal`, and only the front sets that key. The lists of the workbench leave such a run out:
 
 - `dashboard.Runs`, and so the MCP tool `runs_list`, `GET /v1/fleet/runs`, the home of a person (`GET /v1/home`), and the conversation of the manager on the page
 - the stream of bossmode, which sends no `run` event for such a run
