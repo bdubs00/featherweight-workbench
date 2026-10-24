@@ -160,8 +160,16 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 		s.closers = append(s.closers, closeFn)
 	}
 	attach(a, s)
-	s.start()
 	where, _ := bucket.Where(a.Config(), notifyBucket)
+	if !fleet.CanEnqueue(a.Config()) {
+		// Several fronts can share one bus and so one outbox. A front
+		// without an intake starts no duty, and it can lack the shared
+		// channels and the queues of the fronts that do, so it sends
+		// nothing and serves only the routes.
+		log.Info("notify: this replica serves the settings and sends nothing, because workbench.fleet.intake is empty. A replica with an intake sends.", "store", where)
+		return s, nil
+	}
+	s.start()
 	server := "none, so a person names one"
 	if cfg.Ntfy.Server != "" {
 		server = hostOf(cfg.Ntfy.Server)

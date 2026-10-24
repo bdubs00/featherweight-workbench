@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/duties"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
 )
 
@@ -585,4 +587,35 @@ func decodeEvent(t *testing.T, body []byte) Event {
 		t.Fatalf("the event %s: %v", body, err)
 	}
 	return e
+}
+
+// A replica without an intake serves the settings and runs no loop, so a
+// front on the same bus with another configuration never takes a
+// notification that it cannot send.
+func TestStartWithoutIntake(t *testing.T) {
+	t.Setenv(fleet.EnvIntake, "")
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(fw.NoAuthn{}),
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithLogger(slog.New(slog.DiscardHandler)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close(context.Background())
+	c, err := Start(context.Background(), a)
+	if err != nil || c == nil || Of(a) == nil {
+		t.Fatalf("Start = %v, %v", c, err)
+	}
+	if s := Of(a); s.cancel != nil {
+		t.Fatal("a replica without an intake runs the loop of the outbox")
+	}
+	if err := c.Close(); err != nil || Of(a) != nil {
+		t.Fatalf("Close = %v, %v", err, Of(a))
+	}
+	t.Setenv(fleet.EnvIntake, "fw.jobs")
+	c, err = Start(context.Background(), a)
+	if err != nil || c == nil || Of(a).cancel == nil {
+		t.Fatalf("Start with an intake = %v, %v", c, err)
+	}
+	_ = c.Close()
 }
