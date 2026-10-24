@@ -98,6 +98,8 @@ func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 		native.WriteProblem(w, r, http.StatusConflict, reason(err))
 	case errors.Is(err, ErrUpstream):
 		native.WriteProblem(w, r, http.StatusBadGateway, reason(err))
+	case errors.Is(err, ErrNoStarts):
+		native.WriteProblem(w, r, http.StatusServiceUnavailable, reason(err))
 	case errors.Is(err, ErrNoAnswer):
 		writeCheckFailure(w, r, http.StatusGatewayTimeout, reason(err), nil)
 	default:
@@ -133,7 +135,7 @@ func writeCheckFailure(w http.ResponseWriter, r *http.Request, status int, reaso
 // reason returns the words of an error of the package without its prefix.
 func reason(err error) string {
 	s := err.Error()
-	for _, e := range []error{ErrHidden, ErrNotFound, ErrConflict, ErrExists, ErrReadOnly, ErrUpstream, ErrNoAnswer, fw.ErrInvalidRequest, fw.ErrForbidden} {
+	for _, e := range []error{ErrHidden, ErrNotFound, ErrConflict, ErrExists, ErrReadOnly, ErrUpstream, ErrNoStarts, ErrNoAnswer, fw.ErrInvalidRequest, fw.ErrForbidden} {
 		s = strings.TrimPrefix(s, e.Error()+": ")
 	}
 	return capital(strings.TrimPrefix(s, "duties: "))

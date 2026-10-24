@@ -2,6 +2,7 @@ package duties
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/duties/schedule"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
 )
 
@@ -621,8 +623,21 @@ func TestStartAndClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close(context.Background())
+	// Without an intake, the replica serves the duties and starts none.
+	t.Setenv(fleet.EnvIntake, "")
 	c, err := Start(context.Background(), a)
-	if err != nil || c == nil || Of(a) == nil {
+	if err != nil || c == nil || Of(a) == nil || Of(a).Engine() {
+		t.Fatalf("Start without an intake = %v, %v", c, err)
+	}
+	if _, err := Of(a).begin(context.Background(), &stored{Duty: Duty{Name: "x"}}, Trigger{Kind: StartNow}); !errors.Is(err, ErrNoStarts) {
+		t.Fatalf("a start on a replica without an intake = %v", err)
+	}
+	if err := c.Close(); err != nil || Of(a) != nil {
+		t.Fatalf("Close = %v, %v", err, Of(a))
+	}
+	t.Setenv(fleet.EnvIntake, "fw.jobs")
+	c, err = Start(context.Background(), a)
+	if err != nil || c == nil || !Of(a).Engine() {
 		t.Fatalf("Start = %v, %v", c, err)
 	}
 	Of(a).wake()

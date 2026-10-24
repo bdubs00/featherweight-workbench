@@ -3049,7 +3049,7 @@ workbench:
       - name: TICKETS_HOOK_TOKEN
 ```
 
-The duties need `workbench.fleet.intake` (section 4.6), so a run reaches a queue. `fw-workbench doctor` has a line for the duties. It names where they live, the hosts of the checks, and the secrets of the list. When a variable of the list holds no secret, the line fails.
+The duties need `workbench.fleet.intake` (section 4.6), so a run reaches a queue. Several fronts can share one bus and so one store of duties. A front without an intake serves the routes of the duties and starts none: it runs no engine, no start on an event, and no decision while away. Run now, a call, and Write the check on such a front answer 503 with the reason. The fronts with an intake start the duties. `fw-workbench doctor` has a line for the duties. It names where they live, the hosts of the checks, and the secrets of the list. When a variable of the list holds no secret, the line fails.
 
 ### 22.4 The store
 

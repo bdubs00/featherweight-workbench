@@ -387,6 +387,9 @@ func (s *Service) switchedOff(ctx context.Context) (bool, string) {
 // the check and the action. An error means that the store did not answer,
 // and the start did not happen.
 func (s *Service) begin(ctx context.Context, st *stored, start Trigger) (Outcome, error) {
+	if s.passive {
+		return Outcome{}, ErrNoStarts
+	}
 	d := &st.Duty
 	now := s.now()
 	loc := d.zone()

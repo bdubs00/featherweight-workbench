@@ -32,6 +32,9 @@ var (
 	// ErrReadOnly means that the duty is an entry of workbench.sources,
 	// which only fw.yaml changes.
 	ErrReadOnly = errors.New("duties: read-only")
+	// ErrNoStarts means that this replica starts no duty, because its
+	// configuration names no workbench.fleet.intake.
+	ErrNoStarts = errors.New("duties: this front starts no duty, because workbench.fleet.intake is empty. A front with an intake starts it")
 	// ErrUpstream means that an outside system failed, such as the
 	// address of a check in a test. A route answers 502.
 	ErrUpstream = errors.New("duties: an outside system failed")

@@ -119,6 +119,9 @@ func (s *Service) WriteCheck(ctx context.Context, name string, body WriteCheckBo
 	case len(words) > maxWords:
 		return WriteCheckAnswer{}, &ProblemsError{Problems: []string{problem("words", "The words hold more than %d bytes.", maxWords)}}
 	}
+	if s.passive {
+		return WriteCheckAnswer{}, ErrNoStarts
+	}
 	if err := CheckName(name); err != nil && name != DraftName {
 		return WriteCheckAnswer{}, &ProblemsError{Problems: []string{problem("name", "%s.", capital(err.Error()))}}
 	}

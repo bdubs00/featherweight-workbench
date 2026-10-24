@@ -210,6 +210,10 @@ type Service struct {
 // store it logs once that the starts on events are off.
 func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	log := a.Logger().With("component", "duties-events")
+	if !fleet.CanEnqueue(a.Config()) {
+		log.Info("events: this replica starts no duty on an event, because workbench.fleet.intake is empty. A replica with an intake starts them.")
+		return nil, nil
+	}
 	b, closeFn, err := bucket.Open(ctx, a.Config(), eventsBucket, log)
 	if errors.Is(err, bucket.ErrNoStore) {
 		where, _ := bucket.Where(a.Config(), eventsBucket)

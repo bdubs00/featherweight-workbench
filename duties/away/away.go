@@ -162,6 +162,10 @@ type Service struct {
 // engine of the duties tells of each question itself.
 func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	log := a.Logger().With("component", "duties-away")
+	if !fleet.CanEnqueue(a.Config()) {
+		log.Info("away: this replica decides nothing while away, because workbench.fleet.intake is empty. A replica with an intake decides.")
+		return nil, nil
+	}
 	b, closeFn, err := bucket.Open(ctx, a.Config(), awayBucket, log)
 	if errors.Is(err, bucket.ErrNoStore) {
 		where, _ := bucket.Where(a.Config(), awayBucket)

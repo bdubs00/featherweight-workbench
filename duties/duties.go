@@ -122,6 +122,11 @@ type Service struct {
 	seeded  map[string]bool            // per duty, whether this replica read its history once
 	warned  map[string]string          // per duty, the last problem of its schedule in the log
 
+	// passive is true on a replica that cannot put a job on a queue
+	// (fleet.CanEnqueue): it serves the routes and runs no engine, and a
+	// start on it fails with ErrNoStarts.
+	passive bool
+
 	poke      chan struct{}
 	closers   []func()
 	cancel    context.CancelFunc
@@ -174,12 +179,21 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	}
 	s := newService(a, NewStore(duties, runs, seen, log), cfg, log)
 	s.closers = closers
+	s.passive = !fleet.CanEnqueue(a.Config())
 	attach(a, s)
-	s.start()
 	where, _ := bucket.Where(a.Config(), dutiesBucket)
+	if s.passive {
+		log.Info("duties: this replica serves the duties and starts none, because workbench.fleet.intake is empty. A replica with an intake starts them.", "store", where, "replica", s.replica)
+		return s, nil
+	}
+	s.start()
 	log.Info("duties: the duties are on", "store", where, "replica", s.replica)
 	return s, nil
 }
+
+// Engine reports whether this replica starts duties. A replica without
+// workbench.fleet.intake serves the routes and starts none.
+func (s *Service) Engine() bool { return s != nil && !s.passive }
 
 // newService builds the duties of an agent on a store, with the seams of
 // the fleet and the secrets of the agent.

@@ -32,6 +32,15 @@ const MaxEnqueue = 500
 // queue takes a job.
 var ErrNoIntake = errors.New("fleet: workbench.fleet.intake is empty, so no queue takes a job")
 
+// CanEnqueue reports whether this process can put a job on a queue: its
+// configuration names workbench.fleet.intake. Several fronts can share one
+// bus, and a front without an intake serves its routes but starts no run
+// on a schedule or an event, because the job would find no queue.
+func CanEnqueue(cfg *fw.Config) bool {
+	c, err := Load(cfg)
+	return err == nil && c.Intake != ""
+}
+
 // Queue returns the queue of a profile that no pool runs: "<intake>.<agent>",
 // which a worker of no pool reads. A job goes to the queue of QueueFor,
 // which knows the pools.
