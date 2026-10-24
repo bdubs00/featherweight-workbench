@@ -312,7 +312,8 @@ func (s *Service) Put(ctx context.Context, name string, body DutyBody, opt PutOp
 	default:
 		return PutAnswer{}, &ProblemsError{Problems: []string{problem("name", "The duty is named %s in the body and %s in the path.", d.Name, name)}}
 	}
-	if err := CheckName(name); err != nil {
+	draft := opt.DryRun && name == DraftName
+	if err := CheckName(name); err != nil && !draft {
 		return PutAnswer{}, &ProblemsError{Problems: []string{problem("name", "%s.", capital(err.Error()))}}
 	}
 	if s.fileOf(name) != nil {
@@ -381,7 +382,13 @@ func (s *Service) Put(ctx context.Context, name string, body DutyBody, opt PutOp
 	if d.RunAs == RunAsOwner && by != d.Owner {
 		d.RunAs = RunAsDuty
 	}
-	problems = append(problems, d.problems()...)
+	for _, p := range d.problems() {
+		// A draft has no name yet, so its dry run says nothing of the name.
+		if draft && strings.HasPrefix(p, "name: ") {
+			continue
+		}
+		problems = append(problems, p)
+	}
 	problems = append(problems, s.contextProblems(ctx, &d)...)
 	if opt.DryRun {
 		return s.dryRun(ctx, d, problems, opt.Test, now)

@@ -319,8 +319,14 @@ var envPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // headerPattern is the form of the name of a header.
 var headerPattern = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 
-// reservedName is the name that the route GET /v1/duties/options takes.
-const reservedName = "options"
+// Names that no duty takes. The route GET /v1/duties/options takes
+// options. DraftName stands for a duty that has no name yet: the page
+// checks such a duty with a dry run of PUT /v1/duties/new and asks
+// POST /v1/duties/new/write-check for its check.
+const (
+	reservedName = "options"
+	DraftName    = "new"
+)
 
 // CheckName returns an error in words for a name that is not the name of
 // a duty.
@@ -328,8 +334,11 @@ func CheckName(name string) error {
 	if !namePattern.MatchString(name) {
 		return fmt.Errorf("the name %q must be 1 to 63 of a-z, 0-9, '-', and '_'", name)
 	}
-	if name == reservedName {
+	switch name {
+	case reservedName:
 		return fmt.Errorf("the name %s is taken by the route GET /v1/duties/options: pick another", name)
+	case DraftName:
+		return fmt.Errorf("the name %s stands for a duty that has no name yet: pick another", name)
 	}
 	return nil
 }

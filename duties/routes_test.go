@@ -112,6 +112,15 @@ func TestRoutesDryRun(t *testing.T) {
 	if resp, _ := send(t, http.MethodPut, one+"?test=true", "alice", words); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("a test without a dry run = %d", resp.StatusCode)
 	}
+	// A draft without a name is checked as new: its dry run says nothing
+	// of the name, and a write of the name new fails.
+	draft := f.url + "/v1/duties/" + DraftName
+	if resp, b := send(t, http.MethodPut, draft+"?dryRun=true", "alice", words, HeaderTimeZone, "America/Chicago"); resp.StatusCode != http.StatusOK || strings.Contains(b, "name: ") || !strings.Contains(b, "Every weekday at 9:00 AM") {
+		t.Fatalf("the dry run of a draft = %d %s", resp.StatusCode, b)
+	}
+	if resp, b := send(t, http.MethodPut, draft, "alice", words); resp.StatusCode != http.StatusBadRequest || !strings.Contains(b, "name: The name new stands for a duty that has no name yet") {
+		t.Fatalf("a write of the draft name = %d %s", resp.StatusCode, b)
+	}
 	if resp, b := send(t, http.MethodPut, one+"?dryRun=true&test=true", "alice", words); resp.StatusCode != http.StatusOK || !strings.Contains(b, "checkFirst: The test runs the check, and the duty has none") {
 		t.Fatalf("a test without a check = %d %s", resp.StatusCode, b)
 	}

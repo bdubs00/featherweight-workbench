@@ -33,6 +33,9 @@ func TestOptions(t *testing.T) {
 	if err := CheckName("options"); err == nil {
 		t.Fatal("a duty can take the name of the route of the options")
 	}
+	if err := CheckName(DraftName); err == nil {
+		t.Fatal("a duty can take the name of a draft")
+	}
 }
 
 // withBudget gives the agent triage a budget.
@@ -87,6 +90,11 @@ func TestWriteCheck(t *testing.T) {
 	}
 	if resp, _ := send(t, http.MethodGet, f.url+"/v1/duties/incidents", "alice", ""); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("write-check saved the duty: %d", resp.StatusCode)
+	}
+	// A draft that has no name yet asks under the name new.
+	f.answering(fw.StateCompleted, answer)
+	if resp, b := send(t, http.MethodPost, f.url+"/v1/duties/"+DraftName+"/write-check", "alice", `{"words": "a new P1 or P2 in the queue", "agent": "triage"}`); resp.StatusCode != http.StatusOK || !strings.Contains(b, `"checkFirst"`) {
+		t.Fatalf("write-check of a draft = %d %s", resp.StatusCode, b)
 	}
 }
 
