@@ -535,12 +535,39 @@ func (s *Service) contextProblems(ctx context.Context, d *Duty) []string {
 			p = append(p, act.Check(ctx, s.a, d)...)
 		}
 	}
+	p = append(p, s.channelProblems(d.Notify)...)
 	p = append(p, s.checkContextProblems(ctx, d.CheckFirst)...)
 	if w := d.When.Webhook; w != nil && w.Auth.Secret != "" && envPattern.MatchString(w.Auth.Secret) {
 		p = append(p, s.cfg.webhookProblems(w)...)
 		if s.cfg.secretRule(w.Auth.Secret) != nil {
 			if _, err := s.secret(ctx, w.Auth.Secret); err != nil {
 				p = append(p, problem("when.webhook.auth.secret", "%s holds no secret in this front.", w.Auth.Secret))
+			}
+		}
+	}
+	return p
+}
+
+// channelProblems lists the shared channels of the notify lists that the
+// front does not have (RegisterChannels).
+func (s *Service) channelProblems(n *Notify) []string {
+	if n == nil {
+		return nil
+	}
+	var p []string
+	has := channelCheck()
+	for _, f := range []struct {
+		path string
+		list []string
+	}{{"notify.failure", n.Failure}, {"notify.needsYou", n.NeedsYou}} {
+		for _, who := range f.list {
+			name, ok := ChannelOf(who)
+			switch {
+			case !ok || !namePattern.MatchString(name):
+			case has == nil:
+				p = append(p, problem(f.path, "Not available yet: this front sends no notification, so %s reaches nothing.", who))
+			case !has(s.a, name):
+				p = append(p, problem(f.path, "%s is not a shared channel of this front. An operator names it in workbench.notifications.shared.", who))
 			}
 		}
 	}

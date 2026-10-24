@@ -77,6 +77,7 @@ func TestProblems(t *testing.T) {
 		{func(d *Duty) { d.WhileAway = &WhileAway{Decider: "nobody", Timeout: "10s", Then: "deny"} }, `whileAway.timeout: "10s" is not a span`},
 		{func(d *Duty) { d.WhileAway = &WhileAway{Decider: "nobody", Timeout: "1h", Then: "allow"} }, `whileAway.then: "allow" is not a choice`},
 		{func(d *Duty) { d.Notify = &Notify{Failure: []string{""}} }, `notify.failure: "" is not owner`},
+		{func(d *Duty) { d.Notify = &Notify{NeedsYou: []string{"channel:Ops Room"}} }, `notify.needsYou: "channel:Ops Room" is not a shared channel`},
 		{func(d *Duty) { d.RunAs = "root" }, `runAs: "root" is not a choice`},
 		{func(d *Duty) { d.CheckFirst = &CheckFirst{Key: "id"} }, "checkFirst.look: Pick http"},
 		{func(d *Duty) {

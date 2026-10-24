@@ -98,11 +98,15 @@ duties/                 the duties: the record, the store, the engine, the check
 duties/away/            the decisions while away: the verdict of the manager, the question that
                         waits for the person, and the timeout (section 23.4)
 duties/events/          the starts of the duties on events of the fleet (section 23.5)
-notify/                 the notifications of the duties by ntfy, per person: the settings, the
-                        outbox, the quiet hours, and the daily digest (section 23.1)
+notify/                 the notifications of the duties, per person and per channel: the
+                        settings, the outbox, the quiet hours, the daily digest, and the send
+                        to ntfy, Slack, Discord, Teams, a webhook, a mail, or an agent
+                        (section 23.1)
 inbox/                  what needs the caller now: GET /v1/inbox and the tool inbox (section 23.3)
 internal/bucket/        the key-value bucket under the stores of the front: a bucket of the
                         NATS server of the bus, or the memory of the process
+internal/hostguard/     the rule of a glob of a host and the dialer that refuses a private
+                        address, which the duties and the notifications share
 bossmode/               the page of bossmode at /bossmode, its settings, its stream of events,
                         and the feeds of the stream (section 17); static/ holds the build of
                         the page that make page copies, and placeholder/ the placeholder
@@ -2964,7 +2968,7 @@ The page and the MCP tools write the same record. The contract of the build, `re
 | `limits.catchUp` | A span from `0` to `24h`. A missed time younger than this span runs once. The default is `1h`. |
 | `limits.retries` | 0 to 3. A failed run goes again this many times. The default is 1. |
 | `whileAway` | Who decides a question of a run while nobody watches. The default is `{"decider": "manager", "timeout": "2h", "then": "deny"}`. The front keeps it, and a later part of the build applies it. |
-| `notify` | Who hears of a failed run and of a question: `owner`, or the subject of a person. The default names the owner for both. |
+| `notify` | Who hears of a failed run and of a question: `owner`, the subject of a person, or `channel:<name>`, a shared channel of the operator that the notification reaches without a person (section 23.1). The default names the owner for both. |
 | `runAs` | `duty`, the principal `duty:<name>` of the kind `workload`, or `owner`. Only the owner sets `owner`. When another person changes the duty, `runAs` goes back to `duty`. |
 | `paused` | `true` pauses the duty. A write that leaves it out keeps the pause of the duty. |
 
@@ -3185,7 +3189,7 @@ The duties work while nobody watches. This section says how they reach a person,
 
 | Package | Work |
 |---|---|
-| `notify` | The notifications by ntfy, per person: the settings, the outbox, the quiet hours, and the daily digest |
+| `notify` | The notifications, per person and per channel: the settings, the outbox, the quiet hours, the daily digest, and the send of each kind of channel |
 | `inbox` | What needs the caller now: the route `GET /v1/inbox` and the MCP tool `inbox` |
 | `duties/away` | The decisions while away: `whileAway` of a duty |
 | `duties/events` | The starts of a duty on an event of the fleet: `when.event` |
@@ -3194,46 +3198,121 @@ The engine of the duties also keeps two more caps: a daily cap per agent and a d
 
 ### 23.1 Notifications
 
-A person picks where the notifications go, which kinds go, and the quiet hours. The first channel is ntfy. The settings of a person have this shape:
+No one service holds the notifications. A person keeps a list of channels. A channel is one place that the front reaches, such as a phone through ntfy, a room of Slack, or a webhook of Home Assistant. Each channel has its own switches. The quiet hours are one setting per person, and they hold every channel. The settings of a person have this shape:
 
 ```json
 {
-  "ntfy": {"server": "https://ntfy.example.com", "topic": "alice-fw-8f3k", "token": "set"},
-  "send": {"questions": true, "failures": true, "digest": false},
-  "quietHours": {"from": "22:00", "to": "07:00", "timeZone": "America/New_York"}
+  "channels": [
+    {"id": "phone", "kind": "ntfy", "label": "My phone",
+     "send": {"questions": true, "failures": true, "digest": false},
+     "ntfy": {"server": "", "topic": "alice-fw-8f3k", "token": "set"}},
+    {"id": "room", "kind": "slack", "label": "Ops room",
+     "send": {"questions": false, "failures": true, "digest": true},
+     "url": "set"},
+    {"id": "ha", "kind": "webhook", "label": "Home Assistant",
+     "send": {"questions": true, "failures": true, "digest": false},
+     "url": "set", "secret": "set"},
+    {"id": "mail", "kind": "email", "label": "Work mail",
+     "send": {"questions": false, "failures": true, "digest": true},
+     "email": {"to": "alice@example.com"}},
+    {"id": "signal", "kind": "agent", "label": "Signal",
+     "send": {"questions": true, "failures": false, "digest": false},
+     "agent": {"agent": "relay", "how": "Send it to me on Signal.",
+               "budget": {"maxCostUSD": 0.02}}},
+    {"id": "ops", "kind": "shared", "label": "Ops room of the team",
+     "send": {"questions": false, "failures": true, "digest": false},
+     "shared": "ops-room"}
+  ],
+  "quietHours": {"from": "22:00", "to": "07:00", "timeZone": "America/New_York"},
+  "offered": [{"kind": "ntfy", "label": "ntfy"}, {"kind": "slack", "label": "Slack"},
+              {"kind": "discord", "label": "Discord"}, {"kind": "teams", "label": "Microsoft Teams"},
+              {"kind": "webhook", "label": "Webhook"}, {"kind": "email", "label": "Email"},
+              {"kind": "agent", "label": "Agent"}, {"kind": "shared", "label": "Shared channel"}],
+  "shared": [{"name": "ops-room", "kind": "slack", "label": "Ops room"}],
+  "off": ""
 }
 ```
 
 | Field | Rule |
 |---|---|
-| `ntfy.server` | An `http` or `https` address without a user, a query, or a fragment. Empty takes `workbench.notifications.ntfy.server`. |
-| `ntfy.topic` | 1 to 64 of `A-Z`, `a-z`, `0-9`, `-`, and `_` |
-| `ntfy.token` | The access token of the server. A read answers `"set"` or `""` and never the token. In a write, `"set"` keeps the token, `""` clears it, and any other value replaces it. |
-| `send.questions` | A run of a duty that waits for the person, and a decision of the front while the person was away. The default is `true`. |
-| `send.failures` | A failed run, a duty that paused itself, and a duty at a daily cap. The default is `true`. |
-| `send.digest` | The daily digest. The default is `false`. |
-| `quietHours.from`, `quietHours.to` | Two times `HH:MM`, or both empty for no quiet hours. From 22:00 to 07:00 crosses midnight. |
-| `quietHours.timeZone` | The time zone of the person, for the quiet hours and the digest. The default is the header `X-Time-Zone` of the write, else `UTC`. |
+| `channels` | At most 10 channels. A write without `channels` keeps the channels. `[]` removes every channel. |
+| `channels[].id` | 1 to 40 of `A-Z`, `a-z`, `0-9`, `-`, and `_`, once in the list. A channel without an id gets one from the front: its kind, such as `slack`, or `slack-2` when that id is taken. |
+| `channels[].kind` | A kind of the list `offered` |
+| `channels[].label` | At most 80 characters on one line. The default is the label of the kind, or the label of the shared channel. |
+| `channels[].send` | `questions`, `failures`, and `digest`. A switch that a write leaves out is off. |
+| `quietHours.from`, `quietHours.to` | Two times `HH:MM`, or both empty for no quiet hours. From 22:00 to 07:00 crosses midnight. A write without `quietHours` keeps the quiet hours. |
+| `quietHours.timeZone` | The time zone of the person, for the quiet hours, the digest, and the day of the runs of the kind `agent`. The default is the header `X-Time-Zone` of the write, else `UTC`. |
+| `offered` | Read only. The kinds that this front serves now. The page offers no other kind. |
+| `shared` | Read only. The shared channels of the operator, by name, kind, and label. A read never holds their addresses. |
+| `off` | Read only. When no channel reaches the person, the reason in words. Otherwise `""`. |
 
-The front never picks a public server by itself. Without a server of the person and without `workbench.notifications.ntfy.server`, the notifications of the person are off. A read then says why in the field `off`. A person without a topic, and a person who turned every kind off, get `off` too.
+A write takes `offered`, `shared`, and `off`, and leaves them out. The fields `url`, `secret`, and `ntfy.token` are write only. A read answers `"set"` or `""`. In a write, `"set"` keeps the stored value of the channel with the same id, `""` clears it, and any other value replaces it. A write-only field that a write leaves out is `""`. A field of another kind is taken and left out.
 
-The package gets each notice of the duties through `duties.OnNotice`. It reads the settings of each person of the notice, `Notice.Who`, and puts one notification per person in the outbox. The kind of the notice picks the switch of `send`:
+A switch sends these notices:
 
-| Notice | Switch | Title |
+| Switch | Notices |
+|---|---|
+| `questions` | `needs-you`, a run of a duty that waits for the person, and `decided`, a decision of the front while the person was away |
+| `failures` | `failed`, a failed run, `paused`, a duty that paused itself, and `cap`, a duty at a daily cap |
+| `digest` | The daily digest |
+
+Each kind has its fields and its send:
+
+| Kind | Fields | What the front sends |
 |---|---|---|
-| `needs-you` | `questions` | `Duty <name> needs you` |
-| `decided` | `questions` | `Duty <name>: decided while you were away` |
-| `failed` | `failures` | `Duty <name> failed` |
-| `paused` | `failures` | `Duty <name> paused itself` |
-| `cap` | `failures` | `Duty <name> reached a daily cap` |
+| `ntfy` | `ntfy.server`, `ntfy.topic`, `ntfy.token` | A JSON publish of ntfy: a `POST` to the server with `topic`, `title`, `message`, `priority`, and `click`, the link. The token goes as a bearer token. |
+| `slack` | `url`, an incoming webhook of Slack | `{"text": ...}` with the title in bold, the text, and the link |
+| `discord` | `url`, a webhook of a Discord channel | `{"content": ...}` with the title in bold, the text, and the link. The message pings nobody. |
+| `teams` | `url`, a webhook of a Teams workflow | A message with one Adaptive Card: the title, the text, and a button that opens the link |
+| `webhook` | `url`, and `secret` as an option | The event of the notification as JSON. With a secret, the header `X-Featherweight-Signature` holds `sha256=` and the hex HMAC-SHA256 of the body. |
+| `email` | `email.to`, one mail address | A plain mail in UTF-8 through the SMTP server of the operator |
+| `agent` | `agent.agent`, `agent.how`, `agent.budget` | One run of the agent as the person. The agent delivers the message with its own tools. |
+| `shared` | `shared`, the name of a shared channel | The send of the kind of that channel |
 
-The text of a notification is the reason of the notice in plain words, such as "The agent triage asks to run git.push. Decide in Activity, or with approve. Without an answer within 2h, the front denies it."
+The rules of each kind:
 
-The outbox lives in the bucket of the settings, so a restart of a replica loses no notification. Every replica reads the outbox. A replica claims a notification with a compare-and-swap before it sends it, as the engine claims a time, so one replica sends each one. A notification during the quiet hours of its person waits until they end. A notification that the server refuses goes again after 1, 2, 4, and 8 minutes. After five tries, or after three days, the front drops it and the log says why.
+- `ntfy.server` is an `http` or `https` address without a user, a query, or a fragment. An empty server takes `workbench.notifications.ntfy.server`. Without both, the channel does not save. When `workbench.notifications.ntfy.hosts` is not empty, the server needs a host of that list. `ntfy.topic` is 1 to 64 of `A-Z`, `a-z`, `0-9`, `-`, and `_`.
+- The address of `slack` uses `https` on `hooks.slack.com`. The address of `discord` uses `https` on `discord.com` or `discordapp.com`, under `/api/webhooks/`.
+- The address of `teams` and `webhook` uses `https`. A literal private address and the name `localhost` need a glob of `workbench.notifications.hosts`. A glob follows the rule of section 22.3: `path.Match` of Go on the host name in lower case, without the port.
+- No address holds a user or a password.
+- At each send, the dialer refuses a loopback, private, or link-local address after the name resolves, unless the host matches `workbench.notifications.hosts`. For ntfy, the server of the front and the hosts of `workbench.notifications.ntfy.hosts` also pass. The checks of the duties use the same dialer (`internal/hostguard`). The front follows no redirect.
+- The front offers `email` when `workbench.notifications.email` names an SMTP server. `email.to` is one mail address alone. The front uses STARTTLS when the server offers it. It logs in only when the configuration names a user, and only after STARTTLS.
+- The front offers `agent` when `workbench.notifications.agent.enabled` is true. The person needs the right `agent.run` on the agent. A channel without a budget does not save: the budget needs at least one limit above zero, such as `{"maxCostUSD": 0.02}`. Each message is one run of the agent, as the person, through the queue of the agent (`fleet.EnqueueFor`), with the budget of the channel. The input is the words of `how`, then the title, the text, and the link. The run carries the metadata `workbench.notify` with the id of the channel. At most `workbench.notifications.agent.perDay` runs go out per person and day, in the time zone of the person. The count lives in the bucket of the settings. A message past the count drops, and the log says why.
+- An operator names a shared channel in `workbench.notifications.shared`: a name, a label, a kind, the variable that holds its address, and the variable that holds its secret as an option. Its kind is `ntfy`, `slack`, `discord`, `teams`, or `webhook`. The front reads the address at each send, with the rules of its kind. For `ntfy`, the address is the address of the topic, such as `https://ntfy.example.com/ops`, and the secret is the access token. A person picks a shared channel by name and never sees its address.
 
-A notification goes as a JSON publish of ntfy: a `POST` to the address of the server with `topic`, `title`, `message`, and `priority`. The token goes as a bearer token. A question, a failed run, and a duty that paused itself have the priority 4. A decision and a cap have 3, and the digest has 2.
+Nothing goes out by default. A new person has no channel. The front sends nothing until the person adds a channel, or a duty names a shared channel. The operator turns on the kinds `email` and `agent` and names the shared channels. The front never picks a public ntfy server, an SMTP server, or an agent by itself. Activity in the page always shows what needs the person, with or without a channel.
 
-The digest goes once a day for each person whose settings send it. It goes at the end of the quiet hours, or at 08:00 in the time zone of the person without quiet hours. A front that did not run at that time sends it up to six hours later. It lists the starts of the duties of the person in the last day, each with its time, its outcome, and its cost, then the starts that did not run as one count, and the duties that paused themselves. The duties of a person are those that the person owns and those whose `notify` lists name the person. A person with no duty gets no digest. One replica sends each digest: it claims the day of the person in the bucket.
+The package gets each notice of the duties through `duties.OnNotice`. For each person of `Notice.Who`, it reads the settings and puts one notification in the outbox for each channel whose switch sends the kind of the notice. A notify list of a duty can also name a shared channel as `channel:<name>`. Such an entry of `Notice.Who` reaches the shared channel without a person, so no quiet hours hold it. A write of a duty checks the name through `duties.RegisterChannels`. One notice reaches a shared channel once, also when several people pick it. Each notice has a title:
+
+| Notice | Title | Priority |
+|---|---|---|
+| `needs-you` | `Duty <name> needs you` | 4 |
+| `decided` | `Duty <name>: decided while you were away` | 3 |
+| `failed` | `Duty <name> failed` | 4 |
+| `paused` | `Duty <name> paused itself` | 4 |
+| `cap` | `Duty <name> reached a daily cap` | 3 |
+
+The digest has the priority 2, and a test has 3. The text of a notification is the reason of the notice in plain words, such as "The agent triage asks to run git.push. Decide in Activity, or with approve. Without an answer within 2h, the front denies it."
+
+The link of a notification starts with `workbench.notifications.link`, the base address of the page, such as `https://fleet.example.com/bossmode/`. A notice of a run links to `#activity/<run>`. A notice of a duty without a run links to `#duties/<name>`. The digest and a test link to the page itself. Without the key, the link is empty.
+
+A webhook gets the event of the notification:
+
+```json
+{"kind": "needs-you", "title": "Duty daily-report needs you",
+ "text": "The agent triage asks to run git.push. Decide in Activity.",
+ "duty": "daily-report", "agent": "triage", "run": "01K...",
+ "link": "https://fleet.example.com/bossmode/#activity/01K...",
+ "priority": 4, "at": "2026-10-23T13:05:00Z"}
+```
+
+`kind` is `needs-you`, `decided`, `failed`, `paused`, `cap`, `digest`, or `test`. A field that does not apply is `""`. `at` is the time of the notice in UTC, to the second.
+
+The outbox lives in the bucket of the settings, so a restart of a replica loses no notification. Each notification serves one channel. Every replica reads the outbox. A replica claims a notification with a compare-and-swap before it sends it, as the engine claims a time, so one replica sends each one. A notification during the quiet hours of its person waits until they end. A notification that its channel refuses goes again after 1, 2, 4, and 8 minutes. Each notification keeps its own count, so a channel that fails does not hold back the other channels of the notice. After five tries, or after three days, the front drops it and the log says why. A send that a later try cannot fix drops at once: an address that breaks the rules of its kind, an address that resolves to a private address, a person without the right on the agent, and a person at the count of the agent runs of the day. A notification drops too when the person removed its channel, turned its switch off, or when the front no longer offers its kind.
+
+The digest goes once a day for each person with a channel whose switch `digest` is on, to each such channel. It goes at the end of the quiet hours, or at 08:00 in the time zone of the person without quiet hours. A front that did not run at that time sends it up to six hours later. It lists the starts of the duties of the person in the last day, each with its time, its outcome, and its cost, then the starts that did not run as one count, and the duties that paused themselves. The duties of a person are those that the person owns and those whose `notify` lists name the person. A person with no duty gets no digest. One replica sends each digest: it claims the day of the person in the bucket.
+
+The settings of the first build had one ntfy place per person, with `ntfy` and `send` beside the quiet hours. Such a record reads as a person with no channel, and its quiet hours stay. A notification of the first build in the outbox names no channel, and the front drops it.
 
 ### 23.2 The routes and the tools of the notifications
 
@@ -3241,11 +3320,20 @@ Each route acts for the caller alone. Each tool calls the same Go function as it
 
 | Route | Tool | Answer |
 |---|---|---|
-| `GET /v1/notifications` | `notifications_get` | The settings with `serverDefault`, the value of `workbench.notifications.ntfy.server` or `""`, and `off` when no notification reaches the caller |
-| `PUT /v1/notifications` | `notifications_put` | The same body, and the same answer after the write. A body that does not fit gets 400 with `{"problems": ["ntfy.topic: ...", ...]}`. |
-| `POST /v1/notifications/test` | `notification_test` | 200 `{"sent": true}`, or 502 `{"error": "<reason in words>"}` |
+| `GET /v1/notifications` | `notifications_get` | The settings of section 23.1 |
+| `PUT /v1/notifications` | `notifications_put` | The settings after the write, or 400 with `{"problems": ["channels[1].url: ...", ...]}` |
+| `POST /v1/notifications/test` | `notification_test` | `{"results": [{"channel", "sent", "error"}]}` |
 
-A read is a valid body. A write replaces the settings. A field of `send` that the body leaves out takes its default. `serverDefault` and `off` in a body are taken and left out. The tool `notifications_put` takes `ntfy`, `send`, `quietHours`, and `timeZone`, the time zone of quiet hours that name none. A test goes also during the quiet hours. A call without a person gets 403.
+A read is a valid body. A problem starts with the path of its field, such as `channels[1].url:` or `quietHours.from:`, and the page shows the text after the colon beside the field. The tool `notifications_put` takes `channels`, `quietHours`, and `timeZone`, the time zone of quiet hours that name none.
+
+The test takes `{"channel": "<id>"}` for one channel, and an empty body for every channel. The tool takes `channel` as an option. A channel that the caller does not have gets 400. A failed send is a result with `sent: false` and the reason in words, so the answer is 200:
+
+```json
+{"results": [{"channel": "phone", "sent": true, "error": ""},
+             {"channel": "room", "sent": false, "error": "The host hooks.slack.com answered 404: no_service."}]}
+```
+
+A test goes also during the quiet hours, and whatever the switches of the channel say. A test of a channel of the kind `agent` starts one run, and the run counts for the day. A call without a person gets 403.
 
 ### 23.3 The inbox
 
@@ -3311,7 +3399,7 @@ The package `duties/events` serves `when.event` for these kinds:
 | `question.waiting` | A run that waits for a person, once it waited for `after`, and only while it still waits | The agent of the run | No |
 | `page.changed` | A write of a page of the wiki (`pages.OnChange`) | The profile of the run that wrote, from `agent:<profile>` | A glob of the path, such as `reports/*.md`, or a folder with a slash at its end |
 | `bridge.closed` | The close of a bridge (`bridges.OnMessage`) | No | No |
-| `routine.ready` | A routine that may go live (`routines.OnChange`) | The agent of the routine | No |
+| `routine.ready` | A routine that is ready to go live (`routines.OnChange`) | The agent of the routine | No |
 | `cap.reached` | A duty at a daily cap (`duties.OnNotice`) | The agent of that duty | No |
 
 `after` is a span from 0 to 24h. For `question.waiting` it is how long the question waited. For the other kinds the duty starts that long after the event. The check of a write answers each problem as `when.event.<field>: text`.
@@ -3335,8 +3423,15 @@ Today starts at midnight in the time zone of the duty that starts. A start count
 
 | Key | Meaning | Default |
 |---|---|---|
-| `workbench.notifications.ntfy.server` | The ntfy server of a person who names none, such as `https://ntfy.example.com` | none, so the notifications of such a person are off |
-| `workbench.notifications.ntfy.hosts` | The hosts that a person may name as a server, as globs. When the list is empty, a person may name any host on a public address, and never a loopback, private, or link-local address after the name resolves. The host of the server of the front is always allowed. | empty |
+| `workbench.notifications.ntfy.server` | The ntfy server of an ntfy channel that names none, such as `https://ntfy.example.com` | none, so an ntfy channel names its server |
+| `workbench.notifications.ntfy.hosts` | The hosts that a person can name as an ntfy server, as globs. When the list is empty, a person can name any host. The host of the server of the front is always allowed. | empty |
+| `workbench.notifications.hosts` | The private hosts that a channel can reach, as globs such as `*.lab.internal`. A public host needs no entry. | empty, so a channel reaches public addresses only |
+| `workbench.notifications.link` | The base address of the page, such as `https://fleet.example.com/bossmode/`, for the link of a notification | none, so a notification has no link |
+| `workbench.notifications.email.host`, `port`, `from` | The SMTP server, its port, and the sender of each mail. With a host, the front offers `email`. | no server, and the port 587 |
+| `workbench.notifications.email.user`, `passwordEnv` | The account on the SMTP server, and the variable of the front that holds its password | none, so the front sends without a login |
+| `workbench.notifications.agent.enabled` | `true` offers the kind `agent` | `false` |
+| `workbench.notifications.agent.perDay` | The most runs of the kind `agent` per person and day | 20 |
+| `workbench.notifications.shared` | The shared channels: `{name, label, kind, urlEnv, secretEnv}`. `urlEnv` names the variable that holds the address. `secretEnv` names the variable that holds the secret, as an option. | none |
 | `workbench.duties.caps.perAgentUSD` | The daily cap of the duties of one agent | 0, no cap |
 | `workbench.duties.caps.fleetUSD` | The daily cap of every duty | 0, no cap |
 
@@ -3345,20 +3440,40 @@ workbench:
   notifications:
     ntfy:
       server: https://ntfy.lab.internal
-      hosts: ["ntfy.example.com"]
+    hosts: ["*.lab.internal"]
+    link: https://fleet.example.com/bossmode/
+    email:
+      host: smtp.example.com
+      port: 587
+      from: Featherweight <featherweight@example.com>
+      user: featherweight
+      passwordEnv: FW_SMTP_PASSWORD
+    agent:
+      enabled: true
+      perDay: 20
+    shared:
+      - name: ops-room
+        label: Ops room
+        kind: slack
+        urlEnv: FW_OPS_ROOM_URL
+      - name: home
+        label: Home Assistant
+        kind: webhook
+        urlEnv: FW_HOME_URL
+        secretEnv: FW_HOME_SECRET
   duties:
     caps:
       perAgentUSD: 5
       fleetUSD: 20
 ```
 
-A value that does not fit stops the start, and the error names the key. `fw-workbench doctor` has a line `notify`. It names where the settings live, the server of the front, and the hosts that a person may name.
+A value that does not fit stops the start, and the error names the key. `fw-workbench doctor` has a line `notify`. It names where the settings live, the kinds that a person picks, the ntfy server of the front, the private hosts, the mail server, the count of the agent runs, the host of the link, and the shared channels. A variable of a shared channel or of the password of the mail server that holds no value fails the line. The line never holds an address.
 
 ### 23.8 The buckets
 
 | Bucket | Keys | Forgets |
 |---|---|---|
-| `<stream>_NOTIFY` | `person.<subject in base64url>`: the settings of a person, with the token. `out.<id>`: a notification that waits. `digest.<subject in base64url>`: the day of the last digest. | Never. A notification leaves the outbox once it went out or the front dropped it. |
+| `<stream>_NOTIFY` | `person.<subject in base64url>`: the settings of a person, with the addresses, the secrets, and the tokens of the channels. `out.<id>`: a notification for one channel that waits. `digest.<subject in base64url>`: the day of the last digest. `agents.<subject in base64url>`: the day and the count of the runs of the kind `agent`. | Never. A notification leaves the outbox once it went out or the front dropped it. |
 | `<stream>_DUTY_AWAY` | `wait.<run>.<approval>`: an approval of a run of a duty, who decides it, the run of the manager, and what the front did | 8 days after the last write |
 | `<stream>_DUTY_EVENTS` | `start.<duty>.<hash>`: an event that starts a duty, its time, the depth of its chain, and what the start did | 8 days after the last write |
 
@@ -3374,23 +3489,31 @@ On the bus `mem` they live in the memory of the process. On another bus each pac
 | `duties.Service.Tell(ctx, kind, name, run, reason)` | Sends a notice of a duty to the hooks of `OnNotice`, as the engine does |
 | `duties.Service.FireChain(ctx, name, event, chain)` | `Fire` at a depth of a chain, with the loop guard |
 | `duties.SetAwayHandler(on)` | Says that a package tells of each question itself |
+| `duties.RegisterChannels(has)`, `duties.ChannelOf(entry)` | The check of `channel:<name>` in the notify lists, which the package `notify` registers, and the name of the shared channel of an entry |
 | `duties.MetaChain`, `duties.NoticeDecided`, `duties.DecidedByManager`, `duties.DecidedByTimeout` | The key of the chain, the kind of the notice of a decision, and the deciders that are no person |
 | `bridges.Store.Waiting(ctx)` | The seats of the open bridges that need the caller |
 | `inbox.For(ctx, agent, now)` | The inbox of the caller |
-| `notify.Of(agent).Get`, `Put`, `Test` | The settings of the caller |
+| `notify.Of(agent).Get`, `Put`, `Test` | The settings of the caller, and a test of one channel or of every channel |
+| `notify.Sign(body, secret)` | The value of `X-Featherweight-Signature`, for a receiver that checks a webhook |
+| `hostguard.Match(globs, host)`, `hostguard.Transport(refuse)` | The rule of a glob of a host, and the dialer that refuses a private address, which the duties and the notifications share |
 | `away.ParseVerdict(answer)` | Reads a verdict of the manager strictly |
 
 ### 23.10 Security
 
-- The token of a person lives in the bucket of the settings. No answer, log line, or error holds it. An error of a send names the host of the server, never the topic.
-- A server that a person names gets the same rule as a check of a duty: no loopback, private, or link-local address after the name resolves, unless the operator lists the host. The front follows no redirect of an ntfy server.
+- The addresses, the secrets, and the tokens of the channels live in the bucket of the settings. The address of a shared channel and the password of the mail server live in variables of the front. No answer, log line, or error holds one of them. An error names the host at most. When a server repeats a value of the channel in its answer, the front takes the value out of the error.
+- A channel that a person names gets the same rule as a check of a duty: no loopback, private, or link-local address after the name resolves, unless the operator lists the host in `workbench.notifications.hosts`. The front follows no redirect.
+- The front sends the password of the mail server only after STARTTLS. A person can mail one address per channel, and the mail holds the notification alone.
+- A channel of the kind `agent` runs as the person, with the right `agent.run`, with the budget of the channel, and at most `perDay` times a day. The front never fills a paid default. The message reaches the agent as input. Prompt injection in the reason of a notice can sway the agent, so give the agent of such a channel only the tools that the delivery needs.
 - The manager never decides a question, a connect, or a destructive tool. Its verdict is data that the front reads strictly, and the front applies it with its own authority. The input of the call reaches the manager as data. Prompt injection in the input can still sway the manager on a tool that is not destructive, so mark each tool that changes what matters destructive, or ask for it in a rule of the policy.
 - A run of the manager that decides acts as the owner of the duty, with the budget of the duty. The front never fills a paid default.
 - A chain of duties that events start stops at a depth of 3, and a duty that events start runs at most 60 times in an hour.
 
 ### 23.11 What this build leaves out
 
-- Other channels than ntfy, such as Slack, email, and a plain webhook.
+- A shared channel of the kind `email` or `agent`. A shared channel is ntfy, Slack, Discord, Teams, or a webhook.
+- A list of the mail addresses or domains that a person can reach. A person with an email channel can name any address.
+- SMTP with TLS from the first byte, on the port 465. The front speaks STARTTLS.
+- Quiet hours per channel. The quiet hours hold every channel of the person.
 - A notification when the manager decides. The history records it, and the digest lists the run.
 - A digest that a run of the manager writes into the wiki. The front writes the digest itself.
 - An approval with a deadline and a default in the kernel. The front applies the default with the route that a person uses.

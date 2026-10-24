@@ -5,8 +5,10 @@ package notify
 // of settings.go that its MCP tool calls.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -71,8 +73,8 @@ func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 			Problem:  native.Problem{Type: "about:blank", Title: http.StatusText(http.StatusBadRequest), Status: http.StatusBadRequest, Detail: pe.Error(), Instance: r.URL.Path},
 			Problems: pe.Problems,
 		})
-	case errors.Is(err, ErrUpstream):
-		native.WriteJSON(w, http.StatusBadGateway, map[string]string{"error": strings.TrimPrefix(err.Error(), ErrUpstream.Error()+": ")})
+	case errors.Is(err, ErrUnknownChannel):
+		native.WriteProblem(w, r, http.StatusBadRequest, capitalize(err.Error())+".")
 	default:
 		rt.k.Fail(w, r, err)
 	}
@@ -104,13 +106,38 @@ func (rt *routes) put(w http.ResponseWriter, r *http.Request) {
 	native.WriteJSON(w, http.StatusOK, ans)
 }
 
-// test answers POST /v1/notifications/test with 200 {"sent": true}, or
-// 502 {"error": "..."} with the reason in words.
+// testBody is the body of a test: the id of one channel, or nothing for
+// every channel.
+type testBody struct {
+	Channel string `json:"channel"`
+}
+
+// maxTestBody bounds the body of a test.
+const maxTestBody = 4 << 10
+
+// test answers POST /v1/notifications/test with 200 {"results": [...]},
+// one result per channel, or 400 for a channel that the caller does not
+// have. A send that failed is a result with sent false and the reason.
 func (rt *routes) test(w http.ResponseWriter, r *http.Request) {
 	ctx, _, _ := manager.OnBehalf(r.Context())
-	if err := rt.s.Test(ctx); err != nil {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxTestBody))
+	if err != nil {
+		native.WriteProblem(w, r, http.StatusBadRequest, "The body does not read, or it is longer than 4 KB.")
+		return
+	}
+	var body testBody
+	if len(bytes.TrimSpace(raw)) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil {
+			native.WriteProblem(w, r, http.StatusBadRequest, `The body is {"channel": "<id>"} for one channel, or empty for every channel.`)
+			return
+		}
+	}
+	ans, err := rt.s.Test(ctx, strings.TrimSpace(body.Channel))
+	if err != nil {
 		rt.fail(w, r, err)
 		return
 	}
-	native.WriteJSON(w, http.StatusOK, map[string]bool{"sent": true})
+	native.WriteJSON(w, http.StatusOK, ans)
 }

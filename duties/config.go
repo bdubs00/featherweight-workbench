@@ -8,17 +8,13 @@ package duties
 // operator did not allow.
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
-	"path"
 	"strings"
-	"syscall"
-	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/internal/hostguard"
 	"github.com/bdubs00/featherweight-workbench/sources"
 	"github.com/bdubs00/featherweight-workbench/teams"
 )
@@ -74,15 +70,17 @@ func LoadConfig(cfg *fw.Config) (Config, error) {
 			problems = append(problems, fmt.Sprintf("workbench.duties.secrets[%d].name %q is not the name of a variable", i, r.Name))
 		}
 		for j, h := range r.Hosts {
-			c.Secrets[i].Hosts[j] = strings.ToLower(strings.TrimSpace(h))
-			if _, err := path.Match(c.Secrets[i].Hosts[j], "x"); err != nil || c.Secrets[i].Hosts[j] == "" {
+			g, ok := hostguard.CleanGlob(h)
+			c.Secrets[i].Hosts[j] = g
+			if !ok {
 				problems = append(problems, fmt.Sprintf("workbench.duties.secrets[%d].hosts[%d] %q is not a host or a glob of hosts", i, j, h))
 			}
 		}
 	}
 	for i, h := range c.CheckHosts {
-		c.CheckHosts[i] = strings.ToLower(strings.TrimSpace(h))
-		if _, err := path.Match(c.CheckHosts[i], "x"); err != nil || c.CheckHosts[i] == "" {
+		g, ok := hostguard.CleanGlob(h)
+		c.CheckHosts[i] = g
+		if !ok {
 			problems = append(problems, fmt.Sprintf("workbench.duties.checkHosts[%d] %q is not a host or a glob of hosts", i, h))
 		}
 	}
@@ -98,16 +96,9 @@ func LoadConfig(cfg *fw.Config) (Config, error) {
 	return c, nil
 }
 
-// matchHost reports whether host matches one of the globs.
-func matchHost(globs []string, host string) bool {
-	host = strings.ToLower(host)
-	for _, g := range globs {
-		if ok, _ := path.Match(g, host); ok {
-			return true
-		}
-	}
-	return false
-}
+// matchHost reports whether host matches one of the globs, with the rule
+// that the notifications share (hostguard.Match).
+func matchHost(globs []string, host string) bool { return hostguard.Match(globs, host) }
 
 // secretRule returns the rule of a variable, or nil.
 func (c Config) secretRule(name string) *SecretRule {
@@ -170,25 +161,11 @@ var errBlockedAddress = errors.New("the address is loopback, private, or link-lo
 // after the name resolves, so a name that resolves to such an address
 // does not pass either.
 func (c Config) client() *http.Client {
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	var refuse error
 	if len(c.CheckHosts) == 0 {
-		dialer.Control = func(_, address string, _ syscall.RawConn) error {
-			host, _, err := net.SplitHostPort(address)
-			if err != nil {
-				return err
-			}
-			ip := net.ParseIP(host)
-			if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-				return errBlockedAddress
-			}
-			return nil
-		}
+		refuse = errBlockedAddress
 	}
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		return dialer.DialContext(ctx, network, addr)
-	}
-	return &http.Client{Transport: tr, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	return &http.Client{Transport: hostguard.Transport(refuse), CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if err := sources.SameHost(req, via); err != nil {
 			return err
 		}

@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -10,10 +11,12 @@ import (
 )
 
 // DoctorCheck is the line of fw doctor about the notifications
-// (cli.DoctorCheck): where the settings live, the ntfy server of the
-// front, and the hosts that a person may name. A configuration that does
-// not fit fails the check. cmd/fw-workbench registers it.
-func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duration) (bool, string) {
+// (cli.DoctorCheck): where the settings live, the kinds that the front
+// offers, the ntfy server of the front, the private hosts that a channel
+// may reach, the link, and the shared channels. A configuration that does
+// not fit, or a variable of a shared channel or of the mail server that
+// holds no value, fails the check. cmd/fw-workbench registers it.
+func DoctorCheck(ctx context.Context, cfg *fw.Config, secrets fw.Secrets, _ time.Duration) (bool, string) {
 	c, err := LoadConfig(cfg)
 	if err != nil {
 		return false, err.Error()
@@ -22,16 +25,56 @@ func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duratio
 	if !on {
 		return true, "notify: off; the settings live " + where
 	}
-	parts := []string{"the settings live in " + where}
+	if secrets == nil {
+		secrets = fw.EnvSecrets{}
+	}
+	ok := true
+	set := func(name string) bool {
+		v, err := secrets.Get(ctx, name)
+		return err == nil && strings.TrimSpace(v) != ""
+	}
+	var offered []string
+	for _, o := range c.offered() {
+		offered = append(offered, o.Kind)
+	}
+	parts := []string{"the settings live in " + where, "a person picks " + strings.Join(offered, ", ")}
 	if c.Ntfy.Server == "" {
-		parts = append(parts, "no server of the front (workbench.notifications.ntfy.server), so only a person who names a server gets notifications")
+		parts = append(parts, "no ntfy server of the front (workbench.notifications.ntfy.server), so an ntfy channel names its server")
 	} else {
-		parts = append(parts, "the server of the front is "+hostOf(c.Ntfy.Server))
+		parts = append(parts, "the ntfy server of the front is "+hostOf(c.Ntfy.Server))
 	}
-	if len(c.Ntfy.Hosts) == 0 {
-		parts = append(parts, "a person may name any server on a public address (workbench.notifications.ntfy.hosts)")
+	if len(c.Hosts) == 0 {
+		parts = append(parts, "a channel reaches public hosts only (workbench.notifications.hosts)")
 	} else {
-		parts = append(parts, "a person may name "+strings.Join(c.Ntfy.Hosts, ", "))
+		parts = append(parts, "a channel also reaches "+strings.Join(c.Hosts, ", "))
 	}
-	return true, "notify: " + strings.Join(parts, "; ")
+	if c.Email.Host != "" {
+		line := fmt.Sprintf("mail goes through %s:%d", c.Email.Host, c.smtpPort())
+		if c.Email.User != "" && !set(c.Email.PasswordEnv) {
+			ok = false
+			line += fmt.Sprintf(", but %s holds no password", c.Email.PasswordEnv)
+		}
+		parts = append(parts, line)
+	}
+	if c.Agent.Enabled {
+		parts = append(parts, fmt.Sprintf("an agent channel runs at most %d times per person and day", c.perDay()))
+	}
+	if c.Link == "" {
+		parts = append(parts, "a notification has no link (workbench.notifications.link)")
+	} else {
+		parts = append(parts, "links go to "+hostOf(c.Link))
+	}
+	for _, sc := range c.Shared {
+		line := fmt.Sprintf("the shared channel %s (%s)", sc.Name, sc.Kind)
+		switch {
+		case !set(sc.URLEnv):
+			ok = false
+			line += fmt.Sprintf(", but %s holds no address", sc.URLEnv)
+		case sc.SecretEnv != "" && !set(sc.SecretEnv):
+			ok = false
+			line += fmt.Sprintf(", but %s holds no secret", sc.SecretEnv)
+		}
+		parts = append(parts, line)
+	}
+	return ok, "notify: " + strings.Join(parts, "; ")
 }

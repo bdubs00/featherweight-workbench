@@ -343,6 +343,7 @@ var hooks struct {
 	kinds   []string
 	notice  []func(ctx context.Context, a *fw.Agent, n Notice)
 	change  []func(name string)
+	channel func(a *fw.Agent, name string) bool
 }
 
 // RegisterAction makes the action post, open, or manager available. A
@@ -400,6 +401,22 @@ func Offered() (events, actions, looks []string) {
 	slices.Sort(actions)
 	slices.Sort(looks)
 	return events, slices.Compact(actions), slices.Compact(looks)
+}
+
+// RegisterChannels makes the entries channel:<name> of the notify lists
+// available: has reports whether the front has a shared channel of the
+// name. The package notify calls it in init. Until then, a write of a duty
+// that names a shared channel fails with "not available yet".
+func RegisterChannels(has func(a *fw.Agent, name string) bool) {
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	hooks.channel = has
+}
+
+func channelCheck() func(a *fw.Agent, name string) bool {
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	return hooks.channel
 }
 
 // OnNotice registers a function that gets each notice of a duty, after the
