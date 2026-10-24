@@ -72,9 +72,23 @@ func (s *Service) Records(ctx context.Context) ([]Record, error) {
 	}
 	out := make([]Record, 0, len(list))
 	for _, st := range list {
-		out = append(out, Record{Duty: st.Duty, OwnerKind: st.OwnerKind, PausedReason: st.PausedReason, Since: st.Since, Changed: st.Changed})
+		out = append(out, recordOf(st))
 	}
 	return out, nil
+}
+
+// RecordOf returns one duty of the store for the front itself, or an
+// error that wraps ErrNotFound.
+func (s *Service) RecordOf(ctx context.Context, name string) (Record, error) {
+	st, err := s.st.get(ctx, name)
+	if err != nil {
+		return Record{}, err
+	}
+	return recordOf(st), nil
+}
+
+func recordOf(st *stored) Record {
+	return Record{Duty: st.Duty, OwnerKind: st.OwnerKind, PausedReason: st.PausedReason, Since: st.Since, Changed: st.Changed}
 }
 
 // Starts returns the starts of a duty that began or changed since a
