@@ -119,7 +119,7 @@ func TestCallSecretRule(t *testing.T) {
 	f := newFront(t, "", nil)
 	f.sec["HOOK_TOKEN"] = "tok"
 	_, err := f.s.Put(as("alice"), "hook", DutyBody{Duty: hookDuty("hook")}, PutOptions{})
-	if err == nil || !strings.Contains(err.Error(), "names HOOK_TOKEN, which workbench.duties.secrets does not list") {
+	if err == nil || !strings.Contains(err.Error(), "when.webhook.auth.secret: HOOK_TOKEN is not in workbench.duties.secrets") {
 		t.Fatalf("a secret off the list = %v", err)
 	}
 }

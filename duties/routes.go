@@ -40,11 +40,14 @@ type route struct {
 var table = []route{
 	{pattern: "GET /v1/duties", handle: (*routes).list, tool: ToolList},
 	{pattern: "PATCH /v1/duties", handle: (*routes).pauseAll, tool: ToolPauseAll},
+	{pattern: "GET /v1/duties/options", handle: (*routes).options,
+		why: "the page reads it to offer only what the front serves; duty_put with dryRun names each choice that the front does not serve, and duty_write_check names the looks and the secrets to the agent"},
 	{pattern: "GET /v1/duties/{name}", handle: (*routes).get, tool: ToolGet},
 	{pattern: "PUT /v1/duties/{name}", handle: (*routes).put, tool: ToolPut},
 	{pattern: "PATCH /v1/duties/{name}", handle: (*routes).patch, tool: ToolPause},
 	{pattern: "DELETE /v1/duties/{name}", handle: (*routes).remove, tool: ToolDelete},
 	{pattern: "POST /v1/duties/{name}/run", handle: (*routes).runNow, tool: ToolRunNow},
+	{pattern: "POST /v1/duties/{name}/write-check", handle: (*routes).writeCheck, tool: ToolWriteCheck},
 	{pattern: "POST /v1/duties/{name}/call", handle: (*routes).call, public: true,
 		why: "another app calls it with the credential of the webhook of the duty; a person or an agent uses duty_run_now"},
 }
@@ -95,15 +98,42 @@ func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 		native.WriteProblem(w, r, http.StatusConflict, reason(err))
 	case errors.Is(err, ErrUpstream):
 		native.WriteProblem(w, r, http.StatusBadGateway, reason(err))
+	case errors.Is(err, ErrNoAnswer):
+		writeCheckFailure(w, r, http.StatusGatewayTimeout, reason(err), nil)
 	default:
 		rt.k.Fail(w, r, err)
 	}
 }
 
+// checkProblem is the problem document of a check that the agent did not
+// write, with the reason in error too, and the record and its readback
+// when the agent wrote one.
+type checkProblem struct {
+	native.Problem
+	Error      string      `json:"error"`
+	CheckFirst *CheckFirst `json:"checkFirst,omitempty"`
+	Readback   string      `json:"readback,omitempty"`
+}
+
+// writeCheckFailure writes the problem document of a write of a check
+// that failed.
+func writeCheckFailure(w http.ResponseWriter, r *http.Request, status int, reason string, ce *CheckError) {
+	doc := checkProblem{
+		Problem: native.Problem{Type: "about:blank", Title: http.StatusText(status), Status: status, Detail: reason, Instance: r.URL.Path},
+		Error:   reason,
+	}
+	if ce != nil {
+		doc.CheckFirst, doc.Readback = ce.CheckFirst, ce.Readback
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(doc)
+}
+
 // reason returns the words of an error of the package without its prefix.
 func reason(err error) string {
 	s := err.Error()
-	for _, e := range []error{ErrHidden, ErrNotFound, ErrConflict, ErrExists, ErrReadOnly, ErrUpstream, fw.ErrInvalidRequest, fw.ErrForbidden} {
+	for _, e := range []error{ErrHidden, ErrNotFound, ErrConflict, ErrExists, ErrReadOnly, ErrUpstream, ErrNoAnswer, fw.ErrInvalidRequest, fw.ErrForbidden} {
 		s = strings.TrimPrefix(s, e.Error()+": ")
 	}
 	return capital(strings.TrimPrefix(s, "duties: "))
@@ -235,6 +265,34 @@ func writeOutcome(w http.ResponseWriter, r *http.Request, out Outcome) {
 		native.WriteJSON(w, http.StatusOK, map[string]string{"skipped": out.Skipped})
 	default:
 		native.WriteJSON(w, http.StatusAccepted, map[string]string{"run": ""})
+	}
+}
+
+// options answers GET /v1/duties/options with what the page can offer:
+// {"secrets": [{"name", "hosts"}], "events", "actions", "looks"}.
+func (rt *routes) options(w http.ResponseWriter, r *http.Request) {
+	native.WriteJSON(w, http.StatusOK, rt.s.Options())
+}
+
+// writeCheck answers POST /v1/duties/{name}/write-check: 200 with
+// {"checkFirst", "readback", "check", "run"}, 422 with the reason in
+// error when the agent wrote no check that works, and 504 when it did
+// not answer in time.
+func (rt *routes) writeCheck(w http.ResponseWriter, r *http.Request) {
+	ctx, _, _ := manager.OnBehalf(r.Context())
+	var body WriteCheckBody
+	if !rt.k.Decode(w, r, &body) {
+		return
+	}
+	ans, err := rt.s.WriteCheck(ctx, r.PathValue("name"), body)
+	var ce *CheckError
+	switch {
+	case errors.As(err, &ce):
+		writeCheckFailure(w, r, http.StatusUnprocessableEntity, ce.Reason, ce)
+	case err != nil:
+		rt.fail(w, r, err)
+	default:
+		native.WriteJSON(w, http.StatusOK, ans)
 	}
 }
 

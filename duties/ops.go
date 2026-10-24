@@ -310,10 +310,10 @@ func (s *Service) Put(ctx context.Context, name string, body DutyBody, opt PutOp
 	case "", name:
 		d.Name = name
 	default:
-		return PutAnswer{}, &ProblemsError{Problems: []string{fmt.Sprintf("The duty is named %s in the body and %s in the path.", d.Name, name)}}
+		return PutAnswer{}, &ProblemsError{Problems: []string{problem("name", "The duty is named %s in the body and %s in the path.", d.Name, name)}}
 	}
 	if err := CheckName(name); err != nil {
-		return PutAnswer{}, &ProblemsError{Problems: []string{capital(err.Error()) + "."}}
+		return PutAnswer{}, &ProblemsError{Problems: []string{problem("name", "%s.", capital(err.Error()))}}
 	}
 	if s.fileOf(name) != nil {
 		return PutAnswer{}, readOnly(name)
@@ -359,7 +359,7 @@ func (s *Service) Put(ctx context.Context, name string, body DutyBody, opt PutOp
 	zone := strings.TrimSpace(opt.Zone)
 	if zone != "" {
 		if loc, err := time.LoadLocation(zone); err != nil || loc == nil || zone == "Local" {
-			problems = append(problems, fmt.Sprintf("The time zone %q of the caller is not an IANA time zone, such as America/New_York.", zone))
+			problems = append(problems, problem("when.schedule.timeZone", "The time zone %q of the caller is not an IANA time zone, such as America/New_York.", zone))
 			zone = ""
 		}
 	}
@@ -370,7 +370,7 @@ func (s *Service) Put(ctx context.Context, name string, body DutyBody, opt PutOp
 	if say := strings.TrimSpace(d.When.Say); say != "" && d.When.starts() == 1 {
 		sch, err := schedule.Parse(say, schedule.Options{Zone: zone, Now: now})
 		if err != nil {
-			problems = append(problems, err.Error())
+			problems = append(problems, problem("when.say", "%s", err.Error()))
 		} else {
 			d.When.Schedule, d.When.Say = &sch, ""
 		}
@@ -469,7 +469,7 @@ func (s *Service) dryRun(ctx context.Context, d Duty, problems []string, test bo
 		return PutAnswer{Dry: ans}, nil
 	}
 	if d.CheckFirst == nil {
-		ans.Problems = append(ans.Problems, "test runs checkFirst, and the duty has no check.")
+		ans.Problems = append(ans.Problems, problem("checkFirst", "The test runs the check, and the duty has none."))
 		return PutAnswer{Dry: ans}, nil
 	}
 	for _, p := range problems {
@@ -481,7 +481,7 @@ func (s *Service) dryRun(ctx context.Context, d Duty, problems []string, test bo
 	t, err := s.testCheck(ctx, &d)
 	switch {
 	case errors.Is(err, ErrNotAvailable):
-		ans.Problems = append(ans.Problems, "checkFirst.look.tool is not available yet: "+strings.TrimPrefix(err.Error(), ErrNotAvailable.Error()+": ")+".")
+		ans.Problems = append(ans.Problems, problem("checkFirst.look.tool", "Not available yet: %s.", strings.TrimPrefix(err.Error(), ErrNotAvailable.Error()+": ")))
 	case err != nil:
 		return PutAnswer{}, fmt.Errorf("%w: the check failed: %s", ErrUpstream, strings.TrimSuffix(err.Error(), "."))
 	default:
@@ -501,16 +501,16 @@ func (s *Service) contextProblems(ctx context.Context, d *Duty) []string {
 		err := faces.Check(front, s.a, d.Agent, fw.ActionAgentView)
 		switch {
 		case errors.Is(err, fw.ErrProfileNotFound), errors.Is(err, fw.ErrInvalidRequest):
-			p = append(p, fmt.Sprintf("agent %s is not an agent of this front or of a pool of the fleet.", d.Agent))
+			p = append(p, problem("agent", "%s is not an agent of this front or of a pool of the fleet.", d.Agent))
 		case err == nil && d.Do.Ask != nil:
 			if _, err := fleet.QueueFor(front, s.a, d.Agent, d.Pool); err != nil {
-				p = append(p, fmt.Sprintf("agent %s has no queue: %s.", d.Agent, reasonOf(err)))
+				p = append(p, problem("agent", "%s has no queue: %s.", d.Agent, reasonOf(err)))
 			}
 		}
 	}
 	if e := d.When.Event; e != nil {
 		if check := eventsCheck(); check == nil {
-			p = append(p, "when.event is not available yet: a later build starts a duty on an event of the fleet. Use a schedule or a webhook for now.")
+			p = append(p, problem("when.event", "Not available yet: this front starts a duty on no event of the fleet. Use a schedule or a webhook for now."))
 		} else {
 			p = append(p, check(e)...)
 		}
@@ -519,25 +519,38 @@ func (s *Service) contextProblems(ctx context.Context, d *Duty) []string {
 		act, ok := actionOf(name)
 		switch {
 		case !ok:
-			p = append(p, fmt.Sprintf("do.%s is not available yet: this build has the action ask, which asks the agent with a message.", name))
+			_, served, _ := Offered()
+			p = append(p, problem("do."+name, "Not available yet: this front serves %s.", strings.Join(served, ", ")))
 		case act.Check != nil:
 			p = append(p, act.Check(ctx, s.a, d)...)
 		}
 	}
-	if c := d.CheckFirst; c != nil && c.Look.HTTP != nil && c.Look.Tool == "" && hostOf(c.Look.HTTP.URL) != "" {
-		h := c.Look.HTTP
-		p = append(p, s.cfg.lookProblems(h)...)
-		if h.Secret != "" && s.cfg.secretRule(h.Secret) != nil {
-			if _, err := s.secret(ctx, h.Secret); err != nil {
-				p = append(p, fmt.Sprintf("checkFirst.look.http.secret names %s, which holds no secret in this front.", h.Secret))
-			}
-		}
-	}
+	p = append(p, s.checkContextProblems(ctx, d.CheckFirst)...)
 	if w := d.When.Webhook; w != nil && w.Auth.Secret != "" && envPattern.MatchString(w.Auth.Secret) {
 		p = append(p, s.cfg.webhookProblems(w)...)
 		if s.cfg.secretRule(w.Auth.Secret) != nil {
 			if _, err := s.secret(ctx, w.Auth.Secret); err != nil {
-				p = append(p, fmt.Sprintf("when.webhook.auth.secret names %s, which holds no secret in this front.", w.Auth.Secret))
+				p = append(p, problem("when.webhook.auth.secret", "%s holds no secret in this front.", w.Auth.Secret))
+			}
+		}
+	}
+	return p
+}
+
+// checkContextProblems lists what the rules of the operator refuse in a
+// check: a secret or a host of an address that the rules refuse. A write
+// keeps a look that this front does not serve yet, and its test says so.
+func (s *Service) checkContextProblems(ctx context.Context, c *CheckFirst) []string {
+	var p []string
+	if c == nil {
+		return nil
+	}
+	if c.Look.HTTP != nil && c.Look.Tool == "" && hostOf(c.Look.HTTP.URL) != "" {
+		h := c.Look.HTTP
+		p = append(p, s.cfg.lookProblems(h)...)
+		if h.Secret != "" && s.cfg.secretRule(h.Secret) != nil {
+			if _, err := s.secret(ctx, h.Secret); err != nil {
+				p = append(p, problem("checkFirst.look.http.secret", "%s holds no secret in this front.", h.Secret))
 			}
 		}
 	}

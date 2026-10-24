@@ -1,8 +1,9 @@
 package workers
 
-// This file holds the MCP tools of the pools and the templates
-// (docs/ARCHITECTURE.md section 14.10), which the package adds to the MCP
-// server of the workbench through mcp.RegisterTools. For a call of a run of
+// This file holds the MCP tools of the pools, the templates, and the
+// orphan Tasks (docs/ARCHITECTURE.md section 14.10), which the package
+// adds to the MCP server of the workbench through mcp.RegisterTools. Each
+// tool calls the Go function of its route. For a call of a run of
 // the fleet that names its person, the tools act as that person
 // (manager.OnBehalf, section 19).
 
@@ -29,6 +30,8 @@ const (
 	ToolPoolPut       = "pool_put"
 	ToolPoolDelete    = "pool_delete"
 	ToolTemplatesList = "templates_list"
+	ToolOrphansList   = "orphans_list"
+	ToolOrphansRemove = "orphans_remove"
 )
 
 const (
@@ -79,6 +82,12 @@ type (
 		View      string               `json:"view"`
 		Templates []pools.TemplateInfo `json:"templates"`
 	}
+	// orphansResult is the structured result of orphans_list, as GET
+	// /v1/fleet/orphans answers.
+	orphansResult struct {
+		Orphans     []fleet.Orphan `json:"orphans"`
+		RemoveAfter int64          `json:"removeAfter"`
+	}
 )
 
 // tools builds the tools of the pools for one MCP server. A process whose
@@ -126,6 +135,24 @@ func tools(s *mcp.Server) []mcp.Tool {
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in deleteArgs) (*sdk.CallToolResult, any, error) {
 			return remove(ctx, a, in), nil, nil
+		}),
+		mcp.NewTool(&sdk.Tool{
+			Name:        ToolOrphansList,
+			Title:       "List orphan Tasks",
+			Description: "List the orphan Tasks of the fleet: the child Tasks whose parent Task is gone, each after the Tasks under it, with its parent, its phase, its pool, and its open runs, and how long an orphan sleeps before the front removes it. It needs the admin role of the process.",
+			InputSchema: json.RawMessage(emptySchema),
+			Annotations: readOnly,
+		}, func(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
+			return orphans(ctx, a), nil, nil
+		}),
+		mcp.NewTool(&sdk.Tool{
+			Name:        ToolOrphansRemove,
+			Title:       "Remove orphan Tasks",
+			Description: "Remove every orphan Task of the fleet, each Task before the Task above it, with the runs that it holds. The answer names the Tasks that went and each Task whose delete failed. It needs the admin role of the process. List them with orphans_list first.",
+			InputSchema: json.RawMessage(emptySchema),
+			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(true)},
+		}, func(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
+			return removeOrphans(ctx, a), nil, nil
 		}),
 	}
 }
@@ -199,4 +226,50 @@ func remove(ctx context.Context, a *fw.Agent, in deleteArgs) *sdk.CallToolResult
 	}
 	text := fmt.Sprintf("Deleted the runtime pool %s: the front deletes each worker of it once the worker is idle, and then the pool. The profile of the agent %s stays in the overlay of the pool.\n%s", st.Name, st.Agent, poolText(st))
 	return mcp.Result(text, poolResult{View: "pool", Pool: st})
+}
+
+// orphans is the tool orphans_list.
+func orphans(ctx context.Context, a *fw.Agent) *sdk.CallToolResult {
+	ctx, _, _ = manager.OnBehalf(ctx)
+	list, err := fleet.Orphans(ctx, a)
+	if err != nil {
+		return mcp.ErrorResult(explain(err))
+	}
+	after := fleet.OrphansAfter(a)
+	var b strings.Builder
+	if len(list) == 0 {
+		b.WriteString("The fleet has no orphan Task.")
+	} else {
+		fmt.Fprintf(&b, "%d orphan %s:", len(list), plural(len(list), "Task", "Tasks"))
+	}
+	for _, o := range list {
+		fmt.Fprintf(&b, "\n- %s: the child of %s, %s, %d open %s", o.Member, o.Parent, o.Phase, o.Open, plural(o.Open, "run", "runs"))
+		if o.Pool != "" {
+			b.WriteString(", of the pool " + o.Pool)
+		}
+	}
+	if after > 0 {
+		fmt.Fprintf(&b, "\nThe front removes an orphan that sleeps for %s.", after)
+	} else {
+		b.WriteString("\nThe front removes no orphan by itself.")
+	}
+	return mcp.Result(b.String(), orphansResult{Orphans: list, RemoveAfter: int64(after.Seconds())})
+}
+
+// removeOrphans is the tool orphans_remove.
+func removeOrphans(ctx context.Context, a *fw.Agent) *sdk.CallToolResult {
+	ctx, _, _ = manager.OnBehalf(ctx)
+	out, err := fleet.RemoveOrphans(ctx, a)
+	if err != nil {
+		return mcp.ErrorResult(explain(err))
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Removed %d orphan %s.", len(out.Removed), plural(len(out.Removed), "Task", "Tasks"))
+	for _, m := range out.Removed {
+		b.WriteString("\n- " + m)
+	}
+	for _, f := range out.Failed {
+		fmt.Fprintf(&b, "\nThe delete of %s failed: %s", f.Member, f.Error)
+	}
+	return mcp.Result(b.String(), out)
 }

@@ -93,6 +93,10 @@ func (f *Fleet) Members(ctx context.Context) ([]Member, error) {
 				continue
 			}
 			seen++
+			if !Listed(run) {
+				// A check run of a duty keeps no worker busy for a person.
+				continue
+			}
 			if !run.State.Terminal() {
 				m.Active++
 			}
@@ -141,7 +145,7 @@ func (f *Fleet) self(ctx context.Context) (Member, error) {
 	if err != nil {
 		return m, fmt.Errorf("fleet: list the runs: %w", err)
 	}
-	for _, r := range runs {
+	for _, r := range ListedOnly(runs) {
 		if !r.State.Terminal() {
 			m.Active++
 		}

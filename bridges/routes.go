@@ -171,13 +171,13 @@ func (rt *routes) open(w http.ResponseWriter, r *http.Request) {
 	if !rt.k.Decode(w, r, &spec) {
 		return
 	}
-	rec, err := s.open(r.Context(), spec, fw.PrincipalFrom(r.Context()), nil)
+	it, err := s.Open(r.Context(), spec)
 	if err != nil {
 		rt.fail(w, r, err)
 		return
 	}
-	w.Header().Set("Location", "/v1/bridges/"+rec.ID)
-	rt.answer(w, r, s, rec, http.StatusCreated, false)
+	w.Header().Set("Location", "/v1/bridges/"+it.ID)
+	native.WriteJSON(w, http.StatusCreated, it)
 }
 
 // get answers GET /v1/bridges/{id}: the record with the presence of each
@@ -201,15 +201,12 @@ func (rt *routes) patch(w http.ResponseWriter, r *http.Request) {
 	if !rt.k.Decode(w, r, &p) {
 		return
 	}
-	rec, closed, err := s.patch(r.Context(), rec.ID, p, fw.PrincipalFrom(r.Context()))
+	it, err := s.Patch(r.Context(), rec.ID, p)
 	if err != nil {
 		rt.fail(w, r, err)
 		return
 	}
-	if closed {
-		s.askReport(r.Context(), rec)
-	}
-	rt.answer(w, r, s, rec, http.StatusOK, false)
+	native.WriteJSON(w, http.StatusOK, it)
 }
 
 // read answers PUT /v1/bridges/{id}/read with 204: it moves the read mark
@@ -229,8 +226,7 @@ func (rt *routes) read(w http.ResponseWriter, r *http.Request) {
 		native.WriteProblem(w, r, http.StatusBadRequest, "the body needs seq, the newest entry that the person read")
 		return
 	}
-	seq := min(*body.Seq, rec.LastSeq)
-	if err := s.b.setRead(s.asFront(r.Context()), rec.ID, subjectOf(r.Context()), seq); err != nil {
+	if _, err := s.MarkRead(r.Context(), rec.ID, *body.Seq); err != nil {
 		rt.fail(w, r, err)
 		return
 	}
@@ -382,7 +378,7 @@ func (rt *routes) react(w http.ResponseWriter, r *http.Request) {
 	if !rt.k.Decode(w, r, &spec) {
 		return
 	}
-	m, err := s.reactEntry(r.Context(), rec.ID, seq, spec, fw.PrincipalFrom(r.Context()))
+	m, err := s.React(r.Context(), rec.ID, seq, spec)
 	if err != nil {
 		rt.fail(w, r, err)
 		return
@@ -434,7 +430,7 @@ func (rt *routes) patchMember(w http.ResponseWriter, r *http.Request) {
 	if !rt.k.Decode(w, r, &p) {
 		return
 	}
-	m, err := s.patchMember(r.Context(), rec.ID, r.PathValue("handle"), p, fw.PrincipalFrom(r.Context()))
+	m, err := s.PatchMember(r.Context(), rec.ID, r.PathValue("handle"), p)
 	if err != nil {
 		rt.fail(w, r, err)
 		return

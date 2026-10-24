@@ -359,3 +359,51 @@ func TestSummary(t *testing.T) {
 		t.Fatalf("the summary after a minute = %d runs", got.Runs)
 	}
 }
+
+// routine_put calls the function of PUT /v1/routines/{agent}/{name}: an
+// operator proposes a new routine, only the owner changes its body, and a
+// caller without a role, or a body that does not fit, is refused.
+func TestPutTool(t *testing.T) {
+	fr := newFront(t, withClef)
+	var r map[string]any
+	if err := json.Unmarshal([]byte(body(t, "", nil)), &r); err != nil {
+		t.Fatal(err)
+	}
+	args := func(mut func(map[string]any)) map[string]any {
+		a := map[string]any{"agent": "triage", "name": "acknowledge", "routine": r["routine"], "source": r["source"]}
+		if mut != nil {
+			mut(a)
+		}
+		return a
+	}
+	bob := connectMCP(t, fr.a, "bob")
+	if res := call(t, bob, ToolPut, args(func(a map[string]any) { a["standing"] = Rehearsing })); !res.IsError {
+		t.Fatalf("an operator starts a rehearsal = %s", textOf(res))
+	}
+	res := call(t, bob, ToolPut, args(nil))
+	var put putResult
+	structured(t, res, &put)
+	if res.IsError || !put.Created || put.Routine.Standing != Proposed || !strings.Contains(textOf(res), "Created the routine acknowledge of triage.") {
+		t.Fatalf("an operator proposes = %s", textOf(res))
+	}
+	changed := ack()
+	changed.Answer = "TRIAGE {{ .type }}"
+	if res := call(t, bob, ToolPut, args(func(a map[string]any) { a["routine"] = changed })); !res.IsError || !strings.Contains(textOf(res), "Forbidden") {
+		t.Fatalf("an operator changes a body = %s", textOf(res))
+	}
+	alice := connectMCP(t, fr.a, "alice")
+	res = call(t, alice, ToolPut, args(func(a map[string]any) { a["routine"] = changed; a["note"] = "a shorter answer" }))
+	put = putResult{}
+	structured(t, res, &put)
+	if res.IsError || put.Created || !put.Changed || put.Routine.Version() != 2 {
+		t.Fatalf("the owner changes the body = %s", textOf(res))
+	}
+	if res := call(t, connectMCP(t, fr.a, "carol"), ToolPut, args(nil)); !res.IsError || !strings.Contains(textOf(res), "Not found") {
+		t.Fatalf("a caller without a role = %s", textOf(res))
+	}
+	broken := ack()
+	broken.Steps[0].Tool = ""
+	if res := call(t, alice, ToolPut, args(func(a map[string]any) { a["routine"] = broken })); !res.IsError || !strings.Contains(textOf(res), "tool is empty") {
+		t.Fatalf("a body that does not fit = %s", textOf(res))
+	}
+}

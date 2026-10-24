@@ -271,10 +271,15 @@ func (h *Hub) feed() {
 // addChange puts a change of the fleet view on the stream. The data of a
 // run is the run object of the view with member, reactions, and activity,
 // and the activity also holds its words, phrase. The data of a member or
-// a Task is the change itself.
+// a Task is the change itself. A run that the lists leave out
+// (fleet.Listed), such as a check run of a duty, is no work of a person,
+// so it does not go on the stream.
 func (h *Hub) addChange(c fleet.Change) {
 	var data []byte
 	var err error
+	if c.Kind == fleet.ChangeRun && c.Run != nil && !fleet.Listed(c.Run) {
+		return
+	}
 	if c.Kind == fleet.ChangeRun && c.Run != nil {
 		data, err = runData(c)
 	} else {

@@ -2968,7 +2968,7 @@ The page and the MCP tools write the same record. The contract of the build, `re
 | `runAs` | `duty`, the principal `duty:<name>` of the kind `workload`, or `owner`. Only the owner sets `owner`. When another person changes the duty, `runAs` goes back to `duty`. |
 | `paused` | `true` pauses the duty. A write that leaves it out keeps the pause of the duty. |
 
-The front fills each default into the record, so a read shows it. A write that does not fit gets 400 with each problem in words, in the field `problems` of the problem document. Each problem names its field, such as "limits.budget is required, with at least one limit above zero".
+The front fills each default into the record, so a read shows it. A write that does not fit gets 400 with each problem in words, in the field `problems` of the problem document. Each problem starts with the dotted path of its field and a colon, such as "limits.budget: A budget is required, with at least one limit above zero", so the page shows the text after the colon beside the field. A problem of the whole duty has no path (section 24.7).
 
 These parts of the record are for later work. The front reads them, and a write answers "not available yet" until a package registers them (section 22.10):
 
@@ -3124,10 +3124,14 @@ Each capability is one Go function of the service. Its route and its MCP tool ca
 | `POST /v1/duties/{name}/run` | `duty_run_now` | 202 with `{"run"}`. For a start that waits, 202 with `{"waiting"}`. 200 with `{"skipped"}` and the reason. For a failed check or queue, 502. |
 | `PATCH /v1/duties` | `duties_pause_all` | `{"paused", "reason"}`, for an admin. 200 with the switch. |
 | `POST /v1/duties/{name}/call` | none | The call of another app (section 22.9) |
+| `GET /v1/duties/options` | none | `{"secrets": [{"name", "hosts"}], "events", "actions", "looks"}`: what the page can offer in New duty (section 24.4) |
+| `POST /v1/duties/{name}/write-check` | `duty_write_check` | `{"words", "agent"}` in, `{"checkFirst", "readback", "check", "run"}` out, 422 with `error` when the agent writes no check that works, and 504 after 120 seconds (section 24.4) |
 
 `duty_put` takes `{"name", "duty", "dryRun", "test", "timeZone"}`. The other tools take `name`, and `duty_pause` also takes `paused`. `duties_pause_all` takes `paused` and `reason`. A client, such as the manager, calls `duty_put` with `dryRun` first. It shows the readback and the next times to the person, and it saves only after the person agrees.
 
 A run now runs the check of the duty and keeps its overlap and its daily cap. It also runs a paused duty, for a test, but not while the switch is on.
+
+`GET /v1/duties/options` names only what this front serves now, and the page offers no other choice. It names each secret of `workbench.duties.secrets` with its hosts, and never a value. The name `options` is taken by this route, so no duty has it. `POST /v1/duties/{name}/write-check` asks the agent of the duty to write the check from the words of a person. For a duty that does not exist yet, the body names the agent. For a saved duty, the agent of the duty wins. `duty_write_check` takes `{"name", "words", "agent"}`. Section 24.4 tells how the front runs the agent and checks its answer.
 
 Errors follow the workbench. A body that does not fit gets 400 with `problems`. A conflict of revision gets 409. An entry of `workbench.sources` gets 409 on a change. An outside system that failed gets 502. A test of parity reads the table of the routes in `duties/routes.go`. Each route has a tool or a reason.
 
@@ -3389,3 +3393,155 @@ On the bus `mem` they live in the memory of the process. On another bus each pac
 - A digest that a run of the manager writes into the wiki. The front writes the digest itself.
 - An approval with a deadline and a default in the kernel. The front applies the default with the route that a person uses.
 - The manager as dispatcher with the duty tools (phase 3 of the design).
+
+## 24. Actions, checks with a tool, playbooks, and parity
+
+This section adds four things to the duties of section 22. A duty can post in a bridge, open a bridge from a playbook, or ask the manager. A check can call a tool of the agent. The agent of a duty writes its check from words. And each route that changes something has an MCP tool that calls the same Go function. The packages `duties/actions`, `duties/looks`, and `playbooks` plug into the seams of section 22.10. A binary turns each one on with a blank import, as `cmd/fw-workbench/drivers.go` does.
+
+### 24.1 The actions post, open, and manager
+
+The package `duties/actions` registers three actions with `duties.RegisterAction`. Each action goes through the Go function of the route that a person uses.
+
+| Action | Record | What a start does |
+|---|---|---|
+| `post` | `{"bridge", "to", "message"}` | It posts the message in the bridge, through the post of `POST /v1/bridges/{id}/messages`. The message goes to the members of `to`, else to every active member. |
+| `open` | `{"playbook", "goal"}` | It opens a bridge from the playbook, through the open of `POST /v1/bridges`. The title is `<duty>: <date>`, with the date of the start in the time zone of the duty. The goal is the goal of the duty, else the goal of the playbook. |
+| `manager` | `{"message"}` | It puts the message on the queue of the manager (`workbench.bossmode.manager`) as a run of the duty. The run has the id, the metadata, the budget, and the principal of the start, and its input starts with "From the duty <name>." |
+
+The message of `post` and `manager`, and the goal of `open`, take the placeholders of section 22.1. The front fills them before the action starts.
+
+A person decides the access of a duty when the person writes it. `Action.Check` runs then, with the person of the write. It lists each problem with the path of its field:
+
+- `do.post.bridge`: no bridge that the person can use has the id, or the bridge is closed. A duty posts in a bridge that stays open.
+- `do.post.to`: a handle that the bridge does not have. The handle `manager` is always there.
+- `do.post.message` and `do.manager.message`: an empty message.
+- `do.open.playbook`: no playbook that the person can read has the name, a seat of the playbook needs the operator role on an agent that the person does not operate, or the plan of the playbook does not fit. `do.open.goal`: a goal that is too long for a bridge.
+- `do.manager`: the front names no manager, the person cannot run the manager, or the manager has no queue.
+
+`Action.Start` runs in the engine as the front itself. It acts for the principal of the runs of the duty: `duty:<name>`, of the kind `workload`, or the owner with `runAs: owner`. So the sender of a post is that principal, with the name "the duty <name>" in the channel. The operator of a bridge that a duty opens is that principal too, and the runs of its seats act as it. With `runAs: duty`, a person finds such a bridge by the note of the start in the history of the duty. The list of bridges of a person shows a bridge of the person and of the teams of the person, and a duty has no team.
+
+A post and an open start no run. The start then ends `completed` at once, it names no run, and its reason says what the action did, such as "Opened the bridge 01m5... "weekly-patching: 2026-10-26" from the playbook weekly-patching." A start of `manager` names its run, and the engine follows that run as it follows a run of `ask`. An action that fails goes again up to the retries of the duty, as a run of `ask` does, and its reason names the cause, such as a bridge that closed after the write.
+
+### 24.2 Playbooks
+
+A playbook is the body of `POST /v1/bridges` without a title, saved under a name. A duty opens a bridge from it on a schedule, such as weekly patching, and a person can open one from the page.
+
+```json
+{
+  "name": "weekly-patching",
+  "goal": "Patch the lab hosts and report.",
+  "placement": "queue",
+  "seats": [{"handle": "patcher", "agent": "net-auditor", "task": "Patch the hosts."}],
+  "caps": {"maxMessages": 200, "maxTurns": 400},
+  "delegation": {"approve": true, "budget": false, "members": false, "report": true}
+}
+```
+
+`seats` are the members of the plan of a bridge, each with `handle`, `agent`, `task`, and optionally `pool` and `budget`. `caps` and `delegation` are partial, as in the plan of a bridge. A name is 1 to 63 of `a-z`, `0-9`, `-`, and `_`.
+
+The package `playbooks` keeps the playbooks in the key-value bucket `<stream>_PLAYBOOKS`, one entry per playbook with the last ten values. On the bus `mem`, the bucket lives in memory. On another bus, the playbooks are off, and the log says so once. Each write is a compare-and-swap on the revision that the writer read.
+
+| Route | Tool | Answer |
+|---|---|---|
+| `GET /v1/playbooks` | `playbooks_list` | `{"playbooks": [{"name", "goal", "placement", "seats", "revision", "owner", "updatedAt"}]}`, by name |
+| `GET /v1/playbooks/{name}` | `playbook_get` | The playbook with `caps`, `delegation`, `revision`, `owner`, and `updatedAt` |
+| `PUT /v1/playbooks/{name}` | `playbook_put` | 201 with the playbook and `Location` for a new playbook, else 200. An optional `revision` in the body makes the write a compare-and-swap, and a stale revision gets 409. |
+| `DELETE /v1/playbooks/{name}` | `playbook_delete` | 204 |
+
+A read is a valid body of a write: the write takes `revision` and leaves out `owner` and `updatedAt`. `playbook_put` takes `{"name", "playbook", "revision"}`.
+
+A playbook that does not fit gets 400 with `problems`. The checks are those of the plan of a bridge (`bridges.Store.CheckPlan`), without the title, and each problem starts with the path of its field, such as `seats[0].handle: The handle "Bad Handle" must be lower-case letters...`. The route `POST /v1/bridges` checks its body with the same function.
+
+The access rules are those of the bridges. A person who can open a bridge from a playbook can read it and write it: its owner, and a person with the operator role on the agent of each of its seats. A write needs the operator role on the agent of each new seat, as an open needs it. A caller who cannot read a playbook gets 404. The owner of a new playbook is the person who writes it, and a change keeps the owner. A change of a playbook changes what a duty opens from it at its next start. A duty whose playbook is gone fails at its next start and says why.
+
+### 24.3 A check with a tool of the agent
+
+A check with `checkFirst.look.tool` calls a tool of the agent of the duty, such as a query of a ServiceNow queue. The worker of the agent holds the tool, its credential, its egress, and its policy, so the check cannot run in the front. The package `duties/looks` registers the look `tool` with `duties.RegisterLook`:
+
+1. The front puts a check run of the kernel on the queue of the pool of the agent (`fleet.EnqueueFor`). The request has one step, `{"tool", "input"}` from the check, the time limit of a check (30 seconds), and its output limit (1 MB). It has no input: a check run reads its work from its check. It acts as the principal of the runs of the duty.
+2. The kernel of the worker calls the tool with the policy of the agent and calls no model. A tool that the policy asks for, or denies, fails the run with the reason, because nobody answers a check.
+3. The front waits for the run (`fleet.Await`) at most 60 seconds: the time limit of the check, and as long again for the queue and for a worker that wakes. A run that does not end in time is canceled, and the check fails.
+4. The front reads the output of the run, `{"results": [{"tool", "output", "isError"}]}`. The document of the check is the output of its one step. An output that is a JSON string that holds JSON, as a tool that answers JSON in a text gives it, reads as that JSON once. An error result of the tool, an output that the kernel cut, and a failed run fail the check with the reason in words.
+
+The check then finds its items as for an HTTP address (section 22.6). A dry run with `test=true` runs the check run once, and so does each start of the duty.
+
+A check run carries the metadata `workbench.internal` with `duty-check:<name>` and the title "Check of the duty <name>". It carries no batch and no `workbench.duty`, so the history of the duty never takes it for a run of the duty. The kernel gives it `fw.kind: check`.
+
+### 24.4 The options and the write of a check
+
+`GET /v1/duties/options` answers what the page can offer in New duty:
+
+```json
+{
+  "secrets": [{"name": "SNOW_API_TOKEN", "hosts": ["acme.service-now.com"]}],
+  "events": [],
+  "actions": ["ask", "manager", "open", "post"],
+  "looks": ["http", "tool"]
+}
+```
+
+`secrets` lists `workbench.duties.secrets` by name and hosts, and never a value. `events`, `actions`, and `looks` come from `duties.Offered`: only what a registered package serves now. Any person with a credential of the native API reads it.
+
+`POST /v1/duties/{name}/write-check` takes `{"words", "agent"}`, such as `{"words": "a new P1 or P2 in the Platform Ops queue", "agent": "triage"}`. The caller needs the owner role on the agent, as for a write of the duty. For a saved duty, the agent of the duty writes the check, whatever the body names.
+
+The front runs the agent itself, with its profile, its model, and its budget, as the caller. It picks no model and no budget of its own. An agent whose profile has no budget, with at least one of `maxCostUSD`, `maxTurns`, `maxTokens`, and `maxToolCalls` above zero, does not run, and the answer is 422 with the reason. The run gets the deadline of its budget, at most 120 seconds. Its input is the words of the person. Its instructions are fixed text that describes the record `checkFirst` of the contract, the looks and the secrets that this front offers now, and the tools of the profile. They tell the agent to call at most one tool that only reads, to see the shape of its answer, and to answer with one JSON object alone.
+
+The front then:
+
+1. reads the answer strictly: one JSON object of the record, with no other field and nothing after it. A fence of Markdown around it comes off.
+2. checks the record as a dry run of the duty checks it, with the rules of the operator for the secrets and the hosts.
+3. tests the check once when the front can run its look, and writes no seen key.
+4. answers `{"checkFirst", "readback", "check", "run"}`. `readback` is the check in words, from the record and never from the words of the model, such as "First it looks at acme.service-now.com/api/queue for the items at result.records, where priority is 1 or 2. Only items that it did not see before wake triage, by their number." `check` is the answer of the test, as in a dry run, and `null` when the front cannot run the look yet. `run` is the run that wrote the check.
+
+An answer that is no check, a record that does not fit, a test that fails, a failed run, and a run that asks a person to allow a tool get 422 with the reason in `error`, beside the `detail` of the problem document. When the agent wrote a record that reads, the answer also holds `checkFirst` and `readback`, so the page can show it. After 120 seconds without an answer, the front cancels the run and answers 504. The write saves nothing: the person puts `checkFirst` into the duty with a write, after the person agrees.
+
+The run that writes a check carries `workbench.internal` with `duty-write-check:<name>` and the title "Write the check of the duty <name>", and no batch.
+
+### 24.5 Parity of the routes and the tools
+
+Each capability is a Go function. Its route and its MCP tool call that function, with the same checks of access and the same errors. This build adds these tools:
+
+| Tool | Route | Go function |
+|---|---|---|
+| `bridge_patch` | `PATCH /v1/bridges/{id}` | `bridges.Store.Patch` |
+| `bridge_member_patch` | `PATCH /v1/bridges/{id}/members/{handle}` | `bridges.Store.PatchMember` |
+| `bridge_react` | `POST /v1/bridges/{id}/messages/{seq}/reactions` | `bridges.Store.React` |
+| `bridge_mark_read` | `PUT /v1/bridges/{id}/read` | `bridges.Store.MarkRead` |
+| `bridge_post`, for a person | `POST /v1/bridges/{id}/messages` | `bridges.Store.Post` |
+| `orphans_list`, `orphans_remove` | `GET` and `DELETE /v1/fleet/orphans` | `fleet.Orphans`, `fleet.RemoveOrphans` |
+| `routine_put` | `PUT /v1/routines/{agent}/{name}` | the write of the routines |
+| `playbooks_list`, `playbook_get`, `playbook_put`, `playbook_delete` | `/v1/playbooks` | `playbooks.Service` |
+| `duty_write_check` | `POST /v1/duties/{name}/write-check` | `duties.Service.WriteCheck` |
+
+The four tools of a bridge are for a person who calls the MCP server with a credential of its own, such as Claude Code. Each takes `bridge`, the id of the bridge, and the fields of the body of its route. A run of the fleet gets a refusal that names the tools of a run: `bridge_post`, `bridge_close`, `bridge_add_member`, and `bridge_remove_member`, which follow the delegation of the operator. So a manager run never changes the delegation that binds it. `bridge_post` without a run of the fleet behind the call is the post of a person: it needs `bridge`, and it takes `replyTo`, `pinned`, and `files`, each `{"name", "data"}` with the bytes in base64, as the route takes them. A run that sends them gets a refusal.
+
+`orphans_list` and `orphans_remove` need the admin role of the process, as their routes do. `routine_put` takes `{"agent", "name", "routine", "standing", "source", "replay", "note"}`, the body of its route.
+
+The test `TestParity` of `cmd/fw-workbench` reads the source of the workbench with `go/ast` and needs no cluster. It finds each pattern that a package mounts with `Handle` or `HandlePublic` of the kit of the native surface, or lists in a table of routes, and it resolves a constant of the workbench or of the kernel. It finds each tool by the name of an `sdk.Tool`. Each route that changes something, any method but `GET` and `HEAD`, needs an entry in `parityRoutes`: the tool that calls its Go function, or the reason why none does. A new route without an entry, an entry of no route, and a tool that no package declares fail the test. These routes have a reason and no tool:
+
+| Route | Reason |
+|---|---|
+| `POST /v1/connections/{server}` | It starts a sign-in at the service in the browser of the person. The tool `connections` gives the address that starts it. |
+| `POST /v1/tokens`, `/v1/tokens/reject`, `/v1/tokens/forget` | The broker of the tokens of a connection: a worker calls it for a run with the static token. |
+| `POST /v1/sources/{name}`, `POST /v1/duties/{name}/call` | Another app calls it with the credential of its webhook. |
+| `DELETE /v1/pages/{path...}` | No tool yet. An agent keeps the wiki with `pages_write`. |
+| `DELETE /v1/faces/{agent}`, `PATCH /v1/faces/{agent}` | No tool yet. A person changes these on the page. |
+| `DELETE /v1/bossmode/skills/{name}` | No tool yet. An admin removes an imported skill on the page. |
+
+### 24.6 The runs that the lists leave out
+
+The front starts some runs for itself: the check runs of 24.3 and the run that writes a check. `fleet.Listed(run)` is false for a run with `fw.kind: check` or with the metadata `workbench.internal`, and only the front sets that key. The lists of the workbench leave such a run out:
+
+- `dashboard.Runs`, and so the MCP tool `runs_list`, `GET /v1/fleet/runs`, the home of a person (`GET /v1/home`), and the conversation of the manager on the page
+- the stream of bossmode, which sends no `run` event for such a run
+- the counts of the busy runs of a member in the view of the fleet
+
+The kernel leaves the check runs out of its own `GET /v1/runs`. A run that writes a check is a run of the model, so the `GET /v1/runs` of the worker that holds it still lists it.
+
+A record of a member in the view keeps the newest 50 finished runs that the lists show and, apart from them, the newest 10 finished runs that they leave out (`fleet.HiddenFinishedRuns`). So a check every few minutes never pushes the work of people out of the view.
+
+`fleet.Await(ctx, agent, id)` waits until a run that the front put on a queue ends or waits for a person, and returns it with its whole output. It reads the run from this process, else from the view, and once the run settled it reads the whole run from the member that holds it, with the static token of the fleet, because a record of the view cuts the output to 2 KB. `fleet.CancelRun` cancels such a run in the same way. `fleet.EnqueueFor` takes a request with a check and an empty input, as the kernel takes it.
+
+### 24.7 Problems with the path of their field
+
+Each problem of a duty, of an action, and of a playbook starts with the dotted path of its field and a colon, such as `when.schedule.times: ...`, `do.post.bridge: ...`, `checkFirst.where[0].field: ...`, or `seats[1].task: ...`. The page shows the text after the colon beside the field. A problem of the whole duty has no path. The words of `when.say` that do not read are a problem of `when.say`, and the time zone of the caller that is not an IANA name is a problem of `when.schedule.timeZone`.

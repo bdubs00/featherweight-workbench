@@ -33,6 +33,13 @@ const (
 
 	// FinishedRuns is how many finished runs a record holds, newest first.
 	FinishedRuns = 50
+	// HiddenFinishedRuns is how many finished runs that the lists leave
+	// out (Listed), such as check runs, a record holds besides
+	// FinishedRuns, newest first. So a check every few minutes never
+	// pushes the work of people out of the view, and a check run that
+	// ended a moment ago stays in the view for the front that waits for
+	// it.
+	HiddenFinishedRuns = 10
 	// TextLimit is the size in bytes to which a record cuts the input, the
 	// output, and the error of a run.
 	TextLimit = 2 << 10

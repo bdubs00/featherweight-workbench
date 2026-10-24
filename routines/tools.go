@@ -3,9 +3,11 @@ package routines
 // This file holds the MCP tools of the routines (docs/ARCHITECTURE.md
 // section 21.6), which the package adds to the MCP server of the
 // workbench through mcp.RegisterTools: routines_list reads the routines
-// of an agent, and routine_standing moves one. They decide as the routes
-// do. Whether a call of routine_standing waits for a person is the policy
-// of the profile that calls it, such as ask in the profile of the manager.
+// of an agent, routine_put proposes or changes one, and routine_standing
+// moves one. They call the Go functions of the routes and decide as the
+// routes do. Whether a call of routine_put or routine_standing waits for
+// a person is the policy of the profile that calls it, such as ask in the
+// profile of the manager.
 
 import (
 	"context"
@@ -24,6 +26,7 @@ import (
 const (
 	ToolList     = "routines_list"
 	ToolStanding = "routine_standing"
+	ToolPut      = "routine_put"
 )
 
 const (
@@ -39,6 +42,16 @@ const (
 		"note":{"type":"string","maxLength":512,"description":"One line that says why, for the history of the routine, at most 512 bytes."},
 		"version":{"type":"integer","minimum":1,"description":"The version of the routine that you read. The move fails when the routine changed since."}
 	},"required":["agent","name","standing"]}`
+
+	putSchema = `{"type":"object","properties":{
+		"agent":{"type":"string","minLength":1,"maxLength":64,"description":"The name of the agent profile, such as triage."},
+		"name":{"type":"string","minLength":1,"maxLength":64,"description":"The name of the routine, such as acknowledge-a-new-ticket."},
+		"routine":{"type":"object","description":"The body of the routine in the shape of the kernel: name, decider, questions, steps, after, and answer. routines_list with name shows the body of a routine."},
+		"standing":{"type":"string","enum":["proposed","rehearsing","live","paused","retired"],"description":"The standing of a new routine, proposed by default. An operator of the agent proposes a new routine; any other write needs the owner role."},
+		"source":{"type":"object","properties":{"runs":{"type":"integer"},"from":{"type":"string"},"to":{"type":"string"},"proposedBy":{"type":"string"}},"description":"Where the routine comes from: the runs that it learned from, their dates, and who proposed it."},
+		"replay":{"type":"object","properties":{"matched":{"type":"integer"},"total":{"type":"integer"},"at":{"type":"string"}},"description":"The result of a replay of the routine over past runs."},
+		"note":{"type":"string","maxLength":512,"description":"One line that says why, for the history of the routine."}
+	},"required":["agent","name","routine"]}`
 )
 
 type (
@@ -59,6 +72,16 @@ type (
 	standingResult struct {
 		Routine Record `json:"routine"`
 		Moved   bool   `json:"moved"`
+	}
+	putArgs struct {
+		Agent string `json:"agent"`
+		Name  string `json:"name"`
+		putBody
+	}
+	putResult struct {
+		Routine Record `json:"routine"`
+		Created bool   `json:"created,omitempty"`
+		Changed bool   `json:"changed"`
 	}
 )
 
@@ -90,7 +113,42 @@ func tools(s *mcp.Server) []mcp.Tool {
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in standingArgs) (*sdk.CallToolResult, any, error) {
 			return standingTool(ctx, a, in), nil, nil
 		}),
+		mcp.NewTool(&sdk.Tool{
+			Name:        ToolPut,
+			Title:       "Propose or change a routine",
+			Description: "Propose a routine of an agent, or change its body, as PUT /v1/routines/{agent}/{name} does. An operator of the agent proposes a new routine, which starts in the standing proposed. A change of the body needs the owner role, and it gives the routine the next version, so a live routine rehearses again. Move a routine with routine_standing.",
+			InputSchema: json.RawMessage(putSchema),
+			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
+		}, func(ctx context.Context, _ *sdk.CallToolRequest, in putArgs) (*sdk.CallToolResult, any, error) {
+			return putTool(ctx, a, in), nil, nil
+		}),
 	}
+}
+
+// putTool is the tool routine_put.
+func putTool(ctx context.Context, a *fw.Agent, in putArgs) *sdk.CallToolResult {
+	ctx, _, _ = manager.OnBehalf(ctx)
+	s := Of(a)
+	if s == nil {
+		return mcp.ErrorResult("The routines are off in this process. They run on a front that serves, with the bus nats or mem.")
+	}
+	rec, res, err := put(ctx, a, s, in.Agent, in.Name, in.putBody)
+	if err != nil {
+		return mcp.ErrorResult(explain(err))
+	}
+	var text string
+	switch {
+	case res.Created:
+		text = fmt.Sprintf("Created the routine %s of %s.", in.Name, in.Agent)
+	case res.Changed:
+		text = fmt.Sprintf("Changed the routine %s of %s.", in.Name, in.Agent)
+	default:
+		text = fmt.Sprintf("The routine %s of %s has this body already. Nothing changed.", in.Name, in.Agent)
+	}
+	if res.Changed {
+		a.Logger().Info("routines: a routine was written", "agent", in.Agent, "routine", in.Name, "version", rec.Version(), "standing", rec.Standing, "created", res.Created)
+	}
+	return mcp.Result(text+" "+recordText(rec), putResult{Routine: rec, Created: res.Created, Changed: res.Changed})
 }
 
 // explain words an error of the routines for a tool result.

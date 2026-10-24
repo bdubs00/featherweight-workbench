@@ -244,26 +244,26 @@ func TestCheckRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(ans.Dry.Problems, " "); !strings.Contains(got, "does not allow for the host 127.0.0.1") {
+	if got := strings.Join(ans.Dry.Problems, " "); !strings.Contains(got, "checkFirst.look.http.secret: workbench.duties.secrets does not allow SNOW_KEY for the host 127.0.0.1") {
 		t.Fatalf("problems = %q", got)
 	}
 	d.CheckFirst.Look.HTTP.Secret = "OTHER"
 	ans, _ = other.s.Put(as("alice"), d.Name, DutyBody{Duty: d}, PutOptions{DryRun: true})
-	if got := strings.Join(ans.Dry.Problems, " "); !strings.Contains(got, "names OTHER, which workbench.duties.secrets does not list") {
+	if got := strings.Join(ans.Dry.Problems, " "); !strings.Contains(got, "checkFirst.look.http.secret: OTHER is not in workbench.duties.secrets") {
 		t.Fatalf("problems = %q", got)
 	}
 	// checkHosts that do not list the host.
 	listed := newFront(t, "duties:\n  checkHosts: [\"*.example.com\"]\n", nil)
 	d.CheckFirst.Look.HTTP.Secret, d.CheckFirst.Look.HTTP.Header = "", ""
 	ans, _ = listed.s.Put(as("alice"), d.Name, DutyBody{Duty: d}, PutOptions{DryRun: true})
-	if got := strings.Join(ans.Dry.Problems, " "); !strings.Contains(got, "reaches the host 127.0.0.1, which workbench.duties.checkHosts does not list") {
+	if got := strings.Join(ans.Dry.Problems, " "); !strings.Contains(got, "checkFirst.look.http.url: The address reaches the host 127.0.0.1, which workbench.duties.checkHosts does not list") {
 		t.Fatalf("problems = %q", got)
 	}
 	// A secret that the list names but the front does not hold.
 	empty := newFront(t, checkBlock, nil)
 	d = triageDuty(srv.URL)
 	ans, _ = empty.s.Put(as("alice"), d.Name, DutyBody{Duty: d}, PutOptions{DryRun: true})
-	if got := strings.Join(ans.Dry.Problems, " "); !strings.Contains(got, "names SNOW_KEY, which holds no secret in this front") {
+	if got := strings.Join(ans.Dry.Problems, " "); !strings.Contains(got, "checkFirst.look.http.secret: SNOW_KEY holds no secret in this front") {
 		t.Fatalf("problems = %q", got)
 	}
 	if _, err := LoadConfig(func() *fw.Config {
@@ -310,7 +310,7 @@ func TestCheckTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(ans.Dry.Problems, " "); !strings.Contains(got, "checkFirst.look.tool is not available yet") || ans.Dry.Check != nil {
+	if got := strings.Join(ans.Dry.Problems, " "); !strings.Contains(got, "checkFirst.look.tool: Not available yet") || ans.Dry.Check != nil {
 		t.Fatalf("the test of a tool = %q, %+v", got, ans.Dry.Check)
 	}
 	if !strings.Contains(ans.Dry.Readback, "First it calls the tool servicenow.query_incidents") {

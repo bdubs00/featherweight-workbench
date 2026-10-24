@@ -129,14 +129,14 @@ func (c Config) lookProblems(h *LookHTTP) []string {
 		return nil
 	}
 	if len(c.CheckHosts) > 0 && !matchHost(c.CheckHosts, host) {
-		p = append(p, fmt.Sprintf("checkFirst.look.http.url reaches the host %s, which workbench.duties.checkHosts does not list: an operator adds it there.", host))
+		p = append(p, problem("checkFirst.look.http.url", "The address reaches the host %s, which workbench.duties.checkHosts does not list. An operator adds it there.", host))
 	}
 	if h.Secret != "" {
 		switch r := c.secretRule(h.Secret); {
 		case r == nil:
-			p = append(p, fmt.Sprintf("checkFirst.look.http.secret names %s, which workbench.duties.secrets does not list: an operator adds it there, with the hosts that it may reach.", h.Secret))
+			p = append(p, problem("checkFirst.look.http.secret", "%s is not in workbench.duties.secrets. An operator adds it there, with the hosts that it may reach.", h.Secret))
 		case !matchHost(r.Hosts, host):
-			p = append(p, fmt.Sprintf("checkFirst.look.http.secret names %s, which workbench.duties.secrets does not allow for the host %s.", h.Secret, host))
+			p = append(p, problem("checkFirst.look.http.secret", "workbench.duties.secrets does not allow %s for the host %s.", h.Secret, host))
 		}
 	}
 	return p
@@ -148,7 +148,7 @@ func (c Config) webhookProblems(w *Webhook) []string {
 	if w.Auth.Secret == "" || c.secretRule(w.Auth.Secret) != nil {
 		return nil
 	}
-	return []string{fmt.Sprintf("when.webhook.auth.secret names %s, which workbench.duties.secrets does not list: an operator adds it there.", w.Auth.Secret)}
+	return []string{problem("when.webhook.auth.secret", "%s is not in workbench.duties.secrets. An operator adds it there.", w.Auth.Secret)}
 }
 
 // hostOf returns the host of an address without its port, or "".

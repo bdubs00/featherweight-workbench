@@ -110,6 +110,12 @@ type Service struct {
 	runs    func(ctx context.Context, name string) (map[string]*fw.Run, error)
 	secret  func(ctx context.Context, name string) (string, error)
 
+	// The seams of a write of a check (writecheck.go): the wait for a run
+	// that the front put on a queue, its cancel, and the longest wait.
+	await     func(ctx context.Context, id string) (*fw.Run, error)
+	stopRun   func(ctx context.Context, id string) error
+	writeWait time.Duration
+
 	mu      sync.Mutex
 	cursors map[string]time.Time       // per duty, the newest time of its schedule that this replica handled
 	open    map[string]map[string]bool // per duty, the dates of its history with a start that works
@@ -191,6 +197,9 @@ func newService(a *fw.Agent, st *Store, cfg Config, log *slog.Logger) *Service {
 		return fleet.EnqueueFor(ctx, a, agent, pool, reqs)
 	}
 	s.runs = s.runsOfFleet
+	s.await = func(ctx context.Context, id string) (*fw.Run, error) { return fleet.Await(ctx, a, id) }
+	s.stopRun = func(ctx context.Context, id string) error { return fleet.CancelRun(ctx, a, id) }
+	s.writeWait = WriteCheckTimeout
 	s.secret = func(ctx context.Context, name string) (string, error) {
 		secrets := a.Secrets()
 		if secrets == nil {
@@ -275,9 +284,17 @@ type Action struct {
 }
 
 // Looker reads the document of a check: the JSON in which the check finds
-// its items. A later package registers the look tool, a check run of the
-// kernel through the tool of the agent.
+// its items. The package duties/looks registers the look tool, a check
+// run of the kernel through the tool of the agent.
 type Looker func(ctx context.Context, a *fw.Agent, d *Duty) ([]byte, error)
+
+// Names of the looks of a check: LookNameHTTP reads an address in the
+// front, and LookNameTool calls a tool of the agent in a check run of the
+// kernel.
+const (
+	LookNameHTTP = "http"
+	LookNameTool = "tool"
+)
 
 // Notice is an event of a duty for the notifications: a failed run, a
 // duty that paused itself, a daily cap that a duty reached, or a run that
@@ -362,7 +379,7 @@ func Offered() (events, actions, looks []string) {
 	for name := range hooks.actions {
 		actions = append(actions, name)
 	}
-	looks = []string{"http"}
+	looks = []string{LookNameHTTP}
 	for name := range hooks.looks {
 		looks = append(looks, name)
 	}
@@ -408,6 +425,23 @@ func eventsCheck() func(e *Event) []string {
 	hooks.mu.Lock()
 	defer hooks.mu.Unlock()
 	return hooks.events
+}
+
+// endWithoutRun ends a start whose registered action started no run, such
+// as a post in a bridge: the start names no run, so its history links to
+// none, and its reason says what the action did.
+func (s *Service) endWithoutRun(ctx context.Context, st *stored, date string, e entry, note string) {
+	_, wrote, err := s.st.setEntry(ctx, st.Duty.Name, date, e.ID, []string{StateStarting}, func(x *entry) bool {
+		x.State, x.Reason, x.Run = StateCompleted, note, ""
+		x.FoundText, x.Event = "", ""
+		return true
+	})
+	if err != nil {
+		s.log.Warn("duties: the history of a duty did not change", "duty", st.Duty.Name, "error", err)
+	}
+	if wrote {
+		changed(st.Duty.Name)
+	}
 }
 
 // notify calls the OnNotice hooks.
