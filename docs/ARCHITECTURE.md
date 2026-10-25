@@ -3317,6 +3317,14 @@ The outbox lives in the bucket of the settings, so a restart of a replica loses 
 
 The digest goes once a day for each person with a channel whose switch `digest` is on, to each such channel. It goes at the end of the quiet hours, or at 08:00 in the time zone of the person without quiet hours. A front that did not run at that time sends it up to six hours later. It lists the starts of the duties of the person in the last day, each with its time, its outcome, and its cost, then the starts that did not run as one count, and the duties that paused themselves. The duties of a person are those that the person owns and those whose `notify` lists name the person. A person with no duty gets no digest. One replica sends each digest: it claims the day of the person in the bucket.
 
+Under a start, the digest lists the decisions about the approvals of its run while its owner was away (section 23.4). Each decision is one line in the words of the page:
+
+- `The manager allowed bash: it only reads.`
+- `Nobody answered in time, so the front denied git.push.`
+- `You stopped the run at deploy: wrong host.`
+
+A start shows at most three decisions and a count of the rest. The lines of the starts and of their decisions are 40 at most.
+
 The settings of the first build had one ntfy place per person, with `ntfy` and `send` beside the quiet hours. Such a record reads as a person with no channel, and its quiet hours stay. A notification of the first build in the outbox names no channel, and the front drops it.
 
 ### 23.2 The routes and the tools of the notifications

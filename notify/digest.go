@@ -5,8 +5,10 @@ package notify
 // quiet hours of the person, or at 08:00 in the time zone of the person
 // without quiet hours. It lists the
 // starts of the duties of the person in the last day, each with its
-// outcome and its cost. The duties of a person are the duties that the
-// person owns and the duties whose notify lists name the person. One
+// outcome and its cost, and under each start the decisions about the
+// approvals of its run while its owner was away. The duties of a person
+// are the duties that the person owns and the duties whose notify lists
+// name the person. One
 // replica sends each digest: it claims the day of the person in the
 // bucket, under digest.<person>, with a compare-and-swap.
 
@@ -32,8 +34,18 @@ const (
 	digestLate = 6 * time.Hour
 	// digestEvery is how often a replica looks for a digest to send.
 	digestEvery = time.Minute
-	// maxDigestLines bounds the lines of the starts of a digest.
+	// maxDigestLines bounds the lines of the starts of a digest and of
+	// their decisions.
 	maxDigestLines = 40
+	// maxStartDecisions bounds the decisions under one start. A line
+	// counts the rest.
+	maxStartDecisions = 3
+	// maxDecisionBytes bounds the text of the lines of a digest, in
+	// bytes, while it adds a decision. The rest of maxText stays free for
+	// the counts and the paused duties at the end.
+	maxDecisionBytes = maxText - 1000
+	// maxReasonBytes bounds the reason of one decision, in bytes.
+	maxReasonBytes = 120
 )
 
 // digestAt returns the time of the digest of a person on the day of now,
@@ -124,9 +136,10 @@ func (s *Service) digests(ctx context.Context) {
 }
 
 // digestText writes the digest of a person: each start of the duties of
-// the person in the day before now with its outcome and its cost, the
-// starts that did not run as one count, the total, and the duties that
-// paused themselves. It reports false for a person with no duty.
+// the person in the day before now with its outcome and its cost, and
+// under it the decisions while its owner was away, the starts that did
+// not run as one count, the total, and the duties that paused
+// themselves. It reports false for a person with no duty.
 func (s *Service) digestText(ctx context.Context, subject string, loc *time.Location, now time.Time) (string, bool) {
 	svc := duties.Of(s.a)
 	if svc == nil {
@@ -138,7 +151,7 @@ func (s *Service) digestText(ctx context.Context, subject string, loc *time.Loca
 		return "", false
 	}
 	var lines, paused []string
-	runs, idle, more := 0, 0, 0
+	runs, idle, more, size := 0, 0, 0, 0
 	total := 0.0
 	mine := 0
 	for _, r := range recs {
@@ -161,15 +174,38 @@ func (s *Service) digestText(ctx context.Context, subject string, loc *time.Loca
 				continue
 			}
 			runs++
-			if len(lines) >= maxDigestLines {
+			// A start with decisions needs a second line, for at least
+			// the count of its decisions.
+			need := 1
+			if len(e.Decided) > 0 {
+				need = 2
+			}
+			if len(lines)+need > maxDigestLines {
 				more++
 				continue
 			}
-			line := fmt.Sprintf("%s, %s: %s, $%.2f", r.Duty.Name, e.Slot.In(loc).Format("Mon 3:04 PM"), e.State, e.CostUSD)
+			line := fmt.Sprintf("- %s, %s: %s, $%.2f", r.Duty.Name, e.Slot.In(loc).Format("Mon 3:04 PM"), e.State, e.CostUSD)
 			if e.State == duties.StateFailed && e.Reason != "" {
 				line += ". " + cutText(e.Reason, 160)
 			}
 			lines = append(lines, line)
+			size += len(line) + 1
+			shown := 0
+			for _, d := range e.Decided {
+				w := "  - " + decidedWords(d, subject)
+				if shown == maxStartDecisions || len(lines) >= maxDigestLines-1 || size+len(w) > maxDecisionBytes {
+					break
+				}
+				lines = append(lines, w)
+				size += len(w) + 1
+				shown++
+			}
+			switch rest := len(e.Decided) - shown; {
+			case rest == 1:
+				lines = append(lines, "  - and 1 more decision")
+			case rest > 1:
+				lines = append(lines, fmt.Sprintf("  - and %d more decisions", rest))
+			}
 		}
 	}
 	if mine == 0 {
@@ -185,7 +221,7 @@ func (s *Service) digestText(ctx context.Context, subject string, loc *time.Loca
 		fmt.Fprintf(&b, "%d runs of your duties in the last day, $%.2f in all:", runs, total)
 	}
 	for _, l := range lines {
-		b.WriteString("\n- " + l)
+		b.WriteString("\n" + l)
 	}
 	if more > 0 {
 		fmt.Fprintf(&b, "\n- and %d more", more)
@@ -214,4 +250,74 @@ func names(d duties.Duty, subject string) bool {
 		}
 	}
 	return false
+}
+
+// decidedWords says in short words who decided an approval of a run while
+// its owner was away, and how, as the page says it: "The manager allowed
+// bash: it only reads." or "Nobody answered in time, so the front denied
+// git.push." me is the person of the digest, who reads "You". The reason
+// of a timeout only repeats the timeout, so it stays out.
+func decidedWords(d duties.Decided, me string) string {
+	tool := strings.TrimSpace(d.Tool)
+	if tool == "" {
+		tool = "a tool"
+	}
+	if d.By == duties.DecidedByTimeout {
+		switch d.Verdict {
+		case "cancel":
+			return "Nobody answered in time, so the front stopped the run at " + tool + "."
+		case "allow":
+			return "Nobody answered in time, so the front allowed " + tool + "."
+		}
+		return "Nobody answered in time, so the front denied " + tool + "."
+	}
+	why := "."
+	if r := strings.Join(strings.Fields(d.Reason), " "); r != "" {
+		why = ": " + reasonWords(r)
+	}
+	var who string
+	switch {
+	case d.By == duties.DecidedByManager:
+		who = "The manager"
+	case me != "" && d.By == me:
+		who = "You"
+	default:
+		who = capitalize(personName(d.By))
+	}
+	switch d.Verdict {
+	case "allow":
+		return who + " allowed " + tool + why
+	case "cancel":
+		return who + " stopped the run at " + tool + why
+	}
+	return who + " denied " + tool + why
+}
+
+// reasonWords cuts the reason of a decision to maxReasonBytes at a word,
+// and ends it with a full stop.
+func reasonWords(r string) string {
+	if len(r) > maxReasonBytes {
+		c := cutText(r, maxReasonBytes)
+		if i := strings.LastIndexByte(c, ' '); i > maxReasonBytes/2 {
+			c = c[:i]
+		}
+		return strings.TrimRight(c, " ,;:") + "…"
+	}
+	if strings.HasSuffix(r, ".") || strings.HasSuffix(r, "!") || strings.HasSuffix(r, "?") {
+		return r
+	}
+	return r + "."
+}
+
+// personName is the short name of a subject, as the page shows it: the
+// part before an @, or "someone" for no subject.
+func personName(subject string) string {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return "someone"
+	}
+	if i := strings.IndexByte(subject, '@'); i > 0 {
+		return subject[:i]
+	}
+	return subject
 }
