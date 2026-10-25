@@ -72,26 +72,36 @@ pools:
 // overlays and the runtime pools in memory. The ax API does not answer, so
 // no pass runs.
 type front struct {
-	a     *fw.Agent
-	url   string
-	store *pools.Store
+	a        *fw.Agent
+	url      string
+	store    *pools.Store
+	overlays *pools.MemOverlays
 }
 
 func newFront(t *testing.T) *front {
+	t.Helper()
+	return newFrontWith(t, block)
+}
+
+// newFrontWith is newFront with another block workbench.
+func newFrontWith(t *testing.T, block string) *front {
 	t.Helper()
 	t.Setenv("FW_API_TOKEN", "fleet-secret-token")
 	t.Setenv(titles.EnvTitles, titles.ModeInput)
 	t.Setenv("FW_ATESPACE", "")
 	overlays := pools.NewMemOverlays()
 	store := pools.NewStore(bucket.NewMem(pools.StoreBucket), nil)
-	oldO, oldR := fleet.OpenOverlays, fleet.OpenRuntime
+	oldO, oldR, oldE := fleet.OpenOverlays, fleet.OpenRuntime, fleet.OpenEnvironments
 	fleet.OpenOverlays = func(context.Context, *fw.Config, *slog.Logger) (pools.OverlayStore, func(), error) {
 		return overlays, nil, nil
 	}
 	fleet.OpenRuntime = func(context.Context, *fw.Config, *slog.Logger, bool) (*pools.Store, func(), error) {
 		return store, nil, nil
 	}
-	t.Cleanup(func() { fleet.OpenOverlays, fleet.OpenRuntime = oldO, oldR })
+	fleet.OpenEnvironments = func(context.Context, *fw.Config, *slog.Logger) (bucket.Bucket, func(), error) {
+		return bucket.NewMem(fleet.EnvBucket), nil, nil
+	}
+	t.Cleanup(func() { fleet.OpenOverlays, fleet.OpenRuntime, fleet.OpenEnvironments = oldO, oldR, oldE })
 	cfg := fw.DefaultConfig()
 	cfg.Home = t.TempDir()
 	cfg.Access.Creators, cfg.Access.Admins = []string{"alice"}, []string{"carol"}
@@ -132,7 +142,7 @@ func newFront(t *testing.T) *front {
 	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &front{a: a, url: srv.URL, store: store}
+	return &front{a: a, url: srv.URL, store: store, overlays: overlays}
 }
 
 func do(t *testing.T, method, url, token, body string) (*http.Response, string) {

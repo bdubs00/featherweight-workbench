@@ -142,6 +142,13 @@ type Fleet struct {
 	// keeps no store or when it did not open, and its end.
 	indexBucket bucket.Bucket
 	closeIndex  func()
+
+	// The package mirror of the front, nil when the packages are off, the
+	// bucket of the states of the environments of the workers, and its
+	// end (packages.go).
+	mirror    *pools.PackageMirror
+	envStates bucket.Bucket
+	closeEnv  func()
 }
 
 // Open builds the fleet of an agent from a configuration that Load filled
@@ -253,6 +260,10 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 		}
 		return nil, err
 	}
+	if err := f.startPackages(ctx, cfg); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	var src queueSource
 	var shared jobStore
 	if f.intake != "" {
@@ -304,6 +315,9 @@ func (f *Fleet) Close() error {
 		}
 		if f.closeIndex != nil {
 			f.closeIndex()
+		}
+		if f.closeEnv != nil {
+			f.closeEnv()
 		}
 		f.client.CloseIdleConnections()
 	})

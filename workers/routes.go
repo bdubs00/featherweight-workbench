@@ -35,6 +35,12 @@ func mount(k *native.Kit) error {
 	k.Handle("GET /v1/templates", rt.templates)
 	k.Handle("GET /v1/fleet/orphans", rt.orphans)
 	k.Handle("DELETE /v1/fleet/orphans", rt.removeOrphans)
+	if fleet.PackagesOn(k.Agent()) {
+		// Without a package mirror, the packages are off, and these
+		// routes answer 404.
+		k.Handle("GET /v1/pools/{name}/packages", rt.packages)
+		k.Handle("PUT /v1/pools/{name}/packages", rt.putPackages)
+	}
 	return nil
 }
 
@@ -45,7 +51,7 @@ func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 		native.WriteProblem(w, r, http.StatusNotFound, cause(err))
 	case errors.Is(err, fleet.ErrPoolExists), errors.Is(err, fleet.ErrPoolConflict):
 		native.WriteProblem(w, r, http.StatusConflict, cause(err))
-	case errors.Is(err, fleet.ErrNoTaskList):
+	case errors.Is(err, fleet.ErrNoTaskList), errors.Is(err, fleet.ErrPackagesOff):
 		native.WriteProblem(w, r, http.StatusNotFound, cause(err))
 	case errors.Is(err, fleet.ErrTaskList):
 		native.WriteProblem(w, r, http.StatusBadGateway, cause(err))
@@ -129,6 +135,39 @@ func (rt *routes) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	native.WriteJSON(w, http.StatusAccepted, st)
+}
+
+// packages answers GET /v1/pools/{name}/packages with the packages of the
+// pool and the state of each worker (fleet.Packages). The caller must
+// view the pool.
+func (rt *routes) packages(w http.ResponseWriter, r *http.Request) {
+	ctx, _, _ := manager.OnBehalf(r.Context())
+	out, err := fleet.PackagesOf(ctx, rt.a, r.PathValue("name"))
+	if err != nil {
+		rt.fail(w, r, err)
+		return
+	}
+	native.WriteJSON(w, http.StatusOK, out)
+}
+
+// putPackages answers PUT /v1/pools/{name}/packages: the body is {on, ask,
+// python, tools} (fleet.PackagesRequest), which replaces the packages of
+// the pool, and the answer is 200 with the packages as GET answers them.
+// It needs the owner role on the agent of the pool. With ?dryRun=true it
+// checks the body, answers the setting that it would write, and writes
+// nothing.
+func (rt *routes) putPackages(w http.ResponseWriter, r *http.Request) {
+	var req fleet.PackagesRequest
+	if !rt.k.Decode(w, r, &req) {
+		return
+	}
+	ctx, _, _ := manager.OnBehalf(r.Context())
+	out, err := fleet.PutPackages(ctx, rt.a, r.PathValue("name"), req, r.URL.Query().Get("dryRun") == "true")
+	if err != nil {
+		rt.fail(w, r, err)
+		return
+	}
+	native.WriteJSON(w, http.StatusOK, out)
 }
 
 // templates answers GET /v1/templates with {"templates": [...]}: the name,

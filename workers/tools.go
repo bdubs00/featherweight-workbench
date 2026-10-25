@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/bdubs00/featherweight-kernel/ax"
 	"github.com/bdubs00/featherweight-kernel/fw"
@@ -32,6 +33,8 @@ const (
 	ToolTemplatesList = "templates_list"
 	ToolOrphansList   = "orphans_list"
 	ToolOrphansRemove = "orphans_remove"
+	ToolPackagesGet   = "packages_get"
+	ToolPackagesPut   = "packages_put"
 )
 
 const (
@@ -53,6 +56,19 @@ const (
 	},"required":["name"]}`
 
 	deleteSchema = `{"type":"object","properties":{"name":` + poolNameSchema + `},"required":["name"]}`
+
+	packagesGetSchema = `{"type":"object","properties":{"pool":` + poolNameSchema + `},"required":["pool"]}`
+
+	packageListSchema = `{"type":"array","maxItems":100,"items":{"type":"string","minLength":1,"maxLength":200}`
+
+	packagesPutSchema = `{"type":"object","properties":{
+		"pool":` + poolNameSchema + `,
+		"on":{"type":"boolean","description":"True gives the workers of the pool the packages of the lists. False turns the packages off, and the workers use only the programs of their image."},
+		"ask":{"type":"boolean","description":"True lets the agent ask for a package, and a person approves each one. False lets the agent only list its packages."},
+		"python":` + packageListSchema + `,"description":"The Python packages, such as ansible-lint or pyyaml>=6. The list replaces the list of the pool, and an empty list clears it."},
+		"tools":` + packageListSchema + `,"description":"The Programs, such as nodejs>=22 or iproute2. The list replaces the list of the pool, and an empty list clears it."},
+		"dryRun":{"type":"boolean","description":"Check the request and answer the packages that it would set, and change nothing."}
+	},"required":["pool","on"]}`
 )
 
 type (
@@ -66,6 +82,17 @@ type (
 	}
 	deleteArgs struct {
 		Name string `json:"name"`
+	}
+	packagesGetArgs struct {
+		Pool string `json:"pool"`
+	}
+	packagesPutArgs struct {
+		Pool   string   `json:"pool"`
+		On     *bool    `json:"on"`
+		Ask    bool     `json:"ask,omitempty"`
+		Python []string `json:"python,omitempty"`
+		Tools  []string `json:"tools,omitempty"`
+		DryRun bool     `json:"dryRun,omitempty"`
 	}
 	// poolsResult, poolResult, and templatesResult are the structured
 	// results of the tools.
@@ -98,7 +125,7 @@ func tools(s *mcp.Server) []mcp.Tool {
 		return nil
 	}
 	readOnly := &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)}
-	return []mcp.Tool{
+	out := []mcp.Tool{
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolPoolsList,
 			Title:       "List pools",
@@ -155,6 +182,29 @@ func tools(s *mcp.Server) []mcp.Tool {
 			return removeOrphans(ctx, a), nil, nil
 		}),
 	}
+	if !fleet.PackagesOn(a) {
+		return out
+	}
+	return append(out,
+		mcp.NewTool(&sdk.Tool{
+			Name:        ToolPackagesGet,
+			Title:       "Read the packages of a pool",
+			Description: "Read the packages of the workers of a pool: whether they are on, whether the agent can ask for a package, the Python packages and the Programs with who added each one and when, whether a worker still waits for a change, and the state of each worker: pending, materializing, ready, failed, or unknown, with the installed versions or the failure.",
+			InputSchema: json.RawMessage(packagesGetSchema),
+			Annotations: readOnly,
+		}, func(ctx context.Context, _ *sdk.CallToolRequest, in packagesGetArgs) (*sdk.CallToolResult, any, error) {
+			return packagesGet(ctx, a, in), nil, nil
+		}),
+		mcp.NewTool(&sdk.Tool{
+			Name:        ToolPackagesPut,
+			Title:       "Set the packages of a pool",
+			Description: "Turn the packages of the workers of a pool on or off, and replace its lists of Python packages and Programs. It needs the owner role on the agent of the pool. Each worker gets the change when it is idle, and work in progress does not stop. With dryRun, it checks the request and changes nothing. Read the setting with packages_get first, because the lists replace the lists of the pool.",
+			InputSchema: json.RawMessage(packagesPutSchema),
+			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
+		}, func(ctx context.Context, _ *sdk.CallToolRequest, in packagesPutArgs) (*sdk.CallToolResult, any, error) {
+			return packagesPut(ctx, a, in), nil, nil
+		}),
+	)
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -226,6 +276,107 @@ func remove(ctx context.Context, a *fw.Agent, in deleteArgs) *sdk.CallToolResult
 	}
 	text := fmt.Sprintf("Deleted the runtime pool %s: the front deletes each worker of it once the worker is idle, and then the pool. The profile of the agent %s stays in the overlay of the pool.\n%s", st.Name, st.Agent, poolText(st))
 	return mcp.Result(text, poolResult{View: "pool", Pool: st})
+}
+
+// packagesResult is the structured result of packages_get and
+// packages_put, the answer of the routes.
+type packagesResult struct {
+	View     string         `json:"view"`
+	Packages fleet.Packages `json:"packages"`
+	DryRun   bool           `json:"dryRun,omitempty"`
+}
+
+// packagesGet is the tool packages_get.
+func packagesGet(ctx context.Context, a *fw.Agent, in packagesGetArgs) *sdk.CallToolResult {
+	ctx, _, _ = manager.OnBehalf(ctx)
+	out, err := fleet.PackagesOf(ctx, a, in.Pool)
+	if err != nil {
+		return mcp.ErrorResult(explain(err))
+	}
+	return mcp.Result(packagesText(out), packagesResult{View: "packages", Packages: out})
+}
+
+// packagesPut is the tool packages_put.
+func packagesPut(ctx context.Context, a *fw.Agent, in packagesPutArgs) *sdk.CallToolResult {
+	ctx, _, _ = manager.OnBehalf(ctx)
+	out, err := fleet.PutPackages(ctx, a, in.Pool, fleet.PackagesRequest{On: in.On, Ask: in.Ask, Python: in.Python, Tools: in.Tools}, in.DryRun)
+	if err != nil {
+		return mcp.ErrorResult(explain(err))
+	}
+	text := packagesText(out)
+	if in.DryRun {
+		text = "Dry run: nothing changed. With this request:\n" + text
+	}
+	return mcp.Result(text, packagesResult{View: "packages", Packages: out, DryRun: in.DryRun})
+}
+
+// packagesText says the packages of a pool in words, with the words that
+// a person sees on the page: package, Python package, and Program.
+func packagesText(p fleet.Packages) string {
+	var b strings.Builder
+	if !p.On {
+		fmt.Fprintf(&b, "The packages of the pool %s are off. Its workers use only the programs of their image.", p.Pool)
+		if !p.Available {
+			b.WriteString(" The front cannot change them here.")
+		}
+		if p.Applying {
+			b.WriteString("\nWhen a worker is idle, it gets the change. Work in progress does not stop.")
+		}
+		return b.String()
+	}
+	fmt.Fprintf(&b, "The packages of the pool %s are on.", p.Pool)
+	list := func(what string, items []pools.PackageItem) {
+		if len(items) == 0 {
+			fmt.Fprintf(&b, "\n%s: none.", what)
+			return
+		}
+		fmt.Fprintf(&b, "\n%s:", what)
+		for _, it := range items {
+			b.WriteString("\n- " + it.Name)
+			if it.By != "" {
+				b.WriteString(", added by " + it.By)
+			}
+			if it.At != nil {
+				b.WriteString(" at " + it.At.UTC().Format(time.RFC3339))
+			}
+			if it.Run != "" {
+				fmt.Fprintf(&b, ", for the agent %s in the run %s", it.Agent, it.Run)
+			}
+		}
+	}
+	list("Python packages", p.Python)
+	list("Programs", p.Tools)
+	if p.Ask {
+		b.WriteString("\nThe agent can ask for a package. A person approves each one.")
+	} else {
+		b.WriteString("\nThe agent cannot ask for a package. It can only list its packages.")
+	}
+	ready, failed := 0, 0
+	for _, w := range p.Workers {
+		switch w.State {
+		case fleet.EnvReady:
+			ready++
+		case fleet.EnvFailed:
+			failed++
+			why := "the front holds no reason"
+			if w.Failure != nil && w.Failure.Error != "" {
+				why = w.Failure.Error
+			}
+			fmt.Fprintf(&b, "\nThe install failed on %s: %s", w.Task, why)
+		}
+	}
+	switch n := len(p.Workers); {
+	case n == 0:
+		b.WriteString("\nThe pool has no worker now.")
+	case ready == n:
+		fmt.Fprintf(&b, "\nReady on %d of %d %s.", ready, n, plural(n, "worker", "workers"))
+	case failed == 0:
+		fmt.Fprintf(&b, "\nInstalling on %d of %d %s.", n-ready, n, plural(n, "worker", "workers"))
+	}
+	if p.Applying {
+		b.WriteString("\nWhen a worker is idle, it gets the change. Work in progress does not stop.")
+	}
+	return b.String()
 }
 
 // orphans is the tool orphans_list.

@@ -47,9 +47,11 @@ func extension(k *native.Kit) error {
 // reads, as the package bridges reads them (bridges.Load), the theme of
 // the deployment, the worker templates from which the page offers a
 // choice when it creates an agent (fleet.TemplatesOf), an empty list for
-// none, the quick chat, when the configuration names one, and whether this
+// none, the quick chat, when the configuration names one, whether this
 // process keeps routines and serves their routes, so the page shows the
-// place Routines only then.
+// place Routines only then, and whether it serves the packages of the
+// pools (fleet.PackagesOn), so the page shows the section Packages only
+// then.
 type Settings struct {
 	Manager    *Manager   `json:"manager"`
 	Placement  string     `json:"placement"`
@@ -58,6 +60,7 @@ type Settings struct {
 	Templates  []Template `json:"templates"`
 	Chat       *QuickChat `json:"chat"`
 	Routines   bool       `json:"routines"`
+	Packages   bool       `json:"packages"`
 }
 
 // ChatView is the value of the metadata key fw.view (dashboard.ViewKey)
@@ -106,7 +109,7 @@ func settingsRoute(k *native.Kit, c Config) http.HandlerFunc {
 			k.Fail(w, r, err)
 			return
 		}
-		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers, Theme: pageTheme(a, c.Theme), Templates: []Template{}, Routines: routines.Of(a) != nil}
+		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers, Theme: pageTheme(a, c.Theme), Templates: []Template{}, Routines: routines.Of(a) != nil, Packages: fleet.PackagesOn(a)}
 		for _, t := range fleet.TemplatesOf(a) {
 			out.Templates = append(out.Templates, Template{Name: t.Name, Default: t.Default})
 		}

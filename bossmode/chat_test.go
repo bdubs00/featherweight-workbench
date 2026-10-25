@@ -62,7 +62,7 @@ func TestSettingsChat(t *testing.T) {
 	t.Setenv(EnvChatMember, "")
 	fr := newFront(t, nil)
 	resp, body := get(t, fr.url+"/v1/bossmode", "ada")
-	if resp.StatusCode != http.StatusOK || !strings.HasSuffix(body, `"chat":null,"routines":false}`+"\n") {
+	if resp.StatusCode != http.StatusOK || !strings.HasSuffix(body, `"chat":null,"routines":false,"packages":false}`+"\n") {
 		t.Fatalf("settings without a quick chat: %d %s", resp.StatusCode, body)
 	}
 

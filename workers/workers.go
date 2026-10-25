@@ -3,9 +3,11 @@
 // for an agent without an edit of fw.yaml and without a restart of the
 // front. It mounts the routes /v1/pools and /v1/templates on the native
 // surface (native.Extend) and adds the MCP tools pools_list, pool_put,
-// pool_delete, and templates_list (mcp.RegisterTools). The package fleet
-// keeps the pools, runs them, and decides who can change them; this
-// package only carries the requests to it.
+// pool_delete, and templates_list (mcp.RegisterTools). With a package
+// mirror, it also serves the packages of a pool (section 14.11) with the
+// routes /v1/pools/{name}/packages and the tools packages_get and
+// packages_put. The package fleet keeps the pools, runs them, and decides
+// who can change them. This package only carries the requests to it.
 package workers
 
 import (
@@ -63,7 +65,7 @@ func plural(n int, one, many string) string {
 // in front.
 func cause(err error) string {
 	msg := err.Error()
-	for _, e := range []error{fleet.ErrPoolNotFound, fleet.ErrPoolExists, fleet.ErrPoolConflict} {
+	for _, e := range []error{fleet.ErrPoolNotFound, fleet.ErrPoolExists, fleet.ErrPoolConflict, fleet.ErrPackagesOff} {
 		if errors.Is(err, e) {
 			msg = strings.TrimPrefix(msg, e.Error()+": ")
 		}

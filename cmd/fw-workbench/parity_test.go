@@ -67,6 +67,8 @@ var parityRoutes = map[string]parity{
 	"POST /v1/pools":                                 {tool: "pool_put"},
 	"PATCH /v1/pools/{name}":                         {tool: "pool_put"},
 	"DELETE /v1/pools/{name}":                        {tool: "pool_delete"},
+	"GET /v1/pools/{name}/packages":                  {tool: "packages_get"},
+	"PUT /v1/pools/{name}/packages":                  {tool: "packages_put"},
 	"DELETE /v1/fleet/orphans":                       {tool: "orphans_remove"},
 	"PUT /v1/routines/{agent}/{name}":                {tool: "routine_put"},
 	"POST /v1/routines/{agent}/{name}/standing":      {tool: "routine_standing"},

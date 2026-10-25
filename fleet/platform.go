@@ -242,6 +242,10 @@ type platformRun struct {
 	idx       indexMark
 	fromIndex bool
 	partial   bool
+	// env holds the calls of the tool env of the run that asked a person,
+	// with their decisions, so the front writes into the overlay of a
+	// pool only a change of a package that a person allowed (packages.go).
+	env []envAsk
 }
 
 // addedUsage is the usage that one event added to a run.
@@ -893,6 +897,7 @@ func (p *platform) onEvent(e fw.Event) error {
 		r.run.Apply(e, p.prices)
 		r.track(e, before)
 		r.noteToolInput(e)
+		r.noteEnv(e)
 		r.mark(e)
 		if e.Type == fw.EvApprovalDecided && len(r.decided) < maxDecided {
 			r.decided = append(r.decided, e.Seq)

@@ -43,26 +43,58 @@ templates:
 `
 
 // The settings name the worker templates of the front, with the default,
-// so the page offers the choice when it creates an agent.
+// so the page offers the choice when it creates an agent. Without a
+// package mirror, they say that the packages are off.
 func TestSettingsNameTheTemplates(t *testing.T) {
+	got, body := settingsFor(t, templatesBlock)
+	if len(got.Templates) != 2 || got.Templates[0] != (Template{Name: "general"}) || got.Templates[1] != (Template{Name: "fast", Default: true}) {
+		t.Fatalf("templates = %s", body)
+	}
+	if got.Packages {
+		t.Fatalf("packages without a mirror = %s", body)
+	}
+}
+
+// With a package mirror and pools, the settings say that the front serves
+// the packages, so the page shows the section Packages.
+func TestSettingsNameThePackages(t *testing.T) {
+	block := templatesBlock + `
+packages:
+  mirrors:
+    python: http://pkg-cache.fw-fleet.svc.cluster.local:8080/pypi/simple
+    tools: http://pkg-cache.fw-fleet.svc.cluster.local:8080/conda-forge
+  egress: [http://pkg-cache.fw-fleet.svc.cluster.local:8080]
+`
+	if got, body := settingsFor(t, block); !got.Packages {
+		t.Fatalf("settings with a mirror = %s", body)
+	}
+}
+
+// settingsFor answers GET /v1/bossmode of a front with the block
+// workbench.
+func settingsFor(t *testing.T, block string) (Settings, string) {
+	t.Helper()
 	t.Setenv("FW_ATESPACE", "")
 	t.Setenv(EnvEnabled, "on")
 	t.Setenv("FW_API_TOKEN", "fleet-secret-token")
-	oldO, oldR := fleet.OpenOverlays, fleet.OpenRuntime
+	oldO, oldR, oldE := fleet.OpenOverlays, fleet.OpenRuntime, fleet.OpenEnvironments
 	fleet.OpenOverlays = func(context.Context, *fw.Config, *slog.Logger) (pools.OverlayStore, func(), error) {
 		return pools.NewMemOverlays(), nil, nil
 	}
 	fleet.OpenRuntime = func(context.Context, *fw.Config, *slog.Logger, bool) (*pools.Store, func(), error) {
 		return pools.NewStore(bucket.NewMem(pools.StoreBucket), nil), nil, nil
 	}
-	t.Cleanup(func() { fleet.OpenOverlays, fleet.OpenRuntime = oldO, oldR })
+	fleet.OpenEnvironments = func(context.Context, *fw.Config, *slog.Logger) (bucket.Bucket, func(), error) {
+		return bucket.NewMem(fleet.EnvBucket), nil, nil
+	}
+	t.Cleanup(func() { fleet.OpenOverlays, fleet.OpenRuntime, fleet.OpenEnvironments = oldO, oldR, oldE })
 	cfg := fw.DefaultConfig()
 	cfg.Home = t.TempDir()
 	cfg.Agents = map[string]fw.AgentProfile{"default": {}}
 	cfg.Bus.Driver, cfg.Bus.URL = "nats", "nats://nats.agents.svc.cluster.local:4222"
 	cfg.AX.Server, cfg.AX.Router = "127.0.0.1:1", "127.0.0.1:1"
 	var n yaml.Node
-	if err := yaml.Unmarshal([]byte(templatesBlock), &n); err != nil {
+	if err := yaml.Unmarshal([]byte(block), &n); err != nil {
 		t.Fatal(err)
 	}
 	cfg.Extensions = map[string]yaml.Node{fleet.Block: *n.Content[0]}
@@ -102,7 +134,5 @@ func TestSettingsNameTheTemplates(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &got) != nil {
 		t.Fatalf("settings: %d %s", resp.StatusCode, body)
 	}
-	if len(got.Templates) != 2 || got.Templates[0] != (Template{Name: "general"}) || got.Templates[1] != (Template{Name: "fast", Default: true}) {
-		t.Fatalf("templates = %s", body)
-	}
+	return got, body
 }
