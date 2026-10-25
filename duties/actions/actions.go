@@ -190,7 +190,8 @@ func slotOf(req fw.RunRequest) time.Time {
 // startOpen opens a bridge from the playbook of the duty, as the front
 // for the principal of the duty, through the open of the route. The title
 // is "<duty>: <date>", and the goal is the goal of the duty, with its
-// placeholders filled, else the goal of the playbook.
+// placeholders filled, else the goal of the playbook. limits.budget.maxTurns
+// of the duty caps the turns of the whole bridge.
 func startOpen(ctx context.Context, a *fw.Agent, d *duties.Duty, req fw.RunRequest) (duties.Started, error) {
 	b, ps := bridges.Of(a), playbooks.Of(a)
 	if b == nil || ps == nil {
@@ -203,6 +204,19 @@ func startOpen(ctx context.Context, a *fw.Agent, d *duties.Duty, req fw.RunReque
 	}
 	spec := pb.Spec(Title(d, slotOf(req)))
 	spec.Owner = d.Owner
+	if b := d.Limits.Budget; b != nil && b.MaxTurns > 0 {
+		// The budget of the duty caps the turns of the whole bridge, below
+		// the cap of the playbook when it sets a lower one.
+		turns := b.MaxTurns
+		var caps bridges.CapsPatch
+		if spec.Caps != nil {
+			caps = *spec.Caps
+		}
+		if caps.MaxTurns == nil || *caps.MaxTurns > turns {
+			caps.MaxTurns = &turns
+		}
+		spec.Caps = &caps
+	}
 	if goal := strings.TrimSpace(req.Input); goal != "" {
 		spec.Goal = goal
 	}

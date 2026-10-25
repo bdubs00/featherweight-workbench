@@ -413,6 +413,16 @@ func (d *Duty) normalize(zone string) {
 		}
 	}
 	l := &d.Limits
+	switch {
+	case d.Do.Post != nil:
+		// A post spends nothing of its own, so it keeps no budget and no
+		// daily cap.
+		l.Budget, l.PerDayUSD = nil, 0
+	case d.Do.Open != nil:
+		// The budget of an open is the turn cap of the bridge. The daily
+		// cap counts the runs of a duty, and an open starts none.
+		l.PerDayUSD = 0
+	}
 	l.Overlap = strings.ToLower(strings.TrimSpace(l.Overlap))
 	if l.Overlap == "" {
 		l.Overlap = DefaultOverlap
@@ -581,6 +591,13 @@ func (d *Duty) problems() []string {
 	}
 	l := d.Limits
 	switch b := l.Budget; {
+	case d.Do.Post != nil:
+		// A post spends nothing of its own: the seats of the bridge spend
+		// from their own budgets. normalize drops the budget.
+	case d.Do.Open != nil && b != nil && (b.MaxCostUSD != 0 || b.MaxTokens != 0 || b.MaxToolCalls != 0):
+		add("limits.budget", "A bridge counts turns. Give maxTurns, such as 40, and leave out the other limits.")
+	case d.Do.Open != nil && (b == nil || b.MaxTurns <= 0):
+		add("limits.budget.maxTurns", "A duty that opens a bridge needs the most turns of the whole bridge, such as 40.")
 	case b == nil || (b.MaxCostUSD <= 0 && b.MaxTurns <= 0 && b.MaxTokens <= 0 && b.MaxToolCalls <= 0):
 		add("limits.budget", "A budget is required, with at least one limit above zero, such as {\"maxCostUSD\": 0.5}. A duty without a budget does not save, because a paid default would be a silent cost.")
 	case b.MaxCostUSD < 0 || b.MaxTurns < 0 || b.MaxTokens < 0 || b.MaxToolCalls < 0:

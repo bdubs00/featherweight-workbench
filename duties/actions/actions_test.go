@@ -154,6 +154,15 @@ func duty(do string) string {
 	return `{"agent": "triage", "when": {"say": "every day at 9am UTC"}, "do": ` + do + `, "limits": {"budget": {"maxCostUSD": 0.25, "maxTurns": 10}}}`
 }
 
+// dutyWith is a duty of triage every day at 9:00 in UTC with the action do
+// and the limits, or none for "".
+func dutyWith(do, limits string) string {
+	if limits == "" {
+		return `{"agent": "triage", "when": {"say": "every day at 9am UTC"}, "do": ` + do + `}`
+	}
+	return `{"agent": "triage", "when": {"say": "every day at 9am UTC"}, "do": ` + do + `, "limits": ` + limits + `}`
+}
+
 // problemsOf returns the problems of a dry run, joined.
 func problemsOf(t *testing.T, out map[string]any) string {
 	t.Helper()
@@ -189,6 +198,14 @@ func TestPostInABridge(t *testing.T) {
 	status, v := f.send(t, http.MethodPut, "/v1/duties/status", "alice", duty(`{"post": {"bridge": "`+id+`", "to": ["ops"], "message": "Report the status of {date}."}}`))
 	if status != http.StatusCreated {
 		t.Fatalf("the duty = %d %v", status, v)
+	}
+	// A post spends nothing of its own, so the front keeps no budget and
+	// no daily cap, and a post without a budget saves.
+	if lim, _ := v["limits"].(map[string]any); lim["budget"] != nil || lim["perDayUSD"] != nil && lim["perDayUSD"] != 0.0 {
+		t.Fatalf("the limits of a post = %v", v["limits"])
+	}
+	if status, v := f.send(t, http.MethodPut, "/v1/duties/status2?dryRun=true", "alice", dutyWith(`{"post": {"bridge": "`+id+`", "to": ["ops"], "message": "x"}}`, "")); status != http.StatusOK || problemsOf(t, v) != "" {
+		t.Fatalf("a post without a budget = %d %v", status, v)
 	}
 	status, v = f.send(t, http.MethodPost, "/v1/duties/status/run", "alice", "")
 	if status != http.StatusAccepted || v["run"] != "" {
@@ -244,7 +261,7 @@ func TestOpenFromAPlaybook(t *testing.T) {
 	if status, v := f.send(t, http.MethodPut, "/v1/playbooks/secret", "dave", `{"goal": "x", "seats": [{"handle": "p", "agent": "private", "task": "x"}]}`); status != http.StatusCreated {
 		t.Fatalf("the playbook of dave = %d %v", status, v)
 	}
-	if status, v := f.send(t, http.MethodPut, "/v1/duties/weekly", "alice", duty(`{"open": {"playbook": "weekly", "goal": "Patch the lab on {date}."}}`)); status != http.StatusCreated {
+	if status, v := f.send(t, http.MethodPut, "/v1/duties/weekly", "alice", dutyWith(`{"open": {"playbook": "weekly", "goal": "Patch the lab on {date}."}}`, `{"budget": {"maxTurns": 12}, "perDayUSD": 1}`)); status != http.StatusCreated {
 		t.Fatalf("the duty = %d %v", status, v)
 	}
 	if status, v := f.send(t, http.MethodPost, "/v1/duties/weekly/run", "alice", ""); status != http.StatusAccepted {
@@ -260,6 +277,10 @@ func TestOpenFromAPlaybook(t *testing.T) {
 	if status != http.StatusOK || b["title"] != "weekly: "+today || b["goal"] != "Patch the lab on "+today+"." || b["operator"] != "duty:weekly" {
 		t.Fatalf("the bridge = %d %v", status, b)
 	}
+	// The budget of the duty is the turn cap of the whole bridge.
+	if caps, _ := b["caps"].(map[string]any); caps["maxTurns"] != 12.0 {
+		t.Fatalf("the caps of the bridge = %v", b["caps"])
+	}
 	if reqs := f.queued("migrator", 1); len(reqs) != 1 || reqs[0].Principal != "duty:weekly" {
 		t.Fatalf("the seat requests = %+v", reqs)
 	}
@@ -273,9 +294,19 @@ func TestOpenFromAPlaybook(t *testing.T) {
 		{`{"open": {"playbook": "secret"}}`, "do.open.playbook: No playbook that you can read is named secret."},
 		{`{"open": {"playbook": ""}}`, "do.open.playbook: Name the playbook"},
 	} {
-		_, out := f.send(t, http.MethodPut, "/v1/duties/x?dryRun=true", "alice", duty(c.do))
+		_, out := f.send(t, http.MethodPut, "/v1/duties/x?dryRun=true", "alice", dutyWith(c.do, `{"budget": {"maxTurns": 12}}`))
 		if got := problemsOf(t, out); !strings.Contains(got, c.want) {
 			t.Errorf("problems of %s = %s, want %s", c.do, got, c.want)
+		}
+	}
+	// A bridge counts turns: an open needs maxTurns and takes no other limit.
+	for _, c := range []struct{ limits, want string }{
+		{`{"budget": {"maxCostUSD": 0.25, "maxTurns": 10}}`, "limits.budget: A bridge counts turns. Give maxTurns, such as 40, and leave out the other limits."},
+		{``, "limits.budget.maxTurns: A duty that opens a bridge needs the most turns of the whole bridge, such as 40."},
+	} {
+		_, out := f.send(t, http.MethodPut, "/v1/duties/x?dryRun=true", "alice", dutyWith(`{"open": {"playbook": "weekly"}}`, c.limits))
+		if got := problemsOf(t, out); !strings.Contains(got, c.want) {
+			t.Errorf("problems of the limits %s = %s, want %s", c.limits, got, c.want)
 		}
 	}
 }
