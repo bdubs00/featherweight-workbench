@@ -256,11 +256,15 @@ func names(d duties.Duty, subject string) bool {
 // its owner was away, and how, as the page says it: "The manager allowed
 // bash: it only reads." or "Nobody answered in time, so the front denied
 // git.push." me is the person of the digest, who reads "You". The reason
-// of a timeout only repeats the timeout, so it stays out.
+// of a timeout only repeats the timeout, so it stays out. A question is
+// answered or declined.
 func decidedWords(d duties.Decided, me string) string {
 	tool := strings.TrimSpace(d.Tool)
 	if tool == "" {
 		tool = "a tool"
+	}
+	if d.Question {
+		return questionWords(d, me)
 	}
 	if d.By == duties.DecidedByTimeout {
 		switch d.Verdict {
@@ -291,6 +295,34 @@ func decidedWords(d duties.Decided, me string) string {
 		return who + " stopped the run at " + tool + why
 	}
 	return who + " denied " + tool + why
+}
+
+// questionWords says who answered or declined a question of a run while
+// its owner was away: "You answered the question." or "Nobody answered
+// the question in time, so the front declined it."
+func questionWords(d duties.Decided, me string) string {
+	if d.By == duties.DecidedByTimeout {
+		if d.Verdict == "cancel" {
+			return "Nobody answered the question in time, so the front stopped the run."
+		}
+		return "Nobody answered the question in time, so the front declined it."
+	}
+	var who string
+	switch {
+	case d.By == duties.DecidedByManager:
+		who = "The manager"
+	case me != "" && d.By == me:
+		who = "You"
+	default:
+		who = capitalize(personName(d.By))
+	}
+	switch d.Verdict {
+	case "allow":
+		return who + " answered the question."
+	case "cancel":
+		return who + " stopped the run at the question."
+	}
+	return who + " declined the question."
 }
 
 // reasonWords cuts the reason of a decision to maxReasonBytes at a word,

@@ -574,6 +574,10 @@ func TestDecidedWords(t *testing.T) {
 		{duties.Decided{By: "alice@example.com", Verdict: "allow", Tool: "bash"}, "You allowed bash."},
 		{duties.Decided{By: "carol", Verdict: "deny"}, "Carol denied a tool."},
 		{duties.Decided{Verdict: "allow", Tool: "bash"}, "Someone allowed bash."},
+		// A question is answered or declined.
+		{duties.Decided{By: "alice@example.com", Verdict: "allow", Tool: "ask_user", Question: true}, "You answered the question."},
+		{duties.Decided{By: "token", Verdict: "deny", Tool: "ask_user", Question: true}, "Token declined the question."},
+		{duties.Decided{By: "timeout", Verdict: "deny", Tool: "ask_user", Question: true}, "Nobody answered the question in time, so the front declined it."},
 	} {
 		if got := decidedWords(x.d, "alice@example.com"); got != x.want {
 			t.Errorf("decidedWords(%+v) = %q, want %q", x.d, got, x.want)

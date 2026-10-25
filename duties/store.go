@@ -142,13 +142,15 @@ type RunEntry struct {
 // Decided is one decision about an approval or a question of the run of a
 // start: when, by whom (DecidedByManager, DecidedByTimeout, or the subject
 // of a person), the verdict (allow, deny, or cancel), the tool of the
-// call, and the reason in words.
+// call, the reason in words, and Question for a question, which a person
+// answers or declines rather than allows or denies.
 type Decided struct {
-	At      time.Time `json:"at"`
-	By      string    `json:"by"`
-	Verdict string    `json:"verdict"`
-	Tool    string    `json:"tool,omitempty"`
-	Reason  string    `json:"reason,omitempty"`
+	At       time.Time `json:"at"`
+	By       string    `json:"by"`
+	Verdict  string    `json:"verdict"`
+	Tool     string    `json:"tool,omitempty"`
+	Reason   string    `json:"reason,omitempty"`
+	Question bool      `json:"question,omitempty"`
 }
 
 // Deciders of a decision that no person made.

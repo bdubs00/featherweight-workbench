@@ -115,11 +115,11 @@ func TestQuestionTimesOut(t *testing.T) {
 		t.Fatalf("decided = %v %v", decided, notes)
 	}
 	got := f.decided(t, "report")
-	if len(got) != 1 || got[0].By != duties.DecidedByTimeout || got[0].Verdict != "deny" {
+	if len(got) != 1 || got[0].By != duties.DecidedByTimeout || got[0].Verdict != "deny" || !got[0].Question {
 		t.Fatalf("the history = %+v", got)
 	}
 	n = allNotices.of(f.a)
-	if len(n) != 2 || n[1].Kind != duties.NoticeDecided || n[1].Reason != "Nobody answered the question of the agent triage within 30m, so the front denied the call." {
+	if len(n) != 2 || n[1].Kind != duties.NoticeDecided || n[1].Reason != "Nobody answered the question of the agent triage within 30m, so the front declined it." {
 		t.Fatalf("notices = %+v", n)
 	}
 }

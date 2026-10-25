@@ -471,7 +471,7 @@ func (s *Service) ended(ctx context.Context, svc *duties.Service, w *wait) {
 		if cur, err := s.run(ctx, w.Run); err == nil {
 			if by, verdict, ok := s.decider(ctx, cur, w.Approval); ok {
 				w.Outcome = "decided by " + by
-				if err := svc.RecordDecision(ctx, w.Duty, w.Run, duties.Decided{By: by, Verdict: verdict, Tool: w.Tool}); err != nil && !errors.Is(err, duties.ErrNotFound) {
+				if err := svc.RecordDecision(ctx, w.Duty, w.Run, duties.Decided{By: by, Verdict: verdict, Tool: w.Tool, Question: w.Question}); err != nil && !errors.Is(err, duties.ErrNotFound) {
 					s.log.Warn("away: a decision of a person did not reach the history", "duty", w.Duty, "run", w.Run, "error", err)
 				}
 			}
@@ -484,6 +484,9 @@ func (s *Service) ended(ctx context.Context, svc *duties.Service, w *wait) {
 // run, records the decision, and tells the people of notify.needsYou.
 func (s *Service) timeout(ctx context.Context, svc *duties.Service, w *wait, r *fw.Run) {
 	verdict, did := "deny", "denied the call"
+	if w.Question {
+		did = "declined it"
+	}
 	reason := fmt.Sprintf("Nobody decided within %s, so the front denied it, as whileAway of the duty %s says.", w.Timeout, w.Duty)
 	var err error
 	if w.Then == "cancel" {
@@ -502,7 +505,7 @@ func (s *Service) timeout(ctx context.Context, svc *duties.Service, w *wait, r *
 		return
 	}
 	w.State, w.Outcome = stateDone, "timeout "+verdict
-	s.record(ctx, svc, w, duties.Decided{By: duties.DecidedByTimeout, Verdict: verdict, Tool: w.Tool, Reason: reason})
+	s.record(ctx, svc, w, duties.Decided{By: duties.DecidedByTimeout, Verdict: verdict, Tool: w.Tool, Reason: reason, Question: w.Question})
 	what := fmt.Sprintf("the call of %s by the agent %s", w.Tool, w.Agent)
 	if w.Question {
 		what = "the question of the agent " + w.Agent

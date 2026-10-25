@@ -177,7 +177,7 @@ func (s *Service) verdict(ctx context.Context, svc *duties.Service, w *wait, r, 
 		return
 	}
 	w.State, w.Outcome = stateDone, "manager "+v.Verdict
-	s.record(ctx, svc, w, duties.Decided{By: duties.DecidedByManager, Verdict: v.Verdict, Tool: w.Tool, Reason: v.Reason})
+	s.record(ctx, svc, w, duties.Decided{By: duties.DecidedByManager, Verdict: v.Verdict, Tool: w.Tool, Reason: v.Reason, Question: w.Question})
 	if v.Verdict == "deny" {
 		// A deny stops work that the owner asked for, so the people of
 		// notify.needsYou hear of it. An allow lets the work go on, and
