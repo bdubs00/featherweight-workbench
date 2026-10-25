@@ -99,6 +99,7 @@ type wait struct {
 	Agent    string    `json:"agent"`
 	Tool     string    `json:"tool,omitempty"`
 	Question bool      `json:"question,omitempty"`
+	Ask      string    `json:"ask,omitempty"` // the words of a question, for its notice
 	Asked    time.Time `json:"asked"`
 	Deadline time.Time `json:"deadline"`
 	Timeout  string    `json:"timeout"`
@@ -291,6 +292,9 @@ func (s *Service) open(ctx context.Context, svc *duties.Service, r *fw.Run) {
 		Duty: duties.NameOf(r), Run: r.ID, Member: r.Member, Approval: p.ID, Agent: r.Agent, Tool: p.Tool,
 		Question: len(p.Schema) > 0, Asked: asked.UTC(), State: stateOpen, Updated: now,
 	}
+	if w.Question {
+		w.Ask = trimmed(p.Reason, 300)
+	}
 	d, err := svc.Lookup(ctx, w.Duty)
 	switch {
 	case errors.Is(err, duties.ErrNotFound):
@@ -436,7 +440,14 @@ func (s *Service) tell(ctx context.Context, svc *duties.Service, w *wait) {
 // answer.
 func (s *Service) askWords(w *wait) string {
 	what := fmt.Sprintf("The agent %s asks to run %s.", w.Agent, w.Tool)
-	if w.Question {
+	switch {
+	case w.Question && w.Ask != "":
+		ask := w.Ask
+		if !strings.ContainsAny(ask[len(ask)-1:], ".?!") {
+			ask += "."
+		}
+		what = fmt.Sprintf("The agent %s asks you: %s", w.Agent, ask)
+	case w.Question:
 		what = fmt.Sprintf("The agent %s asks you a question.", w.Agent)
 	}
 	then := "the front denies it"

@@ -86,9 +86,9 @@ func TestManagerDenies(t *testing.T) {
 	}
 }
 
-// A question goes to the person with a needs-you notice, never to the
-// manager. After the timeout the front denies it, records the decision,
-// and tells the people of notify.needsYou.
+// A question goes to the person with a needs-you notice that says the
+// question, never to the manager. After the timeout the front denies it,
+// records the decision, and tells the people of notify.needsYou.
 func TestQuestionTimesOut(t *testing.T) {
 	b := bucket.NewMem(awayBucket)
 	c := &clock{t: t0}
@@ -101,7 +101,7 @@ func TestQuestionTimesOut(t *testing.T) {
 	}
 	n := allNotices.of(f.a)
 	if len(n) != 1 || n[0].Kind != duties.NoticeNeedsYou || !slices.Equal(n[0].Who, []string{"alice", "erin"}) || n[0].Run != run ||
-		n[0].Reason != "The agent triage asks you a question. Decide in Activity, or with approve. Without an answer within 30m, the front denies it." {
+		n[0].Reason != "The agent triage asks you: Which branch? Decide in Activity, or with approve. Without an answer within 30m, the front denies it." {
 		t.Fatalf("notices = %+v", n)
 	}
 	f.pass(t)
