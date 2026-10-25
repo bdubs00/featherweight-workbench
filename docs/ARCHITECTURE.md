@@ -2962,7 +2962,7 @@ The page and the MCP tools write the same record. The contract of the build, `re
 | `when.webhook` | `{"auth": {"mode", "secret", "header"}, "key"}`. The auth works as for a webhook source (section 13.4). `key` is an optional dotted path in the body to the key of the event. |
 | `checkFirst` | Optional. It looks for work before the model wakes (section 22.6). |
 | `do` | Exactly one action. This build has `ask`, which asks the agent with `message`. |
-| `limits.budget` | Required, with at least one limit above zero. A paid default is a silent cost, so a duty without a budget does not save. |
+| `limits.budget` | Required for `ask` and `manager`, with at least one limit above zero. A paid default is a silent cost, so such a duty without a budget does not save. A `post` starts no run of its own, so it keeps no budget and no `perDayUSD`. An `open` needs `maxTurns` alone, the turn cap of the whole bridge, and keeps no `perDayUSD`. |
 | `limits.perDayUSD` | The cap of the cost of a day in the time zone of the duty. `0` has no cap. |
 | `limits.overlap` | `skip`, `queue`, or `allow`. The default is `skip`. |
 | `limits.catchUp` | A span from `0` to `24h`. A missed time younger than this span runs once. The default is `1h`. |
@@ -3010,7 +3010,7 @@ The package `duties/schedule` holds the schedule. It reads no clock and calls no
 | `times` | 1 to 12 times of the day as `HH:MM`, with `daily`, `weekdays`, `weekly`, and `monthly`. Without times, a day runs at `09:00`. |
 | `every` | A step from `15m` to `24h`, with `every` |
 | `between` | Two times that bound `hourly` and `every`, both included. Without it, the steps start at midnight. |
-| `timeZone` | An IANA name. The default is the header `X-Time-Zone` of the caller, else `UTC`. |
+| `timeZone` | An IANA name. The default is the header `X-Time-Zone` of the caller. Without it, the default is the time zone that the person saved with the notifications, else `UTC` (`duties.RegisterZone`). |
 | `start`, `end` | Dates, both included |
 
 When a schedule of several weeks names no `start`, the front sets `start` to the date of the write. When a write changes only the message, the duty keeps its weeks.
@@ -3127,6 +3127,7 @@ Each capability is one Go function of the service. Its route and its MCP tool ca
 | `GET /v1/duties` | `duties_list` | `{"duties": [...], "paused": false}`, with `reason` while the switch is on |
 | `GET /v1/duties/{name}` | `duty_get` | The duty with its history |
 | `PUT /v1/duties/{name}` | `duty_put` | 201 with the duty and `Location` for a new duty, else 200. `?dryRun=true` answers `{"duty", "readback", "next", "problems"}` and saves nothing. `?dryRun=true&test=true` adds `check`. The header `X-Time-Zone`, or the argument `timeZone` of the tool, is the time zone of a new schedule. |
+| `PUT /v1/duties/{name}?dryRun=true` | `duty_preview` | The dry run as a tool that only reads, so a policy that allows read-only tools runs it without an approval |
 | `PATCH /v1/duties/{name}` | `duty_pause` | `{"paused": true}` or `{"paused": false}`, and 200 with the duty |
 | `DELETE /v1/duties/{name}` | `duty_delete` | 204 |
 | `POST /v1/duties/{name}/run` | `duty_run_now` | 202 with `{"run"}`. For a start that waits, 202 with `{"waiting"}`. 200 with `{"skipped"}` and the reason. For a failed check or queue, 502. |
@@ -3135,7 +3136,7 @@ Each capability is one Go function of the service. Its route and its MCP tool ca
 | `GET /v1/duties/options` | none | `{"secrets": [{"name", "hosts"}], "events", "actions", "looks"}`: what the page can offer in New duty (section 24.4) |
 | `POST /v1/duties/{name}/write-check` | `duty_write_check` | `{"words", "agent"}` in, `{"checkFirst", "readback", "check", "run"}` out, 422 with `error` when the agent writes no check that works, and 504 after 120 seconds (section 24.4) |
 
-`duty_put` takes `{"name", "duty", "dryRun", "test", "timeZone"}`. The other tools take `name`, and `duty_pause` also takes `paused`. `duties_pause_all` takes `paused` and `reason`. A client, such as the manager, calls `duty_put` with `dryRun` first. It shows the readback and the next times to the person, and it saves only after the person agrees.
+`duty_put` takes `{"name", "duty", "dryRun", "test", "timeZone"}`, and `duty_preview` takes the same without `dryRun`. Both read `duty` as an object or as a JSON text that holds one. The other tools take `name`, and `duty_pause` also takes `paused`. `duties_pause_all` takes `paused` and `reason`. A client, such as the manager, calls `duty_preview` first. It shows the readback and the next times to the person, and it saves with `duty_put` only after the person agrees.
 
 A run now runs the check of the duty and keeps its overlap and its daily cap. It also runs a paused duty, for a test, but not while the switch is on.
 
@@ -3383,7 +3384,9 @@ The run acts as the owner of the duty, with the budget of the duty, the metadata
 
 After `whileAway.timeout` without a decision, the front applies `whileAway.then`. With `deny`, it denies the call through the route of a decision. With `cancel`, it cancels the run through the route of a cancel. Then it tells the people of `notify.needsYou` with a notice of kind `decided`, and it stops a run of the manager that still works.
 
-The person can always decide first, in Activity or with `approve`. Then the front does nothing more. It reads who decided from the ledger of the run and stops a run of the manager that still works.
+The person can always decide first, in Activity or with `approve`. Then the front does nothing more. It reads who decided from the ledger of the run and stops a run of the manager that still works. The history names a person who signs in, a person with the static token, and the local user. It leaves out the kernel, a parent run, and a workload.
+
+A deny of the manager sends the notice `decided` to the people of `notify.needsYou`, with the reason of the manager. An allow sends no notice, because the work goes on. The history and the digest hold every verdict.
 
 Each decision lands in the history of the duty, on the start of its run, in the field `decided`:
 
