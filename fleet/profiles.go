@@ -538,7 +538,10 @@ func (pl *poolPlace) Profile(name string) (fw.AgentProfile, bool) {
 
 // Check runs the checks of the kernel on the name and the limits, and then
 // the checks of a pool on the merged configuration, which also checks the
-// model against the models of the workers.
+// model against the models of the workers. Last, each entry of the tools
+// of the profile must name a tool that the workers offer
+// (pools.Pool.ToolsProblem): a profile with a tool that its workers lack
+// would tell its person that it has no such tool.
 func (pl *poolPlace) Check(p fw.AgentProfile) error {
 	c := p
 	c.Model = ""
@@ -554,6 +557,9 @@ func (pl *poolPlace) Check(p fw.AgentProfile) error {
 	}
 	if _, err := pl.base.WithOverlay(pl.pool.Overlay().WithProfile(pools.OverlayProfile{Profile: p})); err != nil {
 		return fmt.Errorf("%w: %s", fw.ErrInvalidRequest, strings.TrimPrefix(err.Error(), "pools: "))
+	}
+	if why := pl.pool.ToolsProblem(p.Name, p.Tools); why != "" {
+		return fmt.Errorf("%w: %s", fw.ErrInvalidRequest, why)
 	}
 	return nil
 }
