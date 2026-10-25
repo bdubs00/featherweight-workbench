@@ -175,8 +175,10 @@ func (s *Service) enqueueOnFleet(ctx context.Context, agent string, req fw.RunRe
 }
 
 // deciderOnFleet reads who decided an approval from the ledger of its run:
-// the subject of a person, and the verdict. It reports false when the
-// ledger names no person, such as for the static token.
+// the subject of a person, and the verdict. A person signs in, uses the
+// static token of the front, or is the local user of the process. It
+// reports false for the kernel, a parent run, and a workload, which are
+// no person.
 func (s *Service) deciderOnFleet(ctx context.Context, r *fw.Run, approval string) (string, string, bool) {
 	var events []fw.Event
 	if r.Member == "" {
@@ -209,7 +211,12 @@ func (s *Service) deciderOnFleet(ctx context.Context, r *fw.Run, approval string
 		if json.Unmarshal(e.Data, &d) != nil || d.ApprovalID != approval {
 			continue
 		}
-		if d.Decider == "" || (d.DeciderKind != "" && d.DeciderKind != fw.ActorPerson) {
+		switch d.DeciderKind {
+		case "", fw.ActorPerson, fw.KindToken, fw.KindLocal:
+		default:
+			return "", "", false
+		}
+		if d.Decider == "" {
 			return "", "", false
 		}
 		return d.Decider, d.Decision, true

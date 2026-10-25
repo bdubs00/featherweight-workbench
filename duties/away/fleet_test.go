@@ -59,7 +59,7 @@ func waitFor(t *testing.T, a *fw.Agent, id string, state fw.RunState) *fw.Run {
 func TestSeamsOnALocalRun(t *testing.T) {
 	deploy := fw.NewTool(fw.ToolSpec{Name: "deploy", Description: "Deploy", InputSchema: json.RawMessage(`{"type":"object"}`), Destructive: true},
 		func(context.Context, json.RawMessage) (fw.ToolResult, error) { return fw.TextResult("deployed"), nil })
-	sc := &script{resps: []*fw.Response{toolUse("c1", "deploy", `{}`), toolUse("c2", "deploy", `{}`)}}
+	sc := &script{resps: []*fw.Response{toolUse("c1", "deploy", `{}`), toolUse("c2", "deploy", `{}`), toolUse("c3", "deploy", `{}`)}}
 	cfg := fw.DefaultConfig()
 	cfg.Home = t.TempDir()
 	cfg.Auth.Mode = "none"
@@ -105,6 +105,17 @@ func TestSeamsOnALocalRun(t *testing.T) {
 	}
 	if by, verdict, ok := s.decider(ctx, r2, r2.Pending.ID); !ok || by != "alice" || verdict != "allow" {
 		t.Fatalf("decider = %q %q %v", by, verdict, ok)
+	}
+	// A person with the static token is a person too. The kernel is not.
+	r3 := waitFor(t, a, run.ID, fw.StateInputRequired)
+	if r3.Pending == nil || r3.Pending.ID == r2.Pending.ID {
+		t.Fatalf("the third approval = %+v", r3.Pending)
+	}
+	if err := a.Decide(ctx, run.ID, fw.ApprovalDecision{ApprovalID: r3.Pending.ID, Decision: "deny", Decider: "token", DeciderKind: fw.KindToken}); err != nil {
+		t.Fatal(err)
+	}
+	if by, verdict, ok := s.decider(ctx, r3, r3.Pending.ID); !ok || by != "token" || verdict != "deny" {
+		t.Fatalf("the decider with the static token = %q %q %v", by, verdict, ok)
 	}
 	got, err := s.run(ctx, run.ID)
 	if err != nil || got.ID != run.ID {
