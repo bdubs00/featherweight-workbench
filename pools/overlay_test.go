@@ -179,3 +179,53 @@ func TestWriteNamesTheOverlay(t *testing.T) {
 		}
 	}
 }
+
+// ToolsProblem names each entry of a tools list that no worker of the
+// pool offers, and what the workers offer: a glob without a dot matches a
+// built-in tool or a peer tool, and a glob with a dot needs an MCP server
+// of its name. A pool without a configuration of its workers cannot tell,
+// so it names no problem.
+func TestToolsProblem(t *testing.T) {
+	triage := loadFixture(t, fixture)[0]
+	for _, x := range []struct {
+		tools []string
+		want  string
+	}{
+		{nil, ""},
+		{[]string{"files", "clock", "tickets.search", "tickets.*"}, ""},
+		{[]string{"*"}, ""},
+		{[]string{"cl?ck", "f*", "tick*.search"}, ""},
+		{[]string{"bash", "files"}, "The pool of triage offers no tool bash: it offers the tools files and clock, and the tools of the server tickets"},
+		{[]string{"bash", "github.*", "bash", "ask_user"}, "The pool of triage offers no tool bash, github.*, or ask_user: it offers the tools files and clock, and the tools of the server tickets"},
+		{[]string{"[bad"}, "The pool of triage offers no tool [bad: it offers the tools files and clock, and the tools of the server tickets"},
+	} {
+		if got := triage.ToolsProblem("triage", x.tools); got != x.want {
+			t.Errorf("ToolsProblem(%q) = %q, want %q", x.tools, got, x.want)
+		}
+	}
+	lab := &Pool{worker: &fw.Config{Tools: fw.ToolsConfig{
+		Builtin: []string{"bash", "files", "skill"},
+		MCP:     []fw.MCPServerConfig{{Name: "front"}, {Name: "ansible"}},
+	}}}
+	if got := lab.ToolsProblem("away-test", []string{"clock", "ask_user", "bash", "front.*"}); got != "The pool of away-test offers no tool clock or ask_user: it offers the tools bash, files, and skill, and the tools of the servers front and ansible" {
+		t.Errorf("the pool of the lab = %q", got)
+	}
+	peers := &Pool{worker: &fw.Config{Tools: fw.ToolsConfig{Builtin: []string{"bash"}, Peers: []fw.PeerConfig{{Name: "billing"}}}}}
+	if got := peers.ToolsProblem("x", []string{"ask_billing", "ask_other agent", "bash"}); got != "" {
+		t.Errorf("a pool with a peer = %q", got)
+	}
+	if got := peers.ToolsProblem("x", []string{"git.push"}); got != "The pool of x offers no tool git.push: it offers the tools bash and ask_billing" {
+		t.Errorf("a pool without a server = %q", got)
+	}
+	servers := &Pool{worker: &fw.Config{Tools: fw.ToolsConfig{Builtin: []string{}, MCP: []fw.MCPServerConfig{{Name: "front"}}}}}
+	if got := servers.ToolsProblem("x", []string{"bash"}); got != "The pool of x offers no tool bash: it offers the tools of the server front" {
+		t.Errorf("a pool with a server alone = %q", got)
+	}
+	none := &Pool{worker: &fw.Config{}}
+	if got := none.ToolsProblem("x", []string{"bash"}); got != "The pool of x offers no tool bash: it offers no tool at all" {
+		t.Errorf("a pool without tools = %q", got)
+	}
+	if got := (&Pool{}).ToolsProblem("x", []string{"bash"}); got != "" {
+		t.Errorf("a pool without a configuration of its workers = %q", got)
+	}
+}

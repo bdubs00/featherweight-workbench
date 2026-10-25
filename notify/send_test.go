@@ -242,6 +242,10 @@ func TestPrivateAddress(t *testing.T) {
 	}
 }
 
+// allowExample is the line of workbench.notifications.email.allow that
+// lets a channel mail any address at example.com.
+const allowExample = "    allow: [\"*@example.com\"]\n"
+
 // smtpBlock is the block of a front that mails through the server at
 // addr, with more lines after it.
 func smtpBlock(t *testing.T, addr, more string) string {
@@ -257,7 +261,7 @@ func smtpBlock(t *testing.T, addr, more string) string {
 // not offer email.
 func TestEmail(t *testing.T) {
 	plain := newSMTP(t, nil)
-	f := newFront(t, smtpBlock(t, plain.addr, ""), true)
+	f := newFront(t, smtpBlock(t, plain.addr, allowExample), true)
 	f.duty(t, "report", nil)
 	if got := f.problems(t, "alice", Body{Channels: []Channel{{Kind: KindEmail, Email: &Email{To: "Alice <alice@example.com>"}}}}); len(got) != 1 || !strings.HasPrefix(got[0], "channels[0].email.to: Write one mail address alone") {
 		t.Fatalf("a bad address = %q", got)
@@ -288,7 +292,7 @@ func TestEmail(t *testing.T) {
 	pool.AddCert(h.Certificate())
 	secure := newSMTP(t, h.TLS.Clone())
 	t.Setenv("FW_TEST_SMTP_PASSWORD", "mail-pass")
-	g := newFront(t, smtpBlock(t, secure.addr, "    user: fw\n    passwordEnv: FW_TEST_SMTP_PASSWORD\n"), true)
+	g := newFront(t, smtpBlock(t, secure.addr, allowExample+"    user: fw\n    passwordEnv: FW_TEST_SMTP_PASSWORD\n"), true)
 	g.s.smtpTLS = func(host string) *tls.Config { return &tls.Config{ServerName: host, RootCAs: pool} }
 	g.set(t, "alice", Body{Channels: []Channel{{ID: "mail", Kind: KindEmail, Email: &Email{To: "alice@example.com"}}}})
 	if res, err := g.s.Test(as("alice"), "mail"); err != nil || !res.Results[0].Sent {
@@ -304,13 +308,84 @@ func TestEmail(t *testing.T) {
 	}
 	noSecrets(t, "the log", g.logs.String(), "mail-pass")
 	// A server without STARTTLS gets no password.
-	k := newFront(t, smtpBlock(t, plain.addr, "    user: fw\n    passwordEnv: FW_TEST_SMTP_PASSWORD\n"), true)
+	k := newFront(t, smtpBlock(t, plain.addr, allowExample+"    user: fw\n    passwordEnv: FW_TEST_SMTP_PASSWORD\n"), true)
 	k.set(t, "alice", Body{Channels: []Channel{{ID: "mail", Kind: KindEmail, Email: &Email{To: "alice@example.com"}}}})
 	if res, _ := k.s.Test(as("alice"), "mail"); res.Results[0].Sent || res.Results[0].Error != "The mail server offers no STARTTLS, so the front does not send the password." {
 		t.Fatalf("a login in the clear = %+v", res)
 	}
 	if len(plain.list()) != 1 {
 		t.Fatalf("the plain server got %d mails", len(plain.list()))
+	}
+}
+
+// An email channel sends only to an address that
+// workbench.notifications.email.allow lists, without regard to case.
+// Without the list, it sends only to the address of the person, which is
+// the subject when the subject is a mail address. The save refuses any
+// other address at the field, on the route and in the tool. The send
+// refuses it too, after an operator changed the list, and the log names
+// the domain of the address alone.
+func TestEmailAllow(t *testing.T) {
+	plain := newSMTP(t, nil)
+	f := newFront(t, smtpBlock(t, plain.addr, ""), true)
+	mail := func(to string) Body {
+		return Body{Channels: []Channel{{ID: "mail", Kind: KindEmail, Send: on, Email: &Email{To: to}}}}
+	}
+	if got := f.problems(t, "alice", mail("alice@example.com")); len(got) != 1 || got[0] != "channels[0].email.to: Without workbench.notifications.email.allow, the front sends email only to your own address, and your sign-in gives it none. An operator can list the addresses in workbench.notifications.email.allow." {
+		t.Fatalf("a person whose subject is no address = %q", got)
+	}
+	f.set(t, "carol@example.com", mail("Carol@Example.com"))
+	if got := f.problems(t, "carol@example.com", mail("bob@example.com")); len(got) != 1 || got[0] != "channels[0].email.to: Without workbench.notifications.email.allow, the front sends email only to your own address, carol@example.com." {
+		t.Fatalf("another address without the list = %q", got)
+	}
+	resp, body := send(t, http.MethodPut, f.url+"/v1/notifications", "carol@example.com", `{"channels":[{"kind":"email","email":{"to":"bob@example.com"}}]}`)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, `"problems":["channels[0].email.to: Without workbench.notifications.email.allow, the front sends email only to your own address, carol@example.com."]`) {
+		t.Fatalf("PUT of another address = %d %s", resp.StatusCode, body)
+	}
+	cs := connectMCP(t, f.a, "carol@example.com")
+	if res := call(t, cs, ToolPut, map[string]any{"channels": []any{map[string]any{"kind": "email", "email": map[string]any{"to": "bob@example.com"}}}}); !res.IsError ||
+		!strings.Contains(textOf(res), "- channels[0].email.to: Without workbench.notifications.email.allow, the front sends email only to your own address, carol@example.com.") {
+		t.Fatalf("notifications_put of another address = %s", textOf(res))
+	}
+
+	// With the list, a glob or an address of the list matches.
+	listed := "    allow: [\"*@example.com\", \"Ops@Lab.Internal\"]\n"
+	b := bucket.NewMem(notifyBucket)
+	g := newFrontOn(t, smtpBlock(t, plain.addr, listed), true, b)
+	g.set(t, "alice", Body{Channels: []Channel{
+		{ID: "mail", Kind: KindEmail, Send: on, Email: &Email{To: "bob@example.com"}},
+		{ID: "ops", Kind: KindEmail, Send: on, Email: &Email{To: "ops@lab.internal"}},
+	}})
+	if got := g.problems(t, "alice", mail("x@y.org")); len(got) != 1 || got[0] != "channels[0].email.to: The front sends email only to the addresses that workbench.notifications.email.allow lists, and it lists no match for x@y.org." {
+		t.Fatalf("an address that the list does not match = %q", got)
+	}
+
+	// Another replica whose list no longer matches example.com sends no
+	// mail to bob, and the log holds no address of a channel.
+	h := newFrontOn(t, smtpBlock(t, plain.addr, "    allow: [\"*@lab.internal\"]\n"), true, b)
+	h.duty(t, "report", nil)
+	h.tell(t, duties.NoticeFailed, "report", "The run failed: budget exceeded.")
+	h.pass(t)
+	mails := plain.list()
+	if len(mails) != 1 || mails[0].To[0] != "ops@lab.internal" {
+		t.Fatalf("the server got %+v", mails)
+	}
+	want := "The front sends email only to the addresses that workbench.notifications.email.allow lists, and it lists no match for the address at example.com."
+	if res, err := h.s.Test(as("alice"), "mail"); err != nil || res.Results[0].Sent || res.Results[0].Error != want {
+		t.Fatalf("a test of a channel that the list no longer matches = %+v, %v", res, err)
+	}
+	if logs := h.logs.String(); !strings.Contains(logs, "lists no match for the address at example.com") || !strings.Contains(logs, "drops it") {
+		t.Fatalf("the log does not say why the mail did not go:\n%s", logs)
+	}
+	noSecrets(t, "the log", h.logs.String(), "bob@example.com", "ops@lab.internal")
+	// Without the list, a channel to another address than the subject
+	// does not send either.
+	k := newFrontOn(t, smtpBlock(t, plain.addr, ""), true, b)
+	if res, _ := k.s.Test(as("alice"), "ops"); res.Results[0].Sent || res.Results[0].Error != "Without workbench.notifications.email.allow, the front sends email only to the address of the person, and the channel names another address at lab.internal." {
+		t.Fatalf("a test without the list = %+v", res)
+	}
+	if len(plain.list()) != 1 {
+		t.Fatalf("the server got %d mails", len(plain.list()))
 	}
 }
 

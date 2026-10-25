@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -515,6 +516,120 @@ func (p *Pool) Tools() []string {
 		out = append(out, s.Name+".*")
 	}
 	return out
+}
+
+// ToolsProblem says in words which entries of tools, the tools list of the
+// profile agent, no worker of the pool offers, and what the workers offer.
+// It returns "" when the workers offer each entry, and when the pool has
+// no configuration of its workers, so it cannot tell. An entry is a glob,
+// as the kernel matches it. "*" asks for every tool. An entry without a
+// dot names tools by their name: it must match a built-in tool of
+// fw.tools.builtin, or a tool ask_<peer> of fw.tools.peers. An entry
+// server.tool or server.* needs an MCP server of that name in
+// fw.tools.mcp. The tools of a server live in the Tasks, so the front
+// cannot tell the tool itself.
+func (p *Pool) ToolsProblem(agent string, tools []string) string {
+	if p.worker == nil {
+		return ""
+	}
+	t := p.worker.Tools
+	var names, servers []string
+	for _, b := range t.Builtin {
+		if b = strings.TrimSpace(b); b != "" && !slices.Contains(names, b) {
+			names = append(names, b)
+		}
+	}
+	for _, peer := range t.Peers {
+		if n := strings.TrimSpace(peer.Name); n != "" {
+			names = append(names, "ask_"+n)
+		}
+	}
+	for _, s := range t.MCP {
+		if n := strings.TrimSpace(s.Name); n != "" {
+			servers = append(servers, n)
+		}
+	}
+	var missing []string
+	for _, entry := range tools {
+		if entry == "*" || slices.Contains(missing, entry) || offersTool(entry, names, servers, len(t.Peers) > 0) {
+			continue
+		}
+		missing = append(missing, entry)
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("The pool of %s offers no tool %s: %s", agent, wordList(missing, "or"), offerWords(names, servers))
+}
+
+// offersTool reports whether a glob of a tools list matches a tool that
+// the workers offer: a tool of names for a glob without a dot, else a
+// tool of one of the MCP servers. With peers, a glob ask_* without a dot
+// passes, because the kernel words the name of a peer tool itself.
+func offersTool(entry string, names, servers []string, peers bool) bool {
+	server, _, dotted := strings.Cut(entry, ".")
+	if !dotted {
+		for _, n := range names {
+			if globMatches(entry, n) {
+				return true
+			}
+		}
+		return peers && strings.HasPrefix(entry, "ask_")
+	}
+	for _, s := range servers {
+		if strings.HasPrefix(entry, s+".") || globMatches(server, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// globMatches matches a name against a glob of a tools list, as the
+// kernel does: the same text, or path.Match.
+func globMatches(glob, name string) bool {
+	if glob == name {
+		return true
+	}
+	ok, err := path.Match(glob, name)
+	return err == nil && ok
+}
+
+// offerWords words the tools that the workers offer, such as "it offers
+// the tools bash and files, and the tools of the server ansible".
+func offerWords(names, servers []string) string {
+	var parts []string
+	switch len(names) {
+	case 0:
+	case 1:
+		parts = append(parts, "the tool "+names[0])
+	default:
+		parts = append(parts, "the tools "+wordList(names, "and"))
+	}
+	switch len(servers) {
+	case 0:
+	case 1:
+		parts = append(parts, "the tools of the server "+servers[0])
+	default:
+		parts = append(parts, "the tools of the servers "+wordList(servers, "and"))
+	}
+	if len(parts) == 0 {
+		return "it offers no tool at all"
+	}
+	return "it offers " + strings.Join(parts, ", and ")
+}
+
+// wordList joins words in a sentence: "a", "a or b", or "a, b, or c" with
+// the word or.
+func wordList(words []string, word string) string {
+	switch len(words) {
+	case 0:
+		return ""
+	case 1:
+		return words[0]
+	case 2:
+		return words[0] + " " + word + " " + words[1]
+	}
+	return strings.Join(words[:len(words)-1], ", ") + ", " + word + " " + words[len(words)-1]
 }
 
 // Owns reports whether a Task of that name is a Task of the pool by its

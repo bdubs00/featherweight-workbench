@@ -488,6 +488,99 @@ func TestDigest(t *testing.T) {
 	}
 }
 
+// The digest lists under each start the decisions about the approvals of
+// its run while its owner was away, in the words of the page, at most
+// three of them and a count of the rest. Many starts with decisions keep
+// the digest within maxDigestLines lines and maxText bytes.
+func TestDigestDecisions(t *testing.T) {
+	f := newFront(t, ntfyBlock, false)
+	svc := duties.Of(f.a)
+	f.duty(t, "report", nil)
+	out, err := svc.RunNow(as("alice"), "report")
+	if err != nil || out.Run == "" {
+		t.Fatalf("RunNow = %+v, %v", out, err)
+	}
+	for _, d := range []duties.Decided{
+		{By: duties.DecidedByManager, Verdict: "allow", Tool: "bash", Reason: "it only reads"},
+		{By: duties.DecidedByTimeout, Verdict: "deny", Tool: "git.push", Reason: "Nobody decided within 2h, so the front denied it, as whileAway of the duty report says."},
+		{By: "alice", Verdict: "allow", Tool: "files"},
+		{By: "bob@example.com", Verdict: "cancel", Tool: "deploy", Reason: "wrong host"},
+		{By: duties.DecidedByManager, Verdict: "deny", Tool: "http"},
+	} {
+		if err := svc.RecordDecision(context.Background(), "report", out.Run, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	text, ok := f.s.digestText(context.Background(), "alice", time.UTC, time.Now())
+	want := ": queued, $0.00\n" +
+		"  - The manager allowed bash: it only reads.\n" +
+		"  - Nobody answered in time, so the front denied git.push.\n" +
+		"  - You allowed files.\n" +
+		"  - and 2 more decisions"
+	if !ok || !strings.HasPrefix(text, "1 run of your duties in the last day, $0.00 in all:\n- report, ") || !strings.HasSuffix(text, want) {
+		t.Fatalf("the digest = %q", text)
+	}
+
+	// Many starts with many decisions stay within the bounds.
+	d := duties.Duty{
+		Name: "busy", Agent: "triage",
+		When:   duties.When{Webhook: &duties.Webhook{Auth: duties.WebhookAuth{Mode: "none"}}},
+		Do:     duties.Do{Ask: &duties.Ask{Message: "Work."}},
+		Limits: duties.Limits{Budget: &duties.Budget{MaxCostUSD: 0.5}, Overlap: duties.OverlapAllow},
+	}
+	if _, err := svc.Put(as("alice"), "busy", duties.DutyBody{Duty: d}, duties.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("The call reads the files of the report and writes nothing else. ", 6)
+	for range 20 {
+		out, err := svc.RunNow(as("alice"), "busy")
+		if err != nil || out.Run == "" {
+			t.Fatalf("RunNow = %+v, %v", out, err)
+		}
+		for range 5 {
+			if err := svc.RecordDecision(context.Background(), "busy", out.Run, duties.Decided{By: duties.DecidedByManager, Verdict: "allow", Tool: "bash", Reason: long}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	text, _ = f.s.digestText(context.Background(), "alice", time.UTC, time.Now())
+	lines := strings.Split(text, "\n")
+	listed := 0
+	for _, l := range lines {
+		if strings.HasPrefix(l, "- ") || strings.HasPrefix(l, "  - ") {
+			listed++
+		}
+	}
+	if listed > maxDigestLines+1 || len(text) > maxText || !strings.Contains(text, "\n- and ") || !strings.Contains(text, " more decisions") {
+		t.Fatalf("a digest of %d lines and %d bytes:\n%s", listed, len(text), text)
+	}
+	if !strings.Contains(text, "  - The manager allowed bash: The call reads the files of the report and writes nothing else. The call reads") || !strings.Contains(text, "…\n") {
+		t.Fatalf("a long reason does not end at a word:\n%s", text)
+	}
+}
+
+// The words of a decision follow the page: who, the verdict, the tool,
+// and the reason, which a timeout leaves out.
+func TestDecidedWords(t *testing.T) {
+	for _, x := range []struct {
+		d    duties.Decided
+		want string
+	}{
+		{duties.Decided{By: "manager", Verdict: "allow", Tool: "bash", Reason: "it only reads"}, "The manager allowed bash: it only reads."},
+		{duties.Decided{By: "manager", Verdict: "deny", Tool: "shell.exec"}, "The manager denied shell.exec."},
+		{duties.Decided{By: "timeout", Verdict: "deny", Tool: "git.push", Reason: "Nobody decided within 2h."}, "Nobody answered in time, so the front denied git.push."},
+		{duties.Decided{By: "timeout", Verdict: "cancel", Tool: "git.push"}, "Nobody answered in time, so the front stopped the run at git.push."},
+		{duties.Decided{By: "bob@example.com", Verdict: "cancel", Tool: "bash", Reason: "wrong host!"}, "Bob stopped the run at bash: wrong host!"},
+		{duties.Decided{By: "alice@example.com", Verdict: "allow", Tool: "bash"}, "You allowed bash."},
+		{duties.Decided{By: "carol", Verdict: "deny"}, "Carol denied a tool."},
+		{duties.Decided{Verdict: "allow", Tool: "bash"}, "Someone allowed bash."},
+	} {
+		if got := decidedWords(x.d, "alice@example.com"); got != x.want {
+			t.Errorf("decidedWords(%+v) = %q, want %q", x.d, got, x.want)
+		}
+	}
+}
+
 // A call without a person has no settings.
 func TestNobody(t *testing.T) {
 	f := newFront(t, "", false)
@@ -551,6 +644,58 @@ func TestConfig(t *testing.T) {
 	c, err := LoadConfig(cfg)
 	if err != nil || c.perDay() != DefaultAgentPerDay || c.smtpPort() != DefaultSMTPPort || len(c.offered()) != 8 || c.Shared[0].Label != "ops" {
 		t.Fatalf("LoadConfig = %+v, %v", c, err)
+	}
+}
+
+// A glob of workbench.notifications.email.allow matches an address
+// without regard to case, and "*" matches any text, also none. A glob
+// with a space does not load, and the list needs an SMTP server. Without
+// the list, only the subject of the person matches, when it is an
+// address.
+func TestMailAllowed(t *testing.T) {
+	c := Config{Email: EmailConfig{Allow: []string{"*@example.com", "ops@lab.internal", "team-*-alerts@*.example.org"}}}
+	for to, want := range map[string]bool{
+		"bob@example.com": true, "Bob@EXAMPLE.com": true, "@example.com": true, "bob@example.com.evil": false, "bob@sub.example.com": false,
+		"ops@lab.internal": true, "OPS@lab.internal": true, "dev@lab.internal": false,
+		"team-db-alerts@eu.example.org": true, "team--alerts@x.example.org": true, "team-db@eu.example.org": false, "": false,
+	} {
+		if got := c.mailAllowed(to, "alice"); got != want {
+			t.Errorf("mailAllowed(%q) = %v, want %v", to, got, want)
+		}
+	}
+	if !(Config{Email: EmailConfig{Allow: []string{"*"}}}).mailAllowed("anyone@anywhere.net", "") {
+		t.Error("* does not match an address")
+	}
+	for block, want := range map[string]string{
+		"notifications:\n  email:\n    host: smtp.example.com\n    from: fw@example.com\n    allow: [\"a b@example.com\"]\n": "workbench.notifications.email.allow[0]",
+		"notifications:\n  email:\n    allow: [\"*@example.com\"]\n":                                                         "workbench.notifications.email.host is empty",
+	} {
+		cfg := fw.DefaultConfig()
+		cfg.Extensions = workbench(t, block)
+		if _, err := LoadConfig(cfg); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("LoadConfig(%q) = %v, want %q", block, err, want)
+		}
+	}
+	cfg := fw.DefaultConfig()
+	cfg.Extensions = workbench(t, "notifications:\n  email:\n    host: smtp.example.com\n    from: fw@example.com\n    allow: [\" *@Example.com \"]\n")
+	if c, err := LoadConfig(cfg); err != nil || len(c.Email.Allow) != 1 || c.Email.Allow[0] != "*@example.com" {
+		t.Fatalf("LoadConfig = %+v, %v", c.Email, err)
+	}
+	var none Config
+	for _, x := range []struct {
+		to, subject string
+		want        bool
+	}{
+		{"alice@example.com", "alice@example.com", true},
+		{"Alice@Example.com", "alice@example.com", true},
+		{"alice@example.com", "Alice@Example.com", true},
+		{"bob@example.com", "alice@example.com", false},
+		{"alice@example.com", "alice", false},
+		{"alice@example.com", "Alice <alice@example.com>", false},
+	} {
+		if got := none.mailAllowed(x.to, x.subject); got != x.want {
+			t.Errorf("without the list, mailAllowed(%q, %q) = %v, want %v", x.to, x.subject, got, x.want)
+		}
 	}
 }
 

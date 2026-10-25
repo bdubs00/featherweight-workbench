@@ -167,3 +167,41 @@ func TestAgentPutWithoutADefaultTemplate(t *testing.T) {
 		t.Fatalf("the entry = %+v, %v", e, err)
 	}
 }
+
+// labBlock is templatesBlock with the workers of the lab: the built-in
+// tools bash, files, and skill, and the MCP servers front and ansible.
+var labBlock = strings.Replace(templatesBlock, "        - http://nats.agents.svc.cluster.local:8080\n    fw:\n", `        - http://nats.agents.svc.cluster.local:8080
+        - http://front.agents.svc.cluster.local:8080
+        - http://ansible.agents.svc.cluster.local:8083
+    fw:
+      tools:
+        builtin: [bash, files, skill]
+        mcp:
+          - {name: front, endpoint: "http://front.agents.svc.cluster.local:8080/mcp"}
+          - {name: ansible, endpoint: "http://ansible.agents.svc.cluster.local:8083/mcp"}
+`, 1)
+
+// agent_put refuses a tool that the workers of the pool of the agent do
+// not offer, with the words of PUT /v1/agents/{name}. A dry run refuses
+// it too, and neither creates a pool.
+func TestAgentPutRefusesAToolThatThePoolLacks(t *testing.T) {
+	if labBlock == templatesBlock {
+		t.Fatal("the block of the lab is the block of the templates")
+	}
+	ctx := testCtx(t)
+	tf := newTemplateFront(t, labBlock)
+	alice := as(t, ctx, tf.url, "alice-token")
+	want := "Invalid request: The pool of away-test offers no tool clock or ask_user: it offers the tools bash, files, and skill, and the tools of the servers front and ansible."
+	for _, dry := range []bool{true, false} {
+		res := callTool(t, ctx, alice, toolAgentPut, map[string]any{"name": "away-test", "tools": []string{"clock", "ask_user", "bash", "front.*"}, "dryRun": dry})
+		if !res.IsError || textOf(res) != want {
+			t.Fatalf("agent_put with dryRun %v = %q", dry, textOf(res))
+		}
+	}
+	if list, _ := tf.store.List(ctx); len(list) != 0 {
+		t.Fatalf("a refused agent_put made a pool: %+v", list)
+	}
+	if res := callTool(t, ctx, alice, toolAgentPut, map[string]any{"name": "away-test", "tools": []string{"bash", "files", "skill", "front.*", "ansible.playbook"}}); res.IsError {
+		t.Fatalf("agent_put with the tools of the pool = %q", textOf(res))
+	}
+}

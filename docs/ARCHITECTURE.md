@@ -1573,6 +1573,14 @@ The merge. At each pass, the front reads the overlay of the pool and merges it i
 
 Profiles. On a front with pools, `agent_put`, `agent_delete`, and `PUT` and `DELETE /v1/agents/{name}`, which the builder uses to save, write to the overlay of the pool that runs the profile: the pool whose `agent` is the profile, else the pool whose profiles hold the name. The optional argument `pool`, or `?pool=` on the routes, names the pool when several pools run the profile. It also adds a new profile to a pool, for `spawn_task` or for a run on a member. A pool takes the jobs of its agent from its own queue, so a new agent needs a pool of its own: an entry in `workbench.pools`, or a runtime pool from a template, which `agent_put` makes in the same call (section 14.10). Without a template, a new name without `pool` is an error that names the pools. A profile that only the front holds stays in the store of the front. The checks of section 10 apply: the owner role to change or remove a profile, the creator role to add one, and the same access rules. The front decides with its own access configuration and the access block of the profile in the pool, as it decides for a member (section 4.4). The dry run checks the merged configuration of the pool as the start of the front does, the models of the workers included. `agent_delete` removes an entry of the overlay. A profile of the configuration of the pool stays.
 
+The tools of a profile of a pool. Each entry of `tools` of the profile is a glob that must name a tool of the workers. The front reads the tools in `fw` of the pool, or of the template of a new runtime pool:
+
+- An entry without a dot must match a tool of `fw.tools.builtin`, or the tool `ask_<peer>` of an entry of `fw.tools.peers`.
+- An entry such as `ansible.playbook` or `ansible.*` needs an MCP server of that name in `fw.tools.mcp`. The tools of a server live in the Tasks, so the front reads only the name of the server.
+- The entry `*` asks for every tool.
+
+If an entry names no such tool, `agent_put`, `PUT /v1/agents/{name}`, and their dry runs refuse the profile. The route answers 400. The detail names each missing tool and what the pool offers, such as "The pool of away-test offers no tool clock or ask_user: it offers the tools bash, files, and skill, and the tools of the servers front and ansible". A profile without a worker keeps any tool: a profile of the front, and a profile on a front without pools.
+
 The reads of one profile pick the pool in the same way: `agent_get`, `GET /v1/agents/{name}`, `GET /v1/agents/{name}/skills`, and the seats of a bridge (section 18.1). Of several pools that hold the profile, the one pool whose `agent` is the profile wins, because its workers take the jobs of the profile (section 4.9), and a pool that holds the profile only for its child Tasks stays out of the choice. The pool of the manager is such a pool: a child Task of a spawn bridge (section 18.3) finds its profile in the configuration of its parent, so that pool holds the profiles of the seats. When none of them or several of them have the profile as their `agent`, the read refuses, names the pools, and asks for `pool`, with 400 on a route.
 
 `agents_list` and `agent_get` show the profiles that the workers of each pool run. Each has `pool`, `overlay` (`added`, `replaced`, or empty), `by` and `at` for an entry of the overlay, and `workerPolicy`, the policy of the workers with the rules of the overlay. A profile of the front carries `front`. The tools of the workers live in their Tasks, so a profile of a pool carries no abilities. The text of `agent_get` words the policy of the workers instead.
@@ -3282,6 +3290,7 @@ The rules of each kind:
 - No address holds a user or a password.
 - At each send, the dialer refuses a loopback, private, or link-local address after the name resolves, unless the host matches `workbench.notifications.hosts`. For ntfy, the server of the front and the hosts of `workbench.notifications.ntfy.hosts` also pass. The checks of the duties use the same dialer (`internal/hostguard`). The front follows no redirect.
 - The front offers `email` when `workbench.notifications.email` names an SMTP server. `email.to` is one mail address alone. The front uses STARTTLS when the server offers it. It logs in only when the configuration names a user, and only after STARTTLS.
+- `workbench.notifications.email.allow` lists the addresses that a channel can send to, as globs such as `*@example.com`. A `*` matches any text, and case does not count. Without the list, a channel sends only to the address of its person. If the subject of the person is a mail address, the front takes it as that address. Else the person has no address. A save with another address gets a problem at `email.to`. If the operator changed the list after the save, the send refuses the address too. The log then names only the domain of the address.
 - The front offers `agent` when `workbench.notifications.agent.enabled` is true. The person needs the right `agent.run` on the agent. A channel without a budget does not save: the budget needs at least one limit above zero, such as `{"maxCostUSD": 0.02}`. Each message is one run of the agent, as the person, through the queue of the agent (`fleet.EnqueueFor`), with the budget of the channel. The input is the words of `how`, then the title, the text, and the link. The run carries the metadata `workbench.notify` with the id of the channel. At most `workbench.notifications.agent.perDay` runs go out per person and day, in the time zone of the person. The count lives in the bucket of the settings. A message past the count drops, and the log says why.
 - An operator names a shared channel in `workbench.notifications.shared`: a name, a label, a kind, the variable that holds its address, and the variable that holds its secret as an option. Its kind is `ntfy`, `slack`, `discord`, `teams`, or `webhook`. The front reads the address at each send, with the rules of its kind. For `ntfy`, the address is the address of the topic, such as `https://ntfy.example.com/ops`, and the secret is the access token. A person picks a shared channel by name and never sees its address.
 
@@ -3316,6 +3325,14 @@ A webhook gets the event of the notification:
 The outbox lives in the bucket of the settings, so a restart of a replica loses no notification. Each notification serves one channel. Every replica with `workbench.fleet.intake` reads the outbox. Several fronts can share one bus and so one outbox. A front without an intake can lack the shared channels and the queues of the others, so it serves the routes of the settings and sends nothing. A replica claims a notification with a compare-and-swap before it sends it, as the engine claims a time, so one replica sends each one. A notification during the quiet hours of its person waits until they end. A notification that its channel refuses goes again after 1, 2, 4, and 8 minutes. Each notification keeps its own count, so a channel that fails does not hold back the other channels of the notice. After five tries, or after three days, the front drops it and the log says why. A send that a later try cannot fix drops at once: an address that breaks the rules of its kind, an address that resolves to a private address, a person without the right on the agent, and a person at the count of the agent runs of the day. A notification drops too when the person removed its channel, turned its switch off, or when the front no longer offers its kind.
 
 The digest goes once a day for each person with a channel whose switch `digest` is on, to each such channel. It goes at the end of the quiet hours, or at 08:00 in the time zone of the person without quiet hours. A front that did not run at that time sends it up to six hours later. It lists the starts of the duties of the person in the last day, each with its time, its outcome, and its cost, then the starts that did not run as one count, and the duties that paused themselves. The duties of a person are those that the person owns and those whose `notify` lists name the person. A person with no duty gets no digest. One replica sends each digest: it claims the day of the person in the bucket.
+
+Under a start, the digest lists the decisions about the approvals of its run while its owner was away (section 23.4). Each decision is one line in the words of the page:
+
+- `The manager allowed bash: it only reads.`
+- `Nobody answered in time, so the front denied git.push.`
+- `You stopped the run at deploy: wrong host.`
+
+A start shows at most three decisions and a count of the rest. The lines of the starts and of their decisions are 40 at most.
 
 The settings of the first build had one ntfy place per person, with `ntfy` and `send` beside the quiet hours. Such a record reads as a person with no channel, and its quiet hours stay. A notification of the first build in the outbox names no channel, and the front drops it.
 
@@ -3436,6 +3453,7 @@ Today starts at midnight in the time zone of the duty that starts. A start count
 | `workbench.notifications.link` | The base address of the page, such as `https://fleet.example.com/bossmode/`, for the link of a notification | none, so a notification has no link |
 | `workbench.notifications.email.host`, `port`, `from` | The SMTP server, its port, and the sender of each mail. With a host, the front offers `email`. | no server, and the port 587 |
 | `workbench.notifications.email.user`, `passwordEnv` | The account on the SMTP server, and the variable of the front that holds its password | none, so the front sends without a login |
+| `workbench.notifications.email.allow` | The addresses that a channel can send to, as globs such as `*@example.com`. Case does not count. | none, so a channel sends only to the address of its person |
 | `workbench.notifications.agent.enabled` | `true` offers the kind `agent` | `false` |
 | `workbench.notifications.agent.perDay` | The most runs of the kind `agent` per person and day | 20 |
 | `workbench.notifications.shared` | The shared channels: `{name, label, kind, urlEnv, secretEnv}`. `urlEnv` names the variable that holds the address. `secretEnv` names the variable that holds the secret, as an option. | none |
@@ -3455,6 +3473,7 @@ workbench:
       from: Featherweight <featherweight@example.com>
       user: featherweight
       passwordEnv: FW_SMTP_PASSWORD
+      allow: ["*@example.com"]
     agent:
       enabled: true
       perDay: 20

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -37,11 +38,11 @@ templates:
       policy: {default: allow, ask: ["ansible.playbook: check=false"]}
 `
 
-// PUT /v1/agents/{name} of a new agent on a front with a default template
-// creates the agent and a runtime pool of two workers named after it, and
-// the answer carries the pool. workers in the body sets the replicas, and
-// a dry run plans the pool without a write.
-func TestPutAgentCreatesARuntimePool(t *testing.T) {
+// templateServer serves a front with the templates of block, the
+// overlays and the runtime pools in memory. The ax API does not answer, so
+// no pass runs.
+func templateServer(t *testing.T, block string) (*httptest.Server, *pools.Store) {
+	t.Helper()
 	t.Setenv("FW_API_TOKEN", "fleet-secret-token")
 	store := pools.NewStore(bucket.NewMem(pools.StoreBucket), nil)
 	overlays := pools.NewMemOverlays()
@@ -59,7 +60,7 @@ func TestPutAgentCreatesARuntimePool(t *testing.T) {
 	cfg.Bus.Driver, cfg.Bus.URL = "nats", "nats://nats.agents.svc.cluster.local:4222"
 	cfg.AX.Server, cfg.AX.Router = "127.0.0.1:1", "127.0.0.1:1"
 	var n yaml.Node
-	if err := yaml.Unmarshal([]byte(templatesBlock), &n); err != nil {
+	if err := yaml.Unmarshal([]byte(block), &n); err != nil {
 		t.Fatal(err)
 	}
 	cfg.Extensions = map[string]yaml.Node{fleet.Block: *n.Content[0]}
@@ -77,7 +78,15 @@ func TestPutAgentCreatesARuntimePool(t *testing.T) {
 	t.Cleanup(func() { _ = f.Close() })
 	fleet.Attach(a, f)
 	t.Cleanup(func() { fleet.Attach(a, nil) })
-	srv := serve(t, a)
+	return serve(t, a), store
+}
+
+// PUT /v1/agents/{name} of a new agent on a front with a default template
+// creates the agent and a runtime pool of two workers named after it, and
+// the answer carries the pool. workers in the body sets the replicas, and
+// a dry run plans the pool without a write.
+func TestPutAgentCreatesARuntimePool(t *testing.T) {
+	srv, store := templateServer(t, templatesBlock)
 	ctx := context.Background()
 
 	var draft struct {
@@ -137,5 +146,42 @@ func TestPutAgentCreatesARuntimePool(t *testing.T) {
 	}
 	if e, err := store.Get(ctx, "big"); err != nil || !e.Deleting {
 		t.Fatalf("the pool of big = %+v, %v", e, err)
+	}
+}
+
+// labBlock is templatesBlock with the workers of the lab: the built-in
+// tools bash, files, and skill, and the MCP servers front and ansible.
+var labBlock = strings.NewReplacer(
+	"        - http://ansible.agents.svc.cluster.local:8083\n", "        - http://ansible.agents.svc.cluster.local:8083\n        - http://front.agents.svc.cluster.local:8080\n",
+	"builtin: [bash, files]\n        mcp:\n", "builtin: [bash, files, skill]\n        mcp:\n          - {name: front, endpoint: \"http://front.agents.svc.cluster.local:8080/mcp\"}\n",
+).Replace(templatesBlock)
+
+// PUT /v1/agents/{name} refuses a tool that the workers of the pool of the
+// agent do not offer, with 400 and a detail that names each missing tool
+// and what the pool offers. A dry run refuses it too, and neither creates
+// a pool.
+func TestPutAgentRefusesAToolThatThePoolLacks(t *testing.T) {
+	if labBlock == templatesBlock {
+		t.Fatal("the block of the lab is the block of the templates")
+	}
+	srv, store := templateServer(t, labBlock)
+	want := "The pool of away-test offers no tool clock or ask_user: it offers the tools bash, files, and skill, and the tools of the servers front and ansible"
+	body := `{"tools":["clock","ask_user","bash","front.*","clock"]}`
+	for _, url := range []string{srv.URL + "/v1/agents/away-test?dryRun=true", srv.URL + "/v1/agents/away-test"} {
+		resp, b := do(t, "PUT", url, body, "Authorization", asAlice)
+		if p := decodeProblem(t, resp, b, http.StatusBadRequest); p.Detail != want {
+			t.Fatalf("PUT %s = %+v", url, p)
+		}
+	}
+	if list, _ := store.List(context.Background()); len(list) != 0 {
+		t.Fatalf("a refused PUT made a pool: %+v", list)
+	}
+	resp, b := do(t, "PUT", srv.URL+"/v1/agents/away-test", `{"tools":["bash","files","skill","front.*","ansible.playbook"]}`, "Authorization", asAlice)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("PUT with the tools of the pool = %d %s", resp.StatusCode, b)
+	}
+	resp, b = do(t, "PUT", srv.URL+"/v1/agents/away-test", `{"tools":["bash","github.*"]}`, "Authorization", asAlice)
+	if p := decodeProblem(t, resp, b, http.StatusBadRequest); p.Detail != "The pool of away-test offers no tool github.*: it offers the tools bash, files, and skill, and the tools of the servers front and ansible" {
+		t.Fatalf("PUT of a server that the pool lacks = %+v", p)
 	}
 }

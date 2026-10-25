@@ -188,6 +188,46 @@ func TestPoolProfileWrites(t *testing.T) {
 	}
 }
 
+// A profile of a pool of the file names only tools that the workers of
+// the pool offer: the built-in tools of the kernel for a pool that names
+// none, and no MCP server. The check refuses before anything is written,
+// and a profile of the front keeps its place.
+func TestPoolProfileToolsOfTheWorkers(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "team")
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
+	ax := newPoolAX(t)
+	tasks := newFakeTasks(t)
+	front := newMember(t, fw.NewMemBus(), "front", poolFront(t, ax, strings.TrimPrefix(tasks.srv.URL, "http://"), ownedBlock))
+	alice := as("alice")
+	at, err := PlaceOf(alice, front.a, "helper", "triage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, put := range []func() error{
+		func() error {
+			_, err := agents.PreviewIn(alice, at, fw.AgentProfile{Name: "helper", Tools: []string{"clock", "tickets.*"}})
+			return err
+		},
+		func() error {
+			_, _, err := agents.PutIn(alice, front.a, at, fw.AgentProfile{Name: "helper", Tools: []string{"clock", "tickets.*"}})
+			return err
+		},
+	} {
+		if err := put(); !errors.Is(err, fw.ErrInvalidRequest) || !strings.Contains(err.Error(), "The pool of helper offers no tool tickets.*: it offers the tools bash, files, http,") {
+			t.Fatalf("a profile with a tool that the pool lacks = %v", err)
+		}
+	}
+	if o, _ := overlaysOf(t, front.f).Read(context.Background(), "triage"); len(o.Profiles) != 0 {
+		t.Fatalf("a refused profile reached the overlay: %+v", o)
+	}
+	if _, _, err := agents.PutIn(alice, front.a, at, fw.AgentProfile{Name: "helper", Tools: []string{"clock", "ask_user", "files"}}); err != nil {
+		t.Fatalf("a profile with the tools of the pool = %v", err)
+	}
+	if at, err := PlaceOf(alice, front.a, "default", ""); err != nil || PoolOf(at) != "" || at.Check(fw.AgentProfile{Name: "default", Tools: []string{"tickets.*"}}) != nil {
+		t.Fatalf("the place of a profile of the front = %v, %v", PoolOf(at), err)
+	}
+}
+
 // crewBlock is the pools of a manager and of its crew: the pool manager
 // takes the queue of the manager and holds the profile reviewer for its
 // child Tasks, and the pools crew-migrator and crew-reviewer take the
