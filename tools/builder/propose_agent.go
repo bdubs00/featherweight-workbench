@@ -11,10 +11,29 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/tools/builtin"
 )
+
+// workerTools holds the check of the tools of a new agent, which the fleet
+// registers in init.
+var workerTools struct {
+	mu sync.Mutex
+	fn func(ctx context.Context, a *fw.Agent, name string, tools []string) string
+}
+
+// RegisterToolsCheck sets how propose_agent learns whether the workers of
+// the agent offer the tools of a proposal. fn says in words what they do
+// not offer, or "" when they offer each tool or it cannot tell. Without it,
+// the tool knows the tools of this process alone, and a pool can refuse
+// the proposal when the person taps Create agent.
+func RegisterToolsCheck(fn func(ctx context.Context, a *fw.Agent, name string, tools []string) string) {
+	workerTools.mu.Lock()
+	defer workerTools.mu.Unlock()
+	workerTools.fn = fn
+}
 
 // Name is the name of the tool.
 const Name = "propose_agent"
@@ -169,13 +188,23 @@ func (proposeAgentTool) Call(ctx context.Context, input json.RawMessage) (fw.Too
 	}
 	// An empty tool list means every tool, so a proposal names at least one.
 	if len(in.Tools) == 0 {
-		problems = append(problems, "tools is empty; name at least one tool, such as clock for an agent that only writes")
+		problems = append(problems, "tools is empty; name at least one tool, such as files for an agent that only writes")
 	}
 	inTools := map[string]bool{}
 	for _, t := range in.Tools {
 		inTools[t] = true
 		if _, ok := known[t]; !ok && a != nil {
 			problems = append(problems, fmt.Sprintf("no tool is named %q", t))
+		}
+	}
+	workerTools.mu.Lock()
+	check := workerTools.fn
+	workerTools.mu.Unlock()
+	if a != nil && check != nil && len(in.Tools) > 0 {
+		// The workers of the pool of the agent run it, and they can offer
+		// fewer tools than this process.
+		if why := check(ctx, a, in.Name, in.Tools); why != "" {
+			problems = append(problems, why)
 		}
 	}
 	for _, t := range in.AsksFirst {

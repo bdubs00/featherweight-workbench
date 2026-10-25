@@ -64,6 +64,16 @@ func TestProposeAgent(t *testing.T) {
 		in, _ := json.Marshal(p)
 		mustFail(t, call(t, ctx, tool, string(in)), want)
 	}
+	// The fleet tells which tools the workers of the agent lack, so the
+	// builder fixes the proposal before the person taps Create agent.
+	t.Cleanup(func() { RegisterToolsCheck(nil) })
+	RegisterToolsCheck(func(_ context.Context, _ *fw.Agent, name string, tools []string) string {
+		if name == "pr-reviewer" && len(tools) == 1 && tools[0] == "ask_user" {
+			return "The pool of pr-reviewer offers no tool ask_user: it offers the tools bash"
+		}
+		return ""
+	})
+	mustFail(t, call(t, ctx, tool, string(in)), "The pool of pr-reviewer offers no tool ask_user: it offers the tools bash")
 }
 
 // mustOK fails unless the result is not an error, and returns its text.

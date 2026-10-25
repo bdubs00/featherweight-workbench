@@ -34,6 +34,28 @@ templates:
       access: {admins: ["kind:token"]}
 `
 
+// propose_agent learns which tools the workers of a new agent lack, from
+// the default template, before the person taps Create agent.
+func TestProposalToolsOfTheTemplate(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "team")
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
+	ax := newPoolAX(t)
+	tasks := newFakeTasks(t)
+	useMemRuntime(t)
+	block := strings.Replace(templateBlock, "      access: {admins: [\"kind:token\"]}\n", "      access: {admins: [\"kind:token\"]}\n      tools: {builtin: [bash, files, skill]}\n", 1)
+	if block == templateBlock {
+		t.Fatal("the template block did not change")
+	}
+	front := newMember(t, fw.NewMemBus(), "front", runtimeFront(t, ax, strings.TrimPrefix(tasks.srv.URL, "http://"), block, []string{"carol"}, []string{"alice"}))
+	alice := as("alice")
+	if why := proposalTools(alice, front.a, "writer", []string{"files", "clock"}); !strings.Contains(why, "The pool of writer offers no tool clock: it offers the tools bash, files, and skill") {
+		t.Fatalf("the check of a proposal with a tool that the template lacks = %q", why)
+	}
+	if why := proposalTools(alice, front.a, "writer", []string{"files", "bash"}); why != "" {
+		t.Fatalf("the check of a proposal with the tools of the template = %q", why)
+	}
+}
+
 // useMemRuntime makes the fronts of a test keep their runtime pools in one
 // store in memory, which the test reads too.
 func useMemRuntime(t *testing.T) *pools.Store {

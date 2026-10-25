@@ -226,6 +226,10 @@ func TestPoolProfileToolsOfTheWorkers(t *testing.T) {
 	if at, err := PlaceOf(alice, front.a, "default", ""); err != nil || PoolOf(at) != "" || at.Check(fw.AgentProfile{Name: "default", Tools: []string{"tickets.*"}}) != nil {
 		t.Fatalf("the place of a profile of the front = %v, %v", PoolOf(at), err)
 	}
+	// propose_agent asks nothing of a profile of the front.
+	if why := proposalTools(alice, front.a, "default", []string{"tickets.*"}); why != "" {
+		t.Fatalf("the check of a proposal for the front = %q", why)
+	}
 }
 
 // crewBlock is the pools of a manager and of its crew: the pool manager
