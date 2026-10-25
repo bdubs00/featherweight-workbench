@@ -57,13 +57,16 @@ type NtfyConfig struct {
 // EmailConfig is the block workbench.notifications.email: the SMTP server
 // (Host and Port, 587 when Port is 0), the address From of each mail, and
 // the account User with the variable PasswordEnv that holds its password.
-// Without User, the front sends without a login.
+// Without User, the front sends without a login. Allow lists the
+// addresses that a channel can send to, as globs such as *@example.com.
+// Without Allow, a channel sends only to the address of its person.
 type EmailConfig struct {
-	Host        string `yaml:"host"`
-	Port        int    `yaml:"port"`
-	From        string `yaml:"from"`
-	User        string `yaml:"user"`
-	PasswordEnv string `yaml:"passwordEnv"`
+	Host        string   `yaml:"host"`
+	Port        int      `yaml:"port"`
+	From        string   `yaml:"from"`
+	User        string   `yaml:"user"`
+	PasswordEnv string   `yaml:"passwordEnv"`
+	Allow       []string `yaml:"allow"`
 }
 
 // AgentConfig is the block workbench.notifications.agent. Enabled offers
@@ -98,6 +101,8 @@ const (
 	DefaultSMTPPort = 587
 	// maxLabel bounds the label of a channel, in bytes.
 	maxLabel = 80
+	// maxAddress bounds a mail address and a glob of addresses, in bytes.
+	maxAddress = 254
 )
 
 // block is the part of the workbench block that this package reads.
@@ -157,8 +162,15 @@ func LoadConfig(cfg *fw.Config) (Config, error) {
 	}
 	e := &c.Email
 	e.Host, e.From, e.User, e.PasswordEnv = strings.TrimSpace(e.Host), strings.TrimSpace(e.From), strings.TrimSpace(e.User), strings.TrimSpace(e.PasswordEnv)
+	for i, g := range e.Allow {
+		g = strings.ToLower(strings.TrimSpace(g))
+		e.Allow[i] = g
+		if g == "" || len(g) > maxAddress || strings.ContainsFunc(g, isSpaceOrControl) || strings.ContainsAny(g, `<>,;"`) {
+			add("workbench.notifications.email.allow[%d] %q: write an address or a glob of addresses, such as *@example.com", i, g)
+		}
+	}
 	switch {
-	case e.Host == "" && (e.From != "" || e.User != "" || e.PasswordEnv != "" || e.Port != 0):
+	case e.Host == "" && (e.From != "" || e.User != "" || e.PasswordEnv != "" || e.Port != 0 || len(e.Allow) > 0):
 		add("workbench.notifications.email.host is empty: name the SMTP server, or leave out the block email")
 	case e.Host != "":
 		e.Host = strings.Trim(e.Host, "[]")
@@ -234,6 +246,93 @@ func (c Config) smtpPort() int {
 		return c.Email.Port
 	}
 	return DefaultSMTPPort
+}
+
+// ownAddress returns the mail address of a person in lower case: the
+// subject, when the subject is a mail address alone. Else it returns "".
+// The front keeps no other address of a person. Principal.Name can hold
+// another claim than email, so it does not count.
+func ownAddress(subject string) string {
+	a, err := mail.ParseAddress(subject)
+	if err != nil || a.Address != subject {
+		return ""
+	}
+	return strings.ToLower(subject)
+}
+
+// mailAllowed reports whether a channel of the person subject can send
+// mail to the address to. With workbench.notifications.email.allow, a glob
+// of the list must match the address. Without the list, the address must
+// be the address of the person (ownAddress). Both compare without regard
+// to case.
+func (c Config) mailAllowed(to, subject string) bool {
+	to = strings.ToLower(strings.TrimSpace(to))
+	if to == "" {
+		return false
+	}
+	if len(c.Email.Allow) == 0 {
+		return to == ownAddress(subject)
+	}
+	for _, g := range c.Email.Allow {
+		if globMatch(g, to) {
+			return true
+		}
+	}
+	return false
+}
+
+// mailProblem says to the person subject why a channel cannot send mail
+// to the address to, or "". It names the address in full, because it goes
+// back to the person who wrote it.
+func (c Config) mailProblem(to, subject string) string {
+	switch own := ownAddress(subject); {
+	case c.mailAllowed(to, subject):
+		return ""
+	case len(c.Email.Allow) > 0:
+		return fmt.Sprintf("The front sends email only to the addresses that workbench.notifications.email.allow lists, and it lists no match for %s.", to)
+	case own != "":
+		return fmt.Sprintf("Without workbench.notifications.email.allow, the front sends email only to your own address, %s.", own)
+	}
+	return "Without workbench.notifications.email.allow, the front sends email only to your own address, and your sign-in gives it none. An operator can list the addresses in workbench.notifications.email.allow."
+}
+
+// mailRefusal says why the front does not send a mail to the address to
+// for the person subject, or "". It goes into a log line, so it names the
+// domain of the address alone, as an error of a send names a host at most.
+func (c Config) mailRefusal(to, subject string) string {
+	if c.mailAllowed(to, subject) {
+		return ""
+	}
+	domain := "an unknown domain"
+	if i := strings.LastIndex(to, "@"); i >= 0 && i < len(to)-1 {
+		domain = strings.ToLower(to[i+1:])
+	}
+	if len(c.Email.Allow) > 0 {
+		return "the front sends email only to the addresses that workbench.notifications.email.allow lists, and it lists no match for the address at " + domain
+	}
+	return "without workbench.notifications.email.allow, the front sends email only to the address of the person, and the channel names another address at " + domain
+}
+
+// globMatch matches a text against a glob in which "*" matches any text,
+// also an empty one. Each other character matches itself.
+func globMatch(glob, s string) bool {
+	parts := strings.Split(glob, "*")
+	if len(parts) == 1 {
+		return glob == s
+	}
+	first, last := parts[0], parts[len(parts)-1]
+	if len(s) < len(first)+len(last) || !strings.HasPrefix(s, first) || !strings.HasSuffix(s, last) {
+		return false
+	}
+	s = s[len(first) : len(s)-len(last)]
+	for _, p := range parts[1 : len(parts)-1] {
+		i := strings.Index(s, p)
+		if i < 0 {
+			return false
+		}
+		s = s[i+len(p):]
+	}
+	return true
 }
 
 // sharedNamed returns the shared channel of the name, or nil.

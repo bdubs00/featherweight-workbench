@@ -554,6 +554,58 @@ func TestConfig(t *testing.T) {
 	}
 }
 
+// A glob of workbench.notifications.email.allow matches an address
+// without regard to case, and "*" matches any text, also none. A glob
+// with a space does not load, and the list needs an SMTP server. Without
+// the list, only the subject of the person matches, when it is an
+// address.
+func TestMailAllowed(t *testing.T) {
+	c := Config{Email: EmailConfig{Allow: []string{"*@example.com", "ops@lab.internal", "team-*-alerts@*.example.org"}}}
+	for to, want := range map[string]bool{
+		"bob@example.com": true, "Bob@EXAMPLE.com": true, "@example.com": true, "bob@example.com.evil": false, "bob@sub.example.com": false,
+		"ops@lab.internal": true, "OPS@lab.internal": true, "dev@lab.internal": false,
+		"team-db-alerts@eu.example.org": true, "team--alerts@x.example.org": true, "team-db@eu.example.org": false, "": false,
+	} {
+		if got := c.mailAllowed(to, "alice"); got != want {
+			t.Errorf("mailAllowed(%q) = %v, want %v", to, got, want)
+		}
+	}
+	if !(Config{Email: EmailConfig{Allow: []string{"*"}}}).mailAllowed("anyone@anywhere.net", "") {
+		t.Error("* does not match an address")
+	}
+	for block, want := range map[string]string{
+		"notifications:\n  email:\n    host: smtp.example.com\n    from: fw@example.com\n    allow: [\"a b@example.com\"]\n": "workbench.notifications.email.allow[0]",
+		"notifications:\n  email:\n    allow: [\"*@example.com\"]\n":                                                         "workbench.notifications.email.host is empty",
+	} {
+		cfg := fw.DefaultConfig()
+		cfg.Extensions = workbench(t, block)
+		if _, err := LoadConfig(cfg); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("LoadConfig(%q) = %v, want %q", block, err, want)
+		}
+	}
+	cfg := fw.DefaultConfig()
+	cfg.Extensions = workbench(t, "notifications:\n  email:\n    host: smtp.example.com\n    from: fw@example.com\n    allow: [\" *@Example.com \"]\n")
+	if c, err := LoadConfig(cfg); err != nil || len(c.Email.Allow) != 1 || c.Email.Allow[0] != "*@example.com" {
+		t.Fatalf("LoadConfig = %+v, %v", c.Email, err)
+	}
+	var none Config
+	for _, x := range []struct {
+		to, subject string
+		want        bool
+	}{
+		{"alice@example.com", "alice@example.com", true},
+		{"Alice@Example.com", "alice@example.com", true},
+		{"alice@example.com", "Alice@Example.com", true},
+		{"bob@example.com", "alice@example.com", false},
+		{"alice@example.com", "alice", false},
+		{"alice@example.com", "Alice <alice@example.com>", false},
+	} {
+		if got := none.mailAllowed(x.to, x.subject); got != x.want {
+			t.Errorf("without the list, mailAllowed(%q, %q) = %v, want %v", x.to, x.subject, got, x.want)
+		}
+	}
+}
+
 // The doctor line names where the settings live, the kinds, the ntfy
 // server of the front, the hosts, the link, and the shared channels. A
 // configuration that does not fit, and a variable that holds no value,

@@ -409,11 +409,17 @@ func detailOf(status int, data []byte) string {
 
 // sendEmail sends a plain mail through the SMTP server of the operator:
 // STARTTLS when the server offers it, a login when the configuration
-// names a user, and never a password in the clear.
+// names a user, and never a password in the clear. It sends only to an
+// address that workbench.notifications.email.allow lists, or without the
+// list to the address of the person, also when the operator changed the
+// list after the person saved the channel.
 func (s *Service) sendEmail(ctx context.Context, t target, m *message, link string) error {
 	ec := s.cfg.Email
 	if ec.Host == "" {
 		return permanent("the front sends no mail now")
+	}
+	if why := s.cfg.mailRefusal(t.to, t.person); why != "" {
+		return permanent("%s", why)
 	}
 	password := ""
 	if ec.User != "" {

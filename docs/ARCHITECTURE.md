@@ -3281,6 +3281,7 @@ The rules of each kind:
 - No address holds a user or a password.
 - At each send, the dialer refuses a loopback, private, or link-local address after the name resolves, unless the host matches `workbench.notifications.hosts`. For ntfy, the server of the front and the hosts of `workbench.notifications.ntfy.hosts` also pass. The checks of the duties use the same dialer (`internal/hostguard`). The front follows no redirect.
 - The front offers `email` when `workbench.notifications.email` names an SMTP server. `email.to` is one mail address alone. The front uses STARTTLS when the server offers it. It logs in only when the configuration names a user, and only after STARTTLS.
+- `workbench.notifications.email.allow` lists the addresses that a channel can send to, as globs such as `*@example.com`. A `*` matches any text, and case does not count. Without the list, a channel sends only to the address of its person. If the subject of the person is a mail address, the front takes it as that address. Else the person has no address. A save with another address gets a problem at `email.to`. If the operator changed the list after the save, the send refuses the address too. The log then names only the domain of the address.
 - The front offers `agent` when `workbench.notifications.agent.enabled` is true. The person needs the right `agent.run` on the agent. A channel without a budget does not save: the budget needs at least one limit above zero, such as `{"maxCostUSD": 0.02}`. Each message is one run of the agent, as the person, through the queue of the agent (`fleet.EnqueueFor`), with the budget of the channel. The input is the words of `how`, then the title, the text, and the link. The run carries the metadata `workbench.notify` with the id of the channel. At most `workbench.notifications.agent.perDay` runs go out per person and day, in the time zone of the person. The count lives in the bucket of the settings. A message past the count drops, and the log says why.
 - An operator names a shared channel in `workbench.notifications.shared`: a name, a label, a kind, the variable that holds its address, and the variable that holds its secret as an option. Its kind is `ntfy`, `slack`, `discord`, `teams`, or `webhook`. The front reads the address at each send, with the rules of its kind. For `ntfy`, the address is the address of the topic, such as `https://ntfy.example.com/ops`, and the secret is the access token. A person picks a shared channel by name and never sees its address.
 
@@ -3433,6 +3434,7 @@ Today starts at midnight in the time zone of the duty that starts. A start count
 | `workbench.notifications.link` | The base address of the page, such as `https://fleet.example.com/bossmode/`, for the link of a notification | none, so a notification has no link |
 | `workbench.notifications.email.host`, `port`, `from` | The SMTP server, its port, and the sender of each mail. With a host, the front offers `email`. | no server, and the port 587 |
 | `workbench.notifications.email.user`, `passwordEnv` | The account on the SMTP server, and the variable of the front that holds its password | none, so the front sends without a login |
+| `workbench.notifications.email.allow` | The addresses that a channel can send to, as globs such as `*@example.com`. Case does not count. | none, so a channel sends only to the address of its person |
 | `workbench.notifications.agent.enabled` | `true` offers the kind `agent` | `false` |
 | `workbench.notifications.agent.perDay` | The most runs of the kind `agent` per person and day | 20 |
 | `workbench.notifications.shared` | The shared channels: `{name, label, kind, urlEnv, secretEnv}`. `urlEnv` names the variable that holds the address. `secretEnv` names the variable that holds the secret, as an option. | none |
@@ -3452,6 +3454,7 @@ workbench:
       from: Featherweight <featherweight@example.com>
       user: featherweight
       passwordEnv: FW_SMTP_PASSWORD
+      allow: ["*@example.com"]
     agent:
       enabled: true
       perDay: 20

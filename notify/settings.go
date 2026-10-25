@@ -232,6 +232,14 @@ func subjectOf(ctx context.Context) (*fw.Principal, error) {
 	return p, nil
 }
 
+// subjectIn returns the subject of the caller in ctx, or "".
+func subjectIn(ctx context.Context) string {
+	if p := fw.PrincipalFrom(ctx); p != nil {
+		return strings.TrimSpace(p.Subject)
+	}
+	return ""
+}
+
 // load reads the settings of a person, or nil when the person has none.
 func (s *Service) load(ctx context.Context, subject string) (*record, error) {
 	e, err := s.b.Get(ctx, personKey(subject))
@@ -605,8 +613,11 @@ func (s *Service) channelsFrom(ctx context.Context, in, old []Channel, add func(
 				to = strings.TrimSpace(ch.Email.To)
 			}
 			a, err := mail.ParseAddress(to)
-			if to == "" || err != nil || a.Address != to || len(to) > 254 {
+			switch {
+			case to == "" || err != nil || a.Address != to || len(to) > maxAddress:
 				add(path+".email.to", "Write one mail address alone, such as alice@example.com.")
+			case s.cfg.mailProblem(to, subjectIn(ctx)) != "":
+				add(path+".email.to", "%s", s.cfg.mailProblem(to, subjectIn(ctx)))
 			}
 			c.Email = &Email{To: to}
 		case KindAgent:
