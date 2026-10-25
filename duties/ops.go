@@ -370,6 +370,9 @@ func (s *Service) Put(ctx context.Context, name string, body DutyBody, opt PutOp
 	if zone == "" && old != nil && old.Duty.When.Schedule != nil {
 		zone = old.Duty.When.Schedule.TimeZone
 	}
+	if zone == "" {
+		zone = s.savedZone(ctx, by)
+	}
 	d.normalize(zone)
 	if say := strings.TrimSpace(d.When.Say); say != "" && d.When.starts() == 1 {
 		sch, err := schedule.Parse(say, schedule.Options{Zone: zone, Now: now})

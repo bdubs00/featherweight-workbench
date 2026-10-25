@@ -193,3 +193,56 @@ func structured(t *testing.T, res *sdk.CallToolResult, v any) {
 		t.Fatalf("structuredContent %s: %v", b, err)
 	}
 }
+
+// A new schedule that names no time zone takes the time zone that the
+// person saved, such as the time zone of the notifications, else UTC. A
+// time zone of the call wins.
+func TestSavedZone(t *testing.T) {
+	hooks.mu.Lock()
+	before := hooks.zone
+	hooks.mu.Unlock()
+	t.Cleanup(func() { RegisterZone(before) })
+	saved := ""
+	RegisterZone(func(_ context.Context, _ *fw.Agent, subject string) string {
+		if subject != "alice" {
+			return ""
+		}
+		return saved
+	})
+	f := newFront(t, "", nil)
+	cs := connectMCP(t, f.a, "alice")
+	duty := map[string]any{
+		"agent":  "triage",
+		"when":   map[string]any{"say": "every weekday at 9am"},
+		"do":     map[string]any{"ask": map[string]any{"message": "Write the report."}},
+		"limits": map[string]any{"budget": map[string]any{"maxCostUSD": 0.5}},
+	}
+	zoneOf := func(args map[string]any) string {
+		t.Helper()
+		res := call(t, cs, ToolPreview, args)
+		var dry putResult
+		structured(t, res, &dry)
+		if res.IsError || dry.DryRun == nil || dry.DryRun.Duty.When.Schedule == nil {
+			t.Fatalf("a preview = %s", textOf(res))
+		}
+		return dry.DryRun.Duty.When.Schedule.TimeZone
+	}
+	cases := []struct {
+		saved, call, want string
+	}{
+		{"America/Chicago", "", "America/Chicago"},
+		{"America/Chicago", "Europe/Paris", "Europe/Paris"},
+		{"Not/AZone", "", "UTC"},
+		{"", "", "UTC"},
+	}
+	for _, c := range cases {
+		saved = c.saved
+		args := map[string]any{"name": "report", "duty": duty}
+		if c.call != "" {
+			args["timeZone"] = c.call
+		}
+		if z := zoneOf(args); z != c.want {
+			t.Errorf("saved %q, call %q: the zone = %q, want %q", c.saved, c.call, z, c.want)
+		}
+	}
+}

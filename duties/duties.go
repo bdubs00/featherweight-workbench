@@ -344,6 +344,33 @@ var hooks struct {
 	notice  []func(ctx context.Context, a *fw.Agent, n Notice)
 	change  []func(name string)
 	channel func(a *fw.Agent, name string) bool
+	zone    func(ctx context.Context, a *fw.Agent, subject string) string
+}
+
+// RegisterZone sets how the duties read the time zone that a person saved,
+// such as the time zone of the notifications of the person. fn answers ""
+// for a person who saved none. A package calls it in init. A new schedule
+// that names no time zone takes this one, else UTC.
+func RegisterZone(fn func(ctx context.Context, a *fw.Agent, subject string) string) {
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	hooks.zone = fn
+}
+
+// savedZone returns the time zone that the person saved, or "" when the
+// person saved none or it is no IANA time zone.
+func (s *Service) savedZone(ctx context.Context, subject string) string {
+	hooks.mu.Lock()
+	fn := hooks.zone
+	hooks.mu.Unlock()
+	if fn == nil || subject == "" {
+		return ""
+	}
+	zone := strings.TrimSpace(fn(ctx, s.a, subject))
+	if loc, err := time.LoadLocation(zone); zone == "" || zone == "Local" || err != nil || loc == nil {
+		return ""
+	}
+	return zone
 }
 
 // RegisterAction makes the action post, open, or manager available. A
