@@ -85,8 +85,10 @@ const (
 // Env holds the variables of the workers, each with a value or with
 // FromEnv, the name of a variable of the front, so the file holds no
 // secret. Egress is spec.egress of each Task, Resources its resources,
-// and Files the extra files of its Workspace. FW is the fw.yaml of the
-// workers: the agents, the policy, the model, and the providers.
+// and Files the extra files of its Workspace. Packages turns the packages
+// of the workers on and names them (packages.go); the overlay of the pool
+// wins over it. FW is the fw.yaml of the workers: the agents, the policy,
+// the model, and the providers.
 //
 // Template names an entry of workbench.templates. The pool then takes
 // every key of the template that it does not set (Template.apply), and its
@@ -105,6 +107,7 @@ type Pool struct {
 	Egress     *ax.EgressSpec   `yaml:"egress,omitempty"`
 	Resources  ax.ResourcesSpec `yaml:"resources,omitempty"`
 	Files      []ax.File        `yaml:"files,omitempty"`
+	Packages   *Packages        `yaml:"packages,omitempty"`
 	FW         map[string]any   `yaml:"fw"`
 
 	// The parts that Load fills.
@@ -153,15 +156,16 @@ type EnvVar struct {
 
 // Front is what the pools take from the configuration of the front.
 type Front struct {
-	Atespaces   []string     // workbench.fleet.atespaces
-	Egress      string       // workbench.fleet.egress
-	Intake      string       // workbench.fleet.intake
-	EgressTypes []string     // the event types of the stream of a worker
-	MaxBytes    int          // bus.egressMaxBytes of a worker that the pool does not set; 0 sets none
-	Bus         fw.BusConfig // the bus of the front, which the workers share
-	AX          fw.AXConfig  // the ax API and the router of the front
-	TokenEnv    string       // the variable of the static token of the front
-	SkillDirs   []string     // the skills directories of the front, which a merged render ships (skills.go)
+	Atespaces   []string       // workbench.fleet.atespaces
+	Egress      string         // workbench.fleet.egress
+	Intake      string         // workbench.fleet.intake
+	EgressTypes []string       // the event types of the stream of a worker
+	MaxBytes    int            // bus.egressMaxBytes of a worker that the pool does not set; 0 sets none
+	Bus         fw.BusConfig   // the bus of the front, which the workers share
+	AX          fw.AXConfig    // the ax API and the router of the front
+	TokenEnv    string         // the variable of the static token of the front
+	SkillDirs   []string       // the skills directories of the front, which a merged render ships (skills.go)
+	Packages    *PackageMirror // workbench.packages, nil when the packages are off (packages.go)
 }
 
 // Replicas returns the number of Tasks that the pool wants.
@@ -491,6 +495,7 @@ func (p *Pool) complete(front Front) []string {
 	}
 	problems = append(problems, p.checkEnv(front)...)
 	problems = append(problems, p.checkFiles()...)
+	problems = append(problems, p.checkPackages(front)...)
 	problems = append(problems, p.render(front)...)
 	if len(problems) > 0 {
 		return problems
@@ -855,6 +860,13 @@ func (p *Pool) workerFile(front Front) (string, error) {
 		"ax":   map[string]any{"server": front.AX.Server, "router": front.AX.Router},
 	}
 	m := merge(defaults, p.FW)
+	if p.front.Packages != nil {
+		// The packages of the pool, with the overlay, go to the workers.
+		// The front gives them only with a package mirror.
+		if s := p.PackageSetting(); s.On {
+			m = withPackages(m, s, p.front.Packages)
+		}
+	}
 	b, _ := m["bus"].(map[string]any)
 	if b == nil {
 		return "", fmt.Errorf("bus is not a mapping")
@@ -929,7 +941,8 @@ func merge(base, over map[string]any) map[string]any {
 // checks the http, https, ws, and wss addresses only, and a value that the
 // worker expands itself is left out.
 func (p *Pool) reach() []string {
-	if p.worker == nil || p.Egress == nil {
+	egress := p.taskEgress()
+	if p.worker == nil || egress == nil {
 		return nil
 	}
 	type target struct{ what, raw string }
@@ -966,7 +979,7 @@ func (p *Pool) reach() []string {
 			continue
 		}
 		n, _ := strconv.Atoi(port)
-		if !allows(p.Egress, proto, strings.ToLower(u.Hostname()), int32(n)) {
+		if !allows(egress, proto, strings.ToLower(u.Hostname()), int32(n)) {
 			// A plain host, TLS forwarded without decryption, serves an
 			// https connection without the trust bundle of the gateway.
 			example := fmt.Sprintf("%s:%d", u.Hostname(), n)

@@ -150,7 +150,7 @@ func (p *Pool) computeHash() string {
 		Egress     *ax.EgressSpec   `json:"egress,omitempty"`
 		Resources  ax.ResourcesSpec `json:"resources"`
 		Files      []ax.File        `json:"files"`
-	}{Image: p.Image, Revision: p.Revision, Generation: p.Generation, Egress: p.Egress, Resources: p.Resources, Files: p.files}
+	}{Image: p.Image, Revision: p.Revision, Generation: p.Generation, Egress: p.taskEgress(), Resources: p.Resources, Files: p.files}
 	for _, e := range p.env {
 		in.Env = append(in.Env, envEntry{Name: e.Name, Value: e.Value, FromEnv: e.FromEnv})
 	}
@@ -167,7 +167,7 @@ func (p *Pool) Render(index int, lookup Lookup) (*v1alpha1.Task, *v1alpha1.Works
 	spec := &v1alpha1.TaskSpec{
 		Image:      p.Image,
 		Workspaces: []*v1alpha1.WorkspaceRef{{Name: wsName, Path: WorkspacePath}},
-		Egress:     egressOf(p.Egress),
+		Egress:     egressOf(p.taskEgress()),
 	}
 	for _, e := range p.env {
 		v := ""
@@ -347,6 +347,21 @@ func Write(w io.Writer, list []*Pool) error {
 				continue
 			}
 			fmt.Fprintf(&b, "The routines of the front give the profile %s the routines %s.\n", name, strings.Join(words, ", "))
+		}
+		if s := p.PackageSetting(); p.PackagesOn() {
+			where := "The configuration of the pool turns the packages on"
+			if p.overlay.Packages != nil {
+				at := time.Time{}
+				if s.At != nil {
+					at = *s.At
+				}
+				where = "The overlay of the front turns the packages on" + written(s.By, at, "")
+			}
+			ask := "the agent cannot change them, because fw.policy.deny holds the rules of the tool env"
+			if s.Ask {
+				ask = "the agent can ask for a change, and a person approves each one"
+			}
+			fmt.Fprintf(&b, "%s: Python packages %s, Programs %s, from the package mirror of the front; %s.\n", where, orWord(strings.Join(Names(s.Python), ", "), "none"), orWord(strings.Join(Names(s.Tools), ", "), "none"), ask)
 		}
 		if len(p.skillNames) > 0 {
 			fmt.Fprintf(&b, "The front ships its skills %s, which the profiles of the pool allow, to %s/%s of each worker.\n", strings.Join(p.skillNames, ", "), WorkspacePath, SkillsPath)

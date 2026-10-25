@@ -57,6 +57,7 @@ type Template struct {
 	Egress     *ax.EgressSpec   `yaml:"egress,omitempty"`
 	Resources  ax.ResourcesSpec `yaml:"resources,omitempty"`
 	Files      []ax.File        `yaml:"files,omitempty"`
+	Packages   *Packages        `yaml:"packages,omitempty"`
 	FW         map[string]any   `yaml:"fw,omitempty"`
 
 	index int   // the position in workbench.templates
@@ -231,7 +232,7 @@ func (t *Template) check(front Front) []string {
 }
 
 // apply gives the pool p every key of the template that p does not set:
-// the image, the atespace, and the egress when p sets none. The variables
+// the image, the atespace, the egress, and the packages when p sets none. The variables
 // and the files of both go together, and a variable or a file of p
 // replaces the one of the same name or path. Each of the four resource
 // values that p sets replaces the one of the template. fw merges key by
@@ -248,6 +249,11 @@ func (t *Template) apply(p *Pool) {
 	}
 	if p.Egress == nil {
 		p.Egress = t.Egress
+	}
+	if p.Packages == nil && t.Packages != nil {
+		c := *t.Packages
+		c.Python, c.Tools = slices.Clone(c.Python), slices.Clone(c.Tools)
+		p.Packages = &c
 	}
 	p.Env = mergeEnv(t.Env, p.Env)
 	p.Files = mergeFiles(t.Files, p.Files)

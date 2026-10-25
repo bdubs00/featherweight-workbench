@@ -39,7 +39,8 @@ func LoadPools(cfg *fw.Config, fc Config) ([]*pools.Pool, error) {
 // LoadAll reads the pools and the worker templates of the configuration
 // for the fleet fc, which Load filled (pools.LoadAll). The front gives the
 // pools its atespaces, its egress stream, its intake prefix, its bus, its
-// ax API, and the variable of its static token.
+// ax API, the variable of its static token, and its package mirror
+// (workbench.packages).
 func LoadAll(cfg *fw.Config, fc Config) ([]*pools.Pool, []*pools.Template, error) {
 	if cfg == nil {
 		return nil, nil, nil
@@ -47,6 +48,10 @@ func LoadAll(cfg *fw.Config, fc Config) ([]*pools.Pool, []*pools.Template, error
 	tokenEnv := strings.TrimSpace(cfg.Auth.TokenEnv)
 	if tokenEnv == "" {
 		tokenEnv = pools.DefaultTokenEnv
+	}
+	mirror, err := pools.LoadMirror(cfg)
+	if err != nil {
+		return nil, nil, err
 	}
 	return pools.LoadAll(cfg, pools.Front{
 		Atespaces:   fc.Atespaces,
@@ -58,6 +63,7 @@ func LoadAll(cfg *fw.Config, fc Config) ([]*pools.Pool, []*pools.Template, error
 		AX:          cfg.AX,
 		TokenEnv:    tokenEnv,
 		SkillDirs:   cfg.SkillDirs(),
+		Packages:    mirror,
 	})
 }
 

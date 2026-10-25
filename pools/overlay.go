@@ -34,10 +34,13 @@ import (
 // each pass, and the store of the overlay keeps none. An agent with an
 // entry gets those routines in place of the routines of its profile. An
 // empty entry takes the routines of the profile away, and it leaves a
-// profile without routines as it is, so its hash stays.
+// profile without routines as it is, so its hash stays. Packages holds
+// the packages of the workers (packages.go), nil when the overlay sets
+// none and the configuration of the pool decides.
 type Overlay struct {
 	Profiles []OverlayProfile        `json:"profiles,omitempty"`
 	Allow    []OverlayRule           `json:"allow,omitempty"`
+	Packages *PackageSetting         `json:"packages,omitempty"`
 	Routines map[string][]fw.Routine `json:"-"`
 }
 
@@ -65,7 +68,7 @@ type OverlayRule struct {
 
 // Empty reports whether the overlay adds nothing.
 func (o Overlay) Empty() bool {
-	return len(o.Profiles) == 0 && len(o.Allow) == 0 && len(o.Routines) == 0
+	return len(o.Profiles) == 0 && len(o.Allow) == 0 && len(o.Routines) == 0 && o.Packages == nil
 }
 
 // Profile returns the profile of that name in the overlay.
@@ -81,7 +84,7 @@ func (o Overlay) Profile(name string) (OverlayProfile, bool) {
 // WithProfile returns a copy of the overlay with e in place of the profile
 // of the same name.
 func (o Overlay) WithProfile(e OverlayProfile) Overlay {
-	out := Overlay{Allow: slices.Clone(o.Allow), Routines: o.Routines}
+	out := Overlay{Allow: slices.Clone(o.Allow), Packages: o.Packages, Routines: o.Routines}
 	for _, old := range o.Profiles {
 		if old.Profile.Name != e.Profile.Name {
 			out.Profiles = append(out.Profiles, old)
@@ -95,7 +98,7 @@ func (o Overlay) WithProfile(e OverlayProfile) Overlay {
 // WithRule returns a copy of the overlay with the rule r, in place of a
 // rule with the same text.
 func (o Overlay) WithRule(r OverlayRule) Overlay {
-	out := Overlay{Profiles: slices.Clone(o.Profiles), Routines: o.Routines}
+	out := Overlay{Profiles: slices.Clone(o.Profiles), Packages: o.Packages, Routines: o.Routines}
 	for _, old := range o.Allow {
 		if old.Rule != r.Rule {
 			out.Allow = append(out.Allow, old)
@@ -103,6 +106,17 @@ func (o Overlay) WithRule(r OverlayRule) Overlay {
 	}
 	out.Allow = append(out.Allow, r)
 	out.sort()
+	return out
+}
+
+// WithPackages returns a copy of the overlay with the packages s, or
+// without an entry of the packages for nil.
+func (o Overlay) WithPackages(s *PackageSetting) Overlay {
+	out := Overlay{Profiles: slices.Clone(o.Profiles), Allow: slices.Clone(o.Allow), Routines: o.Routines}
+	if s != nil {
+		c := s.Clone()
+		out.Packages = &c
+	}
 	return out
 }
 
@@ -116,12 +130,19 @@ func (o *Overlay) sort() {
 // pool without one. PutProfile writes one profile, in place of the profile
 // of the same name, DeleteProfile removes one and reports whether it was
 // there, and AddRule writes one allow rule, in place of a rule with the
-// same text. Describe says in a few words where the overlays live.
+// same text. UpdatePackages reads the entry of the packages, nil when the
+// overlay holds none, and gives a copy to f. f returns the next entry, or
+// nil to write nothing. The store writes the entry at the revision that it
+// read, and calls f again when another writer came first, so two replicas
+// of the front never lose a change. UpdatePackages returns the entry that
+// the store holds after the call. Describe says in a few words where the
+// overlays live.
 type OverlayStore interface {
 	Read(ctx context.Context, pool string) (Overlay, error)
 	PutProfile(ctx context.Context, pool string, e OverlayProfile) error
 	DeleteProfile(ctx context.Context, pool, name string) (bool, error)
 	AddRule(ctx context.Context, pool string, r OverlayRule) error
+	UpdatePackages(ctx context.Context, pool string, f func(cur *PackageSetting) (*PackageSetting, error)) (*PackageSetting, error)
 	Describe() string
 }
 
@@ -145,7 +166,7 @@ func (s *MemOverlays) Read(_ context.Context, pool string) (Overlay, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	o := s.m[pool]
-	return Overlay{Profiles: slices.Clone(o.Profiles), Allow: slices.Clone(o.Allow)}, nil
+	return Overlay{Profiles: slices.Clone(o.Profiles), Allow: slices.Clone(o.Allow)}.WithPackages(o.Packages), nil
 }
 
 // PutProfile implements OverlayStore.
@@ -164,7 +185,7 @@ func (s *MemOverlays) DeleteProfile(_ context.Context, pool, name string) (bool,
 	if _, ok := o.Profile(name); !ok {
 		return false, nil
 	}
-	out := Overlay{Allow: o.Allow}
+	out := Overlay{Allow: o.Allow, Packages: o.Packages}
 	for _, e := range o.Profiles {
 		if e.Profile.Name != name {
 			out.Profiles = append(out.Profiles, e)
@@ -180,6 +201,28 @@ func (s *MemOverlays) AddRule(_ context.Context, pool string, r OverlayRule) err
 	defer s.mu.Unlock()
 	s.m[pool] = s.m[pool].WithRule(r)
 	return nil
+}
+
+// UpdatePackages implements OverlayStore.
+func (s *MemOverlays) UpdatePackages(_ context.Context, pool string, f func(*PackageSetting) (*PackageSetting, error)) (*PackageSetting, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o := s.m[pool]
+	var cur *PackageSetting
+	if o.Packages != nil {
+		c := o.Packages.Clone()
+		cur = &c
+	}
+	next, err := f(cur)
+	if err != nil {
+		return nil, err
+	}
+	if next == nil {
+		return cur, nil
+	}
+	s.m[pool] = o.WithPackages(next)
+	c := next.Clone()
+	return &c, nil
 }
 
 // Overlay returns the overlay that WithOverlay merged into the pool, empty
@@ -538,6 +581,11 @@ func (p *Pool) ToolsProblem(agent string, tools []string) string {
 		if b = strings.TrimSpace(b); b != "" && !slices.Contains(names, b) {
 			names = append(names, b)
 		}
+	}
+	if p.PackagesOn() && !slices.Contains(names, EnvTool) {
+		// The kernel gives a worker with packages the tool env, also when
+		// the block fw names no built-in tool.
+		names = append(names, EnvTool)
 	}
 	for _, peer := range t.Peers {
 		if n := strings.TrimSpace(peer.Name); n != "" {

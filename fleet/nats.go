@@ -290,6 +290,11 @@ const (
 	overlayRuleKey    = "allow."
 )
 
+// overlayPackagesKey is the one entry of the packages of a pool. Its
+// writes compare the revision, because a change of a package reads the
+// entry first (UpdatePackages).
+const overlayPackagesKey = "packages"
+
 // overlayHistory is how many values of each entry a bucket keeps, so an
 // operator can read what an entry held before.
 const overlayHistory = 10
@@ -399,13 +404,18 @@ func (o *natsOverlays) Read(ctx context.Context, pool string) (pools.Overlay, er
 			if bad = json.Unmarshal(e.Value(), &v); bad == nil {
 				out.Allow = append(out.Allow, v)
 			}
+		case e.Key() == overlayPackagesKey:
+			var v pools.PackageSetting
+			if bad = json.Unmarshal(e.Value(), &v); bad == nil {
+				out.Packages = &v
+			}
 		}
 		if bad != nil {
 			o.n.log.Warn("fleet: an entry of the overlay of a pool does not decode", "pool", pool, "key", e.Key(), "error", bad)
 		}
 	}
 	// The sort of the store in memory is the sort of the overlay.
-	sorted := pools.Overlay{}
+	sorted := pools.Overlay{Packages: out.Packages}
 	for _, e := range out.Profiles {
 		sorted = sorted.WithProfile(e)
 	}
@@ -442,6 +452,85 @@ func (o *natsOverlays) PutProfile(ctx context.Context, pool string, e pools.Over
 // AddRule implements pools.OverlayStore.
 func (o *natsOverlays) AddRule(ctx context.Context, pool string, r pools.OverlayRule) error {
 	return o.put(ctx, pool, overlayRuleKey+base64.RawURLEncoding.EncodeToString([]byte(r.Rule)), r)
+}
+
+// overlayAttempts bounds the tries of a write of the packages that other
+// writers race.
+const overlayAttempts = 8
+
+// UpdatePackages implements pools.OverlayStore. It reads the entry and
+// its revision, and writes the result of f at that revision, so a write
+// of another replica in between makes it read again. A read alone makes
+// no bucket.
+func (o *natsOverlays) UpdatePackages(ctx context.Context, pool string, f func(*pools.PackageSetting) (*pools.PackageSetting, error)) (*pools.PackageSetting, error) {
+	for range overlayAttempts {
+		var cur *pools.PackageSetting
+		var rev uint64
+		kv, err := o.bucket(ctx, pool, false)
+		switch {
+		case bucketGone(err):
+			o.forget(pool)
+			kv = nil
+		case err != nil:
+			return nil, err
+		}
+		if kv != nil {
+			e, err := kv.Get(ctx, overlayPackagesKey)
+			switch {
+			case errors.Is(err, jetstream.ErrKeyNotFound), errors.Is(err, jetstream.ErrKeyDeleted):
+			case bucketGone(err):
+				o.forget(pool)
+				kv = nil
+			case err != nil:
+				return nil, err
+			default:
+				var v pools.PackageSetting
+				if err := json.Unmarshal(e.Value(), &v); err != nil {
+					return nil, fmt.Errorf("fleet: decode the packages of the pool %s: %w", pool, err)
+				}
+				cur, rev = &v, e.Revision()
+			}
+		}
+		var arg *pools.PackageSetting
+		if cur != nil {
+			c := cur.Clone()
+			arg = &c
+		}
+		next, err := f(arg)
+		if err != nil {
+			return nil, err
+		}
+		if next == nil {
+			return cur, nil
+		}
+		data, err := json.Marshal(next)
+		if err != nil {
+			return nil, fmt.Errorf("fleet: encode the packages of the pool %s: %w", pool, err)
+		}
+		if kv == nil {
+			if kv, err = o.bucket(ctx, pool, true); err != nil {
+				return nil, err
+			}
+		}
+		if rev == 0 {
+			_, err = kv.Create(ctx, overlayPackagesKey, data)
+		} else {
+			_, err = kv.Update(ctx, overlayPackagesKey, data, rev)
+		}
+		switch {
+		case err == nil:
+			c := next.Clone()
+			return &c, nil
+		case errors.Is(err, jetstream.ErrKeyExists), errors.Is(err, jetstream.ErrKeyRevisionMismatch):
+			continue // another replica wrote first
+		case bucketGone(err):
+			o.forget(pool)
+			continue
+		default:
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("fleet: write the packages of the pool %s: other writers won %d times; try again", pool, overlayAttempts)
 }
 
 // DeleteProfile implements pools.OverlayStore.
