@@ -63,6 +63,29 @@ func TestManagerDecides(t *testing.T) {
 	}
 }
 
+// A deny of the manager stops work that the owner asked for, so the people
+// of notify.needsYou hear of it, with the reason of the manager.
+func TestManagerDenies(t *testing.T) {
+	b := bucket.NewMem(awayBucket)
+	f := newFront(t, b, newFleet(), &clock{t: t0})
+	run := f.duty(t, "report", nil)
+	f.asks(run, "report", "A1", "git.push", "rule: ask git.*", nil)
+	f.pass(t)
+	_, _, _, asked := f.fleet.lists()
+	if len(asked) != 1 {
+		t.Fatalf("the manager got %d questions", len(asked))
+	}
+	f.fleet.set(&fw.Run{ID: asked[0].ID, Agent: "manager", State: fw.StateCompleted, Output: `{"verdict": "deny", "reason": "The report needs no push."}`})
+	f.pass(t)
+	if decided, _, _, _ := f.fleet.lists(); !slices.Equal(decided, []string{run + "/A1=deny"}) {
+		t.Fatalf("decided = %v", decided)
+	}
+	n := allNotices.of(f.a)
+	if len(n) != 1 || n[0].Kind != duties.NoticeDecided || n[0].Reason != "The manager denied the call of git.push by the agent triage: The report needs no push." {
+		t.Fatalf("notices = %+v", n)
+	}
+}
+
 // A question goes to the person with a needs-you notice, never to the
 // manager. After the timeout the front denies it, records the decision,
 // and tells the people of notify.needsYou.

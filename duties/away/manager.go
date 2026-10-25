@@ -178,5 +178,14 @@ func (s *Service) verdict(ctx context.Context, svc *duties.Service, w *wait, r, 
 	}
 	w.State, w.Outcome = stateDone, "manager "+v.Verdict
 	s.record(ctx, svc, w, duties.Decided{By: duties.DecidedByManager, Verdict: v.Verdict, Tool: w.Tool, Reason: v.Reason})
+	if v.Verdict == "deny" {
+		// A deny stops work that the owner asked for, so the people of
+		// notify.needsYou hear of it. An allow lets the work go on, and
+		// the history and the digest hold it.
+		text := fmt.Sprintf("The manager denied the call of %s by the agent %s: %s.", w.Tool, w.Agent, strings.TrimSuffix(v.Reason, "."))
+		if err := svc.Tell(ctx, duties.NoticeDecided, w.Duty, w.Run, text); err != nil {
+			s.log.Warn("away: the notice of a deny of the manager did not go", "duty", w.Duty, "run", w.Run, "error", err)
+		}
+	}
 	s.log.Info("away: the front applied the verdict of the manager", "duty", w.Duty, "run", w.Run, "approval", w.Approval, "verdict", v.Verdict, "manager", m.ID)
 }
