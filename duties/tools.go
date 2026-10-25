@@ -30,6 +30,7 @@ const (
 	ToolList       = "duties_list"
 	ToolGet        = "duty_get"
 	ToolPut        = "duty_put"
+	ToolPreview    = "duty_preview"
 	ToolRunNow     = "duty_run_now"
 	ToolPause      = "duty_pause"
 	ToolDelete     = "duty_delete"
@@ -46,11 +47,22 @@ const (
 
 	putSchema = `{"type":"object","properties":{
 		"name":` + nameSchema + `,
-		"duty":{"type":"object","description":"The duty. agent names the agent that does it. when holds one start: say, the words of a schedule such as \"every weekday at 9am\", or schedule, the record {repeat, days, everyWeeks, dayOfMonth, times, every, between, timeZone, start, end}, or webhook {auth: {mode, secret, header}, key}. checkFirst {look: {http: {url, secret, header}} or {tool, input}, items, key, where, wake} looks for work first; duty_write_check writes it from words. do holds one action: ask {message} asks the agent, post {bridge, to, message} posts in a bridge that stays open, open {playbook, goal} opens a bridge from a playbook, and manager {message} asks the manager. A message takes the placeholders {date}, {time}, {found}, {event}, {last.title}, {last.run}, {last.state}, and {duty}. limits.budget is required, with at least one of maxCostUSD, maxTurns, maxTokens, and maxToolCalls above zero; limits also take perDayUSD, overlap (skip, queue, allow), catchUp, and retries. whileAway, notify, runAs (duty or owner), and paused are optional. notify {failure, needsYou} lists owner, the subject of a person, or channel:<name> for a shared channel of the operator. A read of duty_get is a valid body."},
-		"dryRun":{"type":"boolean","description":"Save nothing, and answer the duty as it would be stored, its readback in words, its next five times, and every problem. Show the readback to the person, and save only after the person agrees."},
+		"duty":` + dutySchema + `,
+		"dryRun":{"type":"boolean","description":"Save nothing, and answer as duty_preview does. duty_preview needs no approval, so call it first."},
 		"test":{"type":"boolean","description":"With dryRun, also run checkFirst once and answer the items that it finds now and whether they wake the agent."},
-		"timeZone":{"type":"string","maxLength":64,"description":"The IANA time zone of a new schedule that names none, such as America/New_York: the time zone of the person. Without it, UTC."}
+		"timeZone":` + zoneSchema + `
 	},"required":["name","duty"]}`
+
+	previewSchema = `{"type":"object","properties":{
+		"name":` + nameSchema + `,
+		"duty":` + dutySchema + `,
+		"test":{"type":"boolean","description":"Also run checkFirst once and answer the items that it finds now and whether they wake the agent."},
+		"timeZone":` + zoneSchema + `
+	},"required":["name","duty"]}`
+
+	zoneSchema = `{"type":"string","maxLength":64,"description":"The IANA time zone of a new schedule that names none, such as America/New_York: the time zone of the person. Without it, the time zone that the person saved in the notifications, else UTC."}`
+
+	dutySchema = `{"type":["object","string"],"description":"The duty, as an object. A JSON text of the object reads too. agent names the agent that does it. when holds one start: say, the words of a schedule such as \"every weekday at 9am\", or schedule, the record {repeat, days, everyWeeks, dayOfMonth, times, every, between, timeZone, start, end}, or webhook {auth: {mode, secret, header}, key}. checkFirst {look: {http: {url, secret, header}} or {tool, input}, items, key, where, wake} looks for work first; duty_write_check writes it from words. do holds one action: ask {message} asks the agent, post {bridge, to, message} posts in a bridge that stays open, open {playbook, goal} opens a bridge from a playbook, and manager {message} asks the manager. A message takes the placeholders {date}, {time}, {found}, {event}, {last.title}, {last.run}, {last.state}, and {duty}. For ask and manager, limits.budget is required, with at least one of maxCostUSD, maxTurns, maxTokens, and maxToolCalls above zero, and limits.perDayUSD caps a day. A post spends nothing of its own and takes no budget. For open, limits.budget holds maxTurns alone, the most turns of the whole bridge. limits also take overlap (skip, queue, allow), catchUp, and retries. whileAway, notify, runAs (duty or owner), and paused are optional. notify {failure, needsYou} lists owner, the subject of a person, or channel:<name> for a shared channel of the operator. A read of duty_get is a valid body."}`
 
 	pauseSchema = `{"type":"object","properties":{
 		"name":` + nameSchema + `,
@@ -77,6 +89,12 @@ type (
 		Name     string          `json:"name"`
 		Duty     json.RawMessage `json:"duty"`
 		DryRun   bool            `json:"dryRun,omitempty"`
+		Test     bool            `json:"test,omitempty"`
+		TimeZone string          `json:"timeZone,omitempty"`
+	}
+	previewArgs struct {
+		Name     string          `json:"name"`
+		Duty     json.RawMessage `json:"duty"`
 		Test     bool            `json:"test,omitempty"`
 		TimeZone string          `json:"timeZone,omitempty"`
 	}
@@ -138,11 +156,20 @@ func tools(srv *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolPut,
 			Title:       "Create or change a duty",
-			Description: "Create or change a duty: what an agent does on its own, when, and within which limits. It needs the owner role on the agent. The schedule is words, such as {\"when\": {\"say\": \"every weekday at 9am\"}}, and the front reads them with a fixed grammar. A duty needs a budget. Call it with dryRun first, show the readback and the next times to the person, and save only after the person agrees. With dryRun and test, it also runs the check once.",
+			Description: "Create or change a duty: what an agent does on its own, when, and within which limits. It needs the owner role on the agent. The schedule is words, such as {\"when\": {\"say\": \"every weekday at 9am\"}}, and the front reads them with a fixed grammar. Call duty_preview first, show the readback and the next times to the person, and save with duty_put only after the person agrees.",
 			InputSchema: json.RawMessage(putSchema),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in putArgs) (*sdk.CallToolResult, any, error) {
 			return putTool(ctx, a, in), nil, nil
+		}),
+		mcp.NewTool(&sdk.Tool{
+			Name:        ToolPreview,
+			Title:       "Preview a duty",
+			Description: "Show a duty as duty_put would save it, and save nothing: the duty as it would be stored, its readback in words, its next five times, and every problem. It reads only, so it needs no approval. Show the readback and the next times to the person, then save with duty_put after the person agrees. With test, it also runs the check once.",
+			InputSchema: json.RawMessage(previewSchema),
+			Annotations: readOnly,
+		}, func(ctx context.Context, _ *sdk.CallToolRequest, in previewArgs) (*sdk.CallToolResult, any, error) {
+			return putTool(ctx, a, putArgs{Name: in.Name, Duty: in.Duty, DryRun: true, Test: in.Test, TimeZone: in.TimeZone}), nil, nil
 		}),
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolRunNow,
@@ -336,7 +363,7 @@ func putTool(ctx context.Context, a *fw.Agent, in putArgs) *sdk.CallToolResult {
 		return off()
 	}
 	var body DutyBody
-	dec := json.NewDecoder(bytes.NewReader(in.Duty))
+	dec := json.NewDecoder(bytes.NewReader(objectOf(in.Duty)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil {
 		return mcp.ErrorResult("Invalid request: the duty does not read: " + err.Error() + ".")
@@ -358,6 +385,20 @@ func putTool(ctx context.Context, a *fw.Agent, in putArgs) *sdk.CallToolResult {
 	return mcp.Result(verb+" the duty "+viewLine(*ans.View), putResult{Duty: ans.View, Created: ans.Created})
 }
 
+// objectOf returns the JSON object of the field duty. A model sometimes
+// sends the object as a JSON text, so a text that holds an object reads
+// as that object.
+func objectOf(raw json.RawMessage) json.RawMessage {
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return raw
+	}
+	if t := strings.TrimSpace(text); strings.HasPrefix(t, "{") {
+		return json.RawMessage(t)
+	}
+	return raw
+}
+
 // dryText words the answer of a dry run.
 func dryText(name string, d *DryAnswer) string {
 	var b strings.Builder
@@ -373,7 +414,7 @@ func dryText(name string, d *DryAnswer) string {
 		b.WriteString("\nNext: " + strings.Join(times, "; ") + ".")
 	}
 	if len(d.Problems) == 0 {
-		b.WriteString("\nNo problem: show the readback to the person, and save after the person agrees.")
+		b.WriteString("\nNo problem: show the readback to the person, and save with duty_put after the person agrees.")
 	} else {
 		b.WriteString("\nProblems:\n- " + strings.Join(d.Problems, "\n- "))
 	}

@@ -14,6 +14,52 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// duty_preview is the dry run of duty_put as a tool that only reads, so a
+// policy that allows read-only tools lets it run without an approval. A
+// duty sent as a JSON text reads as the object, in both tools.
+func TestPreview(t *testing.T) {
+	f := newFront(t, "", nil)
+	cs := connectMCP(t, f.a, "alice")
+	listed, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range listed.Tools {
+		switch tool.Name {
+		case ToolPreview:
+			if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+				t.Errorf("duty_preview is not read-only: %+v", tool.Annotations)
+			}
+		case ToolPut:
+			if tool.Annotations == nil || tool.Annotations.ReadOnlyHint {
+				t.Errorf("duty_put reads only: %+v", tool.Annotations)
+			}
+		}
+	}
+	duty := `{"agent": "triage", "when": {"say": "every weekday at 9am"}, "do": {"ask": {"message": "Write the report of {date}."}}, "limits": {"budget": {"maxCostUSD": 0.5}}}`
+	var object map[string]any
+	if err := json.Unmarshal([]byte(duty), &object); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []any{object, duty} {
+		res := call(t, cs, ToolPreview, map[string]any{"name": "report", "duty": body, "timeZone": "America/New_York"})
+		var dry putResult
+		structured(t, res, &dry)
+		if res.IsError || !strings.Contains(textOf(res), "nothing is saved") || dry.DryRun == nil || len(dry.DryRun.Next) != 5 {
+			t.Fatalf("a preview of %T = %s", body, textOf(res))
+		}
+	}
+	if res := call(t, cs, ToolList, map[string]any{}); !strings.Contains(textOf(res), "You can view no duty.") {
+		t.Fatalf("a preview saved: %s", textOf(res))
+	}
+	if res := call(t, cs, ToolPut, map[string]any{"name": "report", "duty": duty, "timeZone": "America/New_York"}); res.IsError || !strings.HasPrefix(textOf(res), "Created the duty report") {
+		t.Fatalf("a write of a JSON text = %s", textOf(res))
+	}
+	if res := call(t, cs, ToolPreview, map[string]any{"name": "report", "duty": "not a duty"}); !res.IsError || !strings.Contains(textOf(res), "the duty does not read") {
+		t.Fatalf("a preview of a text that holds no object = %s", textOf(res))
+	}
+}
+
 // The tools call the functions of the routes: a dry run with words, a
 // write, a read, a run now, a pause, the switch for an admin, and a
 // delete, each with the access of its route.

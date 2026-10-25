@@ -242,7 +242,7 @@ func TestParity(t *testing.T) {
 			names[tool.Name] = true
 		}
 	}
-	if len(names) != 8 {
+	if len(names) != 9 {
 		t.Fatalf("the server has %d tools of the duties: %v", len(names), names)
 	}
 	seen := map[string]bool{}
@@ -255,6 +255,8 @@ func TestParity(t *testing.T) {
 		}
 		seen[r.tool] = true
 	}
+	// duty_preview is the dry run of PUT /v1/duties/{name}.
+	seen[ToolPreview] = seen[ToolPut]
 	for name := range names {
 		if !seen[name] {
 			t.Errorf("the tool %s has no route", name)
