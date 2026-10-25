@@ -154,8 +154,8 @@ func (rt *routes) packages(w http.ResponseWriter, r *http.Request) {
 // python, tools} (fleet.PackagesRequest), which replaces the packages of
 // the pool, and the answer is 200 with the packages as GET answers them.
 // It needs the owner role on the agent of the pool. With ?dryRun=true it
-// checks the body, answers the setting that it would write, and writes
-// nothing.
+// checks the body, answers the setting that it writes without it, and
+// writes nothing.
 func (rt *routes) putPackages(w http.ResponseWriter, r *http.Request) {
 	var req fleet.PackagesRequest
 	if !rt.k.Decode(w, r, &req) {

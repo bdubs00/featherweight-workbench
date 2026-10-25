@@ -304,7 +304,7 @@ func TestPackagesOfTemplates(t *testing.T) {
 }
 
 // An add of the tool env adds a package, or replaces the package of the
-// same name; a remove takes away each item of that name. A change that
+// same name. A remove takes away each item of that name. A change that
 // the list holds already changes nothing.
 func TestChangePackages(t *testing.T) {
 	s := PackageSetting{Python: []PackageItem{{Name: "ansible-lint"}, {Name: "PyYAML>=6"}}, Tools: []PackageItem{}}

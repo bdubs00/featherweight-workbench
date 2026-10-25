@@ -28,8 +28,8 @@ const packagesKey = "packages"
 
 // The names of the tool env of the kernel and of its two field rules
 // (the kernel architecture, section 18.7). The workbench does not link the
-// package env of the kernel, because its init would give the front the
-// tool and the service too, so it names them here. A test compares them
+// package env of the kernel, because its init gives a process the tool
+// and the service too, so it names them here. A test compares them
 // with the kernel.
 const EnvTool = "env"
 
@@ -98,7 +98,7 @@ func LoadMirror(cfg *fw.Config) (*PackageMirror, error) {
 // Packages is the key packages of a pool or a template in the
 // configuration file. On turns the packages on for the workers. Ask lets
 // the agent ask for a package with the tool env, and a person approves
-// each add and each remove; without it, the tool only lists. Python and
+// each add and each remove. Without it, the tool only lists. Python and
 // Tools name the packages, such as ansible-lint or nodejs>=22.
 type Packages struct {
 	On     bool     `yaml:"on" json:"on"`

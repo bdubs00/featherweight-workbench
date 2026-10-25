@@ -265,7 +265,7 @@ func TestPackagesApprovedChange(t *testing.T) {
 	if !strings.Contains(ws, "pyyaml") {
 		t.Fatalf("the Workspace of triage-1 = %s", ws)
 	}
-	// A person removes the package; the same event again does not bring
+	// A person removes the package. The same event again does not bring
 	// it back.
 	if _, err := PutPackages(as("alice"), front.a, "triage", PackagesRequest{On: ptrTo(true), Ask: true, Python: []string{"ansible-lint"}}, false); err != nil {
 		t.Fatal(err)

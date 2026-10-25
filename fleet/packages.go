@@ -527,9 +527,9 @@ func PackagesOf(ctx context.Context, a *fw.Agent, name string) (Packages, error)
 // request for the caller, in the overlay of the pool. It needs the owner
 // role on the agent of the pool, as PATCH /v1/pools/{name}. Each name is
 // trimmed, a name that a list holds twice counts once, and a name that the
-// kernel refuses is an error. An item that the pool keeps keeps its
-// author; a new item names the caller. With dry, it checks the request and
-// answers the setting that it would write, and writes nothing. A request
+// kernel refuses is an error. An item that stays keeps its author, and a
+// new item names the caller. With dry, it checks the request, answers the
+// setting that it writes without dry, and writes nothing. A request
 // that changes nothing writes nothing. The workers get the change when
 // each is idle.
 func PutPackages(ctx context.Context, a *fw.Agent, name string, req PackagesRequest, dry bool) (Packages, error) {

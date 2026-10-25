@@ -86,7 +86,7 @@ const (
 // FromEnv, the name of a variable of the front, so the file holds no
 // secret. Egress is spec.egress of each Task, Resources its resources,
 // and Files the extra files of its Workspace. Packages turns the packages
-// of the workers on and names them (packages.go); the overlay of the pool
+// of the workers on and names them (packages.go). The overlay of the pool
 // wins over it. FW is the fw.yaml of the workers: the agents, the policy,
 // the model, and the providers.
 //
