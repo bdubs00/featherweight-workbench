@@ -13,6 +13,10 @@ package web
 // to, and the redirect URI. The cookie lasts 10 minutes, is HttpOnly and
 // SameSite=Lax, has the path /ui, and is Secure on https. No token, code,
 // verifier, or secret enters a log line or an error message.
+//
+// A refresh token of the issuer keeps the sign-in alive. The callback puts
+// it in a second, encrypted cookie, and the page trades it for a new token
+// at /ui/refresh before its token expires (refresh.go).
 
 import (
 	"context"
@@ -60,6 +64,7 @@ const (
 	maxNextBytes  = 1024
 	maxIssuerDoc  = 1 << 20 // the largest discovery document or token answer
 	tokenStorage  = "fw.token"
+	scopeOffline  = "offline_access"
 )
 
 // signin is the browser sign-in of one agent.
@@ -89,6 +94,7 @@ type discoveryDoc struct {
 	AuthorizationEndpoint string   `json:"authorization_endpoint"`
 	TokenEndpoint         string   `json:"token_endpoint"`
 	AuthMethods           []string `json:"token_endpoint_auth_methods_supported"`
+	Scopes                []string `json:"scopes_supported"`
 }
 
 // signinState is the content of the sign-in cookie.
@@ -680,7 +686,7 @@ func (s *server) signinStart(w http.ResponseWriter, r *http.Request) {
 	q.Set("response_type", "code")
 	q.Set("client_id", si.clientID)
 	q.Set("redirect_uri", st.Redirect)
-	q.Set("scope", strings.Join(si.scopes, " "))
+	q.Set("scope", strings.Join(si.scopesFor(doc), " "))
 	q.Set("state", st.State)
 	q.Set("nonce", st.Nonce)
 	q.Set("code_challenge", pkceChallenge(st.Verifier))
@@ -689,6 +695,17 @@ func (s *server) signinStart(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, si.cookie(r, si.seal(st), int(signinTTL/time.Second)))
 	w.Header().Set("Location", target.String())
 	w.WriteHeader(http.StatusFound)
+}
+
+// scopesFor returns the scopes of an authorization request. It adds
+// offline_access when the issuer lists it, so the issuer can give a
+// refresh token that keeps the sign-in alive (OpenID Connect Core 1.0,
+// section 11). An issuer that does not list it gets no such request.
+func (si *signin) scopesFor(doc *discoveryDoc) []string {
+	if !slices.Contains(doc.Scopes, scopeOffline) || slices.Contains(si.scopes, scopeOffline) {
+		return si.scopes
+	}
+	return append(slices.Clip(si.scopes), scopeOffline)
 }
 
 // oauthErrorCode matches an error code of the issuer that a page can show.
@@ -776,15 +793,21 @@ func (s *server) signinCallback(w http.ResponseWriter, r *http.Request) {
 		signinFailed(w, http.StatusForbidden, "This server does not accept the token of the sign-in service.")
 		return
 	}
-	log.Info("native: browser sign-in succeeded", "subject", p.Subject, "token", kind)
+	s.keepRefresh(w, r, tok, p.Subject, 0)
+	log.Info("native: browser sign-in succeeded", "subject", p.Subject, "token", kind, "renewable", tok.RefreshToken != "")
 	signinDone(w, token, st.Next)
 }
 
-// tokenAnswer is the answer of the token endpoint.
+// tokenAnswer is the answer of the token endpoint. refresh_expires_in is
+// the name that Keycloak uses, refresh_token_expires_in the name of others.
 type tokenAnswer struct {
-	AccessToken string `json:"access_token"`
-	IDToken     string `json:"id_token"`
-	Error       string `json:"error"`
+	AccessToken           string `json:"access_token"`
+	IDToken               string `json:"id_token"`
+	ExpiresIn             any    `json:"expires_in"`
+	RefreshToken          string `json:"refresh_token"`
+	RefreshExpiresIn      any    `json:"refresh_expires_in"`
+	RefreshTokenExpiresIn any    `json:"refresh_token_expires_in"`
+	Error                 string `json:"error"`
 }
 
 // tokenError is a refusal of the token endpoint: the status and the OAuth
@@ -802,16 +825,21 @@ func (e *tokenError) Error() string {
 var errNoClientSecret = errors.New("native: the client secret is not readable")
 
 // exchange trades the code for tokens (RFC 6749 section 4.1.3) with the
-// PKCE verifier. A confidential client authenticates with HTTP Basic, or
-// with client_secret in the form when the issuer lists only
-// client_secret_post. A public client sends client_id in the form.
+// PKCE verifier.
 func (si *signin) exchange(ctx context.Context, doc *discoveryDoc, code string, st signinState) (tokenAnswer, error) {
-	form := url.Values{
+	return si.tokenRequest(ctx, doc, url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
 		"redirect_uri":  {st.Redirect},
 		"code_verifier": {st.Verifier},
-	}
+	})
+}
+
+// tokenRequest sends a form to the token endpoint and returns the answer.
+// A confidential client authenticates with HTTP Basic, or with
+// client_secret in the form when the issuer lists only
+// client_secret_post. A public client sends client_id in the form.
+func (si *signin) tokenRequest(ctx context.Context, doc *discoveryDoc, form url.Values) (tokenAnswer, error) {
 	var secret string
 	if si.secret != "" {
 		if si.secrets == nil {

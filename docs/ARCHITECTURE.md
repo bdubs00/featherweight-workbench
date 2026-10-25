@@ -135,7 +135,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 |---|---|---|
 | `/mcp` | MCP server over Streamable HTTP, POST only | default on |
 | `/ui` | Dashboard page (section 6.2) | always |
-| `/ui/signin`, `/ui/callback` | Browser sign-in (section 5) | with `auth.oidc.clientId` |
+| `/ui/signin`, `/ui/callback`, `/ui/refresh` | Browser sign-in and its renewal (section 5) | with `auth.oidc.clientId` |
 | `/ui/connect/callback` | The end of a connection (section 2.1) | always |
 | `/.well-known/oauth-protected-resource` | Protected resource metadata (RFC 9728) | when `auth.mode` includes `oidc` |
 | `/v1/sources/{name}` | Webhook sources, POST only, with the credential of each source (section 13) | with a webhook source in `workbench.sources` |
@@ -667,12 +667,12 @@ A person signs in to the dashboard at `/ui` through the OpenID Connect issuer of
 
 | Key | Variable | Meaning |
 |---|---|---|
-| `auth.oidc.clientId` | `FW_AUTH_OIDC_CLIENT_ID` | The client id at the issuer. A value turns browser sign-in on and adds the routes `GET /ui/signin` and `GET /ui/callback`. |
+| `auth.oidc.clientId` | `FW_AUTH_OIDC_CLIENT_ID` | The client id at the issuer. A value turns browser sign-in on and adds the routes `GET /ui/signin`, `GET /ui/callback`, `POST /ui/refresh`, and `DELETE /ui/refresh`. |
 | `auth.oidc.clientSecret` | `FW_AUTH_OIDC_CLIENT_SECRET` | The `Secrets` name of the client secret, such as `FW_OIDC_CLIENT_SECRET`. Empty means a public client. |
 | `auth.oidc.redirectUrl` | `FW_AUTH_OIDC_REDIRECT_URL` | The callback address that the issuer knows |
 | `workbench.signin` | `FW_WORKBENCH_SIGNIN` | `on` or `off`. The default is `on`. With `off`, the client id serves the connections of people alone (the kernel architecture, section 7.11): the two routes do not exist, a 401 names no sign-in, and the page shows its token form. A deployment whose issuer has no login page for a browser sets it off. |
 
-The sign-in also reads `auth.oidc.issuer`, `auth.oidc.scopes`, `auth.oidc.ca`, and `auth.oidc.insecure`. The scope of the request is `openid` plus `auth.oidc.scopes`. Without `auth.oidc.redirectUrl`, the redirect URI is `/ui/callback` on the public address of the page, from `mcp.auth.audience` or `a2a.url`. Without those, it is `/ui/callback` on the address of the request, as a proxy forwards it in `X-Forwarded-Proto` and `X-Forwarded-Host`. Only the first value of each header counts. Register that address at the issuer. A connection (the kernel architecture, section 7.11) returns to `/ui/connect/callback` on the origin of `auth.oidc.redirectUrl`, else on the origin of the request. Register that address too.
+The sign-in also reads `auth.oidc.issuer`, `auth.oidc.scopes`, `auth.oidc.ca`, and `auth.oidc.insecure`. The scope of the request is `openid` plus `auth.oidc.scopes`. If the discovery document of the issuer lists `offline_access` in `scopes_supported`, the request also asks for `offline_access`. The issuer can then give a refresh token (section 5.1). Without `auth.oidc.redirectUrl`, the redirect URI is `/ui/callback` on the public address of the page, from `mcp.auth.audience` or `a2a.url`. Without those, it is `/ui/callback` on the address of the request, as a proxy forwards it in `X-Forwarded-Proto` and `X-Forwarded-Host`. Only the first value of each header counts. Register that address at the issuer. A connection (the kernel architecture, section 7.11) returns to `/ui/connect/callback` on the origin of `auth.oidc.redirectUrl`, else on the origin of the request. Register that address too.
 
 A configuration that cannot work stops the start. These are the cases:
 
@@ -694,7 +694,7 @@ The flow has these steps:
 
 Every answer of `/ui/callback` deletes the cookie. A failure answers a plain page that says in one sentence what failed. No token, code, verifier, or secret enters a log line or an error message. When browser sign-in is on, every 401 problem document of the native API has the member `"signin": "/ui/signin"`. The content security policy of `GET /ui` allows the move to `/ui/signin` and still blocks forms.
 
-The page keeps one token, the access token or else the ID token, in the `sessionStorage` of its tab. It sends that token as a bearer token to `/v1`. The callback hands the page no refresh token, and no cookie holds the token. Pasting a token stays as the path for a developer.
+The page keeps one token, the access token or else the ID token, in the `sessionStorage` of its tab. It sends that token as a bearer token to `/v1`. No cookie holds that token. Pasting a token stays as the path for a developer.
 
 The key that signs the cookie comes from the first source in this list:
 
@@ -706,6 +706,30 @@ The key that signs the cookie comes from the first source in this list:
 If the key comes from the key file and the agent likely has replicas, the log holds one warning at start. Replicas are likely with a fleet, with a ledger driver other than `mem` or `file`, or with a bus driver other than `mem`. Each replica then has its own home and so its own key file.
 
 The key is an HMAC-SHA256 of its source with a label for this purpose. It therefore never equals the MCP state key. Replicas behind one address without session affinity set `FW_MCP_STATE_KEY` to the same value. Otherwise a callback that reaches another replica fails. A confidential client works without it, because every replica has the client secret.
+
+### 5.1 Renewal
+
+Some issuers give tokens with a short life. For example, Cloudflare Access gives tokens that last 5 minutes by default. A refresh token keeps such a sign-in alive. A refresh token is a second token that gets a new token from the issuer without a new login. The issuer gives one only to a client with that permission. At Cloudflare Access, you turn on "Refresh tokens" in the advanced settings of the application.
+
+If the token answer of the callback holds a refresh token, the callback keeps it in the cookie `fw_refresh`. The page never sees the refresh token. The cookie has these properties:
+
+- It holds the refresh token, the subject of the sign-in, and the end of the refresh token. AES-GCM encrypts it, with a key that comes from the key of the sign-in cookie. Every replica that shares that key can open it.
+- It is HttpOnly, SameSite=Strict, and limited to the path `/ui/refresh`. Over https, it is also Secure.
+- The issuer can give the life of the refresh token in `refresh_expires_in` or `refresh_token_expires_in`. Then the cookie lasts as long as the refresh token. Otherwise it lasts as long as the browser session.
+- A sign-in without a refresh token deletes it, so that a browser never renews as the person of an older sign-in.
+
+`POST /ui/refresh` trades the refresh token for new tokens at the token endpoint, with the same client authentication as the callback. The route keeps the first token that the `Authn` of the agent accepts, as step 7 does. That token must name the subject of the cookie. The answer is `{"token": "...", "expiresAt": "..."}`. `expiresAt` is the `exp` claim of a JWT, or else `expires_in` for an access token. Without both, the answer has no `expiresAt`. If the issuer rotates the refresh token, the answer replaces the cookie. The route answers these failures:
+
+| Case | Status | Cookie |
+|---|---|---|
+| `Sec-Fetch-Site` names another site. Without that header, `Origin` names another origin. | 403 | stays |
+| The browser has no cookie, or the cookie does not open or ended | 401 with `signin` | deleted |
+| The issuer refuses the refresh token, or the renewed token names another subject or fails the `Authn` | 401 with `signin` | deleted |
+| The issuer does not answer | 502 | stays |
+
+`DELETE /ui/refresh` deletes the cookie. The page calls it at Sign out. No refresh token enters a log line or an answer.
+
+The page renews its token one minute before the `exp` claim of the token. A token that lives less than two minutes renews at half of its life. A browser slows the timers of a hidden tab. At the return of its tab into view, the page therefore plans the renewal again. After a 401, the page renews once and repeats the request. Calls at the same time share one renewal. Only a 401 that stays after the renewal shows the sign-in. A new tab with no token in its `sessionStorage` also gets one this way, without a move to the issuer. The page at `/ui` renews after a 401 only.
 
 ## 6. Managing agents
 

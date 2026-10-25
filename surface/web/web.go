@@ -80,6 +80,10 @@ func (s *server) mount() error {
 		s.k.SetSigninPath(signinPath)
 		s.k.HandlePublic("GET /ui/signin", s.signinStart)
 		s.k.HandlePublic("GET /ui/callback", s.signinCallback)
+		// The page renews its token here, and forgets the renewal when the
+		// person signs out.
+		s.k.HandlePublic("POST "+refreshPath, s.signinRenew)
+		s.k.HandlePublic("DELETE "+refreshPath, s.signinForget)
 	}
 	// The end of a connection: the authorization server sends the person
 	// here. The connect cookie says who started it.

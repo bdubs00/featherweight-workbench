@@ -39,6 +39,8 @@ var parityRoutes = map[string]parity{
 	"POST /v1/runs/{id}/approvals/{approval}/rule":   {tool: "approve"},
 	"POST /v1/connections/{server}":                  {why: "it starts a sign-in at the service in the browser of the person; the tool connections gives the address that starts it"},
 	"DELETE /v1/connections/{server}":                {tool: "disconnect"},
+	"POST /ui/refresh":                               {why: "the page renews the token of a browser sign-in with the refresh cookie of the browser; an MCP client renews its own token at its issuer"},
+	"DELETE /ui/refresh":                             {why: "the page forgets the refresh cookie of the browser at a sign-out; an MCP client holds no such cookie"},
 	"POST /v1/tokens":                                {why: "the broker of the tokens of a connection: a worker calls it for a run with the static token, and no person or agent does"},
 	"POST /v1/tokens/reject":                         {why: "the broker of the tokens of a connection: a worker calls it for a run with the static token, and no person or agent does"},
 	"POST /v1/tokens/forget":                         {why: "the broker of the tokens of a connection: a worker calls it for a run with the static token, and no person or agent does"},

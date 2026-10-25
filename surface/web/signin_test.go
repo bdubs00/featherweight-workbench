@@ -42,6 +42,13 @@ type fakeIssuer struct {
 	access      string   // the access token of the answer
 	idSubject   string   // the subject of the ID token, or "" for no ID token
 	status      int      // the status of the token endpoint when not 0
+	scopes      []string // scopes_supported, or nil for none
+	refresh     string   // the refresh token that the issuer gives and accepts, or ""
+	refreshLife int      // refresh_expires_in of the answers, or 0 for none
+	rotate      string   // the refresh token that replaces refresh at a renewal, or ""
+	renewAs     string   // the subject of the ID token of a renewal; "" keeps idSubject
+	renewAccess string   // the access token of a renewal
+	renewStatus int      // the status of a renewal when not 0
 	forms       []url.Values
 	auths       []string // the Authorization headers at the token endpoint
 }
@@ -61,6 +68,9 @@ func newFakeIssuer(t *testing.T) *fakeIssuer {
 		if is.methods != nil {
 			doc["token_endpoint_auth_methods_supported"] = is.methods
 		}
+		if is.scopes != nil {
+			doc["scopes_supported"] = is.scopes
+		}
 		is.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(doc)
@@ -73,6 +83,10 @@ func newFakeIssuer(t *testing.T) *fakeIssuer {
 		is.auths = append(is.auths, r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
 		f := r.PostForm
+		if f.Get("grant_type") == "refresh_token" {
+			is.renew(w, f)
+			return
+		}
 		if is.status != 0 {
 			w.WriteHeader(is.status)
 			_, _ = io.WriteString(w, `{"error":"invalid_grant","error_description":"the code is used"}`)
@@ -88,12 +102,51 @@ func newFakeIssuer(t *testing.T) *fakeIssuer {
 		if is.idSubject != "" {
 			ans["id_token"] = idToken(is.idSubject, is.nonce)
 		}
+		if is.refresh != "" {
+			ans["refresh_token"] = is.refresh
+		}
+		if is.refreshLife > 0 {
+			ans["refresh_expires_in"] = is.refreshLife
+		}
 		_ = json.NewEncoder(w).Encode(ans)
 	})
 	is.srv = httptest.NewServer(mux)
 	t.Cleanup(is.srv.Close)
 	return is
 }
+
+// renew answers a refresh grant: an ID token that expires in five minutes,
+// and the rotated refresh token when rotate is set. The caller holds mu.
+func (is *fakeIssuer) renew(w http.ResponseWriter, f url.Values) {
+	if is.renewStatus != 0 {
+		w.WriteHeader(is.renewStatus)
+		_, _ = io.WriteString(w, `{"error":"temporarily_unavailable"}`)
+		return
+	}
+	if is.refresh == "" || f.Get("refresh_token") != is.refresh {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":"invalid_grant"}`)
+		return
+	}
+	sub := is.renewAs
+	if sub == "" {
+		sub = is.idSubject
+	}
+	enc := base64.RawURLEncoding.EncodeToString
+	claims, _ := json.Marshal(map[string]any{"sub": sub, "exp": renewedExp})
+	ans := map[string]any{"token_type": "Bearer", "expires_in": 300, "id_token": enc([]byte(`{"alg":"RS256"}`)) + "." + enc(claims) + ".c2ln"}
+	if is.renewAccess != "" {
+		ans["access_token"] = is.renewAccess
+	}
+	if is.rotate != "" {
+		is.refresh, is.rotate = is.rotate, ""
+		ans["refresh_token"] = is.refresh
+	}
+	_ = json.NewEncoder(w).Encode(ans)
+}
+
+// renewedExp is the exp claim of the ID token of a renewal.
+const renewedExp = 1893456000 // 2030-01-01T00:00:00Z
 
 // idToken is an ID token with a subject and a nonce. Its signature is
 // fake: the test Authn checks the payload only.

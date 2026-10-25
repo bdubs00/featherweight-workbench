@@ -751,7 +751,16 @@ const native = (() => {
   const KEY = 'fw.token';
   const token = () => { try { return sessionStorage.getItem(KEY) || ''; } catch (e) { return ''; } };
   const auth = () => token() ? {Authorization: 'Bearer ' + token()} : {};
-  async function req(method, path, body) {
+  // renew trades the refresh cookie of a browser sign-in for a new token,
+  // so a token that expires does not end the session. Calls at the same
+  // time share one request. A sign-out ends the renewals of this page.
+  let renewing = null, renewOn = true;
+  const renew = () => !renewOn ? Promise.resolve(false) : renewing || (renewing = fetch('/ui/refresh', {method: 'POST', headers: {Accept: 'application/json'}})
+    .then(r => r.ok ? r.json() : null)
+    .then(v => { if (!renewOn || !v || typeof v.token !== 'string' || !v.token) return false; try { sessionStorage.setItem(KEY, v.token); } catch (e) { return false; } return true; })
+    .catch(() => false)
+    .finally(() => { renewing = null; }));
+  async function req(method, path, body, renewed) {
     const headers = Object.assign({Accept: 'application/json'}, auth());
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const res = await fetch(path, {method, headers, body: body === undefined ? undefined : JSON.stringify(body)});
@@ -759,7 +768,10 @@ const native = (() => {
     const raw = await res.text();
     let data = null;
     try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
-    if (res.status === 401) throw unauthorized(data);
+    if (res.status === 401) {
+      if (!renewed && await renew()) return req(method, path, body, true);
+      throw unauthorized(data);
+    }
     if (!res.ok) { const e = new Error((data && data.detail) || raw || res.status + ' ' + res.statusText); e.status = res.status; throw e; }
     return data;
   }
@@ -778,6 +790,8 @@ const native = (() => {
   return {
     token, setToken: t => { try { sessionStorage.setItem(KEY, t); } catch (e) { /* no storage */ } },
     clearToken: () => { try { sessionStorage.removeItem(KEY); } catch (e) { /* no storage */ } },
+    // forgetSignin ends the renewals and deletes the refresh cookie.
+    forgetSignin: () => { renewOn = false; return fetch('/ui/refresh', {method: 'DELETE'}).catch(() => null); },
     whoami: () => req('GET', '/v1/whoami'),
     home: () => req('GET', '/v1/home'),
     agents: () => req('GET', '/v1/agents').then(r => r.agents || []),
@@ -2250,9 +2264,10 @@ const actions = {
     agentsChanged();
     await fillDraft(card);
   },
-  // Sign out forgets the token. The server then answers 401, and the page
-  // shows the sign-in screen that the server offers.
-  signout: () => { native.clearToken(); S.me = null; S.next = location.hash; boot().catch(fail); },
+  // Sign out forgets the token and the renewal of the browser sign-in. The
+  // server then answers 401, and the page shows the sign-in screen that the
+  // server offers.
+  signout: () => { native.forgetSignin(); native.clearToken(); S.me = null; S.next = location.hash; boot().catch(fail); },
   cancel: async (d, el) => { el.disabled = true; await api.cancel(d.id); if (S.run) { S.run.idle = false; S.run.poll().catch(() => {}); } },
   delete: async (d, el) => {
     if (!el.dataset.armed) { el.dataset.armed = '1'; $('.t', el).textContent = 'Tap again to delete ' + d.name; return; }
