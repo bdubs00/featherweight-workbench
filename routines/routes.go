@@ -21,19 +21,33 @@ type routes struct {
 	a *fw.Agent
 }
 
-// mount is the extension of the native surface. A process without
-// routines mounts no route.
+// mount is the extension of the native surface. It mounts every route,
+// and each request reads whether the process keeps routines at that
+// moment, as the settings of bossmode read it (routines: true), because
+// the surface can mount before the service of the routines opens its
+// store. While the routines are off, GET /v1/routines answers 200 with
+// off true and the reason, so a page reads the state and logs no failed
+// request, and the other routes answer 404 with the reason.
 func mount(k *native.Kit) error {
-	if Of(k.Agent()) == nil {
-		return nil
-	}
 	rt := &routes{k: k, a: k.Agent()}
 	k.Handle("GET /v1/routines", rt.list)
-	k.Handle("GET /v1/routines/summary", rt.summary)
-	k.Handle("GET /v1/routines/{agent}/{name}", rt.get)
-	k.Handle("PUT /v1/routines/{agent}/{name}", rt.put)
-	k.Handle("POST /v1/routines/{agent}/{name}/standing", rt.standing)
+	k.Handle("GET /v1/routines/summary", rt.on(rt.summary))
+	k.Handle("GET /v1/routines/{agent}/{name}", rt.on(rt.get))
+	k.Handle("PUT /v1/routines/{agent}/{name}", rt.on(rt.put))
+	k.Handle("POST /v1/routines/{agent}/{name}/standing", rt.on(rt.standing))
 	return nil
+}
+
+// on answers a request with h while the process keeps routines, and with
+// 404 and the reason while they are off.
+func (rt *routes) on(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if Of(rt.a) == nil {
+			native.WriteProblem(w, r, http.StatusNotFound, offReason(rt.a.Config()))
+			return
+		}
+		h(w, r)
+	}
 }
 
 // moveProblem is the problem document of a move that the table forbids,
@@ -94,17 +108,31 @@ func agentParam(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return agent, true
 }
 
+// offReason says in words why the routines of the configuration cfg are
+// off, for a person who reads the place Routines of the page.
+func offReason(cfg *fw.Config) string {
+	if c, err := Load(cfg); err == nil && !c.On() {
+		return "Routines are off on this server. An admin turns them on with the setting workbench.routines.enabled."
+	}
+	return "Routines are off on this server, because its bus keeps no store for them. An admin runs the server with the bus nats or mem."
+}
+
 // list answers GET /v1/routines with the routines of every agent that the
 // caller can view, or with ?agent= the routines of that agent, without
-// evidence, the newest change first.
+// evidence, the newest change first, and off false. While the process
+// keeps no routines, it answers no routine, off true, and the reason.
 func (rt *routes) list(w http.ResponseWriter, r *http.Request) {
+	if Of(rt.a) == nil {
+		native.WriteJSON(w, http.StatusOK, map[string]any{"routines": []Record{}, "off": true, "reason": offReason(rt.a.Config())})
+		return
+	}
 	ctx, _, _ := manager.OnBehalf(r.Context())
 	list, err := visible(ctx, rt.a, Of(rt.a), strings.TrimSpace(r.URL.Query().Get("agent")))
 	if err != nil {
 		rt.fail(w, r, err)
 		return
 	}
-	native.WriteJSON(w, http.StatusOK, map[string]any{"routines": list})
+	native.WriteJSON(w, http.StatusOK, map[string]any{"routines": list, "off": false})
 }
 
 // get answers GET /v1/routines/{agent}/{name} with the record and its

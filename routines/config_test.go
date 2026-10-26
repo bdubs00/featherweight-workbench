@@ -2,6 +2,7 @@ package routines
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -87,9 +88,10 @@ func TestRoutinesOff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("GET /v1/routines = %d; want 404", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `"off":true`) {
+		t.Fatalf("GET /v1/routines = %d %s; want 200 with off", resp.StatusCode, b)
 	}
 	for _, c := range []*fw.Config{nil, cfg} {
 		var got map[string][]fw.Routine

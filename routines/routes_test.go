@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/pages"
 )
 
@@ -405,5 +407,74 @@ func TestPutTool(t *testing.T) {
 	broken.Steps[0].Tool = ""
 	if res := call(t, alice, ToolPut, args(func(a map[string]any) { a["routine"] = broken })); !res.IsError || !strings.Contains(textOf(res), "tool is empty") {
 		t.Fatalf("a body that does not fit = %s", textOf(res))
+	}
+}
+
+// A process whose configuration turns the routines off answers the list
+// with 200, no routine, off, and the reason in words, so the page shows
+// the state and logs no failed request. The other routes stay away.
+func TestRoutesOff(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "")
+	t.Setenv(EnvEnabled, "off")
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	cfg.Access.Default = "closed"
+	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(people{}),
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithSurfaces(native.New()),
+		fw.WithServices(Start), fw.WithLogger(quiet()))
+	if err != nil {
+		t.Fatalf("fw.New: %v", err)
+	}
+	h, err := a.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	t.Cleanup(func() {
+		srv.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		a.Close(ctx)
+	})
+	if Of(a) != nil {
+		t.Fatal("the routines are on")
+	}
+	resp, b := send(t, http.MethodGet, srv.URL+"/v1/routines", "alice", "")
+	var got struct {
+		Routines []Record `json:"routines"`
+		Off      bool     `json:"off"`
+		Reason   string   `json:"reason"`
+	}
+	decodeJSON(t, b, &got)
+	if resp.StatusCode != http.StatusOK || got.Routines == nil || len(got.Routines) != 0 || !got.Off ||
+		got.Reason != "Routines are off on this server. An admin turns them on with the setting workbench.routines.enabled." {
+		t.Fatalf("GET /v1/routines = %d %s", resp.StatusCode, b)
+	}
+	if resp, _ := send(t, http.MethodGet, srv.URL+"/v1/routines", "", ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a list without a token = %d", resp.StatusCode)
+	}
+	if resp, b := send(t, http.MethodGet, srv.URL+"/v1/routines/triage/acknowledge", "alice", ""); resp.StatusCode != http.StatusNotFound || !strings.Contains(b, "Routines are off on this server.") {
+		t.Fatalf("a routine of a process without routines = %d %s", resp.StatusCode, b)
+	}
+}
+
+// Each request reads whether the process keeps routines at that moment,
+// as the settings of bossmode do, so a surface that mounted before the
+// store opened still serves the routines once it is open.
+func TestRoutesFollowTheStore(t *testing.T) {
+	fr := newFront(t, nil)
+	s := Of(fr.a)
+	Attach(fr.a, nil)
+	resp, b := send(t, http.MethodGet, fr.url+"/v1/routines", "alice", "")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(b, `"off":true`) {
+		t.Fatalf("a list while the store is not open = %d %s", resp.StatusCode, b)
+	}
+	if resp, _ := send(t, http.MethodGet, fr.url+"/v1/routines/summary?agent=triage", "alice", ""); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("a summary while the store is not open = %d", resp.StatusCode)
+	}
+	Attach(fr.a, s)
+	resp, b = send(t, http.MethodGet, fr.url+"/v1/routines", "alice", "")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(b, `"off":false`) {
+		t.Fatalf("a list once the store is open = %d %s", resp.StatusCode, b)
 	}
 }
