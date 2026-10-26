@@ -699,6 +699,16 @@ Limits:
 - On the bus `mem`, the archive holds only the events since the start of the process.
 - A run that a worker started while its egress did not reach the bus is not in the stream, and so not in the archive.
 
+### 4.19 Continue a conversation
+
+A conversation of a replaced worker is read-only (section 4.18). A person who writes in it starts a new run that continues it: `POST /v1/runs` with the field `continues`, the id of the run of the earlier conversation, beside `input` and the other fields of a start, with or without `?member=`. The tool `run` takes `continues` too. The front reads the earlier run for the caller from this process, from the member that holds it, or from the archive, so the caller needs the view of that run. It then changes the body before the kernel of this process or of the member reads it, because the kernel knows no `continues`:
+
+- `input` gets a summary of the earlier conversation in front of the message of the person, and an empty line between them. The summary starts with the line "Earlier in this conversation:". Each line after it is one message, "The person: ..." or "You: ...", with its spaces folded. It holds at most the last six messages of the person and of the agent, at most 2,000 characters in all, its first line included. When the newest message alone is longer, it keeps its start and ends with "…". A message of the person that starts with such a summary counts without it, so the summaries of a chain of conversations never nest.
+- `title` becomes the title of the earlier run when the body names none, so the new run does not take its title from the summary.
+- `metadata` gets `workbench.continues` with the id of the earlier run (`fleet.MetaContinues`).
+
+A body without `continues` goes on as it came. A `continues` that is no text answers 400, a body without `input` answers 400, and a run that the caller cannot view answers 404 with "continues names no run that you can view". The earlier run stays as it was: the archive keeps it, and nothing links the two runs but the metadata of the new one.
+
 ## 5. Browser sign-in
 
 A person signs in to the dashboard at `/ui` through the OpenID Connect issuer of `auth.oidc`. Three keys turn the sign-in on and shape it:

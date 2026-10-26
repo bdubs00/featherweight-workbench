@@ -10,6 +10,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -603,6 +604,29 @@ func TestRunMetadata(t *testing.T) {
 	res = callTool(t, ctx, cs, toolRun, map[string]any{"input": "hi", "metadata": map[string]string{"": "x"}})
 	if !res.IsError || !strings.Contains(textOf(res), "metadata key") {
 		t.Fatalf("an empty metadata key = %s", textOf(res))
+	}
+}
+
+// run with continues starts a new run of an earlier conversation, as POST
+// /v1/runs does: the summary in front of input, the title of the earlier
+// run, and the metadata workbench.continues. An unknown run is no error of
+// the server.
+func TestRunContinues(t *testing.T) {
+	ctx := testCtx(t)
+	a := newAgent(t, newScript(endTurn("Two hosts are down."), endTurn("ok")).model())
+	cs := mustConnect(t, ctx, serveAgent(t, a, nil).URL, clientSetup{})
+	first := runOf(t, callTool(t, ctx, cs, toolRun, map[string]any{"input": "Which hosts are down?", "title": "Down hosts"}))
+	res := callTool(t, ctx, cs, toolRun, map[string]any{"input": "And now?", "continues": first.ID})
+	if res.IsError {
+		t.Fatal(textOf(res))
+	}
+	r := runOf(t, res)
+	if want := fleet.SummaryHead + "\nThe person: Which hosts are down?\nYou: Two hosts are down.\n\nAnd now?"; r.Input != want || r.Title != "Down hosts" || r.Metadata[fleet.MetaContinues] != first.ID {
+		t.Fatalf("the new run = input %q, title %q, metadata %v", r.Input, r.Title, r.Metadata)
+	}
+	res = callTool(t, ctx, cs, toolRun, map[string]any{"input": "x", "continues": "01NONE"})
+	if !res.IsError || !strings.Contains(textOf(res), "continues names no run that you can view") {
+		t.Fatalf("an unknown run = %s", textOf(res))
 	}
 }
 

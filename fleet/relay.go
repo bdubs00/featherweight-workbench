@@ -150,7 +150,12 @@ type RestView interface {
 // member that owns the run, when another member owns it, unless the view
 // answers it (ViewRoutes). POST /v1/runs with the query parameter member
 // goes to that member. For a person, the front decides first (forPerson).
+// A body of POST /v1/runs with continues gets the summary of the earlier
+// conversation first, wherever the run starts (continues.go).
 func (rl *Relay) Take(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/runs" && !rl.takeContinues(w, r) {
+		return true // the problem of a body with continues (continues.go)
+	}
 	if id := r.PathValue("id"); id != "" {
 		run, ok := rl.owned(w, r, id)
 		switch {

@@ -140,6 +140,8 @@ func runSchema(a *fw.Agent) json.RawMessage {
 		props["member"] = map[string]any{"type": "string",
 			"description": "The fleet member that runs the agent; the fleet tool lists the members and their agents. Empty, or " + f.Name() + ", runs it here. A run on another member never waits: the call returns the run object at once."}
 	}
+	schema["properties"].(map[string]any)["continues"] = map[string]any{"type": "string",
+		"description": "The id of the run of an earlier conversation that you can view, such as one whose worker was replaced. The new run gets a summary of it in front of input, its title when title is empty, and the metadata " + fleet.MetaContinues + "."}
 	b, _ := json.Marshal(schema)
 	return b
 }
@@ -236,6 +238,7 @@ type runArgs struct {
 	Member       string            `json:"member,omitempty"`
 	Files        []fileArg         `json:"files,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
+	Continues    string            `json:"continues,omitempty"`
 }
 
 // fileArg is one attachment of a run or a message. JSON holds Data in
@@ -486,6 +489,21 @@ func (s *server) run(ctx context.Context, req *sdk.CallToolRequest, in runArgs) 
 	if acting {
 		// The run names the actor that started it (section 19).
 		in.Metadata = withVia(in.Metadata, act)
+	}
+	if id := strings.TrimSpace(in.Continues); id != "" {
+		// A new run of an earlier conversation, as POST /v1/runs with
+		// continues starts it (fleet.Continue).
+		if strings.TrimSpace(in.Input) == "" {
+			return errorResult("Invalid request: the argument input is required and must not be empty."), nil, nil
+		}
+		c, err := fleet.Continue(ctx, s.a, id)
+		if err != nil {
+			if errors.Is(err, fw.ErrRunNotFound) || errors.Is(err, fw.ErrForbidden) {
+				return errorResult("Not found: continues names no run that you can view."), nil, nil
+			}
+			return failResult(err), nil, nil
+		}
+		in.Input, in.Title, in.Metadata = c.Continued(id, in.Input, in.Title, in.Metadata)
 	}
 	md, err := runMetadata(in)
 	if err != nil {
