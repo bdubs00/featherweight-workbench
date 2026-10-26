@@ -170,6 +170,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `DELETE /v1/pages/{path}` | Remove a page. Its history stays. |
 | `GET /v1/pages/{path}/history` | The versions of a page with who and when. |
 | `GET /v1/pages/search?q=` | The pages that hold every word of `q`, read up to 16 MB of text. |
+| `GET /v1/pages/removed` | The removed pages whose history the wiki keeps, the newest removal first. |
 | `GET /v1/faces` | The faces of the agents that the caller can view, each with `agent`, `displayName`, `tagline`, `hash`, and `custom` (section 16.3). |
 | `GET /v1/faces/{agent}` | The face of an agent as `image/svg+xml`: the stored face, else the identicon, with `ETag`. |
 | `PUT /v1/faces/{agent}` | Set the face: an SVG of at most 32 KB that passes the sanitizer, else 422. Needs `agent.edit` on the agent. Answers the entry. |
@@ -1945,6 +1946,7 @@ Other packages of the workbench use the wiki through Go. `pages.Of(a)` returns t
 | `DELETE /v1/pages/{path}` | Removes the page and answers 204. `If-Match` makes the removal a compare-and-swap. The history stays. |
 | `GET /v1/pages/{path}/history` | The versions of the page, newest first, as `{"path", "versions"}`. Each version has `version`, `hash`, `by`, `at`, `summary`, and `size`, and `title` and `run` when it has them. A removal has `deleted: true`, its time, and empty fields. |
 | `GET /v1/pages/search?q=` | The pages that hold every word of `q`. See below. |
+| `GET /v1/pages/removed` | `{"removed": [{"path", "title", "version", "removedAt"}]}`: the pages that were removed and whose history the wiki keeps, the newest removal first, at most 100. `title` and `version` are those of the newest version with a text, which `GET /v1/pages/{path}?version=` reads, so the page can restore it with a write. A page that came back is no removed page. It reads as `GET /v1/pages` does, and no tool calls it, because a removal is for a person on the page. |
 
 The routes stay apart from the pages. `search` is no page path, so `GET /v1/pages/search` is always the search. No page path ends with `history`, so a path that ends with `/history` names the history of the page before it: the page `notes/history.md` has its history at `/v1/pages/notes/history.md/history`. A write of the path `search` or of a path whose last part is `history` answers 400 with that reason. `GET /v1/pages/` answers as `GET /v1/pages`.
 

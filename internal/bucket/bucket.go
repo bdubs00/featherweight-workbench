@@ -681,6 +681,67 @@ type lister interface {
 	keysUnder(ctx context.Context, first string) ([]string, error)
 }
 
+// remover is a bucket that lists the keys whose newest entry is a removal.
+type remover interface {
+	removed(ctx context.Context) ([]Entry, error)
+}
+
+// Removed returns the keys of b whose newest entry is a removal, sorted,
+// each with the revision and the time of the removal and Deleted true. A
+// bucket that keeps no removals answers none.
+func Removed(ctx context.Context, b Bucket) ([]Entry, error) {
+	if r, ok := b.(remover); ok {
+		return r.removed(ctx)
+	}
+	return nil, nil
+}
+
+func (b *natsBucket) removed(ctx context.Context) ([]Entry, error) {
+	var out []Entry
+	err := b.read(ctx, func(kv jetstream.KeyValue) error {
+		w, err := kv.WatchAll(ctx, jetstream.MetaOnly())
+		if err != nil {
+			return err
+		}
+		defer func() { _ = w.Stop() }()
+		for {
+			var e jetstream.KeyValueEntry
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case e = <-w.Updates():
+			}
+			if e == nil {
+				return nil // the end of the entries that the bucket holds now
+			}
+			if e.Operation() != jetstream.KeyValuePut {
+				out = append(out, Entry{Key: e.Key(), Revision: e.Revision(), Created: e.Created(), Deleted: true})
+			}
+		}
+	})
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("bucket: list the removed keys of %s: %w", b.name, err)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out, nil
+}
+
+func (m *memBucket) removed(context.Context) ([]Entry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []Entry
+	for key := range m.keys {
+		if e, ok := m.last(key); ok && e.Deleted {
+			out = append(out, Entry{Key: key, Revision: e.Revision, Created: e.Created, Deleted: true})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out, nil
+}
+
 // KeysUnder returns the keys of b whose first token, the text before the
 // first dot, is first, sorted, without their values. A bucket of a NATS
 // server asks the server for those keys only, so a store that keeps the

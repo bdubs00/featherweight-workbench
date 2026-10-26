@@ -701,6 +701,56 @@ func (s *Store) forget(key string) {
 	s.mu.Unlock()
 }
 
+// MaxRemoved bounds the removed pages of one answer of Removed.
+const MaxRemoved = 100
+
+// RemovedPage is a page that a person or an agent removed and whose
+// history the wiki keeps: its path, the title and the version of its
+// newest version with a text, which a restore brings back, and the time
+// of the removal.
+type RemovedPage struct {
+	Path      string    `json:"path"`
+	Title     string    `json:"title,omitempty"`
+	Version   uint64    `json:"version"`
+	RemovedAt time.Time `json:"removedAt"`
+}
+
+// Removed returns the removed pages whose history the store keeps, the
+// newest removal first, at most MaxRemoved of them. A page that came back
+// is no removed page. A removed page whose history holds no version with a
+// text, because the bucket dropped its old versions, stays out.
+func (s *Store) Removed(ctx context.Context) ([]RemovedPage, error) {
+	gone, err := bucket.Removed(ctx, s.b)
+	if err != nil {
+		return nil, fmt.Errorf("pages: list the removed pages: %w", err)
+	}
+	sort.Slice(gone, func(i, j int) bool { return gone[i].Created.After(gone[j].Created) })
+	out := []RemovedPage{}
+	for _, e := range gone {
+		if len(out) == MaxRemoved {
+			break
+		}
+		p, ok := pathOf(e.Key)
+		if !ok || CheckPath(p) != nil || p == IndexPath {
+			continue
+		}
+		versions, err := s.History(ctx, p)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		for _, v := range versions {
+			if !v.Deleted {
+				out = append(out, RemovedPage{Path: p, Title: v.Title, Version: v.Version, RemovedAt: e.Created.UTC()})
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 // History returns the versions of the page at path that the store keeps,
 // newest first, with the removals.
 func (s *Store) History(ctx context.Context, p string) ([]Version, error) {

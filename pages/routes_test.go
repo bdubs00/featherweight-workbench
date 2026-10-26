@@ -180,6 +180,27 @@ func TestRoutes(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(out, `"deleted":true`) {
 		t.Fatalf("history after DELETE = %d %s", resp.StatusCode, out)
 	}
+	// The removed pages, for the fold of the page: the path, the title and
+	// the newest version with a text, and the time of the removal.
+	resp, out = do(t, "GET", base+"/removed", "bob", "")
+	var gone struct{ Removed []RemovedPage }
+	if err := json.Unmarshal([]byte(out), &gone); resp.StatusCode != http.StatusOK || err != nil || len(gone.Removed) != 1 ||
+		gone.Removed[0].Path != "notes/plan.md" || gone.Removed[0].Version != second.Version || gone.Removed[0].RemovedAt.IsZero() {
+		t.Fatalf("GET removed = %d %s", resp.StatusCode, out)
+	}
+	if resp, _ = do(t, "GET", base+"/notes/plan.md?version="+strconv.FormatUint(gone.Removed[0].Version, 10), "bob", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET of the version to restore = %d", resp.StatusCode)
+	}
+	// A page that comes back is no removed page.
+	if resp, out = do(t, "PUT", base+"/notes/plan.md", "alice", jsonText("# Plan\n\nBack.")); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("PUT back = %d %s", resp.StatusCode, out)
+	}
+	if resp, out = do(t, "GET", base+"/removed", "bob", ""); resp.StatusCode != http.StatusOK || out != `{"removed":[]}`+"\n" {
+		t.Fatalf("GET removed after the restore = %d %s", resp.StatusCode, out)
+	}
+	if resp, _ = do(t, "GET", base+"/removed", "carol", ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("GET removed of a caller without a role = %d", resp.StatusCode)
+	}
 }
 
 // Who reads and who writes: an operator of an agent reads, an owner

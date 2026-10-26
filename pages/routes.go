@@ -39,6 +39,7 @@ func mount(k *native.Kit) error {
 	rt := &routes{k: k, a: k.Agent()}
 	k.Handle("GET /v1/pages", rt.list)
 	k.Handle("GET /v1/pages/search", rt.search)
+	k.Handle("GET /v1/pages/removed", rt.removed)
 	k.Handle("GET /v1/pages/{path...}", rt.get)
 	k.Handle("PUT /v1/pages/{path...}", rt.put)
 	k.Handle("DELETE /v1/pages/{path...}", rt.remove)
@@ -121,6 +122,25 @@ func (rt *routes) list(w http.ResponseWriter, r *http.Request) {
 		infos = got
 	}
 	native.WriteJSON(w, http.StatusOK, map[string]any{"pages": infos})
+}
+
+// removed answers GET /v1/pages/removed with the pages that were removed
+// and whose history the wiki keeps, the newest removal first, as
+// {"removed": [{"path", "title", "version", "removedAt"}]}. version is the
+// newest version with a text, which GET /v1/pages/{path}?version= reads
+// for a restore. A path is never removed, because a page path ends with
+// .md.
+func (rt *routes) removed(w http.ResponseWriter, r *http.Request) {
+	s, ok := rt.store(w, r, false)
+	if !ok {
+		return
+	}
+	list, err := s.Removed(r.Context())
+	if err != nil {
+		rt.failStore(w, r, err)
+		return
+	}
+	native.WriteJSON(w, http.StatusOK, map[string]any{"removed": list})
 }
 
 // search answers GET /v1/pages/search?q=&limit= with the pages that hold
