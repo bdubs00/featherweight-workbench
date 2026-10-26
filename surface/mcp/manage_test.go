@@ -608,8 +608,8 @@ func TestRunMetadata(t *testing.T) {
 }
 
 // run with continues starts a new run of an earlier conversation, as POST
-// /v1/runs does: the summary in front of input, the title of the earlier
-// run, and the metadata workbench.continues. An unknown run is no error of
+// /v1/runs does: the summary in the instructions, the input as it was,
+// and the metadata workbench.continues. An unknown run is no error of
 // the server.
 func TestRunContinues(t *testing.T) {
 	ctx := testCtx(t)
@@ -621,8 +621,15 @@ func TestRunContinues(t *testing.T) {
 		t.Fatal(textOf(res))
 	}
 	r := runOf(t, res)
-	if want := fleet.SummaryHead + "\nThe person: Which hosts are down?\nYou: Two hosts are down.\n\nAnd now?"; r.Input != want || r.Title != "Down hosts" || r.Metadata[fleet.MetaContinues] != first.ID {
-		t.Fatalf("the new run = input %q, title %q, metadata %v", r.Input, r.Title, r.Metadata)
+	var queued fw.RunQueuedData
+	for e, err := range a.Ledger().Read(ctx, r.ID, 0) {
+		if err == nil && e.Type == fw.EvRunQueued {
+			_ = e.Decode(&queued)
+		}
+	}
+	want := fleet.ContinueNote + "\n\n" + fleet.SummaryHead + "\nThe person: Which hosts are down?\nYou: Two hosts are down."
+	if r.Input != "And now?" || queued.Instructions != want || r.Metadata[fleet.MetaContinues] != first.ID {
+		t.Fatalf("the new run = input %q, instructions %q, metadata %v", r.Input, queued.Instructions, r.Metadata)
 	}
 	res = callTool(t, ctx, cs, toolRun, map[string]any{"input": "x", "continues": "01NONE"})
 	if !res.IsError || !strings.Contains(textOf(res), "continues names no run that you can view") {

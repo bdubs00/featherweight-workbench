@@ -141,7 +141,7 @@ func runSchema(a *fw.Agent) json.RawMessage {
 			"description": "The fleet member that runs the agent; the fleet tool lists the members and their agents. Empty, or " + f.Name() + ", runs it here. A run on another member never waits: the call returns the run object at once."}
 	}
 	schema["properties"].(map[string]any)["continues"] = map[string]any{"type": "string",
-		"description": "The id of the run of an earlier conversation that you can view, such as one whose worker was replaced. The new run gets a summary of it in front of input, its title when title is empty, and the metadata " + fleet.MetaContinues + "."}
+		"description": "The id of the run of an earlier conversation that you can view, such as one whose worker was replaced. The new run gets a summary of it in its instructions and the metadata " + fleet.MetaContinues + ", and input stays your words."}
 	b, _ := json.Marshal(schema)
 	return b
 }
@@ -503,7 +503,7 @@ func (s *server) run(ctx context.Context, req *sdk.CallToolRequest, in runArgs) 
 			}
 			return failResult(err), nil, nil
 		}
-		in.Input, in.Title, in.Metadata = c.Continued(id, in.Input, in.Title, in.Metadata)
+		in.Instructions, in.Metadata = c.Continued(id, in.Instructions, in.Metadata)
 	}
 	md, err := runMetadata(in)
 	if err != nil {

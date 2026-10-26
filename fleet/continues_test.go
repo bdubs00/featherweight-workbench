@@ -68,9 +68,9 @@ func TestSummaryOf(t *testing.T) {
 }
 
 // POST /v1/runs with continues starts a run with the summary of the
-// earlier conversation in front of the message, the title of the earlier
-// run, and the metadata workbench.continues, also for a run that only the
-// archive holds. A run that the caller cannot find is 404.
+// earlier conversation in its instructions, the words of the person as
+// its input, and the metadata workbench.continues, also for a run that
+// only the archive holds. A run that the caller cannot find is 404.
 func TestContinueAnArchivedConversation(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "")
 	t.Setenv("FW_API_TOKEN", "fleet-secret")
@@ -112,22 +112,19 @@ func TestContinueAnArchivedConversation(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &run); code != http.StatusOK || err != nil {
 		t.Fatalf("POST = %d %s", code, body)
 	}
-	want := SummaryHead + "\nThe person: Which hosts are down?\nYou: No host is down.\n\nAnd now?"
-	// The mem bus keeps no order, so the archive can hold the title of the
-	// input or of the annotation; the new run takes the one that it holds.
-	old, ok, err := ArchivedRun(context.Background(), front.a, "01RUN")
-	if err != nil || !ok || old.Title == "" {
-		t.Fatalf("ArchivedRun = %+v, %v, %v", old, ok, err)
+	// The input stays the words of the person, and the summary goes into
+	// the instructions of the run.
+	want := ContinueNote + "\n\n" + SummaryHead + "\nThe person: Which hosts are down?\nYou: No host is down."
+	if got := queuedOf(t, front.a, run.ID); run.Input != "And now?" || got.Instructions != want || run.Metadata[MetaContinues] != "01RUN" || run.Metadata["fw.view"] != "chat" || run.Title == "Hosts that are down" {
+		t.Fatalf("the new run = input %q, instructions %q, title %q, metadata %v", run.Input, got.Instructions, run.Title, run.Metadata)
 	}
-	if run.Input != want || run.Title != old.Title || run.Metadata[MetaContinues] != "01RUN" || run.Metadata["fw.view"] != "chat" {
-		t.Fatalf("the new run = input %q, title %q, metadata %v", run.Input, run.Title, run.Metadata)
+	// Instructions of the body follow the summary, and a start without
+	// continues stays as it was.
+	code, body = post(`{"input": "Again?", "instructions": "Answer in one line.", "continues": "01RUN", "wait": true}`)
+	if err := json.Unmarshal([]byte(body), &run); code != http.StatusOK || err != nil || queuedOf(t, front.a, run.ID).Instructions != want+"\n\nAnswer in one line." {
+		t.Fatalf("POST with instructions = %d %s", code, body)
 	}
-	// A title of the body wins, and a start without continues stays as it
-	// was.
-	if code, body := post(`{"input": "Again?", "title": "Hosts, again", "continues": "01RUN", "wait": true}`); code != http.StatusOK || !strings.Contains(body, `"title":"Hosts, again"`) {
-		t.Fatalf("POST with a title = %d %s", code, body)
-	}
-	if code, body := post(`{"input": "Plain.", "wait": true}`); code != http.StatusOK || strings.Contains(body, MetaContinues) || strings.Contains(body, SummaryHead) {
+	if code, body := post(`{"input": "Plain.", "wait": true}`); code != http.StatusOK || strings.Contains(body, MetaContinues) {
 		t.Fatalf("POST without continues = %d %s", code, body)
 	}
 	for body, want := range map[string]int{
@@ -139,4 +136,20 @@ func TestContinueAnArchivedConversation(t *testing.T) {
 			t.Errorf("POST %s = %d %s, want %d", body, code, out, want)
 		}
 	}
+}
+
+// queuedOf returns the data of the fw.run.queued of a run of a.
+func queuedOf(t *testing.T, a *fw.Agent, id string) fw.RunQueuedData {
+	t.Helper()
+	for e, err := range a.Ledger().Read(context.Background(), id, 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		var d fw.RunQueuedData
+		if e.Type == fw.EvRunQueued && e.Decode(&d) == nil {
+			return d
+		}
+	}
+	t.Fatalf("the run %s has no fw.run.queued", id)
+	return fw.RunQueuedData{}
 }
