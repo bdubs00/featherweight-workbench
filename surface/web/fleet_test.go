@@ -283,6 +283,25 @@ func TestFleetRunsCarryTheTitlesOfThePerson(t *testing.T) {
 	}
 }
 
+// POST /v1/runs?member= takes continues too: the front reads the earlier
+// run for the person and the member gets the summary, the title, and the
+// metadata in the body of the start. A run that the person cannot view is
+// a 404 with the reason.
+func TestStartOnAMemberContinues(t *testing.T) {
+	p := newFleetPair(t)
+	resp, b := do(t, "POST", p.viewURL+"/v1/runs?member=owner", `{"agent":"shared","input":"And now?","continues":"`+p.local.ID+`"}`, "Authorization", asAlice)
+	started := decodeRun(t, resp, b, http.StatusCreated)
+	got, err := p.owner.Get(context.Background(), started.ID)
+	want := fleet.SummaryHead + "\nThe person: here\nYou: local\n\nAnd now?"
+	if err != nil || got.Input != want || got.Metadata[fleet.MetaContinues] != p.local.ID || got.Title != p.local.Title || got.Principal != "alice" {
+		t.Fatalf("the run on the owner = %+v, %v", got, err)
+	}
+	resp, b = do(t, "POST", p.viewURL+"/v1/runs?member=owner", `{"agent":"shared","input":"x","continues":"01NONE"}`, "Authorization", asAlice)
+	if pr := decodeProblem(t, resp, b, http.StatusNotFound); pr.Detail != "continues names no run that you can view" {
+		t.Fatalf("an unknown run = %q", pr.Detail)
+	}
+}
+
 func TestFleetListAndRead(t *testing.T) {
 	ctx := testCtx(t)
 	p := newFleetPair(t)
