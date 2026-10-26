@@ -41,6 +41,7 @@ const (
 	ToolMemberPatch  = "bridge_member_patch"
 	ToolReact        = "bridge_react"
 	ToolMarkRead     = "bridge_mark_read"
+	ToolSettle       = "bridge_settle_question"
 )
 
 const bridgeArg = `"bridge":{"type":"string","description":"The id of the bridge. Without it, the bridge of your run: the batch bridge:<id> of the run, or the one bridge that your run manages."}`
@@ -134,6 +135,10 @@ const (
 		"remove":{"type":"boolean","description":"true only takes your reaction back and never adds it, so a retry is safe."}
 	},"required":["bridge","seq","reaction"]}`
 
+	settleSchema = `{"type":"object","properties":{` + personBridgeArg + `,
+		"seq":{"type":"integer","minimum":1,"description":"The seq of the entry that asks the question."}
+	},"required":["bridge","seq"]}`
+
 	markReadSchema = `{"type":"object","properties":{` + personBridgeArg + `,
 		"seq":{"type":"integer","minimum":0,"description":"The newest entry that you read. A seq past the newest entry marks the newest one."}
 	},"required":["bridge","seq"]}`
@@ -171,6 +176,10 @@ type (
 		ReactSpec
 	}
 	markReadArgs struct {
+		Bridge string `json:"bridge"`
+		Seq    uint64 `json:"seq"`
+	}
+	settleArgs struct {
 		Bridge string `json:"bridge"`
 		Seq    uint64 `json:"seq"`
 	}
@@ -288,6 +297,13 @@ func tools(s *mcp.Server) []mcp.Tool {
 			InputSchema: json.RawMessage(markReadSchema),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: &no, IdempotentHint: true, OpenWorldHint: &no},
 		}, t.markRead),
+		mcp.NewTool(&sdk.Tool{
+			Name:        ToolSettle,
+			Title:       "Settle a question",
+			Description: "For a person: end the question of a seat at an entry without an answer, as the key No answer needed of the page does. The seat does not wake, and its question no longer needs you. A question that no longer waits changes nothing.",
+			InputSchema: json.RawMessage(settleSchema),
+			Annotations: &sdk.ToolAnnotations{DestructiveHint: &no, IdempotentHint: true, OpenWorldHint: &no},
+		}, t.settle),
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolClose,
 			Title:       "Close bridge",
@@ -768,6 +784,18 @@ func (t *toolSet) react(ctx context.Context, _ *sdk.CallToolRequest, in reactArg
 		verb = "Took back %s on entry %d of the bridge %s; you have no such reaction on it now."
 	}
 	return mcp.Result(fmt.Sprintf(verb, reaction, m.Seq, in.Bridge), m), nil, nil
+}
+
+func (t *toolSet) settle(ctx context.Context, _ *sdk.CallToolRequest, in settleArgs) (*sdk.CallToolResult, any, error) {
+	s, fail := t.person(ctx)
+	if fail != nil {
+		return fail, nil, nil
+	}
+	id := strings.TrimSpace(in.Bridge)
+	if err := s.Settle(ctx, id, in.Seq); err != nil {
+		return toolError(err), nil, nil
+	}
+	return mcp.Result(fmt.Sprintf("The question at entry %d of the bridge %s needs no answer now. The seat does not wake.", in.Seq, id), map[string]any{"bridge": id, "seq": in.Seq, "settled": true}), nil, nil
 }
 
 func (t *toolSet) markRead(ctx context.Context, _ *sdk.CallToolRequest, in markReadArgs) (*sdk.CallToolResult, any, error) {

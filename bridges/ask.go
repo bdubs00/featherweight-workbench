@@ -1,25 +1,33 @@
 package bridges
 
 // This file tracks the questions that a seat asks the people of its bridge
-// (docs/ARCHITECTURE.md section 18.5). A seat asks with bridge_post and
-// ask true, with up to four choices, and as a safety net for a model that
-// does not follow its instructions, any message of a seat whose to names
-// operator, or whose text holds the word @operator anywhere, asks too. The
-// entry carries ask, so the page draws a question card, and the record
-// marks the question on the seat. While it waits, the seat needs you: its
-// presence is needs-you, so the bridge counts it in needsYou, and the
-// member carries the seq of the question in ask. A person answers with a
-// message that reaches the seat: a message to its handle, a message to
-// everyone, or a reply to the question, such as a key of a choice, which
-// the page sends as a reply. The answer reaches the seat as a message of a
-// person on the usual path and starts its next turn. The question ends
-// too when the seat posts again, other than the final answer of the turn
-// that asked, which the instructions make a one-line status.
+// (docs/ARCHITECTURE.md section 18.5). A message of a seat to the person
+// is a question in two cases: the seat asked with bridge_post and ask
+// true, with up to four choices, or the message addresses the person (its
+// to names operator, or its text holds the word @operator) and its last
+// sentence ends with a question mark. Any other message to the person is a
+// plain message: it sets no ask on the entry and no question on the seat,
+// and it counts nowhere as work that needs the person. A question entry
+// carries ask, so the page draws a question card, and the record marks the
+// question on the seat. While it waits, the seat needs you: its presence
+// is needs-you, so the bridge counts it in needsYou, and the member carries
+// the seq of the question in question. A person answers with a message
+// that reaches the seat: a message to its handle, a message to everyone,
+// or a reply to the question, such as a key of a choice, which the page
+// sends as a reply. The answer reaches the seat as a message of a person
+// on the usual path and starts its next turn. A person can also settle a
+// question without an answer (Settle), and the seat does not wake. The
+// question ends too when the seat posts again, other than the final answer
+// of the turn that asked, which the instructions make a one-line status,
+// and when the bridge closes.
 
 import (
+	"context"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -42,14 +50,32 @@ const (
 var operatorWord = regexp.MustCompile(`(?i)(^|[^a-z0-9._@-])@operator([^a-z0-9_-]|$)`)
 
 // asksOperator reports whether a message of a seat asks the people of the
-// bridge: its to names operator, or its text holds the word @operator.
+// bridge: it addresses them, because its to names operator or its text
+// holds the word @operator, and its last sentence ends with a question
+// mark. A message that only tells the person something is no question.
 func asksOperator(to []string, text string) bool {
+	return addressesOperator(to, text) && endsWithQuestion(text)
+}
+
+// addressesOperator reports whether a message names the people of the
+// bridge: its to names operator, or its text holds the word @operator.
+func addressesOperator(to []string, text string) bool {
 	for _, h := range to {
 		if h == HandleOperator {
 			return true
 		}
 	}
 	return operatorWord.MatchString(text)
+}
+
+// endsWithQuestion reports whether the last sentence of a text ends with a
+// question mark. Spaces, quotes, brackets, and the marks of Markdown after
+// the mark do not count, so "**Which host first?**" ends with one.
+func endsWithQuestion(text string) bool {
+	t := strings.TrimRightFunc(text, func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune("*_`'\")]}»”’", r)
+	})
+	return strings.HasSuffix(t, "?") || strings.HasSuffix(t, "？")
 }
 
 // checkChoices checks the choices of a question: none, or two to four
@@ -166,4 +192,44 @@ func (r *record) personAnswers(to []string, replyTo *uint64) []string {
 		}
 	}
 	return out
+}
+
+// Settle ends the question at the entry seq of a bridge without an answer,
+// for the caller in ctx, as POST /v1/bridges/{id}/questions/{seq}/settle
+// does. The seat does not wake: no message reaches it. A question that no
+// longer waits, because a person answered it, the seat posted again, or
+// somebody settled it, changes nothing, so a retry is safe. An entry that
+// is no question of a seat is ErrNotFound.
+func (s *Store) Settle(ctx context.Context, id string, seq uint64) error {
+	if seq == 0 {
+		return invalid("the seq of an entry is a positive whole number")
+	}
+	rec, err := s.load(ctx, id)
+	if err != nil {
+		return err
+	}
+	e, _, err := s.b.entry(s.asFront(ctx), rec.ID, seq)
+	if err != nil {
+		return err
+	}
+	if e.Ask == nil || e.From.Handle == "" {
+		return fmt.Errorf("%w: entry %d of the bridge %s is no question of a seat", ErrNotFound, seq, rec.ID)
+	}
+	settled := ""
+	rec, err = s.b.update(ctx, rec.ID, func(r *record) error {
+		settled = ""
+		sm := r.Seats[e.From.Handle]
+		if sm == nil || sm.Ask != seq {
+			return errNoChange
+		}
+		sm.Ask, sm.AskOpen = 0, false
+		settled = e.From.Handle
+		return nil
+	})
+	if err != nil || settled == "" {
+		return err
+	}
+	s.log.Info("bridges: a person settled a question without an answer", "bridge", rec.ID, "seq", seq, "seat", settled, "by", subjectOf(ctx))
+	emitMember(rec.ID, s.memberOf(ctx, rec, settled))
+	return nil
 }

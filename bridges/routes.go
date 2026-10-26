@@ -41,6 +41,7 @@ func mount(k *native.Kit) error {
 	k.Handle("GET /v1/bridges/{id}/messages/{seq}", rt.entry)
 	k.Handle("GET /v1/bridges/{id}/pages", rt.pages)
 	k.Handle("POST /v1/bridges/{id}/messages/{seq}/reactions", rt.react)
+	k.Handle("POST /v1/bridges/{id}/questions/{seq}/settle", rt.settle)
 	k.Handle("POST /v1/bridges/{id}/members", rt.addMember)
 	k.Handle("DELETE /v1/bridges/{id}/members/{handle}", rt.fire)
 	k.Handle("PATCH /v1/bridges/{id}/members/{handle}", rt.patchMember)
@@ -385,6 +386,26 @@ func (rt *routes) react(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	native.WriteJSON(w, http.StatusOK, m)
+}
+
+// settle answers POST /v1/bridges/{id}/questions/{seq}/settle with 204:
+// the question at the entry ends without an answer, and the seat does not
+// wake (Store.Settle).
+func (rt *routes) settle(w http.ResponseWriter, r *http.Request) {
+	s, rec, ok := rt.bridge(w, r)
+	if !ok {
+		return
+	}
+	seq, err := strconv.ParseUint(r.PathValue("seq"), 10, 64)
+	if err != nil || seq == 0 {
+		native.WriteProblem(w, r, http.StatusBadRequest, "the seq of an entry is a positive whole number")
+		return
+	}
+	if err := s.Settle(r.Context(), rec.ID, seq); err != nil {
+		rt.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // addMember answers POST /v1/bridges/{id}/members: 201 with the new seat.

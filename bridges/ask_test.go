@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/fleet"
@@ -130,7 +131,7 @@ func TestOperatorAnywhereAsks(t *testing.T) {
 	rev := workerRun("r-rev", it.ID, "reviewer", "reviewer", fw.StateCompleted)
 	mig := workerRun("r-mig", it.ID, "migrator-1", "migrator", fw.StateRunning)
 	v.put(mig)
-	answer := "@migrator-1 The roles pass review.\n\n@operator Two decisions are open. Do you consent to restarting sshd on both hosts? I am waiting for your answer."
+	answer := "@migrator-1 The roles pass review.\n\n@operator Two decisions are open. I am waiting for your answer. Do you consent to restarting sshd on both hosts?"
 	fm.setEvents("r-rev", ev(fw.EvRunQueued, nil), ev(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: answer}))
 	rev.Seq = 2
 	v.put(rev)
@@ -214,8 +215,10 @@ func TestAskIsChecked(t *testing.T) {
 	}
 }
 
-// asksOperator finds the word @operator anywhere, in any case and in the
-// marks of Markdown, and not inside another word or address.
+// addressesOperator finds the word @operator anywhere, in any case and
+// in the marks of Markdown, and not inside another word or address. A
+// message that addresses the operator asks only when its last sentence
+// ends with a question mark.
 func TestAsksOperator(t *testing.T) {
 	for text, want := range map[string]bool{
 		"@operator please decide":            true,
@@ -226,12 +229,128 @@ func TestAsksOperator(t *testing.T) {
 		"@operators read this":               false,
 		"the operator decides":               false,
 	} {
+		if got := addressesOperator(nil, text); got != want {
+			t.Errorf("addressesOperator(%q) = %v", text, got)
+		}
+	}
+	for text, want := range map[string]bool{
+		"@operator please decide":                  false,
+		"@operator 2 plus 2 is 4.":                 false,
+		"@operator Bye.":                           false,
+		"@operator Which host first? I will wait.": false,
+		"@operator Which host first?":              true,
+		"Done. **@Operator:** restart sshd?":       true,
+		"Restart it (@operator)?":                  true,
+		"@operator restart sshd?**  \n":            true,
+		"@operator \"Restart now?\"":               true,
+		"Which host first?":                        false,
+		"@operator restart sshd on both hosts？":    true,
+	} {
 		if got := asksOperator(nil, text); got != want {
 			t.Errorf("asksOperator(%q) = %v", text, got)
 		}
 	}
-	if !asksOperator([]string{"reviewer", HandleOperator}, "hi") {
+	if asksOperator([]string{"reviewer", HandleOperator}, "hi") || !asksOperator([]string{HandleOperator}, "Ready to go?") {
 		t.Error("to operator")
+	}
+}
+
+// A plain answer to the person is a message, not a question: the entry
+// carries no ask, the seat does not need you, and the bridge counts no
+// question, as on the walk where "@operator 2 plus 2 is 4." waited for an
+// answer.
+func TestAPlainAnswerAsksNothing(t *testing.T) {
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	v, fm := withFleet(t, a)
+	v.state("default/crew-0", fleet.MemberLive)
+	url := serve(t, a)
+	it := open(t, url)
+	rev := workerRun("r-rev", it.ID, "reviewer", "reviewer", fw.StateCompleted)
+	rev.Seq = 2
+	fm.setEvents("r-rev", ev(fw.EvRunQueued, nil), ev(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "@operator 2 plus 2 is 4."}))
+	v.put(rev)
+	s.poll(context.Background())
+	var m Message
+	for _, e := range channel(t, s, it.ID) {
+		if e.From.Handle == "reviewer" {
+			m = e
+		}
+	}
+	if m.Seq == 0 || m.Ask != nil {
+		t.Fatalf("the answer = %+v", m)
+	}
+	item, seat := memberNamed(t, url, it.ID, "reviewer")
+	if seat.Question != 0 || seat.Presence == PresenceNeedsYou || item.NeedsYou != 0 {
+		t.Fatalf("reviewer = %+v, needs you %d", seat, item.NeedsYou)
+	}
+	if waits, err := s.Waiting(fw.WithPrincipal(context.Background(), &fw.Principal{Subject: "alice", Kind: fw.KindUser})); err != nil || len(waits) != 0 {
+		t.Fatalf("Waiting = %+v, %v", waits, err)
+	}
+}
+
+// A person settles a question without an answer: the seat no longer needs
+// you and does not wake, the route answers 204, and a second settle
+// changes nothing. An entry that is no question is 404. The tool
+// bridge_settle_question does the same.
+func TestSettleAQuestion(t *testing.T) {
+	h := hooked(t)
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	v, fm := withFleet(t, a)
+	v.state("default/crew-0", fleet.MemberLive)
+	url := serve(t, a)
+	it := open(t, url)
+	v.put(workerRun("r-mig", it.ID, "migrator-1", "migrator", fw.StateRunning))
+	s.poll(context.Background())
+	cs := connectMCP(t, a, "fleet")
+	res := callTool(t, cs, ToolPost, map[string]any{"text": "Restart sshd now?", "ask": true}, metaOf("r-mig", "migrator", ""))
+	var q Message
+	structured(t, res, &q)
+	if res.IsError || q.Ask == nil {
+		t.Fatalf("ask = %s", textOf(res))
+	}
+	settle := func(seq uint64) int {
+		t.Helper()
+		resp, _ := do(t, http.MethodPost, fmt.Sprintf("%s/v1/bridges/%s/questions/%d/settle", url, it.ID, seq), "alice", "")
+		return resp.StatusCode
+	}
+	if code := settle(q.Seq); code != http.StatusNoContent {
+		t.Fatalf("settle = %d", code)
+	}
+	item, m := memberNamed(t, url, it.ID, "migrator-1")
+	if m.Question != 0 || m.Presence == PresenceNeedsYou || item.NeedsYou != 0 {
+		t.Fatalf("after the settle: %+v, needs you %d", m, item.NeedsYou)
+	}
+	if ms := h.member("migrator-1"); len(ms) == 0 || ms[len(ms)-1].Question != 0 {
+		t.Fatalf("the hook after the settle got %+v", ms)
+	}
+	if code := settle(q.Seq); code != http.StatusNoContent {
+		t.Fatalf("a second settle = %d", code)
+	}
+	if code := settle(1); code != http.StatusNotFound {
+		t.Fatalf("a settle of an entry that is no question = %d", code)
+	}
+	if code := settle(999); code != http.StatusNotFound {
+		t.Fatalf("a settle of no entry = %d", code)
+	}
+	if resp, _ := do(t, http.MethodPost, fmt.Sprintf("%s/v1/bridges/%s/questions/%d/settle", url, it.ID, q.Seq), "carol", ""); resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a settle of a stranger = %d", resp.StatusCode)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := len(fm.find(http.MethodPost, "/v1/runs/r-mig/messages")); n != 0 {
+		t.Fatalf("the settle woke the seat %d times", n)
+	}
+	// The tool settles a new question for a person.
+	res = callTool(t, cs, ToolPost, map[string]any{"text": "And lab-2?", "ask": true}, metaOf("r-mig", "migrator", ""))
+	structured(t, res, &q)
+	alice := connectMCP(t, a, "alice")
+	res = callTool(t, alice, ToolSettle, map[string]any{"bridge": it.ID, "seq": q.Seq}, nil)
+	if res.IsError || !strings.Contains(textOf(res), "needs no answer now") {
+		t.Fatalf("bridge_settle_question = %s", textOf(res))
+	}
+	if _, m := memberNamed(t, url, it.ID, "migrator-1"); m.Question != 0 {
+		t.Fatalf("after the tool: %+v", m)
 	}
 }
 
