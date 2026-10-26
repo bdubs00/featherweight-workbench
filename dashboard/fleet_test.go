@@ -68,6 +68,26 @@ func TestMembersText(t *testing.T) {
 	if got := MembersText("here", nil); !strings.Contains(got, "You can see no member.") {
 		t.Errorf("empty = %s", got)
 	}
+	// The agents come first in plain words, before the names of the
+	// members.
+	agents := AgentsText([]fleet.Member{
+		{Name: "front", Self: true, State: fleet.MemberLive, Agents: []fleet.RecordAgent{{Name: "triage"}}},
+		{Name: "default/manager-1", State: fleet.MemberLive, Agents: []fleet.RecordAgent{{Name: "manager"}}, Active: 1},
+		{Name: "team/reviewer-0", State: fleet.MemberLive, Agents: []fleet.RecordAgent{{Name: "reviewer"}}, InputRequired: 1},
+		{Name: "team/reviewer-1", State: fleet.MemberQuiet, Agents: []fleet.RecordAgent{{Name: "reviewer"}}},
+		{Name: "team/migrator-0", State: fleet.MemberQuiet, Agents: []fleet.RecordAgent{{Name: "migrator"}}},
+	})
+	want := "Agents that you can see:\n- triage: on this server\n- manager: 1 worker, awake; 1 run works\n- reviewer: 2 workers: 1 awake, 1 asleep; 1 run waits for a person\n- migrator: 1 worker, asleep\n" +
+		"To a person, name the agents and their workers, such as \"the manager has 1 worker awake\", and not the names of the members below."
+	if agents != want {
+		t.Errorf("AgentsText =\n%s\nwant\n%s", agents, want)
+	}
+	if i, j := strings.Index(text, "Agents that you can see:"), strings.Index(text, "members you can see"); i < 0 || j < i {
+		t.Errorf("the agents do not come first:\n%s", text)
+	}
+	if got := AgentsText([]fleet.Member{{Name: "far"}}); got != "" {
+		t.Errorf("members without an agent = %q", got)
+	}
 }
 
 func TestPageHasTheFleet(t *testing.T) {

@@ -13,8 +13,11 @@ import (
 	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
-// MembersText describes the members of a fleet, one line each. Name is the
-// name of this process.
+// MembersText describes the members of a fleet. It starts with the
+// agents in plain words, each with its workers awake or asleep and its
+// runs, as a person reads them, because a model repeats the words of a
+// tool. The members follow, one line each, by the names that the argument
+// member of run and runs_list takes. Name is the member of this process.
 func MembersText(name string, members []fleet.Member) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "This process is the fleet member %s.", name)
@@ -22,10 +25,90 @@ func MembersText(name string, members []fleet.Member) string {
 		b.WriteString("\nYou can see no member.")
 		return b.String()
 	}
-	fmt.Fprintf(&b, "\n%d members you can see:", len(members))
+	if agents := AgentsText(members); agents != "" {
+		b.WriteString("\n" + agents)
+	}
+	fmt.Fprintf(&b, "\n%d members you can see, by the name that the argument member of run and runs_list takes:", len(members))
 	for _, m := range members {
 		b.WriteString("\n" + MemberLine(m))
 	}
+	return b.String()
+}
+
+// AgentsText says the agents of the members in plain words: each agent
+// with its workers, awake, asleep, or stopped, and the runs of its workers
+// that work and that wait for a person, such as "- manager: 1 worker,
+// awake; 1 run works". An agent of this process says "on this server".
+// It ends with a line that asks to name agents and workers to a person,
+// and not members. It is "" for members without an agent.
+func AgentsText(members []fleet.Member) string {
+	type tally struct{ awake, asleep, stopped, server, active, waiting int }
+	var order []string
+	by := map[string]*tally{}
+	for _, m := range members {
+		for i, ag := range m.Agents {
+			t := by[ag.Name]
+			if t == nil {
+				t = &tally{}
+				by[ag.Name] = t
+				order = append(order, ag.Name)
+			}
+			switch {
+			case m.Self:
+				t.server++
+			case m.State == fleet.MemberLive:
+				t.awake++
+			case m.State == fleet.MemberQuiet:
+				t.asleep++
+			default:
+				t.stopped++
+			}
+			// A worker runs one agent, so its runs are the runs of that
+			// agent. The runs of a process with several agents count once,
+			// with its first agent.
+			if i == 0 {
+				t.active += m.Active
+				t.waiting += m.InputRequired
+			}
+		}
+	}
+	if len(order) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Agents that you can see:")
+	for _, name := range order {
+		t := by[name]
+		var parts []string
+		if workers := t.awake + t.asleep + t.stopped; workers > 0 {
+			var states []string
+			for _, st := range []struct {
+				n    int
+				word string
+			}{{t.awake, "awake"}, {t.asleep, "asleep"}, {t.stopped, "stopped"}} {
+				if st.n > 0 {
+					states = append(states, fmt.Sprintf("%d %s", st.n, st.word))
+				}
+			}
+			if len(states) == 1 {
+				// "1 worker, awake" or "2 workers, asleep"
+				parts = append(parts, count(workers, "worker", "workers")+", "+strings.SplitN(states[0], " ", 2)[1])
+			} else {
+				parts = append(parts, count(workers, "worker", "workers")+": "+strings.Join(states, ", "))
+			}
+		}
+		if t.server > 0 {
+			parts = append(parts, "on this server")
+		}
+		if t.active > 0 {
+			parts = append(parts, count(t.active, "run works", "runs work"))
+		}
+		if t.waiting > 0 {
+			parts = append(parts, count(t.waiting, "run waits", "runs wait")+" for a person")
+		}
+		fmt.Fprintf(&b, "\n- %s: %s", name, strings.Join(parts, "; "))
+	}
+	b.WriteString("\nTo a person, name the agents and their workers, such as \"the manager has 1 worker awake\", and not the names of the members below.")
 	return b.String()
 }
 
