@@ -17,8 +17,13 @@ func TestListed(t *testing.T) {
 	own := &fw.Run{ID: "w", Metadata: map[string]string{MetaInternal: "duty-write-check:report"}}
 	plain := &fw.Run{ID: "p"}
 	other := &fw.Run{ID: "o", Metadata: map[string]string{fw.MetaBatch: "duty:report"}}
-	if Listed(check) || Listed(own) || Listed(nil) || !Listed(plain) || !Listed(other) {
+	// A verdict run of before the key names its approval alone.
+	verdict := &fw.Run{ID: "v", Metadata: map[string]string{metaVerdict: "r1/a1", fw.MetaTitle: "Decide for the duty away"}}
+	if Listed(check) || Listed(own) || Listed(verdict) || Listed(nil) || !Listed(plain) || !Listed(other) {
 		t.Fatal("Listed decides wrong")
+	}
+	if Internal(verdict) != "duty-verdict" || Internal(own) != "duty-write-check:report" || Internal(plain) != "" || Internal(nil) != "" {
+		t.Fatalf("Internal = %q, %q, %q", Internal(verdict), Internal(own), Internal(plain))
 	}
 	all := []*fw.Run{plain, check, other, own}
 	if got := runIDs(ListedOnly(all)); fmt.Sprint(got) != "[p o]" {
@@ -169,5 +174,23 @@ func TestMembersCountNoCheckRun(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("the view lacks the member: %+v", members)
+	}
+}
+
+// The entry of the index keeps the purpose of a run of the front for
+// itself, so a run that the view knows only from the index stays out of
+// the lists.
+func TestIndexKeepsInternal(t *testing.T) {
+	run := &fw.Run{ID: "01J0000000000000000000000A", Agent: "manager", State: fw.StateRunning, Metadata: map[string]string{metaVerdict: "r/a", fw.MetaBatch: "b"}}
+	e := entryOfRun(&platformRun{run: run, member: "team/manager-0"}, time.Now())
+	if e.Internal != "duty-verdict" || e.Batch != "b" {
+		t.Fatalf("entry = %+v", e)
+	}
+	back := runOfEntry(run.ID, *e)
+	if Listed(back) || back.Metadata[fw.MetaBatch] != "b" {
+		t.Fatalf("run of the entry = %+v", back)
+	}
+	if plain := runOfEntry(run.ID, indexEntry{Agent: "manager"}); plain.Metadata != nil || !Listed(plain) {
+		t.Fatalf("a plain entry = %+v", plain)
 	}
 }

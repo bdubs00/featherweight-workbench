@@ -3910,7 +3910,7 @@ The test `TestParity` of `cmd/fw-workbench` reads the source of the workbench wi
 
 ### 24.6 The runs that the lists leave out
 
-The front starts some runs for itself: the check runs of 24.3 and the run that writes a check. The run of the manager that gives a verdict (section 23.4) is one too. `fleet.Listed(run)` is false for a run with `fw.kind: check` or with the metadata `workbench.internal`, and only the front sets that key. The lists of the workbench leave such a run out:
+The front starts some runs for itself: the check runs of 24.3 and the run that writes a check. The run of the manager that gives a verdict (section 23.4) is one too. `fleet.Listed(run)` is false for a run with `fw.kind: check` or with the metadata `workbench.internal`, and only the front sets that key. A verdict run of before 2026-10-24 carries `workbench.dutyVerdict` without `workbench.internal`, and the archive keeps such runs, so `fleet.Internal` reads that key as the purpose `duty-verdict`. The index of the runs (section 4.16) keeps the purpose of an internal run in the entry, so a run that the view knows only from its entry stays out of the lists too. The lists of the workbench leave such a run out:
 
 - `dashboard.Runs`, and so the MCP tool `runs_list`, `GET /v1/fleet/runs`, the home of a person (`GET /v1/home`), and the conversation of the manager on the page
 - the stream of bossmode, which sends no `run` event for such a run

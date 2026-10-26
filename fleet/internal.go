@@ -26,11 +26,35 @@ import (
 // "duty-write-check:<name>". Only the front sets it.
 const MetaInternal = "workbench.internal"
 
+// metaVerdict is the metadata key that names the approval of a verdict
+// run of the manager for a duty (away.MetaVerdict). A verdict run of
+// before 2026-10-24 carries it without MetaInternal, and the archive and
+// the ledgers keep such runs, so the key marks them as runs of the front
+// too.
+const metaVerdict = "workbench.dutyVerdict"
+
+// Internal returns the purpose of a run that the front starts for itself:
+// the value of MetaInternal, "duty-verdict" for a verdict run that names
+// no purpose, and "" for any other run.
+func Internal(r *fw.Run) string {
+	if r == nil {
+		return ""
+	}
+	if v := r.Metadata[MetaInternal]; v != "" {
+		return v
+	}
+	if r.Metadata[metaVerdict] != "" {
+		return "duty-verdict"
+	}
+	return ""
+}
+
 // Listed reports whether the lists of runs of the workbench show a run.
 // They leave out a check run of the kernel (fw.RunKindCheck) and a run
-// that the front starts for itself (MetaInternal).
+// that the front starts for itself (Internal), such as the verdict run of
+// a duty and the run that writes the check of a duty.
 func Listed(r *fw.Run) bool {
-	return r != nil && r.Kind() == "" && r.Metadata[MetaInternal] == ""
+	return r != nil && r.Kind() == "" && Internal(r) == ""
 }
 
 // ListedOnly returns the runs that the lists show (Listed), in their

@@ -14,7 +14,8 @@ package fleet
 // time of a finished run, or when the Task leaves the view. The writes and
 // the load run beside the view, so a bucket that does not exist or does
 // not answer never holds the view up. The index holds no text of a run:
-// the member, the agent, the person, the lineage, the batch, the state,
+// the member, the agent, the person, the lineage, the batch, the mark of a
+// run of the front for itself (MetaInternal), the state,
 // the pending approval without its input, and the times.
 
 import (
@@ -83,6 +84,7 @@ type indexEntry struct {
 	Parent    string        `json:"parent,omitempty"`
 	Depth     int           `json:"depth,omitempty"`
 	Batch     string        `json:"batch,omitempty"`
+	Internal  string        `json:"internal,omitempty"`
 	Pending   *indexPending `json:"pending,omitempty"`
 	CreatedAt time.Time     `json:"createdAt"`
 }
@@ -110,7 +112,7 @@ func entryOfRun(r *platformRun, at time.Time) *indexEntry {
 	run := r.run
 	e := &indexEntry{Member: r.member, Agent: run.Agent, State: run.State, Seq: run.Seq, At: at.UTC(),
 		Principal: run.Principal, Origin: run.Origin, Parent: run.Parent, Depth: run.Depth,
-		Batch: run.Metadata[fw.MetaBatch], CreatedAt: run.CreatedAt}
+		Batch: run.Metadata[fw.MetaBatch], Internal: Internal(run), CreatedAt: run.CreatedAt}
 	if p := run.Pending; p != nil {
 		e.Pending = &indexPending{ID: p.ID, Tool: p.Tool, Reason: cut(p.Reason, 512), RequestedAt: p.RequestedAt}
 	}
@@ -122,8 +124,16 @@ func entryOfRun(r *platformRun, at time.Time) *indexEntry {
 func runOfEntry(id string, e indexEntry) *fw.Run {
 	run := &fw.Run{ID: id, Agent: e.Agent, State: e.State, Seq: e.Seq, Principal: e.Principal, Origin: e.Origin,
 		Parent: e.Parent, Depth: e.Depth, CreatedAt: e.CreatedAt, UpdatedAt: e.At}
-	if e.Batch != "" {
-		run.Metadata = map[string]string{fw.MetaBatch: e.Batch}
+	if e.Batch != "" || e.Internal != "" {
+		run.Metadata = map[string]string{}
+		if e.Batch != "" {
+			run.Metadata[fw.MetaBatch] = e.Batch
+		}
+		if e.Internal != "" {
+			// A run of the front for itself stays out of the lists also
+			// while the view knows only its entry.
+			run.Metadata[MetaInternal] = e.Internal
+		}
 	}
 	if p := e.Pending; p != nil && e.State == fw.StateInputRequired {
 		run.Pending = &fw.Approval{ID: p.ID, Tool: p.Tool, Reason: p.Reason, RequestedAt: p.RequestedAt}
@@ -429,17 +439,22 @@ func (p *platform) applyIndex(entries map[string]indexEntry, now time.Time) {
 
 // identifyFrom gives a run that the stream reached before its
 // fw.run.queued the facts of the index: the agent, the person, the
-// lineage, the batch, and the start. The state of the stream stays. The
+// lineage, the batch, the mark of a run of the front for itself, and the
+// start. The state of the stream stays. The
 // run has no title and no input until a read of its member.
 func (r *platformRun) identifyFrom(e *fw.Run) {
 	c := r.run
 	c.Agent, c.Principal, c.Origin, c.Parent, c.Depth, c.CreatedAt = e.Agent, e.Principal, e.Origin, e.Parent, e.Depth, e.CreatedAt
-	if batch := e.Metadata[fw.MetaBatch]; batch != "" {
+	for _, k := range []string{fw.MetaBatch, MetaInternal} {
+		v := e.Metadata[k]
+		if v == "" {
+			continue
+		}
 		if c.Metadata == nil {
 			c.Metadata = map[string]string{}
 		}
-		if c.Metadata[fw.MetaBatch] == "" {
-			c.Metadata[fw.MetaBatch] = batch
+		if c.Metadata[k] == "" {
+			c.Metadata[k] = v
 		}
 	}
 	r.queued, r.partial = true, true
