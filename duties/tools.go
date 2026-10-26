@@ -62,7 +62,7 @@ const (
 
 	zoneSchema = `{"type":"string","maxLength":64,"description":"Pass it only when the person names a time zone, such as America/New_York. Leave it out otherwise, also when your own clock says UTC: the server then takes the time zone that the person saved, else UTC. The readback names the zone, so show it to the person."}`
 
-	dutySchema = `{"type":["object","string"],"description":"The duty, as an object. A JSON text of the object reads too. agent names the agent that does it. when holds one start: say, the words of a schedule such as \"every weekday at 9am\", or schedule, the record {repeat, days, everyWeeks, dayOfMonth, times, every, between, timeZone, start, end}, or webhook {auth: {mode, secret, header}, key}. checkFirst {look: {http: {url, secret, header}} or {tool, input}, items, key, where, wake} looks for work first; duty_write_check writes it from words. do holds one action: ask {message} asks the agent, post {bridge, to, message} posts in a bridge that stays open, open {playbook, goal} opens a bridge from a playbook, and manager {message} asks the manager. A message takes the placeholders {date}, {time}, {found}, {event}, {last.title}, {last.run}, {last.state}, and {duty}. For ask and manager, limits.budget is required, with at least one of maxCostUSD, maxTurns, maxTokens, and maxToolCalls above zero, and limits.perDayUSD caps a day. A post spends nothing of its own and takes no budget. For open, limits.budget holds maxTurns alone, the most turns of the whole bridge. limits also take overlap (skip, queue, allow), catchUp, and retries. whileAway, notify, runAs (duty or owner), and paused are optional. notify {failure, needsYou} lists owner, the subject of a person, or channel:<name> for a shared channel of the operator. A read of duty_get is a valid body."}`
+	dutySchema = `{"type":["object","string"],"description":"The duty, as an object. A JSON text of the object reads too. title is the name of the duty in the words of the person, such as Walk Duty 1, and is optional. agent names the agent that does it. when holds one start: say, the words of a schedule such as \"every weekday at 9am\", or schedule, the record {repeat, days, everyWeeks, dayOfMonth, times, every, between, timeZone, start, end}, or webhook {auth: {mode, secret, header}, key}. checkFirst {look: {http: {url, secret, header}} or {tool, input}, items, key, where, wake} looks for work first; duty_write_check writes it from words. do holds one action: ask {message} asks the agent, post {bridge, to, message} posts in a bridge that stays open, open {playbook, goal} opens a bridge from a playbook, and manager {message} asks the manager. A message takes the placeholders {date}, {time}, {found}, {event}, {last.title}, {last.run}, {last.state}, and {duty}. For ask and manager, limits.budget is required, with at least one of maxCostUSD, maxTurns, maxTokens, and maxToolCalls above zero, and limits.perDayUSD caps a day. A post spends nothing of its own and takes no budget. For open, limits.budget holds maxTurns alone, the most turns of the whole bridge. limits also take overlap (skip, queue, allow), catchUp, and retries. whileAway, notify, runAs (duty or owner), and paused are optional. notify {failure, needsYou} lists owner, the subject of a person, or channel:<name> for a shared channel of the operator. A read of duty_get is a valid body."}`
 
 	pauseSchema = `{"type":"object","properties":{
 		"name":` + nameSchema + `,
@@ -72,7 +72,8 @@ const (
 	writeCheckSchema = `{"type":"object","properties":{
 		"name":` + nameSchema + `,
 		"words":{"type":"string","minLength":1,"maxLength":2000,"description":"What the check looks for, in the words of the person, such as \"a new P1 or P2 in the Platform Ops queue\"."},
-		"agent":{"type":"string","maxLength":64,"description":"The agent of a duty that does not exist yet. For a saved duty, the agent of the duty writes the check."}
+		"agent":{"type":"string","maxLength":64,"description":"The agent of a duty that does not exist yet. For a saved duty, the agent of the duty writes the check."},
+		"budget":{"type":"object","description":"The budget of each run of the duty, as limits.budget of duty_put: maxCostUSD, maxTurns, maxTokens, maxToolCalls. The run that writes the check takes the budget of the agent, else this one, else the budget of the saved duty.","properties":{"maxCostUSD":{"type":"number","minimum":0},"maxTurns":{"type":"integer","minimum":0},"maxTokens":{"type":"integer","minimum":0},"maxToolCalls":{"type":"integer","minimum":0}}}
 	},"required":["name","words"]}`
 
 	pauseAllSchema = `{"type":"object","properties":{
@@ -107,9 +108,10 @@ type (
 		Reason string `json:"reason,omitempty"`
 	}
 	writeCheckArgs struct {
-		Name  string `json:"name"`
-		Words string `json:"words"`
-		Agent string `json:"agent,omitempty"`
+		Name   string  `json:"name"`
+		Words  string  `json:"words"`
+		Agent  string  `json:"agent,omitempty"`
+		Budget *Budget `json:"budget,omitempty"`
 	}
 	// putResult is the structured result of duty_put: the duty after a
 	// write, with created, or the answer of a dry run.
@@ -283,7 +285,11 @@ func listTool(ctx context.Context, a *fw.Agent) *sdk.CallToolResult {
 
 // viewLine says a duty in one line.
 func viewLine(v View) string {
-	s := fmt.Sprintf("%s (%s): %s", v.Name, v.Agent, v.Readback)
+	name := v.Name
+	if v.Title != "" {
+		name = fmt.Sprintf("%q, %s,", v.Title, v.Name)
+	}
+	s := fmt.Sprintf("%s (%s): %s", name, v.Agent, v.Readback)
 	if v.Origin != nil {
 		s += " " + OriginText
 	}
@@ -330,6 +336,9 @@ func getTool(ctx context.Context, a *fw.Agent, in nameArgs) *sdk.CallToolResult 
 	}
 	var b strings.Builder
 	b.WriteString("The duty " + viewLine(v))
+	if v.ForDevelopers != "" {
+		b.WriteString("\nFor developers: " + v.ForDevelopers)
+	}
 	if len(v.Next) > 1 {
 		times := make([]string, 0, len(v.Next))
 		for _, t := range v.Next {
@@ -409,6 +418,9 @@ func dryText(name string, d *DryAnswer) string {
 	b.WriteString("Dry run of the duty " + name + ": nothing is saved.")
 	if d.Readback != "" {
 		b.WriteString("\nReadback: " + d.Readback)
+	}
+	if d.ForDevelopers != "" {
+		b.WriteString("\nFor developers: " + d.ForDevelopers)
 	}
 	if len(d.Next) > 0 {
 		times := make([]string, 0, len(d.Next))
@@ -513,12 +525,15 @@ func writeCheckTool(ctx context.Context, a *fw.Agent, in writeCheckArgs) *sdk.Ca
 	if s == nil {
 		return off()
 	}
-	ans, err := s.WriteCheck(ctx, in.Name, WriteCheckBody{Words: in.Words, Agent: in.Agent})
+	ans, err := s.WriteCheck(ctx, in.Name, WriteCheckBody{Words: in.Words, Agent: in.Agent, Budget: in.Budget})
 	if err != nil {
 		return mcp.ErrorResult(explain(err))
 	}
 	var b strings.Builder
 	b.WriteString("The check of the duty " + in.Name + ", which nothing saved yet: " + ans.Readback)
+	if ans.ForDevelopers != "" {
+		b.WriteString(" " + ans.ForDevelopers)
+	}
 	switch c := ans.Check; {
 	case c == nil:
 		b.WriteString("\nThe server cannot run this look yet, so it did not test the check.")

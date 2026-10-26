@@ -3171,6 +3171,7 @@ The page and the MCP tools write the same record. The contract of the build, `re
 | Field | Rule |
 |---|---|
 | `name` | 1 to 63 of `a-z`, `0-9`, `-`, and `_`. It names the route, the batch, and the keys. |
+| `title` | Optional. The name in the words of the person, such as "Walk Duty 1", one line of at most 100 characters. The page shows it in place of the name. |
 | `agent` | Required. The access rules of the duty are those of this agent. |
 | `pool` | Optional. It names the pool for an agent that several pools run, as `fleet.EnqueueFor` takes it. |
 | `owner` | The front sets it to the subject of the person who creates the duty. A write never takes it from the body. |
@@ -3205,7 +3206,8 @@ A read adds these fields to the record:
 | `locked` | `true` for a duty of an entry with `locked: true`, else absent. A change, a pause, or a delete of it gets 409. |
 | `template` | `true` while the templates of the entry make the runs, else absent. The message is then empty. |
 | `revision` | The revision of the entry. A write that names it is a compare-and-swap, and a conflict gets 409. |
-| `readback` | The duty in words, from the record alone, such as "Every weekday at 9:00 AM, New York time." |
+| `readback` | The duty in plain words, from the record alone, such as "Every weekday at 9:00 AM, New York time." or "When Gitea sends an event, signed. Repeats of one issue within a week are skipped." It names no address, header, or path of a field. |
+| `forDevelopers` | The technical part of the readback, for the fold "For developers" of the page, else absent: the address, the credential, and the key of a webhook, such as "Another app calls POST /v1/duties/tickets/call with the HMAC-SHA256 signature of the body in the header X-Gitea-Signature. A second call with the same issue.number within a week is a duplicate.", and where a check finds its items and what makes an item new. A dry run and a write of a check answer it too. |
 | `next` | The next five times, in UTC |
 | `state` | `lastRun`, the newest start, and `todayUSD`, `failuresInRow`, and `pausedReason` |
 | `history` | In a read of one duty: the last 50 starts, newest first |
@@ -3355,7 +3357,7 @@ Each capability is one Go function of the service. Its route and its MCP tool ca
 | `PATCH /v1/duties` | `duties_pause_all` | `{"paused", "reason"}`, for an admin. 200 with the switch. |
 | `POST /v1/duties/{name}/call` | none | The call of another app (section 22.9) |
 | `GET /v1/duties/options` | none | `{"secrets": [{"name", "hosts"}], "events", "actions", "looks"}`: what the page can offer in New duty (section 24.4) |
-| `POST /v1/duties/{name}/write-check` | `duty_write_check` | `{"words", "agent"}` in, `{"checkFirst", "readback", "check", "run"}` out, 422 with `error` when the agent writes no check that works, and 504 after 120 seconds (section 24.4) |
+| `POST /v1/duties/{name}/write-check` | `duty_write_check` | `{"words", "agent", "budget"}` in, `{"checkFirst", "readback", "forDevelopers", "check", "run"}` out, 422 with `error` when the agent writes no check that works, and 504 after 120 seconds (section 24.4) |
 
 `duty_put` takes `{"name", "duty", "dryRun", "test", "timeZone"}`, and `duty_preview` takes the same without `dryRun`. Both read `duty` as an object or as a JSON text that holds one. The other tools take `name`, and `duty_pause` also takes `paused`. `duties_pause_all` takes `paused` and `reason`. A client, such as the manager, calls `duty_preview` first. It shows the readback and the next times to the person, and it saves with `duty_put` only after the person agrees.
 
@@ -3863,18 +3865,18 @@ A check run carries the metadata `workbench.internal` with `duty-check:<name>` a
 
 `secrets` lists `workbench.duties.secrets` by name and hosts, and never a value. `events`, `actions`, and `looks` come from `duties.Offered`: only what a registered package serves now. Any person with a credential of the native API reads it.
 
-`POST /v1/duties/{name}/write-check` takes `{"words", "agent"}`, such as `{"words": "a new P1 or P2 in the Platform Ops queue", "agent": "triage"}`. The caller needs the owner role on the agent, as for a write of the duty. For a saved duty, the agent of the duty writes the check, whatever the body names.
+`POST /v1/duties/{name}/write-check` takes `{"words", "agent", "budget"}`, such as `{"words": "a new P1 or P2 in the Platform Ops queue", "agent": "triage"}`. The caller needs the owner role on the agent, as for a write of the duty. For a saved duty, the agent of the duty writes the check, whatever the body names.
 
-The front runs the agent itself, with its profile, its model, and its budget, as the caller. It picks no model and no budget of its own. An agent whose profile has no budget, with at least one of `maxCostUSD`, `maxTurns`, `maxTokens`, and `maxToolCalls` above zero, does not run, and the answer is 422 with the reason. The run gets the deadline of its budget, at most 120 seconds. Its input is the words of the person. Its instructions are fixed text that describes the record `checkFirst` of the contract, the looks and the secrets that this front offers now, and the tools of the profile. They tell the agent to call at most one tool that only reads, to see the shape of its answer, and to answer with one JSON object alone.
+The front runs the agent itself, with its profile, its model, and its budget, as the caller. It picks no model and no budget of its own. An agent whose profile has no budget, with at least one of `maxCostUSD`, `maxTurns`, `maxTokens`, and `maxToolCalls` above zero, runs with the budget of each run of the duty: `budget` of the body, the limits of the form that the person did not save yet, else `limits.budget` of the saved duty. Without either, the agent does not run, and the answer is 422 with the reason in words: "triage has no spending limit, so it does not write the check: a run without a limit would be a silent cost. Set the most that one run of this duty can cost, such as $0.50, and ask again." The run gets the deadline of its budget, at most 120 seconds. Its input is the words of the person. Its instructions are fixed text that describes the record `checkFirst` of the contract, the looks and the secrets that this front offers now, and the tools of the profile. They tell the agent to call at most one tool that only reads, to see the shape of its answer, and to answer with one JSON object alone.
 
 The front then:
 
 1. reads the answer strictly: one JSON object of the record, with no other field and nothing after it. A fence of Markdown around it comes off.
 2. checks the record as a dry run of the duty checks it, with the rules of the operator for the secrets and the hosts.
-3. tests the check once when the front can run its look, and writes no seen key.
-4. answers `{"checkFirst", "readback", "check", "run"}`. `readback` is the check in words, from the record and never from the words of the model, such as "First it looks at acme.service-now.com/api/queue for the items at result.records, where priority is 1 or 2. Only items that it did not see before wake triage, by their number." `check` is the answer of the test, as in a dry run, and `null` when the front cannot run the look yet. `run` is the run that wrote the check.
+3. tests the check once when the front can run its look, and writes no seen key. A record without `items` whose answer is an object with one list of objects, such as `pages` in the answer of `pages_list`, gets that list as `items`, so the record says where the check finds its items.
+4. answers `{"checkFirst", "readback", "forDevelopers", "check", "run"}`. `readback` is the check in words, from the record and never from the words of the model, such as "First it looks at acme.service-now.com/api/queue, where priority is 1 or 2. Only items that it did not see before wake triage." `forDevelopers` says where the check finds its items and what makes an item new, such as "The check reads the items at result.records of the answer. An item is new by its number." `check` is the answer of the test, as in a dry run, and `null` when the front cannot run the look yet. `run` is the run that wrote the check.
 
-An answer that is no check, a record that does not fit, a test that fails, a failed run, and a run that asks a person to allow a tool get 422 with the reason in `error`, beside the `detail` of the problem document. When the agent wrote a record that reads, the answer also holds `checkFirst` and `readback`, so the page can show it. After 120 seconds without an answer, the front cancels the run and answers 504. The write saves nothing: the person puts `checkFirst` into the duty with a write, after the person agrees.
+An answer that is no check, a record that does not fit, a test that fails, a failed run, and a run that asks a person to allow a tool get 422 with the reason in `error`, beside the `detail` of the problem document. When the agent wrote a record that reads, the answer also holds `checkFirst`, `readback`, and `forDevelopers`, so the page can show it and fill the fields of the check by hand from it. After 120 seconds without an answer, the front cancels the run and answers 504. The write saves nothing: the person puts `checkFirst` into the duty with a write, after the person agrees.
 
 The run that writes a check carries `workbench.internal` with `duty-write-check:<name>` and the title "Write the check of the duty <name>", and no batch.
 

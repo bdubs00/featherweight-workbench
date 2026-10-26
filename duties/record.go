@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/bdubs00/featherweight-workbench/duties/schedule"
 	"github.com/bdubs00/featherweight-workbench/sources"
@@ -21,7 +23,11 @@ import (
 // budget: a duty without a budget does not save, because a paid default
 // would be a silent cost.
 type Duty struct {
-	Name       string      `json:"name"`
+	Name string `json:"name"`
+	// Title is the name of the duty in the words of the person, such as
+	// "Walk Duty 1", beside the name of the routes, such as walk-duty-1.
+	// It is optional, and the page shows it in place of the name.
+	Title      string      `json:"title,omitempty"`
 	Agent      string      `json:"agent"`
 	Pool       string      `json:"pool,omitempty"`
 	Owner      string      `json:"owner,omitempty"`
@@ -266,6 +272,9 @@ type Budget struct {
 	MaxToolCalls int     `json:"maxToolCalls,omitempty"`
 }
 
+// MaxTitleRunes bounds the title of a duty.
+const MaxTitleRunes = 100
+
 // Overlaps of a time with a run that works.
 const (
 	OverlapSkip  = "skip"  // the time does not run, and the history says so
@@ -396,6 +405,7 @@ func readDur(s string) (time.Duration, error) {
 // it. The words of when.say stay: the write turns them into a schedule.
 func (d *Duty) normalize(zone string) {
 	d.Name, d.Agent, d.Pool = strings.TrimSpace(d.Name), strings.TrimSpace(d.Agent), strings.TrimSpace(d.Pool)
+	d.Title = strings.Join(strings.Fields(d.Title), " ")
 	if s := d.When.Schedule; s != nil {
 		n := s.Normalize(zone)
 		d.When.Schedule = &n
@@ -527,6 +537,9 @@ func (d *Duty) problems() []string {
 	add := func(path, format string, args ...any) { p = append(p, problem(path, format, args...)) }
 	if err := CheckName(d.Name); err != nil {
 		add("name", "%s.", capital(err.Error()))
+	}
+	if utf8.RuneCountInString(d.Title) > MaxTitleRunes || strings.IndexFunc(d.Title, unicode.IsControl) >= 0 {
+		add("title", "A title is one line of at most %d characters.", MaxTitleRunes)
 	}
 	if d.Agent == "" {
 		add("agent", "Name the agent that does the duty. The access rules of the duty are those of the agent.")

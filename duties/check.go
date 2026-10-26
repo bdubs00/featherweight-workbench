@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -147,6 +148,32 @@ func (s *Service) judge(ctx context.Context, d *Duty, body []byte) (checkResult,
 		res.Text = foundText(res.Wake)
 	}
 	return res, nil
+}
+
+// listKey is a key of a document that a dotted path of items can name.
+var listKey = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// listPath returns the key of the one list of objects of a document that
+// is an object, such as pages in the answer of the tool pages_list, and ""
+// for any other document. A check whose agent left items out because it
+// read the answer of a tool as a list then finds the list.
+func listPath(body []byte) string {
+	var doc map[string]json.RawMessage
+	if json.Unmarshal(body, &doc) != nil {
+		return ""
+	}
+	found := ""
+	for k, v := range doc {
+		var list []json.RawMessage
+		if json.Unmarshal(v, &list) != nil || len(list) == 0 || !strings.HasPrefix(strings.TrimSpace(string(list[0])), "{") {
+			continue
+		}
+		if found != "" || !listKey.MatchString(k) {
+			return ""
+		}
+		found = k
+	}
+	return found
 }
 
 // itemsWords counts items in words.
@@ -344,7 +371,16 @@ type TestAnswer struct {
 // testCheck runs the check of a duty once, for a dry run. It writes
 // nothing: a new item stays new.
 func (s *Service) testCheck(ctx context.Context, d *Duty) (*TestAnswer, error) {
-	res, err := s.check(ctx, d)
+	body, err := s.look(ctx, d)
+	if err != nil {
+		return nil, err
+	}
+	return s.testBody(ctx, d, body)
+}
+
+// testBody is testCheck for the document that a look read.
+func (s *Service) testBody(ctx context.Context, d *Duty, body []byte) (*TestAnswer, error) {
+	res, err := s.judge(ctx, d, body)
 	if err != nil {
 		return nil, err
 	}

@@ -90,8 +90,9 @@ func TestCheckWakesForNewItems(t *testing.T) {
 	q.set(0, inc("INC1", "1"), inc("INC2", 3), inc("INC3", 2))
 	v := f.put(t, "alice", triageDuty(srv.URL))
 	if !strings.Contains(v.Readback, "First it looks at 127.0.0.1") || strings.Contains(v.Readback, "key=x") ||
-		!strings.Contains(v.Readback, "where priority is 1 or 2. Only items that it did not see before wake triage, by their number. The run gets the list.") {
-		t.Fatalf("readback = %q", v.Readback)
+		!strings.Contains(v.Readback, "where priority is 1 or 2. Only items that it did not see before wake triage. The run gets the list.") ||
+		v.ForDevelopers != "The check reads the items at result.records of the answer. An item is new by its number." {
+		t.Fatalf("readback = %q, for developers %q", v.Readback, v.ForDevelopers)
 	}
 	slot := t0.Add(15 * time.Minute)
 	f.clock.Set(slot.Add(time.Second))

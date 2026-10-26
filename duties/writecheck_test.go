@@ -71,7 +71,8 @@ func TestWriteCheck(t *testing.T) {
 	var ans WriteCheckAnswer
 	decodeJSON(t, b, &ans)
 	if resp.StatusCode != http.StatusOK || ans.CheckFirst == nil || ans.CheckFirst.Wake.When != WakeNew || ans.Check == nil || ans.Check.Count != 1 || !ans.Check.Wakes ||
-		!strings.HasPrefix(ans.Readback, "First it looks at 127.0.0.1:") || !strings.Contains(ans.Readback, "Only items that it did not see before wake triage, by their number.") || ans.Run == "" {
+		!strings.HasPrefix(ans.Readback, "First it looks at 127.0.0.1:") || !strings.Contains(ans.Readback, "Only items that it did not see before wake triage.") ||
+		ans.ForDevelopers != "The check reads the items at result.records of the answer. An item is new by its number." || ans.Run == "" {
 		t.Fatalf("write-check = %d %s", resp.StatusCode, b)
 	}
 	req := f.queue.last(t)
@@ -109,7 +110,7 @@ func TestWriteCheckOfASavedDuty(t *testing.T) {
 	var ans WriteCheckAnswer
 	decodeJSON(t, b, &ans)
 	if resp.StatusCode != http.StatusOK || f.queue.last(t).Agent != "triage" || ans.Check != nil || ans.CheckFirst.Look.Tool != "servicenow.query_incidents" ||
-		ans.Readback != "First it calls the tool servicenow.query_incidents for the items at result.records. Any item wakes triage." {
+		ans.Readback != "First it calls the tool servicenow.query_incidents. Any item wakes triage." || ans.ForDevelopers != "The check reads the items at result.records of the answer." {
 		t.Fatalf("write-check of a saved duty = %d %s", resp.StatusCode, b)
 	}
 	cs := connectMCP(t, f.a, "alice")
@@ -170,11 +171,50 @@ func TestWriteCheckRefusals(t *testing.T) {
 		{"alice", `{"words": " ", "agent": "triage"}`, http.StatusBadRequest, "words: Say in words"},
 		{"carol", body, http.StatusForbidden, "needs an owner entry on the agent triage"},
 		{"dave", body, http.StatusNotFound, "No agent that you can view is named triage"},
-		{"dave", `{"words": "x", "agent": "private"}`, http.StatusUnprocessableEntity, "The agent private has no budget"},
+		{"dave", `{"words": "x", "agent": "private"}`, http.StatusUnprocessableEntity, "private has no spending limit, so it does not write the check: a run without a limit would be a silent cost. Set the most that one run of this duty can cost, such as $0.50, and ask again."},
+		{"dave", `{"words": "x", "agent": "private", "budget": {}}`, http.StatusUnprocessableEntity, "private has no spending limit"},
 	} {
 		resp, b := send(t, http.MethodPost, url, c.who, c.body)
 		if resp.StatusCode != c.status || !strings.Contains(b, c.want) {
 			t.Errorf("%s %s = %d %s", c.who, c.body, resp.StatusCode, b)
+		}
+	}
+	// An agent without a budget writes the check within the budget of the
+	// duty that the form holds.
+	resp, b = send(t, http.MethodPost, url, "dave", `{"words": "x", "agent": "private", "budget": {"maxCostUSD": 0.5}}`)
+	if req := f.queue.last(t); resp.StatusCode != http.StatusGatewayTimeout || req.Agent != "private" || req.Budget == nil || req.Budget.MaxCostUSD != 0.5 || req.Budget.Deadline != 50*time.Millisecond {
+		t.Fatalf("a check within the budget of the duty = %d %s, %+v", resp.StatusCode, b, req.Budget)
+	}
+}
+
+// An agent that reads the answer of its tool as the list leaves items out.
+// When the answer is an object with one list of objects, such as the
+// answer of pages_list, the record names that list, and the test finds
+// the items in it.
+func TestWriteCheckFindsTheList(t *testing.T) {
+	f := newFront(t, checkBlock, withBudget)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"pages": [{"path": "walk/a.md"}, {"path": "notes/b.md"}], "total": 2, "index": "_index.md"}`))
+	}))
+	t.Cleanup(srv.Close)
+	f.answering(fw.StateCompleted, `{"look": {"http": {"url": "`+srv.URL+`/pages"}}, "key": "path", "where": [{"field": "path", "contains": "walk/"}]}`)
+	resp, b := send(t, http.MethodPost, f.url+"/v1/duties/pages/write-check", "alice", `{"words": "a new wiki page under walk/", "agent": "triage"}`)
+	var ans WriteCheckAnswer
+	decodeJSON(t, b, &ans)
+	if resp.StatusCode != http.StatusOK || ans.CheckFirst == nil || ans.CheckFirst.Items != "pages" || ans.Check == nil || ans.Check.Count != 1 ||
+		ans.ForDevelopers != "The check reads the items at pages of the answer. An item is new by its path." {
+		t.Fatalf("write-check = %d %s", resp.StatusCode, b)
+	}
+	for _, c := range []struct{ body, want string }{
+		{`{"pages": [{"path": "a"}], "total": 1}`, "pages"},
+		{`{"a": [{"x": 1}], "b": [{"y": 2}]}`, ""},
+		{`{"names": ["a", "b"]}`, ""},
+		{`[{"x": 1}]`, ""},
+		{`{"pages": []}`, ""},
+		{`{"a.b": [{"x": 1}]}`, ""},
+	} {
+		if got := listPath([]byte(c.body)); got != c.want {
+			t.Errorf("listPath(%s) = %q, want %q", c.body, got, c.want)
 		}
 	}
 }

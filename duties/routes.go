@@ -112,9 +112,10 @@ func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 // when the agent wrote one.
 type checkProblem struct {
 	native.Problem
-	Error      string      `json:"error"`
-	CheckFirst *CheckFirst `json:"checkFirst,omitempty"`
-	Readback   string      `json:"readback,omitempty"`
+	Error         string      `json:"error"`
+	CheckFirst    *CheckFirst `json:"checkFirst,omitempty"`
+	Readback      string      `json:"readback,omitempty"`
+	ForDevelopers string      `json:"forDevelopers,omitempty"`
 }
 
 // writeCheckFailure writes the problem document of a write of a check
@@ -125,7 +126,7 @@ func writeCheckFailure(w http.ResponseWriter, r *http.Request, status int, reaso
 		Error:   reason,
 	}
 	if ce != nil {
-		doc.CheckFirst, doc.Readback = ce.CheckFirst, ce.Readback
+		doc.CheckFirst, doc.Readback, doc.ForDevelopers = ce.CheckFirst, ce.Readback, ce.ForDevelopers
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)

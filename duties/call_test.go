@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -27,8 +28,11 @@ func TestCallBearer(t *testing.T) {
 	f := newFront(t, checkBlock, nil)
 	f.sec["HOOK_TOKEN"] = "tok"
 	v := f.put(t, "alice", hookDuty("hook"))
-	if v.Readback != "When another app calls POST /v1/duties/hook/call with its bearer token. A second call with the same body within ten minutes is a duplicate." || len(v.Next) != 0 {
-		t.Fatalf("the duty = %q %v", v.Readback, v.Next)
+	// A person reads plain words, and the address and the credential are
+	// for a developer.
+	if v.Readback != "When another app sends an event with its key. Repeats of the same event within ten minutes are skipped." || len(v.Next) != 0 ||
+		v.ForDevelopers != "Another app calls POST /v1/duties/hook/call with the bearer token of the duty. A second call with the same body within ten minutes is a duplicate." {
+		t.Fatalf("the duty = %q %q %v", v.Readback, v.ForDevelopers, v.Next)
 	}
 	url := f.url + "/v1/duties/hook/call"
 	resp, _ := send(t, http.MethodPost, url, "", `{"id": 1}`)
@@ -81,8 +85,9 @@ func TestCallKeyAndSignature(t *testing.T) {
 	d := hookDuty("signed")
 	d.When.Webhook = &Webhook{Auth: WebhookAuth{Mode: "hmac", Secret: "HOOK_TOKEN"}, Key: "event.id"}
 	v := f.put(t, "alice", d)
-	if v.When.Webhook.Auth.Header != "X-Signature-256" || !strings.Contains(v.Readback, "the same event.id within a week") {
-		t.Fatalf("the duty = %+v %q", v.When.Webhook, v.Readback)
+	if v.When.Webhook.Auth.Header != "X-Signature-256" || v.Readback != "When another app sends an event, signed. Repeats of one event within a week are skipped." ||
+		v.ForDevelopers != "Another app calls POST /v1/duties/signed/call with the HMAC-SHA256 signature of the body in the header X-Signature-256. A second call with the same event.id within a week is a duplicate." {
+		t.Fatalf("the duty = %+v %q %q", v.When.Webhook, v.Readback, v.ForDevelopers)
 	}
 	sign := func(body string) string {
 		mac := hmac.New(sha256.New, []byte("key"))
@@ -121,5 +126,28 @@ func TestCallSecretRule(t *testing.T) {
 	_, err := f.s.Put(as("alice"), "hook", DutyBody{Duty: hookDuty("hook")}, PutOptions{})
 	if err == nil || !strings.Contains(err.Error(), "when.webhook.auth.secret: HOOK_TOKEN is not in workbench.duties.secrets") {
 		t.Fatalf("a secret off the list = %v", err)
+	}
+}
+
+// A duty keeps its title in the words of the person beside its name, in
+// one line, and refuses a title that is not one short line.
+func TestDutyTitle(t *testing.T) {
+	f := newFront(t, checkBlock, nil)
+	f.sec["HOOK_TOKEN"] = "tok"
+	d := hookDuty("walk-duty-1")
+	d.Title = "  Walk   Duty 1 "
+	if v := f.put(t, "alice", d); v.Title != "Walk Duty 1" || v.Name != "walk-duty-1" {
+		t.Fatalf("the duty = %q %q", v.Title, v.Name)
+	}
+	if v, err := f.s.Get(as("alice"), "walk-duty-1"); err != nil || v.Title != "Walk Duty 1" {
+		t.Fatalf("Get = %q, %v", v.Title, err)
+	}
+	for _, title := range []string{strings.Repeat("a", MaxTitleRunes+1), "Walk\u0007Duty"} {
+		d.Title = title
+		_, err := f.s.Put(as("alice"), d.Name, DutyBody{Duty: d}, PutOptions{})
+		var pe *ProblemsError
+		if !errors.As(err, &pe) || !strings.Contains(strings.Join(pe.Problems, " "), "title: A title is one line of at most 100 characters.") {
+			t.Errorf("title %q = %v", title, err)
+		}
 	}
 }

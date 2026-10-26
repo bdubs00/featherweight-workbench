@@ -51,7 +51,9 @@ func (e *ProblemsError) Error() string { return strings.Join(e.Problems, " ") }
 const SourceStore = "store"
 
 // View is a duty as a read gives it: the record, where it comes from, its
-// revision, its readback, its next five times, and its state. History
+// revision, its readback in plain words, the technical part of the
+// readback for a developer (ForDevelopers), its next five times, and its
+// state. History
 // holds the last 50 starts, newest first, in a read of one duty. Origin
 // names the entry of workbench.sources of an imported duty, Locked marks a
 // duty that the setup of the server locks, and Template is true while the
@@ -59,15 +61,18 @@ const SourceStore = "store"
 // of the record is empty.
 type View struct {
 	Duty
-	Source   string      `json:"source"`
-	Origin   *Origin     `json:"origin,omitempty"`
-	Locked   bool        `json:"locked,omitempty"`
-	Template bool        `json:"template,omitempty"`
-	Revision uint64      `json:"revision"`
-	Readback string      `json:"readback"`
-	Next     []time.Time `json:"next"`
-	State    State       `json:"state"`
-	History  []RunEntry  `json:"history,omitempty"`
+	Source   string  `json:"source"`
+	Origin   *Origin `json:"origin,omitempty"`
+	Locked   bool    `json:"locked,omitempty"`
+	Template bool    `json:"template,omitempty"`
+	Revision uint64  `json:"revision"`
+	Readback string  `json:"readback"`
+	// ForDevelopers holds the address and the credential of a webhook
+	// and where a check finds its items, for the fold "For developers".
+	ForDevelopers string      `json:"forDevelopers,omitempty"`
+	Next          []time.Time `json:"next"`
+	State         State       `json:"state"`
+	History       []RunEntry  `json:"history,omitempty"`
 }
 
 // State is the state of a duty in a read: its last start, what it spent
@@ -94,16 +99,17 @@ type ListAnswer struct {
 // fields that only a read has are taken and left out.
 type DutyBody struct {
 	Duty
-	Paused   *bool           `json:"paused,omitempty"`
-	Revision uint64          `json:"revision,omitempty"`
-	Source   string          `json:"source,omitempty"`
-	Origin   json.RawMessage `json:"origin,omitempty"`
-	Locked   json.RawMessage `json:"locked,omitempty"`
-	Template json.RawMessage `json:"template,omitempty"`
-	Readback string          `json:"readback,omitempty"`
-	Next     json.RawMessage `json:"next,omitempty"`
-	State    json.RawMessage `json:"state,omitempty"`
-	History  json.RawMessage `json:"history,omitempty"`
+	Paused        *bool           `json:"paused,omitempty"`
+	Revision      uint64          `json:"revision,omitempty"`
+	Source        string          `json:"source,omitempty"`
+	Origin        json.RawMessage `json:"origin,omitempty"`
+	Locked        json.RawMessage `json:"locked,omitempty"`
+	Template      json.RawMessage `json:"template,omitempty"`
+	Readback      string          `json:"readback,omitempty"`
+	ForDevelopers json.RawMessage `json:"forDevelopers,omitempty"`
+	Next          json.RawMessage `json:"next,omitempty"`
+	State         json.RawMessage `json:"state,omitempty"`
+	History       json.RawMessage `json:"history,omitempty"`
 }
 
 // PutOptions are the options of a write. DryRun saves nothing and
@@ -126,14 +132,15 @@ type PutAnswer struct {
 }
 
 // DryAnswer is the answer of a dry run: the duty as the write would store
-// it, its readback, its next five times, every problem, and with a test
-// what the check finds now.
+// it, its readback, the technical part of the readback, its next five
+// times, every problem, and with a test what the check finds now.
 type DryAnswer struct {
-	Duty     Duty        `json:"duty"`
-	Readback string      `json:"readback"`
-	Next     []time.Time `json:"next"`
-	Problems []string    `json:"problems"`
-	Check    *TestAnswer `json:"check,omitempty"`
+	Duty          Duty        `json:"duty"`
+	Readback      string      `json:"readback"`
+	ForDevelopers string      `json:"forDevelopers,omitempty"`
+	Next          []time.Time `json:"next"`
+	Problems      []string    `json:"problems"`
+	Check         *TestAnswer `json:"check,omitempty"`
 }
 
 // caller names who acts in ctx: the subject and the kind of the
@@ -260,11 +267,12 @@ func (s *Service) view(ctx context.Context, st *stored, withHistory bool) (View,
 		cf.Look.HTTP = &h
 		d.CheckFirst = &cf
 	}
-	v := View{Duty: d, Source: SourceStore, Origin: st.Origin, Locked: st.Locked, Template: st.templated(), Revision: st.rev, Readback: readback(&d), Next: next(&d, now, 5)}
+	words := s.worded(ctx, d)
+	v := View{Duty: d, Source: SourceStore, Origin: st.Origin, Locked: st.Locked, Template: st.templated(), Revision: st.rev, Readback: readback(&words), ForDevelopers: details(&d), Next: next(&d, now, 5)}
 	if step, ok := st.pollStep(); ok {
 		// The interval of an imported poll can be shorter than the
 		// shortest step of a schedule, which the plan of a schedule reads.
-		v.Readback = pollWords(&d, step)
+		v.Readback = pollWords(&words, step)
 		v.Next = make([]time.Time, 0, 5)
 		for i := 1; i <= 5; i++ {
 			v.Next = append(v.Next, now.Add(time.Duration(i)*step).UTC())
@@ -498,7 +506,8 @@ func (s *Service) dryRun(ctx context.Context, d Duty, problems []string, test bo
 	if d.When.Schedule != nil && d.When.Schedule.Check() != nil {
 		ans.Readback = ""
 	} else {
-		ans.Readback = readback(&d)
+		words := s.worded(ctx, d)
+		ans.Readback, ans.ForDevelopers = readback(&words), details(&d)
 	}
 	if !test {
 		return PutAnswer{Dry: ans}, nil

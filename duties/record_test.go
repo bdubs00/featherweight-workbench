@@ -156,8 +156,11 @@ func TestContractRecord(t *testing.T) {
 	if p := d.problems(); len(p) != 0 {
 		t.Fatalf("problems of the record of the contract: %v", p)
 	}
-	if got := readback(&d); got != "Every weekday at 9:00 AM, New York time, from October 26, 2026 until December 31, 2026. First it looks at example/api/queue for the items at result.records, where priority is 1 or 2. Only items that it did not see before wake docs-scribe, by their number. The run gets the list." {
+	if got := readback(&d); got != "Every weekday at 9:00 AM, New York time, from October 26, 2026 until December 31, 2026. First it looks at example/api/queue, where priority is 1 or 2. Only items that it did not see before wake docs-scribe. The run gets the list." {
 		t.Fatalf("readback = %q", got)
+	}
+	if got := details(&d); got != "The check reads the items at result.records of the answer. An item is new by its number." {
+		t.Fatalf("details = %q", got)
 	}
 	var s schedule.Schedule = *d.When.Schedule
 	if s.Repeat != schedule.RepeatWeekdays {

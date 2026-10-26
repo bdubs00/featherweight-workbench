@@ -73,29 +73,34 @@ var ErrNoAnswer = errors.New("duties: the agent did not answer in time")
 // the record that the agent wrote, when it wrote one that reads. A route
 // answers 422.
 type CheckError struct {
-	Reason     string
-	CheckFirst *CheckFirst
-	Readback   string
+	Reason        string
+	CheckFirst    *CheckFirst
+	Readback      string
+	ForDevelopers string
 }
 
 func (e *CheckError) Error() string { return e.Reason }
 
 // WriteCheckBody is the body of a write of a check: the words of a person,
-// and the agent of a duty that does not exist yet. For a saved duty, the
-// agent of the duty wins.
+// the agent of a duty that does not exist yet, and the budget of each run
+// of the duty as the form holds it. For a saved duty, the agent of the
+// duty wins, and without a budget the budget of the saved duty counts.
 type WriteCheckBody struct {
-	Words string `json:"words"`
-	Agent string `json:"agent,omitempty"`
+	Words  string  `json:"words"`
+	Agent  string  `json:"agent,omitempty"`
+	Budget *Budget `json:"budget,omitempty"`
 }
 
 // WriteCheckAnswer is the check that the agent wrote: the record, its
-// readback in words, what a test of it finds now, which is null when the
-// front cannot run the look yet, and the run that wrote it.
+// readback in words, where it finds its items for a developer, what a
+// test of it finds now, which is null when the front cannot run the look
+// yet, and the run that wrote it.
 type WriteCheckAnswer struct {
-	CheckFirst *CheckFirst `json:"checkFirst"`
-	Readback   string      `json:"readback"`
-	Check      *TestAnswer `json:"check"`
-	Run        string      `json:"run"`
+	CheckFirst    *CheckFirst `json:"checkFirst"`
+	Readback      string      `json:"readback"`
+	ForDevelopers string      `json:"forDevelopers,omitempty"`
+	Check         *TestAnswer `json:"check"`
+	Run           string      `json:"run"`
 }
 
 // WriteCheck asks the agent of a duty to turn the words of the caller in
@@ -136,7 +141,12 @@ func (s *Service) WriteCheck(ctx context.Context, name string, body WriteCheckBo
 			return WriteCheckAnswer{}, err
 		}
 		d = st.Duty
+		if body.Budget != nil {
+			// The form holds a budget that the person did not save yet.
+			d.Limits.Budget = body.Budget
+		}
 	case errors.Is(err, ErrNotFound):
+		d.Limits.Budget = body.Budget
 		d.Agent = strings.TrimSpace(body.Agent)
 		if d.Agent == "" {
 			return WriteCheckAnswer{}, &ProblemsError{Problems: []string{problem("agent", "Name the agent of the new duty. It writes the check with its own tools.")}}
@@ -206,13 +216,30 @@ func (s *Service) proveCheck(ctx context.Context, d Duty, c *CheckFirst, run str
 	if len(problems) > 0 {
 		return WriteCheckAnswer{}, &CheckError{Reason: "The check that the agent wrote does not fit: " + strings.Join(problems, " "), CheckFirst: c}
 	}
-	ans := WriteCheckAnswer{CheckFirst: c, Readback: checkWords(&d, c), Run: run}
+	words := s.worded(ctx, d)
+	ans := WriteCheckAnswer{CheckFirst: c, Readback: checkWords(&words, c), ForDevelopers: checkDetails(c), Run: run}
 	if c.Look.Tool != "" && lookOf(LookNameTool) == nil {
 		return ans, nil
 	}
-	t, err := s.testCheck(ctx, &d)
+	failed := func(err error) error {
+		return &CheckError{Reason: "The check that the agent wrote failed its test: " + strings.TrimSuffix(err.Error(), ".") + ".", CheckFirst: c, Readback: ans.Readback, ForDevelopers: ans.ForDevelopers}
+	}
+	body, err := s.look(ctx, &d)
 	if err != nil {
-		return WriteCheckAnswer{}, &CheckError{Reason: "The check that the agent wrote failed its test: " + strings.TrimSuffix(err.Error(), ".") + ".", CheckFirst: c, Readback: ans.Readback}
+		return WriteCheckAnswer{}, failed(err)
+	}
+	if c.Items == "" {
+		// The agent read the answer as the list, and the answer holds one
+		// list of objects, such as pages of pages_list: the record names
+		// it, so the person reads where the check finds its items.
+		if k := listPath(body); k != "" {
+			c.Items = k
+			ans.Readback, ans.ForDevelopers = checkWords(&words, c), checkDetails(c)
+		}
+	}
+	t, err := s.testBody(ctx, &d, body)
+	if err != nil {
+		return WriteCheckAnswer{}, failed(err)
 	}
 	ans.Check = t
 	return ans, nil
@@ -220,9 +247,10 @@ func (s *Service) proveCheck(ctx context.Context, d Duty, c *CheckFirst, run str
 
 // writeRequest returns the run request that asks the agent of a duty for
 // its check: the words of the person as the input, the fixed instructions,
-// the budget of the profile of the agent with a deadline of
-// WriteCheckTimeout at most, and the caller in ctx as its principal. A
-// profile without a budget gets a *CheckError.
+// the budget of the profile of the agent, else the budget of each run of
+// the duty, with a deadline of WriteCheckTimeout at most, and the caller in
+// ctx as its principal. Without either budget it gives a *CheckError that
+// says what to set, because a run without a limit would be a silent cost.
 func (s *Service) writeRequest(ctx context.Context, d *Duty, words string) (fw.RunRequest, error) {
 	front := fw.WithPrincipal(ctx, nil)
 	place, err := fleet.PlaceOf(front, s.a, d.Agent, d.Pool)
@@ -235,7 +263,15 @@ func (s *Service) writeRequest(ctx context.Context, d *Duty, words string) (fw.R
 	}
 	b := prof.Budget
 	if b == nil || (b.MaxCostUSD <= 0 && b.MaxTurns <= 0 && b.MaxTokens <= 0 && b.MaxToolCalls <= 0) {
-		return fw.RunRequest{}, &CheckError{Reason: fmt.Sprintf("The agent %s has no budget, so the server does not run it to write a check: a run without a limit would be a silent cost. Give the agent a budget, with at least one of maxCostUSD, maxTurns, maxTokens, and maxToolCalls, and ask again.", d.Agent)}
+		// The duty bounds each of its runs, and the run that writes its
+		// check is one more run of the duty.
+		b = nil
+		if db := d.Limits.Budget; db != nil && (db.MaxCostUSD > 0 || db.MaxTurns > 0 || db.MaxTokens > 0 || db.MaxToolCalls > 0) {
+			b = &fw.Budget{MaxCostUSD: db.MaxCostUSD, MaxTurns: db.MaxTurns, MaxTokens: db.MaxTokens, MaxToolCalls: db.MaxToolCalls}
+		}
+	}
+	if b == nil {
+		return fw.RunRequest{}, &CheckError{Reason: fmt.Sprintf("%s has no spending limit, so it does not write the check: a run without a limit would be a silent cost. Set the most that one run of this duty can cost, such as $0.50, and ask again.", d.Agent)}
 	}
 	budget := *b
 	if budget.Deadline <= 0 || budget.Deadline > s.writeWait {

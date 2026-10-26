@@ -1,11 +1,15 @@
 package duties
 
 import (
+	"context"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/faces"
+	"github.com/bdubs00/featherweight-workbench/internal/bucket"
 )
 
 // A person reads the title of a run, so the title names the event and
@@ -53,5 +57,77 @@ func TestFailReasonSaysTheLimit(t *testing.T) {
 		if got := failReason(err); got != want {
 			t.Errorf("failReason(%q) = %q, want %q", err, got, want)
 		}
+	}
+}
+
+// A webhook reads in plain words, with the app that signs it when its
+// header names one, and the noun of its key. The address stays in the
+// part for developers.
+func TestWebhookWords(t *testing.T) {
+	for _, c := range []struct {
+		w    Webhook
+		want string
+	}{
+		{Webhook{Auth: WebhookAuth{Mode: "hmac", Header: "X-Gitea-Signature"}, Key: "issue.number"}, "When Gitea sends an event, signed. Repeats of one issue within a week are skipped."},
+		{Webhook{Auth: WebhookAuth{Mode: "hmac", Header: "X-Hub-Signature-256"}, Key: "pull_request.id"}, "When GitHub sends an event, signed. Repeats of one pull request within a week are skipped."},
+		{Webhook{Auth: WebhookAuth{Mode: "hmac", Header: "X-Signature-256"}, Key: "ticket_id"}, "When another app sends an event, signed. Repeats of one ticket within a week are skipped."},
+		{Webhook{Auth: WebhookAuth{Mode: "bearer"}, Key: "id"}, "When another app sends an event with its key. Repeats of one event within a week are skipped."},
+		{Webhook{Auth: WebhookAuth{Mode: "bearer"}, Key: "data.workOrderId"}, "When another app sends an event with its key. Repeats of one work order within a week are skipped."},
+		{Webhook{Auth: WebhookAuth{Mode: "none"}}, "When another app sends an event. Nothing checks who sends it. Repeats of the same event within ten minutes are skipped."},
+	} {
+		if got := webhookWords(&c.w); got != c.want {
+			t.Errorf("webhookWords(%+v) = %q, want %q", c.w, got, c.want)
+		}
+	}
+	d := Duty{Name: "tickets", When: When{Webhook: &Webhook{Auth: WebhookAuth{Mode: "hmac", Header: "X-Gitea-Signature"}, Key: "issue.number"}}}
+	if got := details(&d); got != "Another app calls POST /v1/duties/tickets/call with the HMAC-SHA256 signature of the body in the header X-Gitea-Signature. A second call with the same issue.number within a week is a duplicate." {
+		t.Fatalf("details = %q", got)
+	}
+	if got := readback(&d); strings.Contains(got, "/v1/") || strings.Contains(got, "HMAC") || strings.Contains(got, "issue.number") {
+		t.Fatalf("the readback holds a word of the API: %q", got)
+	}
+}
+
+// An event with a wait says it in words.
+func TestEventWords(t *testing.T) {
+	for _, c := range []struct {
+		e    Event
+		want string
+	}{
+		{Event{Kind: EventQuestionWaiting, After: "1h"}, "When a question waits longer than 1 hour."},
+		{Event{Kind: EventQuestionWaiting, After: "90m"}, "When a question waits longer than 1 hour and 30 minutes."},
+		{Event{Kind: EventBridgeClosed, After: "30m"}, "When a bridge closes. The duty starts 30 minutes later."},
+		{Event{Kind: EventCapReached}, "When a duty reaches its daily cost cap."},
+		{Event{Kind: EventPageChanged, Path: "walk/", After: "0"}, "When a page of the wiki under walk/ changes."},
+		{Event{Kind: EventRunFailed, Agent: "triage"}, "When a run of triage fails after its retries."},
+		{Event{Kind: "custom.kind", Agent: "triage"}, "When the event custom.kind comes, for the agent triage."},
+	} {
+		if got := eventWords(&c.e); got != c.want {
+			t.Errorf("eventWords(%+v) = %q, want %q", c.e, got, c.want)
+		}
+	}
+}
+
+// A readback names an agent by its display name, and the record keeps the
+// name of the agent.
+func TestReadbackNamesTheAgentInWords(t *testing.T) {
+	f := newFront(t, checkBlock, nil)
+	st := faces.New(bucket.NewMem(bucket.Config{Name: "FACES"}), slog.New(slog.DiscardHandler))
+	faces.Attach(f.a, st)
+	t.Cleanup(func() { faces.Attach(f.a, nil) })
+	if _, err := st.Meta(context.Background(), "triage", "Triage Desk", "", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	d := Duty{Name: "q", Agent: "triage", When: When{Event: &Event{Kind: EventQuestionWaiting, Agent: "triage", After: "1h"}},
+		CheckFirst: &CheckFirst{Look: Look{HTTP: &LookHTTP{URL: "https://example.com/q"}}, Wake: Wake{When: WakeAny}}}
+	w := f.s.worded(context.Background(), d)
+	if got := readback(&w); got != "When a question of Triage Desk waits longer than 1 hour. First it looks at example.com/q. Any item wakes Triage Desk." {
+		t.Fatalf("readback = %q", got)
+	}
+	if d.Agent != "triage" || d.When.Event.Agent != "triage" {
+		t.Fatalf("the record changed: %+v", d)
+	}
+	if got := f.s.agentWords(context.Background(), "reviewer"); got != "reviewer" {
+		t.Fatalf("an agent without a display name = %q", got)
 	}
 }
