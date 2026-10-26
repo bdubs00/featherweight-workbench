@@ -157,7 +157,7 @@ type source struct {
 	queue  string
 	verify verifier // a webhook source
 	poll   *poller  // a poll source
-	count  counter
+	count  *counter
 
 	mu    sync.Mutex
 	moved string
@@ -183,7 +183,7 @@ func newSources(ctx context.Context, a *fw.Agent, list []Source, st store) (*Sou
 			return nil, fmt.Errorf("sources: workbench.sources.%s: %w", c.Name, err)
 		}
 		src := &source{cfg: c, tpl: tpl, queue: queue}
-		src.count.st = Stat{Source: c.Name, Kind: c.Kind(), Agent: c.Agent}
+		src.count = &counter{st: Stat{Source: c.Name, Kind: c.Kind(), Agent: c.Agent}}
 		if c.Poll != nil {
 			value, err := secretOf(ctx, secrets, c.Name, "poll.secret", c.Poll.Secret)
 			if err != nil {

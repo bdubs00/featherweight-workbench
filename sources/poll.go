@@ -126,6 +126,12 @@ func (s *Sources) polls(src *source) {
 			return
 		case <-t.C:
 		}
+		if Adopted(s.a, src.cfg.Name) {
+			// A duty runs this entry now (duty.go), so the source polls no
+			// more, and the duty polls in its place.
+			failures, delay = 0, p.every
+			continue
+		}
 		if err := s.pollOnce(s.ctx, src); err != nil {
 			if s.ctx.Err() != nil {
 				return

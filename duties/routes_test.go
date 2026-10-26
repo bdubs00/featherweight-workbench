@@ -185,49 +185,6 @@ func TestRoutesLifecycle(t *testing.T) {
 	}
 }
 
-// The entries of workbench.sources show as duties with the source file,
-// for the viewers of their agent, and no route changes them.
-func TestRoutesFileSources(t *testing.T) {
-	block := `
-sources:
-  - name: tickets
-    agent: triage
-    auth: {mode: none}
-    input: "Triage {{.id}}"
-    key: "{{.id}}"
-  - name: alerts
-    agent: private
-    poll: {url: "https://alerts.example.com/api?token=x", every: 2m}
-    key: "{{.id}}"
-`
-	f := newFront(t, block, nil)
-	base := f.url + "/v1/duties"
-	resp, b := send(t, http.MethodGet, base, "carol", "")
-	var list ListAnswer
-	decodeJSON(t, b, &list)
-	if resp.StatusCode != http.StatusOK || len(list.Duties) != 1 || list.Duties[0].Name != "tickets" || list.Duties[0].Source != SourceFile ||
-		!strings.Contains(list.Duties[0].Readback, "When another app calls the address of this source") || strings.Contains(list.Duties[0].Readback, "/v1/") || strings.Contains(b, "{{") {
-		t.Fatalf("the list = %d %s", resp.StatusCode, b)
-	}
-	_, b = send(t, http.MethodGet, base+"/alerts", "dave", "")
-	if !strings.Contains(b, `"source":"file"`) || !strings.Contains(b, "Every 2m, it looks at alerts.example.com/api") || strings.Contains(b, "token=x") {
-		t.Fatalf("a poll source = %s", b)
-	}
-	if resp, _ := send(t, http.MethodGet, base+"/alerts", "carol", ""); resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("a source of another agent = %d", resp.StatusCode)
-	}
-	for _, c := range []struct{ method, path, body string }{
-		{http.MethodPut, "/tickets", mustJSON(t, daily("tickets"))},
-		{http.MethodPatch, "/tickets", `{"paused": true}`},
-		{http.MethodDelete, "/tickets", ""},
-		{http.MethodPost, "/tickets/run", ""},
-	} {
-		if resp, b := send(t, c.method, base+c.path, "alice", c.body); resp.StatusCode != http.StatusConflict || !strings.Contains(b, "workbench.sources in fw.yaml") {
-			t.Errorf("%s %s = %d %s", c.method, c.path, resp.StatusCode, b)
-		}
-	}
-}
-
 // Each route of the duties has its MCP tool, or a reason why none.
 func TestParity(t *testing.T) {
 	f := newFront(t, "", nil)

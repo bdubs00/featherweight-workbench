@@ -109,7 +109,7 @@ func message(d *duties.Duty, w *wait, r *fw.Run) string {
 	b.WriteString("Allow the call only when it clearly serves the duty and is safe. When you are not sure, deny it.\n")
 	b.WriteString("Answer with one JSON object and nothing else, in this shape:\n")
 	b.WriteString(`{"verdict": "allow", "reason": "one sentence"}` + "\n")
-	b.WriteString(`verdict is "allow" or "deny". The front applies your verdict and records that you decided.`)
+	b.WriteString(`verdict is "allow" or "deny". The server applies your verdict and records that you decided.`)
 	return b.String()
 }
 

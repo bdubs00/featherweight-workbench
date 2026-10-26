@@ -82,7 +82,7 @@ func (l *looker) look(ctx context.Context, a *fw.Agent, d *duties.Duty) ([]byte,
 			_ = l.cancel(context.WithoutCancel(ctx), a, req.ID)
 			return nil, fmt.Errorf("the check run %s did not end within %s", req.ID, wait)
 		}
-		return nil, fmt.Errorf("the front did not read the check run %s: %s", req.ID, words(err))
+		return nil, fmt.Errorf("the server did not read the check run %s: %s", req.ID, words(err))
 	}
 	switch r.State {
 	case fw.StateCompleted:

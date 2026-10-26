@@ -60,7 +60,7 @@ const (
 		"timeZone":` + zoneSchema + `
 	},"required":["name","duty"]}`
 
-	zoneSchema = `{"type":"string","maxLength":64,"description":"Pass it only when the person names a time zone, such as America/New_York. Leave it out otherwise, also when your own clock says UTC: the front then takes the time zone that the person saved, else UTC. The readback names the zone, so show it to the person."}`
+	zoneSchema = `{"type":"string","maxLength":64,"description":"Pass it only when the person names a time zone, such as America/New_York. Leave it out otherwise, also when your own clock says UTC: the server then takes the time zone that the person saved, else UTC. The readback names the zone, so show it to the person."}`
 
 	dutySchema = `{"type":["object","string"],"description":"The duty, as an object. A JSON text of the object reads too. agent names the agent that does it. when holds one start: say, the words of a schedule such as \"every weekday at 9am\", or schedule, the record {repeat, days, everyWeeks, dayOfMonth, times, every, between, timeZone, start, end}, or webhook {auth: {mode, secret, header}, key}. checkFirst {look: {http: {url, secret, header}} or {tool, input}, items, key, where, wake} looks for work first; duty_write_check writes it from words. do holds one action: ask {message} asks the agent, post {bridge, to, message} posts in a bridge that stays open, open {playbook, goal} opens a bridge from a playbook, and manager {message} asks the manager. A message takes the placeholders {date}, {time}, {found}, {event}, {last.title}, {last.run}, {last.state}, and {duty}. For ask and manager, limits.budget is required, with at least one of maxCostUSD, maxTurns, maxTokens, and maxToolCalls above zero, and limits.perDayUSD caps a day. A post spends nothing of its own and takes no budget. For open, limits.budget holds maxTurns alone, the most turns of the whole bridge. limits also take overlap (skip, queue, allow), catchUp, and retries. whileAway, notify, runAs (duty or owner), and paused are optional. notify {failure, needsYou} lists owner, the subject of a person, or channel:<name> for a shared channel of the operator. A read of duty_get is a valid body."}`
 
@@ -156,7 +156,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolPut,
 			Title:       "Create or change a duty",
-			Description: "Create or change a duty: what an agent does on its own, when, and within which limits. It needs the owner role on the agent. The schedule is words, such as {\"when\": {\"say\": \"every weekday at 9am\"}}, and the front reads them with a fixed grammar. Call duty_preview first, show the readback and the next times to the person, and save with duty_put only after the person agrees.",
+			Description: "Create or change a duty: what an agent does on its own, when, and within which limits. It needs the owner role on the agent. The schedule is words, such as {\"when\": {\"say\": \"every weekday at 9am\"}}, and the server reads them with a fixed grammar. Call duty_preview first, show the readback and the next times to the person, and save with duty_put only after the person agrees.",
 			InputSchema: json.RawMessage(putSchema),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in putArgs) (*sdk.CallToolResult, any, error) {
@@ -201,7 +201,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolWriteCheck,
 			Title:       "Write the check of a duty",
-			Description: "Turn the words of a person into the check of a duty, the record checkFirst, which looks for work before the duty wakes the agent. The agent of the duty writes it with its own tools, in one run within its budget, and the front tests it once. The answer is the record, its readback in words, and what the check finds now. It saves nothing: put the record in checkFirst with duty_put. It needs the owner role on the agent, and an agent without a budget does not run.",
+			Description: "Turn the words of a person into the check of a duty, the record checkFirst, which looks for work before the duty wakes the agent. The agent of the duty writes it with its own tools, in one run within its budget, and the server tests it once. The answer is the record, its readback in words, and what the check finds now. It saves nothing: put the record in checkFirst with duty_put. It needs the owner role on the agent, and an agent without a budget does not run.",
 			InputSchema: json.RawMessage(writeCheckSchema),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(false), IdempotentHint: false, OpenWorldHint: ptr(true)},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in writeCheckArgs) (*sdk.CallToolResult, any, error) {
@@ -230,7 +230,7 @@ func explain(err error) string {
 	case errors.Is(err, ErrConflict), errors.Is(err, ErrExists):
 		return "Conflict: " + reason(err) + "."
 	case errors.Is(err, ErrReadOnly):
-		return "Conflict: " + reason(err) + "."
+		return "Conflict: " + strings.TrimSuffix(reason(err), ".") + "."
 	case errors.Is(err, ErrUpstream):
 		return "Bad gateway: " + reason(err) + "."
 	case errors.Is(err, ErrNoAnswer):
@@ -245,7 +245,7 @@ func explain(err error) string {
 
 // off is the result of a tool in a process without duties.
 func off() *sdk.CallToolResult {
-	return mcp.ErrorResult("The duties are off in this process. They run on a front that serves, with the bus nats or mem.")
+	return mcp.ErrorResult("The duties are off in this process. They run on a server that serves, with the bus nats or mem.")
 }
 
 // listTool is the tool duties_list.
@@ -284,9 +284,13 @@ func listTool(ctx context.Context, a *fw.Agent) *sdk.CallToolResult {
 // viewLine says a duty in one line.
 func viewLine(v View) string {
 	s := fmt.Sprintf("%s (%s): %s", v.Name, v.Agent, v.Readback)
+	if v.Origin != nil {
+		s += " " + OriginText
+	}
+	if v.Locked {
+		s += " " + LockedText
+	}
 	switch {
-	case v.Source == SourceFile:
-		return s
 	case v.Paused && v.State.PausedReason != "":
 		s += " Paused: " + v.State.PausedReason
 	case v.Paused:
@@ -517,7 +521,7 @@ func writeCheckTool(ctx context.Context, a *fw.Agent, in writeCheckArgs) *sdk.Ca
 	b.WriteString("The check of the duty " + in.Name + ", which nothing saved yet: " + ans.Readback)
 	switch c := ans.Check; {
 	case c == nil:
-		b.WriteString("\nThe front cannot run this look yet, so it did not test the check.")
+		b.WriteString("\nThe server cannot run this look yet, so it did not test the check.")
 	case c.Wakes:
 		fmt.Fprintf(&b, "\nNow the check finds %s, and they wake the agent.", itemsWords(c.Count))
 	default:

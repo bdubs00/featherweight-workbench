@@ -339,7 +339,7 @@ func TestAskTheManager(t *testing.T) {
 	}
 	t.Setenv(manager.EnvManager, "")
 	_, out := f.send(t, http.MethodPut, "/v1/duties/x?dryRun=true", "alice", duty(`{"manager": {"message": "x"}}`))
-	if got := problemsOf(t, out); !strings.Contains(got, "do.manager: This front names no manager.") {
+	if got := problemsOf(t, out); !strings.Contains(got, "do.manager: This server names no manager.") {
 		t.Fatalf("problems without a manager = %s", got)
 	}
 }

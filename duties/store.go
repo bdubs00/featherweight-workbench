@@ -96,6 +96,13 @@ type stored struct {
 	Created      time.Time `json:"created"`
 	Changed      time.Time `json:"changed"`
 	ChangedBy    string    `json:"changedBy,omitempty"`
+	// Origin names the entry of workbench.sources of an imported duty,
+	// Locked marks a duty that follows the file and takes no change, and
+	// From is the hidden part of the entry (imported.go). No read shows
+	// From.
+	Origin *Origin   `json:"origin,omitempty"`
+	Locked bool      `json:"locked,omitempty"`
+	From   *imported `json:"from,omitempty"`
 
 	rev uint64
 }
@@ -324,6 +331,7 @@ func decodeStored(e bucket.Entry) (*stored, error) {
 		return nil, fmt.Errorf("duties: decode the duty %s: %w", strings.TrimPrefix(e.Key, "duty."), err)
 	}
 	st.rev = e.Revision
+	st.Duty.from = st.From
 	return &st, nil
 }
 
@@ -415,7 +423,7 @@ func (s *Store) remove(ctx context.Context, name string, rev uint64) error {
 		if _, gerr := s.get(ctx, name); errors.Is(gerr, ErrNotFound) {
 			return fmt.Errorf("%w: no duty is named %s", ErrNotFound, name)
 		}
-		return fmt.Errorf("%w: the duty %s changed since the front read it; try again", ErrConflict, name)
+		return fmt.Errorf("%w: the duty %s changed since the server read it; try again", ErrConflict, name)
 	}
 	if err != nil {
 		return fmt.Errorf("duties: remove the duty %s: %w", name, err)

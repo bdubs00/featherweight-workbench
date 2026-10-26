@@ -59,7 +59,7 @@ func (s *Service) serveCall(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			s.log.Warn("duties: the secret of a webhook is not set, so its calls fail", "duty", name, "variable", hook.Auth.Secret)
 			w.Header().Set("Retry-After", "60")
-			native.WriteProblem(w, r, http.StatusServiceUnavailable, "The secret of the webhook is not set in this front.")
+			native.WriteProblem(w, r, http.StatusServiceUnavailable, "The secret of the webhook is not set in this server.")
 			return
 		}
 		secret = v
@@ -86,6 +86,21 @@ func (s *Service) serveCall(w http.ResponseWriter, r *http.Request) {
 	if !verify.Body(r, body) {
 		s.log.Warn("duties: refused a call", "duty", name, "reason", "the signature was missing or wrong")
 		native.WriteProblem(w, r, http.StatusUnauthorized, fmt.Sprintf("The duty needs the HMAC-SHA256 signature of the body in the header %s.", verify.SignatureHeader()))
+		return
+	}
+	if st.templated() {
+		// The templates of the entry make one run per event of the body,
+		// with the claims of the sources, and the answer is the answer of
+		// the entry (imported.go).
+		if blocked, why := s.stopped(ctx, st); blocked {
+			native.WriteJSON(w, http.StatusOK, map[string]string{"skipped": why})
+			return
+		}
+		got := sources.ServeEvents(w, r.WithContext(ctx), s.a, st.sourceOf(), body)
+		if len(got.Runs) > 0 {
+			s.recordDelivery(ctx, st, StartCall, got)
+		}
+		s.log.Info("duties: a call delivered the events of a duty", "duty", name, "runs", len(got.Runs), "duplicates", got.Duplicates)
 		return
 	}
 	key, window := "body:"+string(body), CallBodyWindow

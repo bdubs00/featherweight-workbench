@@ -43,7 +43,7 @@ func TestManagerDecides(t *testing.T) {
 	}
 	f.pass(t)
 	if decided, _, _, _ := f.fleet.lists(); len(decided) != 0 {
-		t.Fatalf("the front decided before the verdict: %v", decided)
+		t.Fatalf("the server decided before the verdict: %v", decided)
 	}
 	f.fleet.set(&fw.Run{ID: q.ID, Agent: "manager", State: fw.StateCompleted, Output: "```json\n{\"verdict\": \"allow\", \"reason\": \"The push  serves the report.\"}\n```"})
 	f.pass(t)
@@ -101,7 +101,7 @@ func TestQuestionTimesOut(t *testing.T) {
 	}
 	n := allNotices.of(f.a)
 	if len(n) != 1 || n[0].Kind != duties.NoticeNeedsYou || !slices.Equal(n[0].Who, []string{"alice", "erin"}) || n[0].Run != run ||
-		n[0].Reason != "The agent triage asks you: Which branch? Decide in Activity, or with approve. Without an answer within 30m, the front denies it." {
+		n[0].Reason != "The agent triage asks you: Which branch? Decide in Activity, or with approve. Without an answer within 30m, the server denies it." {
 		t.Fatalf("notices = %+v", n)
 	}
 	f.pass(t)
@@ -111,7 +111,7 @@ func TestQuestionTimesOut(t *testing.T) {
 	c.Add(30 * time.Minute)
 	f.pass(t)
 	decided, notes, _, _ := f.fleet.lists()
-	if !slices.Equal(decided, []string{run + "/Q1=deny"}) || !strings.Contains(notes[0], "Nobody decided within 30m, so the front denied it") {
+	if !slices.Equal(decided, []string{run + "/Q1=deny"}) || !strings.Contains(notes[0], "Nobody decided within 30m, so the server denied it") {
 		t.Fatalf("decided = %v %v", decided, notes)
 	}
 	got := f.decided(t, "report")
@@ -119,7 +119,7 @@ func TestQuestionTimesOut(t *testing.T) {
 		t.Fatalf("the history = %+v", got)
 	}
 	n = allNotices.of(f.a)
-	if len(n) != 2 || n[1].Kind != duties.NoticeDecided || n[1].Reason != "Nobody answered the question of the agent triage within 30m, so the front declined it." {
+	if len(n) != 2 || n[1].Kind != duties.NoticeDecided || n[1].Reason != "Nobody answered the question of the agent triage within 30m, so the server declined it." {
 		t.Fatalf("notices = %+v", n)
 	}
 }

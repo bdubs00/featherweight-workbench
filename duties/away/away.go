@@ -55,7 +55,7 @@ func init() {
 // for a person. An entry lives a day longer than the longest timeout.
 var awayBucket = bucket.Config{
 	Name:        "DUTY_AWAY",
-	Description: "The approvals of the runs of the duties of a featherweight fleet that waited for a person, under wait.<run>.<approval>: who decides each one while its owner is away, and what the front did.",
+	Description: "The approvals of the runs of the duties of a featherweight fleet that waited for a person, under wait.<run>.<approval>: who decides each one while its owner is away, and what the server did.",
 	History:     1,
 	MaxValue:    64 << 10,
 	TTL:         duties.MaxAwayFor + 24*time.Hour,
@@ -339,7 +339,7 @@ func (s *Service) route(ctx context.Context, r *fw.Run, wa *duties.WhileAway) (s
 	case s.destructive(ctx, r):
 		return RoutePerson, fmt.Sprintf("The policy marks the tool %s destructive, so the manager does not decide it.", p.Tool)
 	case s.manager() == "":
-		return RoutePerson, "The front has no manager: workbench.bossmode.manager names none."
+		return RoutePerson, "The server has no manager: workbench.bossmode.manager names none."
 	}
 	return RouteManager, ""
 }
@@ -450,9 +450,9 @@ func (s *Service) askWords(w *wait) string {
 	case w.Question:
 		what = fmt.Sprintf("The agent %s asks you a question.", w.Agent)
 	}
-	then := "the front denies it"
+	then := "the server denies it"
 	if w.Then == "cancel" {
-		then = "the front cancels the run"
+		then = "the server cancels the run"
 	}
 	out := what
 	if w.Why != "" && !w.Question {
@@ -467,7 +467,7 @@ func (s *Service) askWords(w *wait) string {
 func (s *Service) ended(ctx context.Context, svc *duties.Service, w *wait) {
 	w.State = stateDone
 	if w.Outcome == "" {
-		w.Outcome = "Somebody decided before the front, or the run ended."
+		w.Outcome = "Somebody decided before the server, or the run ended."
 		if cur, err := s.run(ctx, w.Run); err == nil {
 			if by, verdict, ok := s.decider(ctx, cur, w.Approval); ok {
 				w.Outcome = "decided by " + by
@@ -487,11 +487,11 @@ func (s *Service) timeout(ctx context.Context, svc *duties.Service, w *wait, r *
 	if w.Question {
 		did = "declined it"
 	}
-	reason := fmt.Sprintf("Nobody decided within %s, so the front denied it, as whileAway of the duty %s says.", w.Timeout, w.Duty)
+	reason := fmt.Sprintf("Nobody decided within %s, so the server denied it, as whileAway of the duty %s says.", w.Timeout, w.Duty)
 	var err error
 	if w.Then == "cancel" {
 		verdict, did = "cancel", "canceled the run"
-		reason = fmt.Sprintf("Nobody decided within %s, so the front canceled the run, as whileAway of the duty %s says.", w.Timeout, w.Duty)
+		reason = fmt.Sprintf("Nobody decided within %s, so the server canceled the run, as whileAway of the duty %s says.", w.Timeout, w.Duty)
 		err = s.cancelRun(ctx, r)
 	} else {
 		err = s.decide(ctx, r, w.Approval, "deny", reason)
@@ -510,7 +510,7 @@ func (s *Service) timeout(ctx context.Context, svc *duties.Service, w *wait, r *
 	if w.Question {
 		what = "the question of the agent " + w.Agent
 	}
-	text := fmt.Sprintf("Nobody answered %s within %s, so the front %s.", what, w.Timeout, did)
+	text := fmt.Sprintf("Nobody answered %s within %s, so the server %s.", what, w.Timeout, did)
 	if err := svc.Tell(ctx, duties.NoticeDecided, w.Duty, w.Run, text); err != nil {
 		s.log.Warn("away: the notice of a timeout did not go", "duty", w.Duty, "run", w.Run, "error", err)
 	}

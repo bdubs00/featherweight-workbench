@@ -29,12 +29,12 @@ var (
 	// answers 404, so a caller learns nothing of a duty that it cannot
 	// view.
 	ErrHidden = errors.New("duties: hidden")
-	// ErrReadOnly means that the duty is an entry of workbench.sources,
-	// which only fw.yaml changes.
+	// ErrReadOnly means that the duty is locked by the setup of the
+	// server: an entry of workbench.sources with locked: true.
 	ErrReadOnly = errors.New("duties: read-only")
 	// ErrNoStarts means that this replica starts no duty, because its
 	// configuration names no workbench.fleet.intake.
-	ErrNoStarts = errors.New("duties: this front starts no duty, because workbench.fleet.intake is empty. A front with an intake starts it")
+	ErrNoStarts = errors.New("duties: this server starts no duty, because workbench.fleet.intake is empty. A server with an intake starts it")
 	// ErrUpstream means that an outside system failed, such as the
 	// address of a check in a test. A route answers 502.
 	ErrUpstream = errors.New("duties: an outside system failed")
@@ -45,18 +45,24 @@ type ProblemsError struct{ Problems []string }
 
 func (e *ProblemsError) Error() string { return strings.Join(e.Problems, " ") }
 
-// Sources of a duty in a read.
-const (
-	SourceStore = "store" // a duty of the bucket
-	SourceFile  = "file"  // an entry of workbench.sources, which the routes never change
-)
+// SourceStore is the source of every duty in a read: the store of the
+// duties. An entry of workbench.sources is a duty of the store too, with
+// its origin (imported.go).
+const SourceStore = "store"
 
 // View is a duty as a read gives it: the record, where it comes from, its
 // revision, its readback, its next five times, and its state. History
-// holds the last 50 starts, newest first, in a read of one duty.
+// holds the last 50 starts, newest first, in a read of one duty. Origin
+// names the entry of workbench.sources of an imported duty, Locked marks a
+// duty that the setup of the server locks, and Template is true while the
+// message of the duty comes from the setup of the server, so the message
+// of the record is empty.
 type View struct {
 	Duty
 	Source   string      `json:"source"`
+	Origin   *Origin     `json:"origin,omitempty"`
+	Locked   bool        `json:"locked,omitempty"`
+	Template bool        `json:"template,omitempty"`
 	Revision uint64      `json:"revision"`
 	Readback string      `json:"readback"`
 	Next     []time.Time `json:"next"`
@@ -91,6 +97,9 @@ type DutyBody struct {
 	Paused   *bool           `json:"paused,omitempty"`
 	Revision uint64          `json:"revision,omitempty"`
 	Source   string          `json:"source,omitempty"`
+	Origin   json.RawMessage `json:"origin,omitempty"`
+	Locked   json.RawMessage `json:"locked,omitempty"`
+	Template json.RawMessage `json:"template,omitempty"`
 	Readback string          `json:"readback,omitempty"`
 	Next     json.RawMessage `json:"next,omitempty"`
 	State    json.RawMessage `json:"state,omitempty"`
@@ -168,19 +177,9 @@ func hidden(name string) error {
 	return fmt.Errorf("%w: no duty that you can view is named %s", ErrHidden, name)
 }
 
-// readOnly returns ErrReadOnly with the name of the duty.
-func readOnly(name string) error {
-	return fmt.Errorf("%w: the duty %s is an entry of workbench.sources in fw.yaml, so it changes there", ErrReadOnly, name)
-}
-
 // load reads a duty of the store for the caller in ctx, who needs the
 // action on its agent.
 func (s *Service) load(ctx context.Context, name, action string) (*stored, error) {
-	if s.fileOf(name) != nil {
-		if action != fw.ActionAgentView {
-			return nil, readOnly(name)
-		}
-	}
 	st, err := s.st.get(ctx, name)
 	if errors.Is(err, ErrNotFound) {
 		return nil, hidden(name)
@@ -197,8 +196,8 @@ func (s *Service) load(ctx context.Context, name, action string) (*stored, error
 	return st, nil
 }
 
-// List returns the duties whose agent the caller in ctx can view, with
-// the entries of workbench.sources, by name, and the switch.
+// List returns the duties whose agent the caller in ctx can view, by
+// name, and the switch.
 func (s *Service) List(ctx context.Context) (ListAnswer, error) {
 	sw, err := s.st.killSwitch(ctx)
 	if err != nil {
@@ -235,30 +234,12 @@ func (s *Service) List(ctx context.Context) (ListAnswer, error) {
 		}
 		out = append(out, v)
 	}
-	for _, v := range s.files() {
-		ok, err := visible(v.Agent)
-		if err != nil {
-			return ListAnswer{}, err
-		}
-		if ok {
-			out = append(out, v)
-		}
-	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return ListAnswer{Duties: out, Paused: sw.Paused, Reason: sw.Reason}, nil
 }
 
 // Get returns one duty with its history for the caller in ctx.
 func (s *Service) Get(ctx context.Context, name string) (View, error) {
-	if v := s.fileOf(name); v != nil {
-		if err := s.allowed(ctx, v.Agent, fw.ActionAgentView); err != nil {
-			if errors.Is(err, ErrHidden) {
-				return View{}, hidden(name)
-			}
-			return View{}, err
-		}
-		return *v, nil
-	}
 	st, err := s.load(ctx, name, fw.ActionAgentView)
 	if err != nil {
 		return View{}, err
@@ -270,7 +251,25 @@ func (s *Service) Get(ctx context.Context, name string) (View, error) {
 func (s *Service) view(ctx context.Context, st *stored, withHistory bool) (View, error) {
 	d := st.Duty
 	now := s.now()
-	v := View{Duty: d, Source: SourceStore, Revision: st.rev, Readback: readback(&d), Next: next(&d, now, 5)}
+	if c := d.CheckFirst; c != nil && c.Look.HTTP != nil && d.fromFile(c.Look.HTTP) {
+		// The address of an imported poll can hold a credential in its
+		// query, which the read leaves out. A save that keeps the address
+		// keeps the address of the entry.
+		cf, h := *c, *c.Look.HTTP
+		h.URL = maskedURL(h.URL)
+		cf.Look.HTTP = &h
+		d.CheckFirst = &cf
+	}
+	v := View{Duty: d, Source: SourceStore, Origin: st.Origin, Locked: st.Locked, Template: st.templated(), Revision: st.rev, Readback: readback(&d), Next: next(&d, now, 5)}
+	if step, ok := st.pollStep(); ok {
+		// The interval of an imported poll can be shorter than the
+		// shortest step of a schedule, which the plan of a schedule reads.
+		v.Readback = pollWords(&d, step)
+		v.Next = make([]time.Time, 0, 5)
+		for i := 1; i <= 5; i++ {
+			v.Next = append(v.Next, now.Add(time.Duration(i)*step).UTC())
+		}
+	}
 	v.State.PausedReason = st.PausedReason
 	c, err := s.st.counters(ctx, d.Name)
 	if err != nil {
@@ -319,15 +318,15 @@ func (s *Service) Put(ctx context.Context, name string, body DutyBody, opt PutOp
 	if err := CheckName(name); err != nil && !draft {
 		return PutAnswer{}, &ProblemsError{Problems: []string{problem("name", "%s.", capital(err.Error()))}}
 	}
-	if s.fileOf(name) != nil {
-		return PutAnswer{}, readOnly(name)
-	}
 	old, err := s.st.get(ctx, name)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		old = nil
 	case err != nil:
 		return PutAnswer{}, err
+	}
+	if old != nil && old.Locked {
+		return PutAnswer{}, lockedError()
 	}
 	if old != nil {
 		if err := s.allowed(ctx, old.Duty.Agent, fw.ActionAgentEdit); err != nil {
@@ -374,6 +373,17 @@ func (s *Service) Put(ctx context.Context, name string, body DutyBody, opt PutOp
 		zone = s.savedZone(ctx, by)
 	}
 	d.normalize(zone)
+	// An imported duty keeps the hidden part of its entry. Its templates
+	// make the runs while the message stays empty. A message that a person
+	// writes replaces them (imported.go).
+	templated := false
+	if old != nil {
+		d.from = old.From
+		if c, f := d.CheckFirst, old.From; c != nil && c.Look.HTTP != nil && f != nil && f.URL != "" && c.Look.HTTP.URL == maskedURL(f.URL) {
+			c.Look.HTTP.URL = f.URL
+		}
+		templated = old.templated() && d.Do.Ask != nil && d.Do.count() == 1 && strings.TrimSpace(d.Do.Ask.Message) == ""
+	}
 	if say := strings.TrimSpace(d.When.Say); say != "" && d.When.starts() == 1 {
 		sch, err := schedule.Parse(say, schedule.Options{Zone: zone, Now: now})
 		if err != nil {
@@ -391,6 +401,9 @@ func (s *Service) Put(ctx context.Context, name string, body DutyBody, opt PutOp
 	for _, p := range d.problems() {
 		// A draft has no name yet, so its dry run says nothing of the name.
 		if draft && strings.HasPrefix(p, "name: ") {
+			continue
+		}
+		if templated && templateAllows(&d, p) {
 			continue
 		}
 		problems = append(problems, p)
@@ -430,6 +443,15 @@ func (s *Service) Put(ctx context.Context, name string, body DutyBody, opt PutOp
 		}
 		if prev.Paused != nd.Paused {
 			x.PausedReason = ""
+		}
+		if x.Locked {
+			return lockedError()
+		}
+		if x.templated() && !templated {
+			// The message of the person replaces the templates.
+			f := *x.From
+			f.Templated = false
+			x.From = &f
 		}
 		x.Duty, x.Changed, x.ChangedBy = nd, now.UTC(), by
 		return nil
@@ -514,7 +536,7 @@ func (s *Service) contextProblems(ctx context.Context, d *Duty) []string {
 		err := faces.Check(front, s.a, d.Agent, fw.ActionAgentView)
 		switch {
 		case errors.Is(err, fw.ErrProfileNotFound), errors.Is(err, fw.ErrInvalidRequest):
-			p = append(p, problem("agent", "%s is not an agent of this front or of a pool of the fleet.", d.Agent))
+			p = append(p, problem("agent", "%s is not an agent of this server or of a pool of the fleet.", d.Agent))
 		case err == nil && d.Do.Ask != nil:
 			if _, err := fleet.QueueFor(front, s.a, d.Agent, d.Pool); err != nil {
 				p = append(p, problem("agent", "%s has no queue: %s.", d.Agent, reasonOf(err)))
@@ -523,7 +545,7 @@ func (s *Service) contextProblems(ctx context.Context, d *Duty) []string {
 	}
 	if e := d.When.Event; e != nil {
 		if check := eventsCheck(); check == nil {
-			p = append(p, problem("when.event", "Not available yet: this front starts a duty on no event of the fleet. Use a schedule or a webhook for now."))
+			p = append(p, problem("when.event", "Not available yet: this server starts a duty on no event of the fleet. Use a schedule or a webhook for now."))
 		} else {
 			p = append(p, check(e)...)
 		}
@@ -533,18 +555,21 @@ func (s *Service) contextProblems(ctx context.Context, d *Duty) []string {
 		switch {
 		case !ok:
 			_, served, _ := Offered()
-			p = append(p, problem("do."+name, "Not available yet: this front serves %s.", strings.Join(served, ", ")))
+			p = append(p, problem("do."+name, "Not available yet: this server serves %s.", strings.Join(served, ", ")))
 		case act.Check != nil:
 			p = append(p, act.Check(ctx, s.a, d)...)
 		}
 	}
 	p = append(p, s.channelProblems(d.Notify)...)
-	p = append(p, s.checkContextProblems(ctx, d.CheckFirst)...)
+	p = append(p, s.checkContextProblems(ctx, d)...)
 	if w := d.When.Webhook; w != nil && w.Auth.Secret != "" && envPattern.MatchString(w.Auth.Secret) {
-		p = append(p, s.cfg.webhookProblems(w)...)
-		if s.cfg.secretRule(w.Auth.Secret) != nil {
+		fromFile := d.hookFromFile(w)
+		if !fromFile {
+			p = append(p, s.cfg.webhookProblems(w)...)
+		}
+		if fromFile || s.cfg.secretRule(w.Auth.Secret) != nil {
 			if _, err := s.secret(ctx, w.Auth.Secret); err != nil {
-				p = append(p, problem("when.webhook.auth.secret", "%s holds no secret in this front.", w.Auth.Secret))
+				p = append(p, problem("when.webhook.auth.secret", "%s holds no secret in this server.", w.Auth.Secret))
 			}
 		}
 	}
@@ -568,9 +593,9 @@ func (s *Service) channelProblems(n *Notify) []string {
 			switch {
 			case !ok || !namePattern.MatchString(name):
 			case has == nil:
-				p = append(p, problem(f.path, "Not available yet: this front sends no notification, so %s reaches nothing.", who))
+				p = append(p, problem(f.path, "Not available yet: this server sends no notification, so %s reaches nothing.", who))
 			case !has(s.a, name):
-				p = append(p, problem(f.path, "%s is not a shared channel of this front. An operator names it in workbench.notifications.shared.", who))
+				p = append(p, problem(f.path, "%s is not a shared channel of this server. An operator names it in workbench.notifications.shared.", who))
 			}
 		}
 	}
@@ -580,17 +605,23 @@ func (s *Service) channelProblems(n *Notify) []string {
 // checkContextProblems lists what the rules of the operator refuse in a
 // check: a secret or a host of an address that the rules refuse. A write
 // keeps a look that this front does not serve yet, and its test says so.
-func (s *Service) checkContextProblems(ctx context.Context, c *CheckFirst) []string {
+func (s *Service) checkContextProblems(ctx context.Context, d *Duty) []string {
 	var p []string
+	c := d.CheckFirst
 	if c == nil {
 		return nil
 	}
 	if c.Look.HTTP != nil && c.Look.Tool == "" && hostOf(c.Look.HTTP.URL) != "" {
 		h := c.Look.HTTP
-		p = append(p, s.cfg.lookProblems(h)...)
-		if h.Secret != "" && s.cfg.secretRule(h.Secret) != nil {
+		// The configuration of the server allowed the address and the
+		// secret of an imported duty.
+		fromFile := d.fromFile(h)
+		if !fromFile {
+			p = append(p, s.cfg.lookProblems(h)...)
+		}
+		if h.Secret != "" && (fromFile || s.cfg.secretRule(h.Secret) != nil) {
 			if _, err := s.secret(ctx, h.Secret); err != nil {
-				p = append(p, problem("checkFirst.look.http.secret", "%s holds no secret in this front.", h.Secret))
+				p = append(p, problem("checkFirst.look.http.secret", "%s holds no secret in this server.", h.Secret))
 			}
 		}
 	}
@@ -601,13 +632,20 @@ func (s *Service) checkContextProblems(ctx context.Context, c *CheckFirst) []str
 // owner role on its agent. A resume ends the rows of failures, and the
 // times of the pause do not run.
 func (s *Service) SetPaused(ctx context.Context, name string, paused bool) (View, error) {
-	if _, err := s.load(ctx, name, fw.ActionAgentEdit); err != nil {
+	cur, err := s.load(ctx, name, fw.ActionAgentEdit)
+	if err != nil {
 		return View{}, err
+	}
+	if cur.Locked {
+		return View{}, lockedError()
 	}
 	by, _ := caller(ctx)
 	now := s.now().UTC()
 	resumed := false
 	next, err := s.st.update(ctx, name, 0, func(x *stored) error {
+		if x.Locked {
+			return lockedError()
+		}
 		if x.Duty.Paused == paused {
 			return errUnchanged
 		}
@@ -654,6 +692,9 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	st, err := s.load(ctx, name, fw.ActionAgentEdit)
 	if err != nil {
 		return err
+	}
+	if st.Locked {
+		return lockedError()
 	}
 	if err := s.st.remove(ctx, name, st.rev); err != nil {
 		return err

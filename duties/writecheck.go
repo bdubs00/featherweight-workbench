@@ -125,9 +125,6 @@ func (s *Service) WriteCheck(ctx context.Context, name string, body WriteCheckBo
 	if err := CheckName(name); err != nil && name != DraftName {
 		return WriteCheckAnswer{}, &ProblemsError{Problems: []string{problem("name", "%s.", capital(err.Error()))}}
 	}
-	if s.fileOf(name) != nil {
-		return WriteCheckAnswer{}, readOnly(name)
-	}
 	d := Duty{Name: name}
 	st, err := s.st.get(ctx, name)
 	switch {
@@ -175,7 +172,7 @@ func (s *Service) WriteCheck(ctx context.Context, name string, body WriteCheckBo
 			s.log.Warn("duties: the run that writes a check did not stop", "duty", name, "run", req.ID, "error", stopErr)
 		}
 		if ctx.Err() == nil && wctx.Err() != nil {
-			return WriteCheckAnswer{}, fmt.Errorf("%w: the agent %s did not answer within %s, so the front canceled its run %s", ErrNoAnswer, d.Agent, durText(s.writeWait), req.ID)
+			return WriteCheckAnswer{}, fmt.Errorf("%w: the agent %s did not answer within %s, so the server canceled its run %s", ErrNoAnswer, d.Agent, durText(s.writeWait), req.ID)
 		}
 		return WriteCheckAnswer{}, err
 	}
@@ -183,7 +180,7 @@ func (s *Service) WriteCheck(ctx context.Context, name string, body WriteCheckBo
 	case fw.StateCompleted:
 	case fw.StateInputRequired:
 		_ = s.stopRun(context.WithoutCancel(ctx), req.ID)
-		return WriteCheckAnswer{}, &CheckError{Reason: fmt.Sprintf("The agent %s asked a person to allow a tool while it wrote the check, so the front canceled its run %s. Say the check in other words, or give the agent a tool that only reads.", d.Agent, r.ID)}
+		return WriteCheckAnswer{}, &CheckError{Reason: fmt.Sprintf("The agent %s asked a person to allow a tool while it wrote the check, so the server canceled its run %s. Say the check in other words, or give the agent a tool that only reads.", d.Agent, r.ID)}
 	default:
 		return WriteCheckAnswer{}, &CheckError{Reason: fmt.Sprintf("The agent %s wrote no check. Its run %s ended %s: %s.", d.Agent, r.ID, r.State, strings.TrimSuffix(errorLine(orWords(r.Error, "no reason"), 300), "."))}
 	}
@@ -205,7 +202,7 @@ func (s *Service) proveCheck(ctx context.Context, d Duty, c *CheckFirst, run str
 	}
 	d.normalize(zone)
 	c = d.CheckFirst
-	problems := append(c.problems(), s.checkContextProblems(ctx, c)...)
+	problems := append(c.problems(), s.checkContextProblems(ctx, &d)...)
 	if len(problems) > 0 {
 		return WriteCheckAnswer{}, &CheckError{Reason: "The check that the agent wrote does not fit: " + strings.Join(problems, " "), CheckFirst: c}
 	}
@@ -230,15 +227,15 @@ func (s *Service) writeRequest(ctx context.Context, d *Duty, words string) (fw.R
 	front := fw.WithPrincipal(ctx, nil)
 	place, err := fleet.PlaceOf(front, s.a, d.Agent, d.Pool)
 	if err != nil {
-		return fw.RunRequest{}, &CheckError{Reason: fmt.Sprintf("The front did not find the profile of the agent %s: %s.", d.Agent, reasonOf(err))}
+		return fw.RunRequest{}, &CheckError{Reason: fmt.Sprintf("The server did not find the profile of the agent %s: %s.", d.Agent, reasonOf(err))}
 	}
 	prof, ok := place.Profile(d.Agent)
 	if !ok {
-		return fw.RunRequest{}, &CheckError{Reason: fmt.Sprintf("The front did not find the profile of the agent %s.", d.Agent)}
+		return fw.RunRequest{}, &CheckError{Reason: fmt.Sprintf("The server did not find the profile of the agent %s.", d.Agent)}
 	}
 	b := prof.Budget
 	if b == nil || (b.MaxCostUSD <= 0 && b.MaxTurns <= 0 && b.MaxTokens <= 0 && b.MaxToolCalls <= 0) {
-		return fw.RunRequest{}, &CheckError{Reason: fmt.Sprintf("The agent %s has no budget, so the front does not run it to write a check: a run without a limit would be a silent cost. Give the agent a budget, with at least one of maxCostUSD, maxTurns, maxTokens, and maxToolCalls, and ask again.", d.Agent)}
+		return fw.RunRequest{}, &CheckError{Reason: fmt.Sprintf("The agent %s has no budget, so the server does not run it to write a check: a run without a limit would be a silent cost. Give the agent a budget, with at least one of maxCostUSD, maxTurns, maxTokens, and maxToolCalls, and ask again.", d.Agent)}
 	}
 	budget := *b
 	if budget.Deadline <= 0 || budget.Deadline > s.writeWait {
@@ -291,7 +288,7 @@ Rules of the record:
 - wake.when is new, any, or atLeast. new, the default, wakes you only for items whose key no earlier check saw, and it needs key. any wakes you when the check finds at least one item. atLeast takes count, such as {"when": "atLeast", "count": 5}.
 - Use no other field.
 `)
-	fmt.Fprintf(&b, "\nThe looks that this front offers now: %s.\n", strings.Join(looks, ", "))
+	fmt.Fprintf(&b, "\nThe looks that this server offers now: %s.\n", strings.Join(looks, ", "))
 	if len(s.cfg.Secrets) == 0 {
 		b.WriteString("The secrets that a check can send: none. An http look names no secret.\n")
 	} else {

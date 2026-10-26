@@ -41,7 +41,7 @@ var table = []route{
 	{pattern: "GET /v1/duties", handle: (*routes).list, tool: ToolList},
 	{pattern: "PATCH /v1/duties", handle: (*routes).pauseAll, tool: ToolPauseAll},
 	{pattern: "GET /v1/duties/options", handle: (*routes).options,
-		why: "the page reads it to offer only what the front serves; duty_put with dryRun names each choice that the front does not serve, and duty_write_check names the looks and the secrets to the agent"},
+		why: "the page reads it to offer only what the server serves; duty_put with dryRun names each choice that the server does not serve, and duty_write_check names the looks and the secrets to the agent"},
 	{pattern: "GET /v1/duties/{name}", handle: (*routes).get, tool: ToolGet},
 	{pattern: "PUT /v1/duties/{name}", handle: (*routes).put, tool: ToolPut},
 	{pattern: "PATCH /v1/duties/{name}", handle: (*routes).patch, tool: ToolPause},

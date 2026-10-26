@@ -33,6 +33,11 @@ type Duty struct {
 	Notify     *Notify     `json:"notify,omitempty"`
 	RunAs      string      `json:"runAs,omitempty"`
 	Paused     bool        `json:"paused"`
+
+	// from is the hidden part of an imported duty (imported.go): its
+	// templates and the address and the secrets that the configuration of
+	// the server gave it. No read and no write carries it.
+	from *imported
 }
 
 // When is the start of a duty: a schedule, the words of a schedule, an
@@ -554,7 +559,7 @@ func (d *Duty) problems() []string {
 		switch w.Auth.Mode {
 		case sources.AuthBearer, sources.AuthHMAC:
 			if !envPattern.MatchString(w.Auth.Secret) {
-				add("when.webhook.auth.secret", "Name the variable of the front that holds the %s secret.", w.Auth.Mode)
+				add("when.webhook.auth.secret", "Name the variable of the server that holds the %s secret.", w.Auth.Mode)
 			}
 			if w.Auth.Mode == sources.AuthHMAC && !headerPattern.MatchString(w.Auth.Header) {
 				add("when.webhook.auth.header", "%q is not a header name.", w.Auth.Header)
@@ -720,7 +725,7 @@ func (c *CheckFirst) problems() []string {
 			add("checkFirst.look.http.url", "The address holds a user or a password. Name a variable in secret instead.")
 		}
 		if h.Secret != "" && !envPattern.MatchString(h.Secret) {
-			add("checkFirst.look.http.secret", "%q is not the name of a variable of the front.", h.Secret)
+			add("checkFirst.look.http.secret", "%q is not the name of a variable of the server.", h.Secret)
 		}
 		if h.Header != "" && (!headerPattern.MatchString(h.Header) || h.Secret == "") {
 			add("checkFirst.look.http.header", "%q must be a header name, and it needs secret.", h.Header)

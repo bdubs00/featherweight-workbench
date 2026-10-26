@@ -75,7 +75,9 @@ const (
 // event (render.go). Key is required. DedupFor is how long a key blocks a
 // second run. RunAs names the principal of the runs, "source:<name>" by
 // default, and RunAsKind its kind, workload by default or user for a
-// person.
+// person. At its start, the server copies each entry into the store of the
+// duties once (docs/ARCHITECTURE.md section 22.8). Locked makes the duty
+// of the entry follow the file at each start and refuse every change.
 type Source struct {
 	Name      string            `yaml:"name"`
 	Agent     string            `yaml:"agent"`
@@ -91,6 +93,7 @@ type Source struct {
 	Redrive   *Redrive          `yaml:"redrive"`
 	RunAs     string            `yaml:"runAs"`
 	RunAsKind string            `yaml:"runAsKind"`
+	Locked    bool              `yaml:"locked"`
 }
 
 // Redrive lets an event whose job reached the dead letter run again

@@ -51,6 +51,11 @@ func extension(k *native.Kit) error {
 		return nil
 	}
 	k.HandlePublic(RoutePattern, func(w http.ResponseWriter, r *http.Request) {
+		// An entry that the duties took over answers as the call of its
+		// duty, so a caller of the old address needs no change.
+		if fn := takeoverFn(); fn != nil && fn(a, w, r) {
+			return
+		}
 		s := of(a)
 		if s == nil {
 			w.Header().Set("Retry-After", retryAfter)
@@ -130,21 +135,35 @@ func (s *Sources) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("The source needs the HMAC-SHA256 signature of the body in the header %s.", src.verify.header))
 		return
 	}
+	s.answerEvents(w, r, src, body)
+}
+
+// answerEvents answers a request whose credential passed: it reads the
+// events of the body, renders them, delivers them, and writes the answer.
+// It reports what it delivered.
+func (s *Sources) answerEvents(w http.ResponseWriter, r *http.Request, src *source, body []byte) Delivered {
+	name := src.cfg.Name
+	now := s.now()
+	refuse := func(status, n int, reason, detail string) {
+		src.count.refused(n, reason, now)
+		s.log.Warn("sources: refused a request", "source", name, "status", status, "reason", reason)
+		native.WriteProblem(w, r, status, detail)
+	}
 	events, err := decodeEvents(body, src.cfg.Items)
 	if err != nil {
 		refuse(http.StatusBadRequest, 1, err.Error(), "The events do not read: "+err.Error()+".")
-		return
+		return Delivered{Err: err}
 	}
 	ans := answer{Source: name, Agent: src.cfg.Agent, Queue: src.queue, Batch: name, Runs: []runReq{}}
 	if len(events) == 0 {
 		ans.Note = "The body holds no event, so no run started."
 		native.WriteJSON(w, http.StatusOK, ans)
-		return
+		return Delivered{}
 	}
 	if len(events) > fleet.MaxEnqueue {
 		refuse(http.StatusBadRequest, len(events), fmt.Sprintf("the body held %d events", len(events)),
 			fmt.Sprintf("The body holds %d events; one request takes at most %d.", len(events), fleet.MaxEnqueue))
-		return
+		return Delivered{Events: len(events), Refused: len(events)}
 	}
 	items := make([]rendered, 0, len(events))
 	for i, e := range events {
@@ -152,8 +171,9 @@ func (s *Sources) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			refuse(http.StatusUnprocessableEntity, len(events), fmt.Sprintf("event %d: %s", i+1, err),
 				fmt.Sprintf("Event %d does not fit the templates of the source, so no event of the request made a run: %s.", i+1, err))
-			return
+			return Delivered{Events: len(events), Refused: len(events)}
 		}
+		it.req.ID = fw.NewID()
 		items = append(items, it)
 	}
 	// A caller that goes away does not stop the claims in the middle.
@@ -189,4 +209,5 @@ func (s *Sources) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ans.Note = "Every event was a duplicate, so no run started."
 		native.WriteJSON(w, http.StatusOK, ans)
 	}
+	return delivered(len(events), 0, d)
 }

@@ -81,12 +81,12 @@ func checkPost(ctx context.Context, a *fw.Agent, d *duties.Duty) []string {
 	}
 	s := bridges.Of(a)
 	if s == nil {
-		return append(out, problem("do.post", "The bridges are off in this front."))
+		return append(out, problem("do.post", "The bridges are off in this server."))
 	}
 	ok, err := s.Visible(ctx, id)
 	switch {
 	case err != nil:
-		return append(out, problem("do.post.bridge", "The front did not decide whether you can use the bridge %s: %s.", id, words(err)))
+		return append(out, problem("do.post.bridge", "The server did not decide whether you can use the bridge %s: %s.", id, words(err)))
 	case !ok:
 		return append(out, problem("do.post.bridge", "No bridge that you can use has the id %s.", id))
 	}
@@ -111,7 +111,7 @@ func checkPost(ctx context.Context, a *fw.Agent, d *duties.Duty) []string {
 func startPost(ctx context.Context, a *fw.Agent, d *duties.Duty, req fw.RunRequest) (duties.Started, error) {
 	s := bridges.Of(a)
 	if s == nil {
-		return duties.Started{}, errors.New("the bridges are off in this front")
+		return duties.Started{}, errors.New("the bridges are off in this server")
 	}
 	p := d.Do.Post
 	m, err := s.PostFor(ctx, strings.TrimSpace(p.Bridge), bridges.PostSpec{Text: req.Input, To: p.To}, principalOf(req), SenderName(d.Name))
@@ -132,7 +132,7 @@ func checkOpen(ctx context.Context, a *fw.Agent, d *duties.Duty) []string {
 	}
 	b, ps := bridges.Of(a), playbooks.Of(a)
 	if b == nil || ps == nil {
-		return []string{problem("do.open", "The bridges or the playbooks are off in this front.")}
+		return []string{problem("do.open", "The bridges or the playbooks are off in this server.")}
 	}
 	pb, err := ps.Get(ctx, name)
 	switch {
@@ -146,7 +146,7 @@ func checkOpen(ctx context.Context, a *fw.Agent, d *duties.Duty) []string {
 		ok, err := b.Operates(ctx, m.Agent, m.Pool)
 		switch {
 		case err != nil:
-			return append(out, problem("do.open.playbook", "The front did not decide whether you operate the agent %s: %s.", m.Agent, words(err)))
+			return append(out, problem("do.open.playbook", "The server did not decide whether you operate the agent %s: %s.", m.Agent, words(err)))
 		case !ok:
 			out = append(out, problem("do.open.playbook", "The seat %s of the playbook %s needs the operator role on the agent %s, which you do not have.", m.Handle, name, m.Agent))
 		}
@@ -195,7 +195,7 @@ func slotOf(req fw.RunRequest) time.Time {
 func startOpen(ctx context.Context, a *fw.Agent, d *duties.Duty, req fw.RunRequest) (duties.Started, error) {
 	b, ps := bridges.Of(a), playbooks.Of(a)
 	if b == nil || ps == nil {
-		return duties.Started{}, errors.New("the bridges or the playbooks are off in this front")
+		return duties.Started{}, errors.New("the bridges or the playbooks are off in this server")
 	}
 	name := strings.TrimSpace(d.Do.Open.Playbook)
 	pb, err := ps.Lookup(ctx, name)
@@ -236,7 +236,7 @@ func checkManager(ctx context.Context, a *fw.Agent, d *duties.Duty) []string {
 	}
 	mgr := manager.Profile(a.Config())
 	if mgr == "" {
-		return append(out, problem("do.manager", "This front names no manager. An operator sets workbench.bossmode.manager (%s).", manager.EnvManager))
+		return append(out, problem("do.manager", "This server names no manager. An operator sets workbench.bossmode.manager (%s).", manager.EnvManager))
 	}
 	if err := faces.Check(ctx, a, mgr, fw.ActionAgentRun); err != nil {
 		return append(out, problem("do.manager", "You cannot run the manager %s: %s.", mgr, words(err)))
@@ -254,7 +254,7 @@ func checkManager(ctx context.Context, a *fw.Agent, d *duties.Duty) []string {
 func startManager(ctx context.Context, a *fw.Agent, d *duties.Duty, req fw.RunRequest) (duties.Started, error) {
 	mgr := manager.Profile(a.Config())
 	if mgr == "" {
-		return duties.Started{}, errors.New("this front names no manager")
+		return duties.Started{}, errors.New("this server names no manager")
 	}
 	req.Agent = mgr
 	req.Input = "From the duty " + d.Name + ".\n\n" + req.Input

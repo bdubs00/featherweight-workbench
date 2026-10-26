@@ -70,18 +70,25 @@ func (s *Service) look(ctx context.Context, d *Duty) ([]byte, error) {
 		return nil, fmt.Errorf("the check names no address")
 	}
 	host := hostOf(h.URL)
-	if p := s.cfg.lookProblems(h); len(p) > 0 {
+	client := s.client
+	if d.fromFile(h) {
+		// The configuration of the server named this address and this
+		// secret for the entry of the duty, so the rules of
+		// workbench.duties do not refuse them, and the check reads the
+		// address as the poll of the entry did.
+		client = nil
+	} else if p := s.cfg.lookProblems(h); len(p) > 0 {
 		return nil, fmt.Errorf("%s", strings.TrimSuffix(problemText(p[0]), "."))
 	}
 	value := ""
 	if h.Secret != "" {
 		v, err := s.secret(ctx, h.Secret)
 		if err != nil {
-			return nil, fmt.Errorf("the variable %s holds no secret in this front", h.Secret)
+			return nil, fmt.Errorf("the variable %s holds no secret in this server", h.Secret)
 		}
 		value = v
 	}
-	body, err := sources.Fetch(ctx, s.client, h.URL, h.Header, value, CheckTimeout, MaxCheckBytes)
+	body, err := sources.Fetch(ctx, client, h.URL, h.Header, value, CheckTimeout, MaxCheckBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %s", host, strings.TrimPrefix(err.Error(), "Get \""))
 	}

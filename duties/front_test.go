@@ -165,7 +165,7 @@ func TestRecordDecisionAndTell(t *testing.T) {
 	if err := f.s.RecordDecision(ctx, "report", "NORUN", Decided{By: "alice", Verdict: "deny"}); err == nil {
 		t.Fatal("a decision for no start landed")
 	}
-	if err := f.s.Tell(ctx, NoticeDecided, "report", run, "The front denied the call."); err != nil {
+	if err := f.s.Tell(ctx, NoticeDecided, "report", run, "The server denied the call."); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.s.Tell(ctx, NoticeFailed, "report", run, "It failed."); err != nil {
@@ -228,7 +228,7 @@ func TestNotifyChannel(t *testing.T) {
 	}
 	d.Notify.NeedsYou = []string{"channel:nowhere"}
 	_, err = f.s.Put(as("alice"), "report", DutyBody{Duty: d}, PutOptions{})
-	if !errors.As(err, &pe) || len(pe.Problems) != 1 || pe.Problems[0] != "notify.needsYou: channel:nowhere is not a shared channel of this front. An operator names it in workbench.notifications.shared." {
+	if !errors.As(err, &pe) || len(pe.Problems) != 1 || pe.Problems[0] != "notify.needsYou: channel:nowhere is not a shared channel of this server. An operator names it in workbench.notifications.shared." {
 		t.Fatalf("an unknown shared channel = %v", err)
 	}
 	if err := f.s.Tell(context.Background(), NoticeFailed, "report", "", "It failed."); err != nil {

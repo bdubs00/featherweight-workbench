@@ -263,7 +263,7 @@ func TestCheckRules(t *testing.T) {
 	empty := newFront(t, checkBlock, nil)
 	d = triageDuty(srv.URL)
 	ans, _ = empty.s.Put(as("alice"), d.Name, DutyBody{Duty: d}, PutOptions{DryRun: true})
-	if got := strings.Join(ans.Dry.Problems, " "); !strings.Contains(got, "checkFirst.look.http.secret: SNOW_KEY holds no secret in this front") {
+	if got := strings.Join(ans.Dry.Problems, " "); !strings.Contains(got, "checkFirst.look.http.secret: SNOW_KEY holds no secret in this server") {
 		t.Fatalf("problems = %q", got)
 	}
 	if _, err := LoadConfig(func() *fw.Config {

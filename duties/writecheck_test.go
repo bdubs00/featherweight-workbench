@@ -80,7 +80,7 @@ func TestWriteCheck(t *testing.T) {
 		req.Metadata[fw.MetaBatch] != "" || req.Metadata[MetaDuty] != "" {
 		t.Fatalf("the request = %+v", req)
 	}
-	for _, want := range []string{"The looks that this front offers now: http.", "- SNOW_KEY: 127.0.0.1", "Your profile names these tools: servicenow.query_incidents.", `"wake": {"when": "new"}`,
+	for _, want := range []string{"The looks that this server offers now: http.", "- SNOW_KEY: 127.0.0.1", "Your profile names these tools: servicenow.query_incidents.", `"wake": {"when": "new"}`,
 		"keep its scheme, its host, and its port exactly as the person wrote them"} {
 		if !strings.Contains(req.Instructions, want) {
 			t.Errorf("the instructions lack %q:\n%s", want, req.Instructions)

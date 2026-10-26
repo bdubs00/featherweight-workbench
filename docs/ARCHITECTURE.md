@@ -138,7 +138,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `/ui/signin`, `/ui/callback`, `/ui/refresh` | Browser sign-in and its renewal (section 5) | with `auth.oidc.clientId` |
 | `/ui/connect/callback` | The end of a connection (section 2.1) | always |
 | `/.well-known/oauth-protected-resource` | Protected resource metadata (RFC 9728) | when `auth.mode` includes `oidc` |
-| `/v1/sources/{name}` | Webhook sources, POST only, with the credential of each source (section 13) | with a webhook source in `workbench.sources` |
+| `/v1/sources/{name}` | Webhook sources, POST only, with the credential of each source (section 13). For a source that the duties took over, the call of the duty (section 22.8). | with a webhook source in `workbench.sources` |
 | `/v1/duties/{name}/call` | The call of the webhook of a duty, POST only, with the credential of the duty (section 22.9) | where the bus keeps the duties: `nats` or `mem` |
 | `/bossmode`, `/bossmode/{file...}` | The page of bossmode: its static files under `/bossmode/`, GET only, with no credential, and a 301 from `/bossmode` to `/bossmode/` (section 17.2) | with `workbench.bossmode.enabled` |
 
@@ -196,7 +196,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `POST /v1/bridges/{id}/members` | Add a seat, `{"handle", "agent", "task"}`, and start its run. 201 with the seat. |
 | `DELETE /v1/bridges/{id}/members/{handle}` | Fire a seat: cancel its open runs and mute it. 200 with the fired seat. |
 | `PATCH /v1/bridges/{id}/members/{handle}` | Mute or unmute a seat, or give it a task, `{"muted", "task"}`. A task seats a seat whose newest run failed or was canceled again, also with the same text (section 18.9). 200 with the seat. |
-| `GET /v1/duties` | The duties that the caller can view, with the entries of `workbench.sources` as read-only duties, as `{"duties": [...], "paused": false}` (section 22.7). |
+| `GET /v1/duties` | The duties that the caller can view, with the entries of `workbench.sources` that the server imported, as `{"duties": [...], "paused": false}` (section 22.7). |
 | `GET /v1/duties/{name}` | One duty with its readback, its next five times, its state, and its last 50 starts. |
 | `PUT /v1/duties/{name}` | Create (201) or change (200) a duty, for an owner of its agent or an admin. `?dryRun=true` saves nothing and answers the readback, the next five times, and every problem. `&test=true` also runs the check once. `X-Time-Zone` is the time zone of a new schedule. |
 | `PATCH /v1/duties/{name}` | Pause or resume a duty, `{"paused"}`. 200 with the duty. |
@@ -1178,7 +1178,7 @@ If the control plane does not answer in time, the front refuses the request with
 
 ## 13. Event sources
 
-An event source turns the events of an outside system into runs, with no person in between. Examples of such a system are a ticket system, an alert manager, and a repository host. Without a source, a person or an agent calls `enqueue` for each piece of work. With a source, the front reacts to the events by itself, starts one run for each new event, and starts no second run for the same event, also with two replicas of the front. The package `sources` holds the sources. It is a service of the kernel (`fw.RegisterService`), so a process that serves has it, and a verb that runs one piece of work, such as `fw-workbench run`, does not.
+An event source turns the events of an outside system into runs, with no person in between. Examples of such a system are a ticket system, an alert manager, and a repository host. Without a source, a person or an agent calls `enqueue` for each piece of work. With a source, the front reacts to the events by itself, starts one run for each new event, and starts no second run for the same event, also with two replicas of the front. The package `sources` holds the sources. It is a service of the kernel (`fw.RegisterService`), so a process that serves has it, and a verb that runs one piece of work, such as `fw-workbench run`, does not. At its start, the server copies each entry into the store of the duties, and the duty runs the entry from then on (section 22.8). The sources run only an entry that the duties did not take over. They lend the duties their claims, their run requests, their redrive, and their counters.
 
 ### 13.1 How a source works
 
@@ -1233,6 +1233,7 @@ Each entry of `workbench.sources` takes these keys. No variable sets the list.
 | `redrive.cooldown` | The time from the dead letter to the next run, one minute or more and shorter than `dedupFor` | `5m` |
 | `runAs` | The principal of the runs | `source:<name>` |
 | `runAsKind` | The kind of that principal, `workload` or `user` | `workload` |
+| `locked` | Makes the duty of the entry locked: the page and the tools cannot change it, and it follows the file at each start (section 22.8) | `false` |
 
 The sources need `workbench.fleet.intake` (section 4.6), and the bus `nats` for the keys (section 13.3). A configuration that cannot work stops the start. These are the cases:
 
@@ -3199,7 +3200,10 @@ A read adds these fields to the record:
 
 | Field | Meaning |
 |---|---|
-| `source` | `store` for a duty of the bucket, and `file` for an entry of `workbench.sources` (section 22.8) |
+| `source` | `store`. A server before 2026-10-26 answered `file` for an entry of `workbench.sources`, and the page shows such a duty as locked. |
+| `origin` | `{"kind": "config", "name"}` for a duty that the server imported from an entry of `workbench.sources`, else absent (section 22.8) |
+| `locked` | `true` for a duty of an entry with `locked: true`, else absent. A change, a pause, or a delete of it gets 409. |
+| `template` | `true` while the templates of the entry make the runs, else absent. The message is then empty. |
 | `revision` | The revision of the entry. A write that names it is a compare-and-swap, and a conflict gets 409. |
 | `readback` | The duty in words, from the record alone, such as "Every weekday at 9:00 AM, New York time." |
 | `next` | The next five times, in UTC |
@@ -3357,11 +3361,28 @@ A run now runs the check of the duty and keeps its overlap and its daily cap. It
 
 `GET /v1/duties/options` names only what this front serves now, and the page offers no other choice. It names each secret of `workbench.duties.secrets` with its hosts, and never a value. The name `options` is taken by this route, so no duty has it. The name `new` stands for a duty that has no name yet. A dry run of `PUT /v1/duties/new` checks such a duty and says nothing of its name, and `POST /v1/duties/new/write-check` writes its check. A write of a duty named `new` fails. `POST /v1/duties/{name}/write-check` asks the agent of the duty to write the check from the words of a person. For a duty that does not exist yet, the body names the agent. For a saved duty, the agent of the duty wins. `duty_write_check` takes `{"name", "words", "agent"}`. Section 24.4 tells how the front runs the agent and checks its answer.
 
-Errors follow the workbench. A body that does not fit gets 400 with `problems`. A conflict of revision gets 409. An entry of `workbench.sources` gets 409 on a change. An outside system that failed gets 502. A test of parity reads the table of the routes in `duties/routes.go`. Each route has a tool or a reason.
+Errors follow the workbench. A body that does not fit gets 400 with `problems`. A conflict of revision gets 409. A locked duty gets 409 on a change, a pause, or a delete. An outside system that failed gets 502. A test of parity reads the table of the routes in `duties/routes.go`. Each route has a tool or a reason.
 
 ### 22.8 The sources as duties
 
-`GET /v1/duties` and `duty_get` show each entry of `workbench.sources` as a duty with `source: file`, for the viewers of its agent. A poll source shows its address without the query, its interval, and its items. A webhook source shows its credential. The templates of a source stay out of the read. The routes never change such an entry, and a duty of the store cannot take its name.
+A person can edit every duty on the page, so each entry of `workbench.sources` becomes an ordinary duty of the store. The import follows these rules:
+
+- At its start, the server copies each entry into the store of the duties, before the engine starts. It records each imported name in the bucket of the duties, under `import.<name>`. So a person who deletes such a duty does not see it again after a restart. A later change of the entry in the file changes no duty.
+- Two replicas import each entry once. The create of the duty and the record of its name decide by the revision of the bucket.
+- A duty that a person made under the name of an entry keeps the name. The log names the entry, and the sources go on running it as before.
+- After the import, the sources run only the entries that the duties did not take over (`sources.Adopt`). A deleted imported duty stays taken over, so its entry does not run again.
+
+The fields. A webhook entry becomes a duty with `when.webhook`, with the mode, the secret, and the header of its login. A poll entry becomes a duty with a schedule that repeats at the interval of the entry. Its check is of kind HTTP, with the address, the secret, the header, the items, and the key of the entry. A key template that names one field, such as `{{.id}}`, becomes the key path, `id`. The agent and the pool stay. The runs of the entry ran as its `runAs`, `source:<name>` by default, so the duty gets that principal as its owner, with `runAs: owner`. Who can change the duty follows the rules of every duty: the owners of its agent and the admins of the server (section 22.7). The record holds `origin: {"kind": "config", "name"}`. The page shows it as the sentence "First set up in the configuration of the server."
+
+The templates. The duty keeps the templates of its entry in a hidden part of its record: `input`, `title`, `key`, `metadata`, and the items of a call, with the window and the redrive of the entry. No route and no tool shows a template, and a read shows `template: true` and an empty message while the templates make the runs. The engine renders them through the delivery of the sources, so the runs stay as they were: one run per event, with the input, the title, the metadata, the key, the batch, the claims, and the redrive of the entry. Such a duty takes no budget of its own and no retry, as the entry did. A poll of such a duty runs at the interval of its entry, also below the shortest step of a schedule. It runs on every replica, and the claims keep each run single. A start with runs goes into the history of the duty, with its first run and what the delivery did. A save without a message, as `do.ask` without `message`, keeps the templates. A message that a person writes replaces them. The agent then gets the event as data, as with any webhook duty, and the duty needs a budget.
+
+The address and the secrets. The operator named the address, the secret, and the header of the entry in the file. So the rules of `workbench.duties` do not refuse them, and the check reads the address as the poll of the entry did. A read leaves out the query of such an address, and a save that keeps the address keeps the address of the entry.
+
+The lock. An entry with `locked: true` becomes a locked duty, and the read shows `locked: true`. A change, a pause, or a delete of it answers 409 with the detail "This duty is locked by the setup of this server. The person who runs the server can change it." A run now works. A locked entry follows the file at each start. An entry that loses its lock leaves its duty unlocked, as the file last wrote it.
+
+The old address. `POST /v1/sources/{name}` answers as `POST /v1/duties/{name}/call` for an imported duty, so a caller of the old address needs no change. While the templates make the runs, both addresses give the answer of a webhook source (section 13.4). After a message of a person, both give the answer of the call of a duty (section 22.9). For a deleted imported duty, both answer 404.
+
+The words. No answer of a route or a tool says "the front". It says "the server".
 
 ### 22.9 The call of a webhook
 

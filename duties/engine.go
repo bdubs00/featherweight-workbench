@@ -18,6 +18,7 @@ import (
 	"math"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -140,6 +141,14 @@ func (s *Service) pass(ctx context.Context) time.Time {
 			return next
 		}
 		s.follow(ctx, st, sw, now)
+		if step, ok := st.pollStep(); ok {
+			// A duty of the templates polls at the interval of its entry,
+			// as the entry did (imported.go).
+			if t := s.poll(ctx, st, step, sw, now); t.Before(next) {
+				next = t
+			}
+			continue
+		}
 		if st.Duty.When.Schedule == nil {
 			continue
 		}
@@ -191,7 +200,7 @@ func (s *Service) schedule(ctx context.Context, st *stored, plan *schedule.Plan,
 	if now.Sub(last) > max(d.catchUp(), grace) {
 		e := s.newEntry(Trigger{Kind: StartSchedule, Slot: last}, now)
 		e.State = StateMissed
-		e.Reason = fmt.Sprintf("No replica of the front ran this time, and it is older than the catch-up of %s, so it did not run.", durText(d.catchUp()))
+		e.Reason = fmt.Sprintf("No replica of the server ran this time, and it is older than the catch-up of %s, so it did not run.", durText(d.catchUp()))
 		if _, err := s.st.claim(ctx, d.Name, dateOf(last, d.zone()), e); err != nil {
 			s.log.Warn("duties: the engine did not write a missed time", "duty", d.Name, "error", err)
 			return next, !next.IsZero()
@@ -597,6 +606,9 @@ func slotWords(t time.Time, loc *time.Location) string {
 // carry runs the check of a start that a replica claimed, and its action
 // when the check finds work or the duty has no check.
 func (s *Service) carry(ctx context.Context, st *stored, date string, e entry) Outcome {
+	if st.templated() {
+		return s.carryTemplated(ctx, st, date, e)
+	}
 	d := &st.Duty
 	var keys []string
 	if d.CheckFirst != nil {
@@ -799,7 +811,7 @@ func (s *Service) failAttempt(ctx context.Context, st *stored, date string, e en
 		// Each caller failed before a queue took the run, so no run of the
 		// attempt exists and the start names none.
 		x.Run = ""
-		if x.Attempt <= d.retries() && !stopped {
+		if x.Attempt <= st.retries() && !stopped {
 			x.State, x.RetryAt, x.Reason = StateRetrying, now.Add(retryPause).UTC(), reason+" It goes again."
 		} else {
 			x.State, x.Reason = StateFailed, reason
@@ -964,7 +976,7 @@ func (s *Service) follow(ctx context.Context, st *stored, sw Switch, now time.Ti
 					continue
 				}
 				if e.Run == "" {
-					s.failAttempt(ctx, st, date, e, []string{StateStarting}, "The front stopped before the run reached its queue.", stopped)
+					s.failAttempt(ctx, st, date, e, []string{StateStarting}, "The server stopped before the run reached its queue.", stopped)
 					continue
 				}
 				// The run may have gone out: the start waits for it as for
@@ -1004,7 +1016,7 @@ func (s *Service) follow(ctx context.Context, st *stored, sw Switch, now time.Ti
 
 // lostWords says why the front stopped waiting for a run.
 func lostWords(run string) string {
-	return fmt.Sprintf("No worker reported the run %s for %s, so the front stopped waiting for it.", run, durText(lostAfter))
+	return fmt.Sprintf("No worker reported the run %s for %s, so the server stopped waiting for it.", run, durText(lostAfter))
 }
 
 // resume starts a start that waited, once no run of the duty works. It
@@ -1150,7 +1162,7 @@ func (s *Service) settle(ctx context.Context, st *stored, date string, e entry, 
 			x.FoundText, x.Event = "", ""
 		case r.State == fw.StateFailed:
 			reason = failReason(r.Error)
-			if x.Attempt <= d.retries() && !stopped {
+			if x.Attempt <= st.retries() && !stopped {
 				x.State, x.RetryAt, x.SpentUSD, x.Reason = StateRetrying, now.Add(retryPause).UTC(), x.CostUSD, reason+" It goes again."
 			} else {
 				x.State, x.Reason = StateFailed, reason
@@ -1248,14 +1260,16 @@ func cut(s string, n int) string {
 // principal, so the list holds every run of the batch.
 func (s *Service) runsOfFleet(ctx context.Context, name string) (map[string]*fw.Run, error) {
 	ctx = fw.WithPrincipal(ctx, nil)
-	batch := BatchOf(name)
+	// The runs of the templates of an imported duty keep the batch of
+	// their entry, the name of the duty (imported.go).
+	batches := []string{BatchOf(name), name}
 	out := map[string]*fw.Run{}
 	local, err := s.a.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("duties: list the runs: %w", err)
 	}
 	for _, r := range local {
-		if r.Metadata[fw.MetaBatch] == batch {
+		if slices.Contains(batches, r.Metadata[fw.MetaBatch]) {
 			out[r.ID] = r
 		}
 	}
@@ -1265,18 +1279,20 @@ func (s *Service) runsOfFleet(ctx context.Context, name string) (map[string]*fw.
 	}
 	var remote []*fw.Run
 	if bv, ok := v.(fleet.BatchView); ok {
-		b, err := bv.Batch(ctx, batch)
-		if err != nil {
-			return nil, fmt.Errorf("duties: list the runs of %s: %w", batch, err)
+		for _, batch := range batches {
+			b, err := bv.Batch(ctx, batch)
+			if err != nil {
+				return nil, fmt.Errorf("duties: list the runs of %s: %w", batch, err)
+			}
+			remote = append(remote, b.Runs...)
 		}
-		remote = b.Runs
 	} else {
 		all, err := v.Runs(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("duties: list the runs of the fleet: %w", err)
 		}
 		for _, r := range all {
-			if r.Metadata[fw.MetaBatch] == batch {
+			if slices.Contains(batches, r.Metadata[fw.MetaBatch]) {
 				remote = append(remote, r)
 			}
 		}

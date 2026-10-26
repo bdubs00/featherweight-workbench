@@ -20,6 +20,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/duties/schedule"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
+	"github.com/bdubs00/featherweight-workbench/sources"
 )
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -204,6 +205,7 @@ type front struct {
 	queue *queue
 	view  *view
 	sec   secrets
+	store *Store // the store of the duties; a replica of a test shares it
 }
 
 // t0 is Friday, October 23, 2026, at 12:00 in New York.
@@ -230,6 +232,13 @@ func newFront(t *testing.T, block string, mut func(*fw.Config)) *front {
 // newFrontOn is newFront on a bus that a test shares with its workers.
 func newFrontOn(t *testing.T, bus fw.Bus, block string, mut func(*fw.Config)) *front {
 	t.Helper()
+	return newReplica(t, bus, block, mut, nil)
+}
+
+// newReplica is newFrontOn with the store of the duties st, which another
+// replica of the test shares, or a new store for nil.
+func newReplica(t *testing.T, bus fw.Bus, block string, mut func(*fw.Config), st *Store) *front {
+	t.Helper()
 	t.Setenv(fleet.EnvIntake, "fw.jobs")
 	t.Setenv("FW_ATESPACE", "")
 	cfg := fw.DefaultConfig()
@@ -245,18 +254,33 @@ func newFrontOn(t *testing.T, bus fw.Bus, block string, mut func(*fw.Config)) *f
 	if mut != nil {
 		mut(cfg)
 	}
-	f := &front{clock: &clock{t: t0}, queue: &queue{}, view: &view{}, sec: secrets{}}
+	f := &front{clock: &clock{t: t0}, queue: &queue{}, view: &view{}, sec: secrets{}, store: st}
 	start := func(_ context.Context, a *fw.Agent) (io.Closer, error) {
 		c, err := LoadConfig(a.Config())
 		if err != nil {
 			return nil, err
 		}
-		st := NewStore(bucket.NewMem(dutiesBucket), bucket.NewMem(runsBucket), bucket.NewMem(seenBucket), quiet())
+		// The sources start before the duties, as the services of the
+		// process do, and the duties import their entries.
+		srcs, err := sources.Start(context.Background(), a)
+		if err != nil {
+			return nil, err
+		}
+		st := f.store
+		if st == nil {
+			st = NewStore(bucket.NewMem(dutiesBucket), bucket.NewMem(runsBucket), bucket.NewMem(seenBucket), quiet())
+		}
 		st.now = f.clock.Now
 		s := newService(a, st, c, quiet())
 		s.now, s.enqueue, s.runs, s.secret, s.replica = f.clock.Now, f.queue.enqueue, f.view.get, f.sec.get, "front-0"
+		s.importSources(context.Background())
 		attach(a, s)
-		return closer(func() { attach(a, nil) }), nil
+		return closer(func() {
+			attach(a, nil)
+			if srcs != nil {
+				_ = srcs.Close()
+			}
+		}), nil
 	}
 	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(people{}),
 		fw.WithModel(fw.ModelFunc{GenerateFn: func(context.Context, *fw.Request) (*fw.Response, error) {
@@ -279,6 +303,9 @@ func newFrontOn(t *testing.T, bus fw.Bus, block string, mut func(*fw.Config)) *f
 		a.Close(ctx)
 	})
 	f.a, f.s, f.url = a, Of(a), srv.URL
+	if f.s != nil {
+		f.store = f.s.st
+	}
 	if f.s == nil {
 		t.Fatal("the duties are off")
 	}

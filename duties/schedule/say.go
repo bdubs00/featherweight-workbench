@@ -340,7 +340,7 @@ func (p *parser) every() error {
 			p.i, p.days = j, days
 			return set(RepeatWeekly, 0)
 		}
-		return p.fail(from, p.chunkEnd(p.i), "is not a repeat that this front knows: say every other Monday, or every 2 weeks on Friday")
+		return p.fail(from, p.chunkEnd(p.i), "is not a repeat that this server knows: say every other Monday, or every 2 weeks on Friday")
 	case (w == "second" || w == "third" || w == "fourth") && p.w(1) == "week":
 		p.weeks = ordinals[w]
 		return set(RepeatWeekly, 2)
@@ -379,7 +379,7 @@ func (p *parser) every() error {
 			return p.setRepeat(from, RepeatWeekly)
 		case isUnit(unit, "day", "days", "month", "months", "year", "years"):
 			p.i += 2
-			return p.fail(from, p.i, "is not a repeat that this front knows: say every day, days of the week, or a day of the month")
+			return p.fail(from, p.i, "is not a repeat that this server knows: say every day, days of the week, or a day of the month")
 		}
 	}
 	return p.fail(from, p.chunkEnd(from), notRepeat)

@@ -119,7 +119,7 @@ func (s *Service) cancelOnFleet(ctx context.Context, r *fw.Run) error {
 func (s *Service) callMember(ctx context.Context, member, path string, body any) error {
 	v := fleet.Of(s.a)
 	if v == nil {
-		return fmt.Errorf("away: %w: the fleet is off, so the front reaches no member", fleet.ErrNoRoute)
+		return fmt.Errorf("away: %w: the fleet is off, so the server reaches no member", fleet.ErrNoRoute)
 	}
 	tok, err := fleet.Token(ctx, s.a.Config())
 	if err != nil {

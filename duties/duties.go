@@ -42,6 +42,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
+	"github.com/bdubs00/featherweight-workbench/sources"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 )
 
@@ -49,6 +50,7 @@ func init() {
 	fw.RegisterService(Start)
 	native.Extend(mount)
 	mcp.RegisterTools(tools)
+	sources.RegisterTakeover(takeover)
 }
 
 // Keys of the metadata that a duty gives each run, beside fw.batch and
@@ -127,6 +129,13 @@ type Service struct {
 	// start on it fails with ErrNoStarts.
 	passive bool
 
+	// The polls of the duties of the templates (imported.go): the time of
+	// the last poll of each duty on this replica, the duties whose poll
+	// works now, and the polls that work.
+	polled  map[string]time.Time
+	polling map[string]bool
+	pollers sync.WaitGroup
+
 	poke      chan struct{}
 	closers   []func()
 	cancel    context.CancelFunc
@@ -180,6 +189,11 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	s := newService(a, NewStore(duties, runs, seen, log), cfg, log)
 	s.closers = closers
 	s.passive = !fleet.CanEnqueue(a.Config())
+	// The entries of workbench.sources become duties before the engine
+	// starts, so the engine runs them from its first pass.
+	ictx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	s.importSources(ictx)
+	cancel()
 	attach(a, s)
 	where, _ := bucket.Where(a.Config(), dutiesBucket)
 	if s.passive {
@@ -252,6 +266,7 @@ func (s *Service) Close() error {
 			s.cancel()
 			<-s.done
 		}
+		s.pollers.Wait()
 		if Of(s.a) == s {
 			attach(s.a, nil)
 		}
