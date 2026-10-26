@@ -198,7 +198,7 @@ func TestWhoamiAndAgentsList(t *testing.T) {
 		agents.Agents[0].Usage.Runs != 1 || agents.Agents[0].Usage.Tokens != 15 || agents.Agents[0].Description != "Reviews code" || agents.Agents[0].Access.Owners[0] != "alice" {
 		t.Fatalf("bob agents = %+v", agents)
 	}
-	if txt := textOf(res); !strings.Contains(txt, "reviewer (you are a viewer)") || !strings.Contains(txt, "1 runs") {
+	if txt := textOf(res); !strings.Contains(txt, "reviewer (you are a viewer)") || !strings.Contains(txt, "1 runs") || !strings.HasPrefix(txt, "1 agent you can see:") {
 		t.Errorf("agents text = %q", txt)
 	}
 	res = callTool(t, ctx, alice, toolAgentsList, map[string]any{})

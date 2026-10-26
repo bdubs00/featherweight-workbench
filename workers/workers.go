@@ -30,7 +30,7 @@ func init() {
 // poolText says in words what a pool is and why it is not as its entry
 // wants it.
 func poolText(st pools.Status) string {
-	return strings.TrimPrefix(dashboard.PoolsText([]pools.Status{st}), "1 pool of the server:\n- ")
+	return strings.TrimPrefix(dashboard.PoolsText([]pools.Status{st}), "1 group of workers (pool) of the server:\n- ")
 }
 
 // templatesText lists the templates in words.

@@ -489,10 +489,17 @@ func (s *server) agentsList(ctx context.Context, _ *sdk.CallToolRequest, _ struc
 		agents = append(agents, fleet.PoolAgent{AgentView: v, Front: pooled})
 	}
 	var b strings.Builder
-	if len(agents) == 0 {
-		b.WriteString("You can see no agent profile.")
-	} else {
-		fmt.Fprintf(&b, "%d agent profiles you can see:\n", len(agents))
+	names := map[string]bool{}
+	for _, v := range agents {
+		names[v.Name] = true
+	}
+	switch {
+	case len(agents) == 0:
+		b.WriteString("You can see no agent.")
+	case len(names) == len(agents):
+		fmt.Fprintf(&b, "%s you can see:\n", plural(len(names), "agent", "agents"))
+	default:
+		fmt.Fprintf(&b, "%s you can see; an agent that two groups of workers run comes once for each:\n", plural(len(names), "agent", "agents"))
 	}
 	for _, v := range agents {
 		b.WriteString(agentLine(v))
@@ -507,11 +514,11 @@ func agentLine(v fleet.PoolAgent) string {
 	fmt.Fprintf(&b, "- %s (you are %s)", v.Name, roleWord(v.Role))
 	switch {
 	case v.Pool != "" && v.Overlay != "":
-		fmt.Fprintf(&b, " in the pool %s, %s by the server%s", v.Pool, v.Overlay, byWhom(v))
+		fmt.Fprintf(&b, " on the workers of the pool %s, %s by the server%s", v.Pool, v.Overlay, byWhom(v))
 	case v.Pool != "":
-		fmt.Fprintf(&b, " in the pool %s", v.Pool)
+		fmt.Fprintf(&b, " on the workers of the pool %s", v.Pool)
 	case v.Front:
-		b.WriteString(" on the server only, which no worker of a pool runs")
+		b.WriteString(" on the server only, which no worker runs")
 	}
 	if v.Description != "" {
 		b.WriteString(": " + v.Description)
@@ -606,7 +613,7 @@ func byWhom(v fleet.PoolAgent) string {
 		out += " for " + v.By
 	}
 	if v.At != nil {
-		out += " on " + v.At.UTC().Format(time.RFC3339)
+		out += " on " + v.At.UTC().Format("January 2, 2006")
 	}
 	return out
 }

@@ -215,9 +215,9 @@ func TestHomeString(t *testing.T) {
 		Others:     3,
 	}
 	want := "One agent is working. One run needs you.\n\n" +
-		"Needs you:\n- Fix checkout retries (reviewer, needs you, 5m ago, run r1)\n\n" +
-		"In progress:\n- Write the notes (reviewer, working, 5m ago, run r2)\n\n" +
-		"Recent results:\n- Review PR 42 (reviewer, ready to review, 5m ago, run r3)\n\n" +
+		"Needs you:\n- Fix checkout retries (reviewer, needs you, 5 minutes ago, run r1)\n\n" +
+		"In progress:\n- Write the notes (reviewer, working, 5 minutes ago, run r2)\n\n" +
+		"Recent results:\n- Review PR 42 (reviewer, ready to review, 5 minutes ago, run r3)\n\n" +
 		"3 runs by others."
 	if got := h.String(); got != want {
 		t.Errorf("text =\n%s\nwant\n%s", got, want)

@@ -77,7 +77,7 @@ func MemberLine(m fleet.Member) string {
 // queue, and one line per reason for a gap.
 func PoolsText(ps []pools.Status) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s of the server:", count(len(ps), "pool", "pools"))
+	fmt.Fprintf(&b, "%s of the server:", count(len(ps), "group of workers (pool)", "groups of workers (pools)"))
 	for _, p := range ps {
 		from := ""
 		switch {
@@ -89,7 +89,7 @@ func PoolsText(ps []pools.Status) string {
 			from = fmt.Sprintf(" (of the file, from the template %s)", p.Template)
 		}
 		fmt.Fprintf(&b, "\n- %s%s in %s: %d of %d %s ready, %d %s; agent %s on the queue %s",
-			p.Name, from, p.Atespace, p.Ready, p.Wanted, word(p.Wanted, "Task", "Tasks"), p.Actual, word(p.Actual, "exists", "exist"), p.Agent, p.Intake)
+			p.Name, from, p.Atespace, p.Ready, p.Wanted, word(p.Wanted, "worker", "workers"), p.Actual, word(p.Actual, "exists", "exist"), p.Agent, p.Intake)
 		if p.CheckedAt.IsZero() {
 			b.WriteString("; not read yet")
 		} else {
@@ -110,16 +110,23 @@ func word(n int, one, many string) string {
 	return many
 }
 
-// ago is how long ago a time was, in one unit.
+// ago is how long ago a time was, in one unit and in words, such as "5
+// minutes", so a model that reads a text repeats no unit of the code.
 func ago(t time.Time) string {
 	d := time.Since(t)
+	n, unit := 0, ""
 	switch {
 	case d < time.Minute:
-		return fmt.Sprintf("%ds", max(0, int(d.Seconds())))
+		n, unit = max(0, int(d.Seconds())), "second"
 	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
+		n, unit = int(d.Minutes()), "minute"
 	case d < 48*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
+		n, unit = int(d.Hours()), "hour"
+	default:
+		n, unit = int(d.Hours()/24), "day"
 	}
-	return fmt.Sprintf("%dd", int(d.Hours()/24))
+	if n != 1 {
+		unit += "s"
+	}
+	return fmt.Sprintf("%d %s", n, unit)
 }

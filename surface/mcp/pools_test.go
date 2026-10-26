@@ -147,13 +147,17 @@ func TestAgentToolsWithPools(t *testing.T) {
 	alice, bob := as(t, ctx, pf.url, "alice-token"), as(t, ctx, pf.url, "bob-token")
 
 	var list agentsResult
-	structured(t, callTool(t, ctx, alice, toolAgentsList, map[string]any{}), &list)
+	res := callTool(t, ctx, alice, toolAgentsList, map[string]any{})
+	structured(t, res, &list)
 	if len(list.Agents) != 2 || list.Agents[0].Name != "triage" || list.Agents[0].Pool != "triage" || list.Agents[0].Role != "owner" ||
-		list.Agents[1].Name != "default" || !list.Agents[1].Front {
+		list.Agents[1].Name != "default" || !list.Agents[1].Front || len(list.Agents[0].WorkerTools) == 0 {
 		t.Fatalf("agents_list = %+v", list.Agents)
 	}
-	res := callTool(t, ctx, alice, toolAgentGet, map[string]any{"name": "triage"})
-	if text := textOf(res); res.IsError || !strings.Contains(text, "in the pool triage") || !strings.Contains(text, "asks first for tickets.create_ticket") {
+	if text := textOf(res); !strings.Contains(text, "- triage (you are an owner) on the workers of the pool triage") || strings.Contains(text, "agent profiles") {
+		t.Fatalf("agents_list text = %q", text)
+	}
+	res = callTool(t, ctx, alice, toolAgentGet, map[string]any{"name": "triage"})
+	if text := textOf(res); res.IsError || !strings.Contains(text, "on the workers of the pool triage") || !strings.Contains(text, "asks first for tickets.create_ticket") || !strings.Contains(text, "The profile names no tools, so it has the tools of the workers of its pool: bash, files") {
 		t.Fatalf("agent_get = %q", text)
 	}
 	if res := callTool(t, ctx, bob, toolAgentGet, map[string]any{"name": "triage", "pool": "nope"}); !res.IsError {
