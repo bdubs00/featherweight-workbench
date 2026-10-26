@@ -363,7 +363,8 @@ func (s *Store) postAs(ctx context.Context, id string, spec PostSpec) (Message, 
 }
 
 // react answers POST /v1/bridges/{id}/messages/{seq}/reactions with the
-// entry after the reaction of the caller.
+// entry after the reaction of the caller, or after its removal with
+// "remove": true.
 func (rt *routes) react(w http.ResponseWriter, r *http.Request) {
 	s, rec, ok := rt.bridge(w, r)
 	if !ok {

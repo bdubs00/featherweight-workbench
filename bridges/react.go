@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -28,21 +29,41 @@ const (
 	// heartAsked and heartDid bound what the person asked and what the
 	// agent did in an entry of the page.
 	heartAsked = 500
-	heartDid   = 1500
+	heartDid   = 4000
 	// pageAttempts bounds the tries of a write of the page that other
 	// writers race.
 	pageAttempts = 8
 )
 
-// ReactSpec is a reaction of a person on an entry.
+// ReactSpec is a reaction of a person on an entry. A reaction that the
+// person has already takes it back, as a second press of a pressed key on
+// the page does. Remove only takes a reaction back and never adds one.
 type ReactSpec struct {
 	Reaction string `json:"reaction"`
 	Note     string `json:"note,omitempty"`
+	Remove   bool   `json:"remove,omitempty"`
+}
+
+// opposite is the thumb that a thumb excludes: one person holds a thumb
+// up or a thumb down on an entry, never both.
+func opposite(reaction string) string {
+	switch reaction {
+	case ReactionUp:
+		return ReactionDown
+	case ReactionDown:
+		return ReactionUp
+	}
+	return ""
 }
 
 // reactEntry records the reaction of the person by on the entry seq of a
-// bridge and returns the entry. A second reaction of the same kind from
-// the same person changes nothing.
+// bridge and returns the entry. A reaction of the same kind that the
+// person has already takes it back, so a reaction toggles. A thumb takes
+// the other thumb of the person away. With spec.Remove, it only takes the
+// reaction of the person back, and a reaction that the person does not
+// have changes nothing, so a removal is safe to retry. The run that the
+// entry mirrors gets each change. A removed heart leaves its entry on the
+// page of the agent, which is a record of what a person liked once.
 func (s *Store) reactEntry(ctx context.Context, id string, seq uint64, spec ReactSpec, by *fw.Principal) (Message, error) {
 	reaction := strings.ToLower(strings.TrimSpace(spec.Reaction))
 	switch {
@@ -59,13 +80,23 @@ func (s *Store) reactEntry(ctx context.Context, id string, seq uint64, spec Reac
 	if err != nil {
 		return Message{}, err
 	}
+	other, removed := "", false
 	m, changed, err := s.b.changeEntry(ctx, id, seq, func(m *Message) bool {
-		for _, who := range m.Reactions[reaction] {
-			if who == by.Subject {
-				return false
-			}
+		other, removed = "", false
+		has := slices.Contains(m.Reactions[reaction], by.Subject)
+		switch {
+		case has:
+			m.Reactions[reaction] = without(m.Reactions[reaction], by.Subject)
+			removed = true
+			return true
+		case spec.Remove:
+			return false
 		}
 		m.Reactions[reaction] = append(m.Reactions[reaction], by.Subject)
+		if o := opposite(reaction); o != "" && slices.Contains(m.Reactions[o], by.Subject) {
+			m.Reactions[o] = without(m.Reactions[o], by.Subject)
+			other = o
+		}
 		return true
 	})
 	if err != nil || !changed {
@@ -73,8 +104,17 @@ func (s *Store) reactEntry(ctx context.Context, id string, seq uint64, spec Reac
 	}
 	emitMessage(id, m)
 	note := strings.TrimSpace(spec.Note)
+	if removed {
+		note = ""
+	}
 	if run, rseq := reactionTarget(m); run != "" {
-		d := fw.ReactionData{Seq: rseq, Reaction: reaction, By: by.Subject, Note: note}
+		// The run takes the removal of the other thumb first, so its
+		// counts match the entry.
+		var changes []fw.ReactionData
+		if other != "" {
+			changes = append(changes, fw.ReactionData{Seq: rseq, Reaction: other, By: by.Subject, Removed: true})
+		}
+		changes = append(changes, fw.ReactionData{Seq: rseq, Reaction: reaction, By: by.Subject, Note: note, Removed: removed})
 		s.submit(&job{
 			name: fmt.Sprintf("the reaction on entry %d of %s", seq, id),
 			do: func(ctx context.Context) error {
@@ -82,14 +122,19 @@ func (s *Store) reactEntry(ctx context.Context, id string, seq uint64, spec Reac
 				if r == nil {
 					return fmt.Errorf("%w: the view knows no run %s", fw.ErrInvalidRequest, run)
 				}
-				return s.react(ctx, r, d)
+				for _, d := range changes {
+					if err := s.react(ctx, r, d); err != nil {
+						return err
+					}
+				}
+				return nil
 			},
 			fail: func(err error) {
 				s.log.Warn("bridges: a reaction did not reach its run", "bridge", id, "seq", seq, "run", run, "error", err)
 			},
 		})
 	}
-	if reaction == ReactionHeart {
+	if reaction == ReactionHeart && !removed {
 		person := s.nameOf(ctx, by)
 		s.submit(&job{
 			name: fmt.Sprintf("the heart on entry %d of %s", seq, id),
@@ -100,6 +145,18 @@ func (s *Store) reactEntry(ctx context.Context, id string, seq uint64, spec Reac
 		})
 	}
 	return m, nil
+}
+
+// without returns the subjects without who, as a new slice that is never
+// nil, so an entry keeps an empty list for the reaction.
+func without(list []string, who string) []string {
+	out := make([]string, 0, len(list))
+	for _, x := range list {
+		if x != who {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // reactionTarget returns the run and the event that a reaction on an
@@ -162,7 +219,7 @@ func (s *Store) heart(ctx context.Context, rec *record, m Message, person, note 
 	if asked != "" {
 		fmt.Fprintf(&b, "- What %s asked: %s\n", s.operatorName(rec, "the operator"), asked)
 	}
-	fmt.Fprintf(&b, "- What %s did: %s\n", orWords(handle, agent), oneLine(m.Text, heartDid))
+	b.WriteString(didText(orWords(handle, agent), m.Text))
 	if note != "" {
 		fmt.Fprintf(&b, "- The note of %s: %s\n", person, oneLine(note, fw.MaxReactionNoteBytes))
 	}
@@ -191,6 +248,31 @@ func (s *Store) heart(ctx context.Context, rec *record, m Message, person, note 
 		return nil
 	}
 	return fmt.Errorf("bridges: the page %s changed %d times while the server wrote it", path, pageAttempts)
+}
+
+// didText is the line of a heart that says what the agent did. An answer
+// of one line stays on the line. A longer answer keeps its lines, so its
+// lists and its tables stay, indented under the line, so no line of it
+// starts an entry of the page. It holds at most heartDid bytes.
+func didText(who, text string) string {
+	text = strings.TrimSpace(strings.ReplaceAll(clean(text), "\r\n", "\n"))
+	if !strings.Contains(text, "\n") {
+		return fmt.Sprintf("- What %s did: %s\n", who, oneLine(text, heartDid))
+	}
+	if t, cut := cutText(text, heartDid); cut {
+		text = strings.TrimRight(t, " \n") + "…"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "- What %s did:\n\n", who)
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimRight(line, " \t"); line == "" {
+			b.WriteString("\n")
+			continue
+		}
+		b.WriteString("  " + line + "\n")
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 // learnedHeader starts the page of the hearts of an agent.

@@ -397,6 +397,11 @@ func (s *Store) react(ctx context.Context, r *fw.Run, d fw.ReactionData) error {
 		return s.a.React(s.asFront(ctx), r.ID, d)
 	}
 	body := map[string]any{"seq": d.Seq, "reaction": d.Reaction, "note": d.Note, "by": d.By}
+	if d.Removed {
+		// Only a kernel that takes a reaction back knows the key, so a
+		// reaction that stays leaves it out.
+		body["remove"] = true
+	}
 	return s.call(ctx, r.Member, http.MethodPost, runPath(r.ID, "/reactions"), body, "", nil)
 }
 

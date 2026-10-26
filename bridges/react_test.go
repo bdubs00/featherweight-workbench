@@ -174,13 +174,22 @@ func TestReactionsAndHearts(t *testing.T) {
 	if code, m := react("bob", `{"reaction":"up"}`); code != http.StatusOK || len(m.Reactions[ReactionUp]) != 1 || m.Reactions[ReactionUp][0] != "bob" {
 		t.Fatalf("up = %d %+v", code, m.Reactions)
 	}
-	if code, m := react("bob", `{"reaction":"up","note":"again"}`); code != http.StatusOK || len(m.Reactions[ReactionUp]) != 1 {
-		t.Fatalf("a repeat = %d %+v", code, m.Reactions)
-	}
 	eventually(t, "the thumb reaches the run", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-mig/reactions")) == 1 })
 	got := fm.find(http.MethodPost, "/v1/runs/r-mig/reactions")[0]
 	if got.Auth != "Bearer "+fleetToken || got.Body["by"] != "bob" || got.Body["reaction"] != "up" || got.Body["seq"] != float64(3) {
 		t.Fatalf("the reaction on the run = %+v", got)
+	}
+	// A second press of the same reaction takes it back, and a third puts
+	// it on again. The run gets both.
+	if code, m := react("bob", `{"reaction":"up","note":"again"}`); code != http.StatusOK || len(m.Reactions[ReactionUp]) != 0 {
+		t.Fatalf("a repeat = %d %+v", code, m.Reactions)
+	}
+	if code, m := react("bob", `{"reaction":"up"}`); code != http.StatusOK || len(m.Reactions[ReactionUp]) != 1 {
+		t.Fatalf("a third press = %d %+v", code, m.Reactions)
+	}
+	eventually(t, "the toggles reach the run", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-mig/reactions")) == 3 })
+	if back := fm.find(http.MethodPost, "/v1/runs/r-mig/reactions")[1]; back.Body["remove"] != true || back.Body["note"] != "" {
+		t.Fatalf("the removal on the run = %+v", back.Body)
 	}
 	if code, _ := react("bob", `{"reaction":"smile"}`); code != http.StatusBadRequest {
 		t.Fatalf("an unknown reaction = %d", code)
@@ -207,7 +216,7 @@ func TestReactionsAndHearts(t *testing.T) {
 	if page.By != pages.ByFront {
 		t.Fatalf("the page names the writer %q", page.By)
 	}
-	eventually(t, "the heart reaches the run", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-mig/reactions")) == 2 })
+	eventually(t, "the heart reaches the run", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-mig/reactions")) == 4 })
 	// A second heart comes first on the page.
 	react("bob", `{"reaction":"heart"}`)
 	eventually(t, "the second heart reaches the wiki", func() bool {
@@ -222,6 +231,79 @@ func TestReactionsAndHearts(t *testing.T) {
 	rec, _, _ := s.b.get(context.Background(), it.ID)
 	if ins := s.instructionsOf(context.Background(), rec, *rec.member("migrator-1")); !strings.Contains(ins, "Exactly the layout we want.") {
 		t.Fatalf("the instructions lack the heart:\n%s", ins)
+	}
+}
+
+// A thumb takes the other thumb of the same person away, and remove takes
+// a reaction back. The run of the entry gets each change in order, and
+// the removal of nothing changes nothing, so it is safe to retry.
+func TestReactionsExcludeAndRemove(t *testing.T) {
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	v, fm := withFleet(t, a)
+	v.state("default/crew-0", fleet.MemberLive)
+	url := serve(t, a)
+	it := open(t, url)
+	r := workerRun("r-mig", it.ID, "migrator-1", "migrator", fw.StateCompleted)
+	r.Seq = 3
+	v.put(r)
+	fm.setEvents("r-mig", ev(fw.EvRunQueued, nil), ev(fw.EvRunStarted, nil), ev(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "The playbook is ready."}))
+	s.poll(context.Background())
+	var answer Message
+	for _, m := range channel(t, s, it.ID) {
+		if m.From.Kind == KindAgent {
+			answer = m
+		}
+	}
+	if answer.Seq == 0 {
+		t.Fatal("no answer in the channel")
+	}
+	react := func(token, body string) Message {
+		t.Helper()
+		resp, out := do(t, http.MethodPost, fmt.Sprintf("%s/v1/bridges/%s/messages/%d/reactions", url, it.ID, answer.Seq), token, body)
+		var m Message
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST %s = %d %s", body, resp.StatusCode, out)
+		}
+		decodeJSON(t, out, &m)
+		return m
+	}
+	same := func(got []string, want ...string) bool {
+		return got != nil && strings.Join(got, ",") == strings.Join(want, ",")
+	}
+	if m := react("bob", `{"reaction":"up"}`); !same(m.Reactions[ReactionUp], "bob") || !same(m.Reactions[ReactionDown]) {
+		t.Fatalf("up = %+v", m.Reactions)
+	}
+	eventually(t, "the thumb reaches the run", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-mig/reactions")) == 1 })
+	m := react("bob", `{"reaction":"down"}`)
+	if !same(m.Reactions[ReactionUp]) || !same(m.Reactions[ReactionDown], "bob") {
+		t.Fatalf("down after up = %+v", m.Reactions)
+	}
+	eventually(t, "the switch reaches the run", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-mig/reactions")) == 3 })
+	calls := fm.find(http.MethodPost, "/v1/runs/r-mig/reactions")
+	if calls[1].Body["reaction"] != "up" || calls[1].Body["remove"] != true || calls[2].Body["reaction"] != "down" || calls[2].Body["remove"] != nil {
+		t.Fatalf("the run got %+v, then %+v", calls[1].Body, calls[2].Body)
+	}
+	// A heart stays beside a thumb, and alice keeps her own thumb.
+	react("alice", `{"reaction":"up"}`)
+	if m := react("bob", `{"reaction":"heart"}`); !same(m.Reactions[ReactionUp], "alice") || !same(m.Reactions[ReactionDown], "bob") || !same(m.Reactions[ReactionHeart], "bob") {
+		t.Fatalf("a heart and two people = %+v", m.Reactions)
+	}
+	if m := react("bob", `{"reaction":"down","remove":true}`); !same(m.Reactions[ReactionDown]) || !same(m.Reactions[ReactionHeart], "bob") {
+		t.Fatalf("a removal = %+v", m.Reactions)
+	}
+	eventually(t, "the removal reaches the run", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-mig/reactions")) == 6 })
+	last := fm.find(http.MethodPost, "/v1/runs/r-mig/reactions")[5]
+	if last.Body["reaction"] != "down" || last.Body["remove"] != true || last.Body["by"] != "bob" || last.Body["note"] != "" {
+		t.Fatalf("the removal on the run = %+v", last.Body)
+	}
+	// A removal of a reaction that bob does not have changes nothing.
+	if m := react("bob", `{"reaction":"down","remove":true}`); !same(m.Reactions[ReactionDown]) {
+		t.Fatalf("a second removal = %+v", m.Reactions)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := len(fm.find(http.MethodPost, "/v1/runs/r-mig/reactions")); n != 6 {
+		t.Fatalf("a removal of nothing reached the run: %d calls", n)
 	}
 }
 
@@ -515,5 +597,30 @@ func TestCloseAsksForTheReport(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if n := len(fm.find(http.MethodPost, "/v1/runs/mgr-run-1/messages")); n != before {
 		t.Fatalf("the stopped manager run got %d asks", n-before)
+	}
+}
+
+// A liked answer of several lines keeps its lines on the page of the
+// agent, indented under its line, so its tables and lists stay and no line
+// of it starts an entry. An answer of one line stays on the line. The
+// answer holds at most heartDid bytes before the indent.
+func TestLearnedKeepsTheLines(t *testing.T) {
+	answer := "Review done.\r\n\n| Check | Result |\n|---|---|\n| Sections | Pass |\n\n## Next\n- ship it  "
+	got := didText("reviewer", answer)
+	want := "- What reviewer did:\n\n  Review done.\n\n  | Check | Result |\n  |---|---|\n  | Sections | Pass |\n\n  ## Next\n  - ship it\n\n"
+	if got != want {
+		t.Fatalf("didText =\n%q\nwant\n%q", got, want)
+	}
+	if got := didText("reviewer", "  All good.  "); got != "- What reviewer did: All good.\n" {
+		t.Fatalf("one line = %q", got)
+	}
+	first := "## 2026-10-26, bridge \"a\" (b1), reviewer\n\n" + didText("reviewer", answer)
+	page := learnedText("reviewer", "", first)
+	page = learnedText("reviewer", page, "## 2026-10-27, bridge \"b\" (b2), reviewer\n\n- What reviewer did: More.\n")
+	if n := strings.Count(page, "\n## 20"); n != 2 || !strings.Contains(page, "  | Sections | Pass |\n") || !strings.Contains(page, "  ## Next\n") {
+		t.Fatalf("the page =\n%s", page)
+	}
+	if long := didText("reviewer", strings.Repeat("line\n", 2000)); len(long) > 2*heartDid || !strings.Contains(long, "…") {
+		t.Fatalf("a long answer holds %d bytes", len(long))
 	}
 }

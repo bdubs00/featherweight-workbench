@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -129,7 +130,8 @@ const (
 	reactSchema = `{"type":"object","properties":{` + personBridgeArg + `,
 		"seq":{"type":"integer","minimum":1,"description":"The seq of the entry."},
 		"reaction":{"type":"string","enum":["up","down","heart"],"description":"The reaction."},
-		"note":{"type":"string","description":"A short note with the reaction, for the agent that wrote the entry."}
+		"note":{"type":"string","description":"A short note with the reaction, for the agent that wrote the entry."},
+		"remove":{"type":"boolean","description":"true only takes your reaction back and never adds it, so a retry is safe."}
 	},"required":["bridge","seq","reaction"]}`
 
 	markReadSchema = `{"type":"object","properties":{` + personBridgeArg + `,
@@ -275,9 +277,9 @@ func tools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolReact,
 			Title:       "React to an entry",
-			Description: "For a person: react to an entry of the channel of a bridge with up, down, or heart, and an optional note. A second reaction of the same kind changes nothing.",
+			Description: "For a person: react to an entry of the channel of a bridge with up, down, or heart, and an optional note, as a key of the page does. A reaction that you have already takes it back, so a second call of the same reaction toggles it; remove true only takes it back. A thumb up takes your thumb down away, and a thumb down takes your thumb up away.",
 			InputSchema: json.RawMessage(reactSchema),
-			Annotations: &sdk.ToolAnnotations{DestructiveHint: &no, IdempotentHint: true, OpenWorldHint: &no},
+			Annotations: &sdk.ToolAnnotations{DestructiveHint: &no, IdempotentHint: false, OpenWorldHint: &no},
 		}, t.react),
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolMarkRead,
@@ -760,7 +762,12 @@ func (t *toolSet) react(ctx context.Context, _ *sdk.CallToolRequest, in reactArg
 	if err != nil {
 		return toolError(err), nil, nil
 	}
-	return mcp.Result(fmt.Sprintf("Reacted %s to entry %d of the bridge %s.", strings.ToLower(strings.TrimSpace(in.Reaction)), m.Seq, in.Bridge), m), nil, nil
+	reaction := strings.ToLower(strings.TrimSpace(in.Reaction))
+	verb := "Reacted %s to entry %d of the bridge %s."
+	if !slices.Contains(m.Reactions[reaction], subjectOf(ctx)) {
+		verb = "Took back %s on entry %d of the bridge %s; you have no such reaction on it now."
+	}
+	return mcp.Result(fmt.Sprintf(verb, reaction, m.Seq, in.Bridge), m), nil, nil
 }
 
 func (t *toolSet) markRead(ctx context.Context, _ *sdk.CallToolRequest, in markReadArgs) (*sdk.CallToolResult, any, error) {

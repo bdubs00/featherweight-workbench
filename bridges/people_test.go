@@ -45,6 +45,21 @@ func TestToolsOfAPerson(t *testing.T) {
 	if res.IsError || !strings.Contains(textOf(res), "Reacted up to entry") {
 		t.Fatalf("bridge_react = %s", textOf(res))
 	}
+	res = callTool(t, alice, ToolReact, map[string]any{"bridge": it.ID, "seq": posted, "reaction": "up", "remove": true}, nil)
+	var took Message
+	structured(t, res, &took)
+	if res.IsError || !strings.Contains(textOf(res), "Took back up on entry") || len(took.Reactions[ReactionUp]) != 0 {
+		t.Fatalf("bridge_react with remove = %s %+v", textOf(res), took.Reactions)
+	}
+	// As on the page, the same reaction twice puts it on and takes it back.
+	for i, want := range []string{"Reacted heart to entry", "Took back heart on entry"} {
+		res = callTool(t, alice, ToolReact, map[string]any{"bridge": it.ID, "seq": posted, "reaction": "heart"}, nil)
+		var m Message
+		structured(t, res, &m)
+		if res.IsError || !strings.Contains(textOf(res), want) || len(m.Reactions[ReactionHeart]) != 1-i {
+			t.Fatalf("bridge_react heart %d = %s %+v", i+1, textOf(res), m.Reactions)
+		}
+	}
 	res = callTool(t, alice, ToolMarkRead, map[string]any{"bridge": it.ID, "seq": 9999}, nil)
 	var mark markReadResult
 	structured(t, res, &mark)
