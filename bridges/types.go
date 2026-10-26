@@ -565,7 +565,9 @@ func (r *record) public() Bridge {
 	b.Members = append([]Member(nil), r.Members...)
 	for i := range b.Members {
 		b.Members[i].Runs = append([]string{}, b.Members[i].Runs...)
-		if !b.Members[i].Fired {
+		// A closed bridge waits for no answer, also when it was closed
+		// before the close settled its questions (closeQuestions).
+		if !b.Members[i].Fired && r.State != StateClosed {
 			b.Members[i].Question = r.askOf(b.Members[i].Handle)
 		}
 	}

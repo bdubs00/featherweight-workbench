@@ -18,6 +18,7 @@ package bridges
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -123,6 +124,25 @@ func (r *record) seatEnds(handle string, seq uint64, question bool) (asks, chang
 		return false, true
 	}
 	return question, r.seatPosts(handle, seq, question, false)
+}
+
+// closeQuestions ends the question of each seat that waits, because the
+// bridge closes and nobody answers in a closed bridge. It returns the
+// handles whose question ended, sorted. It runs inside the change of the
+// record.
+func (r *record) closeQuestions() []string {
+	var out []string
+	for h, sm := range r.Seats {
+		if sm == nil || sm.Ask == 0 {
+			continue
+		}
+		sm.Ask, sm.AskOpen = 0, false
+		if m := r.member(h); m != nil && !m.Fired {
+			out = append(out, h)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // personAnswers ends the questions that a message of a person answers: the

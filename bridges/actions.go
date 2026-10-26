@@ -675,7 +675,16 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 		switch {
 		case p.State != nil && *p.State == StateClosed && rec.State == StateOpen:
 			rec.State, rec.ClosedAt = StateClosed, &now
-			l = system(EventClosed, fmt.Sprintf("%s closed the bridge", s.nameOf(ctx, by)))
+			text := fmt.Sprintf("%s closed the bridge", s.nameOf(ctx, by))
+			// Nobody answers in a closed bridge, so its questions end.
+			switch settled := rec.closeQuestions(); len(settled) {
+			case 0:
+			case 1:
+				text += "; the question of " + settled[0] + " ends without an answer"
+			default:
+				text += "; the questions of " + andList(settled) + " end without an answer"
+			}
+			l = system(EventClosed, text)
 			if rec.Delegation.Report {
 				rec.Report = &reportMark{AskedAt: now}
 				closed = true

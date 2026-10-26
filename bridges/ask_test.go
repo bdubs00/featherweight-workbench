@@ -234,3 +234,60 @@ func TestAsksOperator(t *testing.T) {
 		t.Error("to operator")
 	}
 }
+
+// A close ends the questions that wait, because nobody answers in a
+// closed bridge: the seat no longer needs you, the bridge counts no
+// question, and the line of the close says so. A bridge that a front
+// closed before this rule shows no question either.
+func TestCloseEndsTheQuestions(t *testing.T) {
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	v, _ := withFleet(t, a)
+	v.state("default/crew-0", fleet.MemberLive)
+	url := serve(t, a)
+	it := open(t, url)
+	rev := workerRun("r-rev", it.ID, "reviewer", "reviewer", fw.StateCompleted)
+	v.put(rev)
+	s.poll(context.Background())
+	cs := connectMCP(t, a, "fleet")
+	res := callTool(t, cs, ToolPost, map[string]any{"text": "Which host first?", "to": []string{"operator"}}, metaOf("r-rev", "reviewer", ""))
+	var q Message
+	structured(t, res, &q)
+	if res.IsError || q.Ask == nil {
+		t.Fatalf("to operator = %s %+v", textOf(res), q)
+	}
+	if _, m := memberNamed(t, url, it.ID, "reviewer"); m.Question != q.Seq || m.Presence != PresenceNeedsYou {
+		t.Fatalf("reviewer before the close = %+v", m)
+	}
+	if waits, err := s.Waiting(fw.WithPrincipal(context.Background(), &fw.Principal{Subject: "alice", Kind: fw.KindUser})); err != nil || len(waits) != 1 {
+		t.Fatalf("Waiting before the close = %+v, %v", waits, err)
+	}
+	if resp, body := do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID, "alice", `{"state":"closed","delegation":{"report":false}}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("close = %d %s", resp.StatusCode, body)
+	}
+	item, m := memberNamed(t, url, it.ID, "reviewer")
+	if m.Question != 0 || m.Presence == PresenceNeedsYou || item.NeedsYou != 0 {
+		t.Fatalf("reviewer after the close = %+v, needs you %d", m, item.NeedsYou)
+	}
+	if waits, err := s.Waiting(fw.WithPrincipal(context.Background(), &fw.Principal{Subject: "alice", Kind: fw.KindUser})); err != nil || len(waits) != 0 {
+		t.Fatalf("Waiting after the close = %+v, %v", waits, err)
+	}
+	var line Message
+	for _, e := range channel(t, s, it.ID) {
+		if e.Event == EventClosed {
+			line = e
+		}
+	}
+	if !strings.HasSuffix(line.Text, "closed the bridge; the question of reviewer ends without an answer") {
+		t.Fatalf("the line of the close = %q", line.Text)
+	}
+	rec, _, err := s.b.get(context.Background(), it.ID)
+	if err != nil || rec.askOf("reviewer") != 0 {
+		t.Fatalf("the record keeps the question: %v", err)
+	}
+	// A record that an older front closed still holds the mark.
+	old := &record{Bridge: Bridge{State: StateClosed, Members: []Member{{Handle: "reviewer"}}}, Seats: map[string]*seatMark{"reviewer": {Ask: 7}}}
+	if got := old.public().Members[0].Question; got != 0 {
+		t.Fatalf("an old closed bridge shows the question %d", got)
+	}
+}
