@@ -125,12 +125,24 @@ func (s *server) fleetRuns(w http.ResponseWriter, r *http.Request) {
 	if limit > 0 && len(matched) > limit {
 		matched = matched[:limit]
 	}
+	var ids []string
+	for _, run := range matched {
+		if run.State.Terminal() {
+			ids = append(ids, run.ID)
+		}
+	}
+	ends := fleet.EndedAt(r.Context(), s.a, ids)
 	list := make([]any, 0, len(matched))
 	for _, run := range matched {
 		mark, marked := marks[run.ID]
+		end, ended := ends[run.ID]
 		switch {
-		case marked:
-			list = append(list, listedRun{Run: run, Archived: archived[run.ID], MyTitle: mark.MyTitle, Hidden: mark.Hidden})
+		case marked || ended:
+			l := listedRun{Run: run, Archived: archived[run.ID], MyTitle: mark.MyTitle, Hidden: mark.Hidden}
+			if ended {
+				l.EndedAt = &end
+			}
+			list = append(list, l)
 		case archived[run.ID]:
 			list = append(list, archivedRun{Run: run, Archived: true})
 		default:
@@ -147,11 +159,13 @@ type archivedRun struct {
 	Archived bool `json:"archived"`
 }
 
-// listedRun is a run of a list that the caller renamed or hid: the run
-// object with the title of the caller in myTitle, hidden, and archived.
+// listedRun is a run of a list with what the front adds to the run
+// object: archived, the title of the caller in myTitle, hidden, and
+// endedAt, the time of the newest fw.run.finished of a run that ended.
 type listedRun struct {
 	*fw.Run
-	Archived bool   `json:"archived,omitempty"`
-	MyTitle  string `json:"myTitle,omitempty"`
-	Hidden   bool   `json:"hidden,omitempty"`
+	Archived bool       `json:"archived,omitempty"`
+	MyTitle  string     `json:"myTitle,omitempty"`
+	Hidden   bool       `json:"hidden,omitempty"`
+	EndedAt  *time.Time `json:"endedAt,omitempty"`
 }

@@ -726,6 +726,10 @@ A person gives a conversation a title of their own, and hides it from their list
 
 The entries live in the key-value bucket `<stream>_CONVERSATIONS` on a NATS bus, one entry per person under `p.<subject in base64url>`, and in the memory of the process on the bus `mem`. With NATS accounts, allow the front `$KV.<stream>_CONVERSATIONS.>`. On another bus, the route and the tool answer 503 with the reason, and the lists show the runs as they are. The static token and a workload have a subject too, so they keep entries of their own, and a caller without a subject gets 403.
 
+### 4.21 The end of a run
+
+`updatedAt` of a run moves with each later event, such as a reaction, a title, or a quality receipt, so it is no time of the end. The view of the fleet and the archive keep the time of the newest `fw.run.finished` of each run that ended, and clear it when the run works again. The front adds it as `endedAt` to the run object of `GET /v1/fleet/runs` and of `GET /v1/runs/{id}` for a run of another member, also when the view or the archive answers for it. A summary of the archive that a server before 2026-10-27 wrote holds no end, and a read of the run finds it among its events. A run of this process, a run that works, and a run whose end the view did not see, such as a run that the view read whole from its member, carry no `endedAt`; a page then shows `updatedAt`.
+
 ## 5. Browser sign-in
 
 A person signs in to the dashboard at `/ui` through the OpenID Connect issuer of `auth.oidc`. Three keys turn the sign-in on and shape it:

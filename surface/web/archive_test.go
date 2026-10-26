@@ -78,10 +78,14 @@ func TestArchivedRunRoutes(t *testing.T) {
 	}
 	var got struct {
 		fw.Run
-		Archived bool `json:"archived"`
+		Archived bool       `json:"archived"`
+		EndedAt  *time.Time `json:"endedAt"`
 	}
+	// The list names the time of the fw.run.finished of the run, the
+	// fifth event, in endedAt.
 	if err := json.Unmarshal(list.Runs[0], &got); err != nil || got.ID != "01CHAT" || got.Metadata["fw.view"] != "quickchat" || got.Metadata[fw.MetaBatch] != "bridge:01B" ||
-		got.Agent != "manager" || got.Principal != "alice" || got.State != fw.StateCompleted || got.Member != "team/manager-0" || !got.Archived {
+		got.Agent != "manager" || got.Principal != "alice" || got.State != fw.StateCompleted || got.Member != "team/manager-0" || !got.Archived ||
+		got.EndedAt == nil || !got.EndedAt.Equal(start.Add(4*time.Second)) {
 		t.Fatalf("the archived run = %s", list.Runs[0])
 	}
 

@@ -234,6 +234,10 @@ type platformRun struct {
 	// a quality receipt sent it back (tap.go).
 	byRoutine bool
 	sentBack  bool
+	// ended is the time of the newest fw.run.finished of a run that ended,
+	// and zero for a run that works again or whose end the view did not
+	// see (endedAt.go).
+	ended time.Time
 	// idx is what the index of the runs holds of the run (index.go).
 	// fromIndex is true while the view knows the run from the index alone:
 	// no event and no read of its member confirmed it since the view
@@ -895,6 +899,7 @@ func (p *platform) onEvent(e fw.Event) error {
 	case !late:
 		before := r.run.Usage
 		r.run.Apply(e, p.prices)
+		r.noteEnd(e)
 		r.track(e, before)
 		r.noteToolInput(e)
 		r.noteEnv(e)
@@ -906,6 +911,7 @@ func (p *platform) onEvent(e fw.Event) error {
 		r.run.Apply(e, p.prices)
 	case (e.Type == fw.EvRunFinished || e.Type == fw.EvRunSuspended) && e.Seq > r.stateSeq:
 		r.lateEnd(e, p.prices)
+		r.noteEnd(e)
 	default:
 		// The view applies no other late event, and a tap still reads it:
 		// a bus can bring the comparison of a routine after the end of

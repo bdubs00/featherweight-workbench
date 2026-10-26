@@ -128,8 +128,9 @@ type Can struct {
 // runAnswer is a run object with the field can, which only a person gets.
 type runAnswer struct {
 	*fw.Run
-	Can      *Can `json:"can,omitempty"`
-	Archived bool `json:"archived,omitempty"`
+	Can      *Can       `json:"can,omitempty"`
+	Archived bool       `json:"archived,omitempty"`
+	EndedAt  *time.Time `json:"endedAt,omitempty"`
 }
 
 // RestView is a View that can stand in for a member that does not run, so
@@ -196,7 +197,7 @@ func (rl *Relay) answerAtRest(w http.ResponseWriter, r *http.Request, run *fw.Ru
 		return false
 	}
 	c.Member = run.Member
-	native.WriteJSON(w, http.StatusOK, runAnswer{Run: c, Can: can})
+	native.WriteJSON(w, http.StatusOK, runAnswer{Run: c, Can: can, EndedAt: endedOf(r.Context(), rl.a, run.ID)})
 	return true
 }
 
@@ -394,7 +395,7 @@ func (rl *Relay) answerArchived(w http.ResponseWriter, r *http.Request, id strin
 		if IsPerson(fw.PrincipalFrom(r.Context())) {
 			can = &Can{View: true}
 		}
-		native.WriteJSON(w, http.StatusOK, runAnswer{Run: run, Can: can, Archived: true})
+		native.WriteJSON(w, http.StatusOK, runAnswer{Run: run, Can: can, Archived: true, EndedAt: rl.archivedEnd(r.Context(), run)})
 	case r.Pattern == "GET /v1/runs/{id}/events":
 		rl.archivedEvents(w, r, run)
 	case r.Method != http.MethodGet && r.Method != http.MethodHead:
@@ -596,7 +597,11 @@ func (rl *Relay) send(ctx context.Context, w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer resp.Body.Close()
-	relay(w, r, member, resp, TokenEnvOf(ctx), can)
+	var ended *time.Time
+	if id := r.PathValue("id"); id != "" && r.Pattern == "GET /v1/runs/{id}" {
+		ended = endedOf(ctx, rl.a, id)
+	}
+	relay(w, r, member, resp, TokenEnvOf(ctx), can, ended)
 }
 
 // readBody reads the body of a request that goes to a member, and returns
@@ -905,7 +910,7 @@ func (o *object) forPerson(pattern string, p *fw.Principal) (agent string, statu
 // carried the static token for a person, tokenEnv names the secret of the
 // token, and a 401 or a 403 of the member says that the member refused the
 // token of the fleet (RefusedToken).
-func relay(w http.ResponseWriter, r *http.Request, member string, resp *http.Response, tokenEnv string, can *Can) {
+func relay(w http.ResponseWriter, r *http.Request, member string, resp *http.Response, tokenEnv string, can *Can, ended *time.Time) {
 	if tokenEnv != "" && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		native.WriteProblem(w, r, http.StatusForbidden, RefusedToken(member, tokenEnv, resp.StatusCode, errorOf(member, resp.StatusCode, b).Detail))
@@ -950,7 +955,7 @@ func relay(w http.ResponseWriter, r *http.Request, member string, resp *http.Res
 			return
 		}
 		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(withMemberJSON(b, member, can))
+		_, _ = w.Write(withMemberJSON(b, member, can, ended))
 	default:
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
@@ -958,9 +963,10 @@ func relay(w http.ResponseWriter, r *http.Request, member string, resp *http.Res
 }
 
 // withMemberJSON sets the field member on a run object, or on the run of a
-// page of events, and the field can on a run object when can is not nil.
-// Any other JSON stays as it is.
-func withMemberJSON(b []byte, member string, can *Can) []byte {
+// page of events, the field can on a run object when can is not nil, and
+// the field endedAt on a run object when ended is not nil. Any other JSON
+// stays as it is.
+func withMemberJSON(b []byte, member string, can *Can, ended *time.Time) []byte {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(b, &m) != nil || m == nil {
 		return b
@@ -971,6 +977,9 @@ func withMemberJSON(b []byte, member string, can *Can) []byte {
 		m["member"] = name
 		if can != nil {
 			m["can"], _ = json.Marshal(can)
+		}
+		if ended != nil {
+			m["endedAt"], _ = json.Marshal(ended)
 		}
 	case m["run"] != nil:
 		var run map[string]json.RawMessage

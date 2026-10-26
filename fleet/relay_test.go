@@ -16,21 +16,21 @@ import (
 )
 
 func TestWithMemberJSON(t *testing.T) {
-	if got := string(withMemberJSON([]byte(`{"id":"r1","state":"running"}`), "m", nil)); !strings.Contains(got, `"member":"m"`) || strings.Contains(got, `"can"`) {
+	if got := string(withMemberJSON([]byte(`{"id":"r1","state":"running"}`), "m", nil, nil)); !strings.Contains(got, `"member":"m"`) || strings.Contains(got, `"can"`) {
 		t.Errorf("run = %s", got)
 	}
-	if got := string(withMemberJSON([]byte(`{"id":"r1","state":"running"}`), "m", &Can{View: true})); !strings.Contains(got, `"can":{"view":true,"operate":false}`) {
+	if got := string(withMemberJSON([]byte(`{"id":"r1","state":"running"}`), "m", &Can{View: true}, nil)); !strings.Contains(got, `"can":{"view":true,"operate":false}`) {
 		t.Errorf("run with can = %s", got)
 	}
 	var page struct {
 		Run    map[string]any `json:"run"`
 		Events []any          `json:"events"`
 	}
-	if err := json.Unmarshal(withMemberJSON([]byte(`{"run":{"id":"r1","state":"running"},"events":[]}`), "m", nil), &page); err != nil || page.Run["member"] != "m" || page.Events == nil {
+	if err := json.Unmarshal(withMemberJSON([]byte(`{"run":{"id":"r1","state":"running"},"events":[]}`), "m", nil, nil), &page); err != nil || page.Run["member"] != "m" || page.Events == nil {
 		t.Errorf("page = %v, %v", page, err)
 	}
 	for _, in := range []string{`{"runs":[]}`, `[1,2]`, `not json`} {
-		if got := string(withMemberJSON([]byte(in), "m", nil)); got != in {
+		if got := string(withMemberJSON([]byte(in), "m", nil, nil)); got != in {
 			t.Errorf("%s became %s", in, got)
 		}
 	}

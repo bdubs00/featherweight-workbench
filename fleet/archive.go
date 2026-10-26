@@ -189,6 +189,7 @@ func consumeArchive(ctx context.Context, n *natsServer, egress string, h func(fw
 // summary applied.
 type archivedRun struct {
 	Run     *fw.Run   `json:"run,omitempty"`
+	Ended   time.Time `json:"ended,omitzero"`
 	Queued  bool      `json:"queued,omitempty"`
 	Member  string    `json:"member,omitempty"`
 	Parent  string    `json:"parent,omitempty"`
@@ -289,10 +290,12 @@ func (a *archive) add(ctx context.Context, e fw.Event) error {
 		switch late := e.Seq != 0 && e.Seq < r.Run.Seq; {
 		case !late:
 			r.Run.Apply(e, a.prices)
+			r.Ended = endedAfter(r.Ended, r.Run, e)
 		case e.Type == fw.EvRunQueued && !r.Queued:
 			r.Run.Apply(e, a.prices)
 		case (e.Type == fw.EvRunFinished || e.Type == fw.EvRunSuspended) && !r.Run.State.Terminal():
 			r.Run.Apply(e, a.prices)
+			r.Ended = endedAfter(r.Ended, r.Run, e)
 		}
 		if e.Type == fw.EvRunQueued {
 			r.Queued = true
