@@ -3246,10 +3246,12 @@ The grammar reads its clauses in any order. These phrases and their variants wor
 - on the last day of the month, on the first Monday of the month at 9
 - every 2 hours between 8am and 6pm, every 15 minutes, every half hour
 - hourly on weekdays, every hour between 9am and 5pm on Monday
-- every morning (9:00), every evening (18:00)
+- every morning (9:00), every evening (18:00), mornings, evenings
+- twice a day (9:00 and 17:00), twice daily at 8 and 4, once a day
+- every Monday 9, weekdays 8 and 4, hourly from 9 to 5 on weekdays
 - starting 2026-11-01, until December 31, UTC, America/New_York
 
-A bare hour, such as "at 9", is a time on the clock of 24 hours. The readback shows the time as "9:00 AM", so a person sees how the front read it. When a part does not read, the answer names that part: "Every Tuesday is clear. "after lunch" is not a time: pick one."
+A bare hour, such as "at 9", is a time on the clock of 24 hours. A bare hour that is not later than the time before it in a list, or than the start of a window, is in the afternoon, so "at 9 and 5" reads as 9:00 and 17:00 and "from 9 to 5" as 9:00 to 17:00. A list that writes one time on the clock of 24 hours, such as "at 17 and 9" or "09:00", keeps every time as written. A bare number right after a repeat that names no time yet, as in "every Monday 9", is a time. A day such as "tomorrow" is no repeat, and the answer says to say a repeat or to start one run with Run now. The readback shows the time as "9:00 AM", so a person sees how the front read it. When a part does not read, the answer names that part: "Every Tuesday is clear. "after lunch" is not a time: pick one."
 
 ### 22.3 Configuration
 

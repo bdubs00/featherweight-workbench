@@ -64,6 +64,26 @@ func TestParse(t *testing.T) {
 		{"every day at 7am in Europe/London", Schedule{Repeat: RepeatDaily, Times: []string{"07:00"}, TimeZone: "Europe/London"}, "Every day at 7:00 AM, London time."},
 		{"every day at 9am starting 2026-11-01 until December 31", Schedule{Repeat: RepeatDaily, Times: []string{"09:00"}, Start: "2026-11-01", End: "2026-12-31"}, "Every day at 9:00 AM, New York time, from November 1, 2026 until December 31, 2026."},
 		{"every day at 9am until Jan 5th", Schedule{Repeat: RepeatDaily, Times: []string{"09:00"}, End: "2027-01-05"}, ""},
+		// A time without am or pm that is not later than the one before
+		// it is in the afternoon, also at the end of a window.
+		{"every weekday at 9 and 5", Schedule{Repeat: RepeatWeekdays, Times: []string{"09:00", "17:00"}}, "Every weekday at 9:00 AM and 5:00 PM, New York time."},
+		{"every day at 9, 12, and 5", Schedule{Repeat: RepeatDaily, Times: []string{"09:00", "12:00", "17:00"}}, ""},
+		{"every day at 9 and 10", Schedule{Repeat: RepeatDaily, Times: []string{"09:00", "10:00"}}, ""},
+		{"every day at 5", Schedule{Repeat: RepeatDaily, Times: []string{"05:00"}}, ""},
+		{"every day at 9am and 5", Schedule{Repeat: RepeatDaily, Times: []string{"09:00", "17:00"}}, ""},
+		{"every day at 9pm and 5am", Schedule{Repeat: RepeatDaily, Times: []string{"05:00", "21:00"}}, ""},
+		{"every day at 17 and 9", Schedule{Repeat: RepeatDaily, Times: []string{"09:00", "17:00"}}, ""},
+		{"every day at 09:00 and 05:00", Schedule{Repeat: RepeatDaily, Times: []string{"05:00", "09:00"}}, ""},
+		{"hourly from 9 to 5 on weekdays", Schedule{Repeat: RepeatHourly, Days: weekdays, Between: []string{"09:00", "17:00"}}, "Every hour from 9:00 AM to 5:00 PM on weekdays, New York time."},
+		{"every 2 hours between 8 and 6", Schedule{Repeat: RepeatEvery, Every: "2h", Between: []string{"08:00", "18:00"}}, ""},
+		// Common phrases of a busy person.
+		{"twice a day", Schedule{Repeat: RepeatDaily, Times: []string{"09:00", "17:00"}}, "Every day at 9:00 AM and 5:00 PM, New York time."},
+		{"twice daily at 8 and 4", Schedule{Repeat: RepeatDaily, Times: []string{"08:00", "16:00"}}, ""},
+		{"once a day", Schedule{Repeat: RepeatDaily, Times: []string{"09:00"}}, ""},
+		{"mornings", Schedule{Repeat: RepeatDaily, Times: []string{"09:00"}}, "Every day at 9:00 AM, New York time."},
+		{"evenings", Schedule{Repeat: RepeatDaily, Times: []string{"18:00"}}, ""},
+		{"every Monday 9", Schedule{Repeat: RepeatWeekly, Days: []string{"mon"}, EveryWeeks: 1, Times: []string{"09:00"}}, "Every Monday at 9:00 AM, New York time."},
+		{"weekdays 8 and 4", Schedule{Repeat: RepeatWeekdays, Times: []string{"08:00", "16:00"}}, ""},
 	} {
 		got, err := Parse(c.say, opt)
 		if err != nil {
@@ -103,6 +123,8 @@ func TestParseErrors(t *testing.T) {
 		{"every day at 25:00", `Every day is clear. "at 25:00" is not a time: pick one.`},
 		{"every day at 13pm", `Every day is clear. "at 13pm" is not a time: pick one.`},
 		{"", "Say when, such as every weekday at 9am."},
+		{"tomorrow at 10", `"tomorrow" is one day, and a duty repeats: say a repeat, such as every day at 10am, or start one run with Run now.`},
+		{"twice a week", `"twice a week" is not a repeat: say one, such as every day, weekdays, every Monday, every 2 hours, or the first of the month.`},
 		{"whenever you like", `"whenever you like" is not a repeat: say one, such as every day, weekdays, every Monday, every 2 hours, or the first of the month.`},
 		{"every blursday at 9", `"every blursday" is not a repeat: say one, such as every day, weekdays, every Monday, every 2 hours, or the first of the month.`},
 		{"every 5 minutes", `"every 5 minutes" is too often: the shortest step is 15 minutes.`},

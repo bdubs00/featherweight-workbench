@@ -6,11 +6,14 @@ package schedule
 //
 //	a repeat   every day, daily, weekdays, every Monday and Thursday,
 //	           every other Tuesday, every 2 weeks on Friday, every morning,
-//	           every evening, hourly, every 2 hours, every 15 minutes,
-//	           on the first of the month, on the last day of the month,
-//	           on the first Monday of the month, every month on the 15th
-//	times      at 9am, at 9:30am and 4pm, at noon, in the morning, 16:30
-//	a window   between 8am and 6pm, from 8:00 to 18:00
+//	           mornings, every evening, twice a day, hourly, every 2 hours,
+//	           every 15 minutes, on the first of the month, on the last
+//	           day of the month, on the first Monday of the month, every
+//	           month on the 15th
+//	times      at 9am, at 9:30am and 4pm, at noon, in the morning, 16:30,
+//	           at 9 and 5 (a time without am or pm that is not later than
+//	           the time before it is in the afternoon), every Monday 9
+//	a window   between 8am and 6pm, from 8:00 to 18:00, from 9 to 5
 //	days       on weekdays, on Monday and Thursday (with hourly and every)
 //	dates      starting 2026-11-01, until December 31
 //	a zone     UTC, America/New_York
@@ -112,6 +115,7 @@ type parser struct {
 	timesAt    int // the token of the first clause of times, or -1
 	timesEnd   int
 	step       time.Duration
+	twice      bool // twice a day: 9:00 and 17:00 when the words name no time
 	between    []int
 	start, end string
 	zone       string
@@ -143,11 +147,17 @@ func Parse(words string, opt Options) (Schedule, error) {
 			}
 		}
 		if !matched {
+			if oneDay[p.w(0)] {
+				return Schedule{}, p.fail(p.i, p.i+1, "is one day, and a duty repeats: say a repeat, such as every day at 10am, or start one run with Run now")
+			}
 			return Schedule{}, p.fail(p.i, p.chunkEnd(p.i), p.want())
 		}
 	}
 	return p.build()
 }
+
+// oneDay are the words of one day, which no repeat reads.
+var oneDay = map[string]bool{"today": true, "tomorrow": true, "tonight": true, "yesterday": true}
 
 // w returns the word k places after the cursor in lower case, or "".
 func (p *parser) w(k int) string { return p.at(p.i + k) }
@@ -255,9 +265,31 @@ func (p *parser) repeatClause() (bool, error) {
 	case "monthly":
 		p.i++
 		return true, p.setRepeat(from, RepeatMonthly)
+	case "twice", "once":
+		// "twice a day", "twice daily", "once a day", "once per day"
+		n := 0
+		switch {
+		case p.w(1) == "daily":
+			n = 2
+		case (p.w(1) == "a" || p.w(1) == "per" || p.w(1) == "each" || p.w(1) == "every") && p.w(2) == "day":
+			n = 3
+		}
+		if n == 0 {
+			return false, nil
+		}
+		p.i += n
+		p.twice = w == "twice"
+		return true, p.setRepeat(from, RepeatDaily)
 	}
 	if p.repeat != "" {
 		return false, nil
+	}
+	switch w := p.w(0); w {
+	case "mornings", "evenings":
+		// "mornings" alone is every morning.
+		p.addPart(strings.TrimSuffix(w, "s"), p.i)
+		p.i++
+		return true, p.setRepeat(from, RepeatDaily)
 	}
 	switch p.w(0) {
 	case "weekdays", "weekday":
@@ -551,13 +583,18 @@ func (p *parser) timeEnd(j int) int {
 	return j + 1
 }
 
-// timeList reads times joined by "and", ",", or "or" from j.
+// timeList reads times joined by "and", ",", or "or" from j. A time
+// that names no half of the day and is not later than the time before it
+// is in the afternoon, so "9 and 5" reads as 9:00 and 17:00.
 func (p *parser) timeList(j int) ([]int, int, bool) {
 	m, k, ok, _ := p.timeAt(j)
 	if !ok {
 		return nil, j, false
 	}
 	out := []int{m}
+	// A person who writes one time on a clock of 24 hours writes every
+	// time so, and a time before an earlier one then stays as it is.
+	clock24 := p.clock24(j)
 	for {
 		sep := k
 		if p.at(sep) == "," && p.at(sep+1) == "and" {
@@ -570,8 +607,49 @@ func (p *parser) timeList(j int) ([]int, int, bool) {
 		if !ok {
 			return out, k, true
 		}
+		clock24 = clock24 || p.clock24(sep+1)
+		if !clock24 {
+			m = p.afternoon(sep+1, m, out[len(out)-1])
+		}
 		out, k = append(out, m), next
 	}
+}
+
+// clock24 reports whether the time at j is written on a clock of 24
+// hours: without am or pm, with an hour of 0 or after 12, or with a
+// leading zero.
+func (p *parser) clock24(j int) bool {
+	m := timePattern.FindStringSubmatch(p.at(j))
+	if m == nil || m[3] != "" || isMeridiem(p.at(j+1)) {
+		return false
+	}
+	h, _ := strconv.Atoi(m[1])
+	return h == 0 || h > 12 || (len(m[1]) == 2 && m[1][0] == '0')
+}
+
+// afternoon returns the time m of the word at j, 12 hours later when the
+// word names no half of the day, m is before noon, and m is not later
+// than before, the time that comes before it in the words.
+func (p *parser) afternoon(j, m, before int) int {
+	if m < 12*60 && m <= before && m+12*60 > before && !p.halfNamed(j) {
+		return m + 12*60
+	}
+	return m
+}
+
+// halfNamed reports whether the time at j says its half of the day: am or
+// pm, noon or midnight, an hour of 0 or after 12, or an hour with a
+// leading zero, as a clock of 24 hours writes it.
+func (p *parser) halfNamed(j int) bool {
+	switch p.at(j) {
+	case "noon", "midday", "midnight":
+		return true
+	}
+	m := timePattern.FindStringSubmatch(p.at(j))
+	if m == nil {
+		return false
+	}
+	return m[3] != "" || isMeridiem(p.at(j+1)) || p.clock24(j)
 }
 
 // timePattern is a time as a person writes it: 9, 9am, 9:30, 9.30pm.
@@ -631,14 +709,16 @@ func (p *parser) timeAt(j int) (int, int, bool, bool) {
 	return h*60 + mi, k, true, true
 }
 
-// bareTime reads a time without "at", such as "weekdays 9am". Only a
-// clear time counts, so a bare number is never a time.
+// bareTime reads a time without "at", such as "weekdays 9am". A clear
+// time counts, and so does a bare number right after a repeat with times
+// that names no time yet, as in "every Monday 9". Any other bare number is
+// never a time.
 func (p *parser) bareTime() (bool, error) {
 	ms, j, ok := p.timeList(p.i)
 	if !ok {
 		return false, nil
 	}
-	if _, _, _, clear := p.timeAt(p.i); !clear {
+	if _, _, _, clear := p.timeAt(p.i); !clear && !(withTimes(p.repeat) && len(p.times) == 0) {
 		return false, nil
 	}
 	p.addTimes(p.i, j, ms...)
@@ -669,6 +749,11 @@ func (p *parser) betweenClause() (bool, error) {
 	b, k, ok, _ := p.timeAt(j + 1)
 	if !ok {
 		return true, p.fail(from, p.timeEnd(j+1), "is not a window of the day: say between 8am and 6pm")
+	}
+	// "from 9 to 5" ends in the afternoon, and "from 09:00 to 05:00" does
+	// not.
+	if !p.clock24(p.i + 1) {
+		b = p.afternoon(j+1, b, a)
 	}
 	if b <= a {
 		return true, p.fail(from, k, "ends before it starts: say two times of one day, the earlier first")
@@ -998,6 +1083,10 @@ func (p *parser) build() (Schedule, error) {
 		}
 	case RepeatEvery:
 		s.Every = stepText(p.step)
+	}
+	if p.twice && len(p.times) == 0 {
+		// Twice a day is the start and the end of a working day.
+		p.times = []int{9 * 60, 17 * 60}
 	}
 	if !withTimes(p.repeat) && len(p.times) > 0 {
 		return Schedule{}, p.fail(p.timesAt, p.timesEnd, "does not fit a repeat of steps through the day: say a window, such as between 8am and 6pm")
