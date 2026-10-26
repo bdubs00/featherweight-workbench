@@ -36,7 +36,7 @@ const (
 			"send":{"type":"object","description":"Which kinds the channel sends. questions: a run of a duty that waits for the person, and a decision while the person was away. failures: a failed run, a duty that paused itself, and a daily cap. digest: once a day, what the duties did. A field left out is off.","properties":{"questions":{"type":"boolean"},"failures":{"type":"boolean"},"digest":{"type":"boolean"}}},
 			"url":{"type":"string","maxLength":2048},
 			"secret":{"type":"string","maxLength":512},
-			"ntfy":{"type":"object","description":"server is the address of the ntfy server, or empty for the server of the server; the server never picks a public server by itself. topic is 1 to 64 of A-Z, a-z, 0-9, '-', and '_'. token is the access token of the server.","properties":{"server":{"type":"string","maxLength":512},"topic":{"type":"string","maxLength":64},"token":{"type":"string","maxLength":512}}},
+			"ntfy":{"type":"object","description":"server is the address of the ntfy server, or empty for the default ntfy server that the operator sets; the server never picks a public ntfy server by itself. topic is 1 to 64 of A-Z, a-z, 0-9, '-', and '_'. token is the access token of the server.","properties":{"server":{"type":"string","maxLength":512},"topic":{"type":"string","maxLength":64},"token":{"type":"string","maxLength":512}}},
 			"email":{"type":"object","properties":{"to":{"type":"string","maxLength":254}}},
 			"agent":{"type":"object","description":"agent names the agent, which the person needs the right to run. how says in words how the agent delivers the message, such as: Send it to me on Signal. budget bounds each run and is required, such as {\"maxCostUSD\": 0.02}.","properties":{"agent":{"type":"string"},"how":{"type":"string","maxLength":2000},"budget":{"type":"object","properties":{"maxCostUSD":{"type":"number"},"maxTurns":{"type":"integer"},"maxTokens":{"type":"integer"},"maxToolCalls":{"type":"integer"}}}}},
 			"shared":{"type":"string","maxLength":63}
@@ -119,7 +119,7 @@ func explain(err error) string {
 
 // off is the result of a tool in a process without the notifications.
 func off() *sdk.CallToolResult {
-	return mcp.ErrorResult("The notifications are off in this process. They run on a server that serves, with the bus nats or mem.")
+	return mcp.ErrorResult("The notifications are off in this process. They run in a process of fw-workbench serve, with the bus nats or mem.")
 }
 
 // answerText words the settings of a person. It never holds an address,

@@ -551,7 +551,7 @@ func (t *toolSet) list(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) 
 		return mcp.ErrorResult(personUses), nil, nil
 	}
 	if meta.Principal == "" {
-		return mcp.ErrorResult("Invalid request: your run names no person in _meta. Mark the MCP server of the server trusted in tools.mcp of the worker, so the call names the person of the run."), nil, nil
+		return mcp.ErrorResult("Invalid request: your run names no person in _meta. Set trusted: true on the tools.mcp entry of the worker that reaches this server, so the call names the person of the run."), nil, nil
 	}
 	fctx := s.asFront(ctx)
 	recs, err := s.b.list(fctx)
@@ -594,7 +594,7 @@ func (t *toolSet) open(ctx context.Context, _ *sdk.CallToolRequest, in OpenSpec)
 	c := call{meta: meta}
 	by := c.person()
 	if by == nil {
-		return mcp.ErrorResult("Invalid request: your run names no person in _meta, and a bridge opens as a person. Mark the MCP server of the server trusted in tools.mcp of the worker."), nil, nil
+		return mcp.ErrorResult("Invalid request: your run names no person in _meta, and a bridge opens as a person. Set trusted: true on the tools.mcp entry of the worker that reaches this server."), nil, nil
 	}
 	mgr := &Manager{Member: fleet.MemberName(meta.Node), Run: meta.Run}
 	rec, err := s.open(actingAs(fw.WithPrincipal(ctx, by), HandleManager), in, by, mgr)

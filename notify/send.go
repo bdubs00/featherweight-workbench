@@ -458,7 +458,7 @@ func (s *Service) sendEmail(ctx context.Context, t target, m *message, link stri
 	}
 	if ec.User != "" {
 		if _, tlsOn := c.TLSConnectionState(); !tlsOn {
-			return permanent("the mail server offers no STARTTLS, so the server does not send the password")
+			return permanent("the mail server offers no STARTTLS, so this server does not send the password")
 		}
 		if err := c.Auth(smtp.PlainAuth("", ec.User, password, ec.Host)); err != nil {
 			return fmt.Errorf("the mail server refused the login: %w", err)

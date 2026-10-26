@@ -63,7 +63,7 @@ func ptr[T any](v T) *T { return &v }
 func put(ctx context.Context, a *fw.Agent, in putArgs) *sdk.CallToolResult {
 	s := Of(a)
 	if s == nil {
-		return mcp.ErrorResult("The faces are off in this process. They run on a server that serves, with the bus nats or mem.")
+		return mcp.ErrorResult("The faces are off in this process. They run in a process of fw-workbench serve, with the bus nats or mem.")
 	}
 	if err := Check(ctx, a, in.Agent, fw.ActionAgentEdit); err != nil {
 		return mcp.ErrorResult(mcp.Explain(err))

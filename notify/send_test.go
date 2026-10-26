@@ -310,7 +310,7 @@ func TestEmail(t *testing.T) {
 	// A server without STARTTLS gets no password.
 	k := newFront(t, smtpBlock(t, plain.addr, allowExample+"    user: fw\n    passwordEnv: FW_TEST_SMTP_PASSWORD\n"), true)
 	k.set(t, "alice", Body{Channels: []Channel{{ID: "mail", Kind: KindEmail, Email: &Email{To: "alice@example.com"}}}})
-	if res, _ := k.s.Test(as("alice"), "mail"); res.Results[0].Sent || res.Results[0].Error != "The mail server offers no STARTTLS, so the server does not send the password." {
+	if res, _ := k.s.Test(as("alice"), "mail"); res.Results[0].Sent || res.Results[0].Error != "The mail server offers no STARTTLS, so this server does not send the password." {
 		t.Fatalf("a login in the clear = %+v", res)
 	}
 	if len(plain.list()) != 1 {

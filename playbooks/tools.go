@@ -133,7 +133,7 @@ func explain(err error) string {
 
 // off is the result of a tool in a process without playbooks.
 func off() *sdk.CallToolResult {
-	return mcp.ErrorResult("The playbooks are off in this process. They live on a server that serves, with the bus nats or mem.")
+	return mcp.ErrorResult("The playbooks are off in this process. They live in a process of fw-workbench serve, with the bus nats or mem.")
 }
 
 // summaryLine says a playbook in one line.

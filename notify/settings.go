@@ -287,7 +287,7 @@ func (s *Service) unusable(ch Channel) string {
 	case KindNtfy:
 		switch {
 		case s.ntfyServer(ch.Ntfy) == "":
-			return "No ntfy server is set. Name one in ntfy.server, or ask an operator to set workbench.notifications.ntfy.server. The server never picks a public server by itself."
+			return "No ntfy server is set. Name one in ntfy.server, or ask an operator to set workbench.notifications.ntfy.server. It never picks a public ntfy server by itself."
 		case ch.Ntfy == nil || ch.Ntfy.Topic == "":
 			return "No topic is set. Name the ntfy topic that your phone subscribes to in ntfy.topic."
 		}
@@ -591,7 +591,7 @@ func (s *Service) channelsFrom(ctx context.Context, in, old []Channel, add func(
 			n.Token = keep(new(n.Token), new(pn.Token))
 			switch {
 			case n.Server == "" && s.cfg.Ntfy.Server == "":
-				add(path+".ntfy.server", "No ntfy server is set. Name one, or ask an operator to set workbench.notifications.ntfy.server. The server never picks a public server by itself.")
+				add(path+".ntfy.server", "No ntfy server is set. Name one, or ask an operator to set workbench.notifications.ntfy.server. It never picks a public ntfy server by itself.")
 			case n.Server == "":
 			case len(n.Server) > 512:
 				add(path+".ntfy.server", "The address is longer than 512 characters.")

@@ -232,7 +232,7 @@ func importTools(a *fw.Agent) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolSkillPreview,
 			Title:       "Preview a skill",
-			Description: "Fetch a skill from a url, a marketplace with name, a text, or files, and check it, for an admin. It installs nothing. The answer holds the server matter, the body, the files with their sizes, the digest, and each problem. An installed skill is instructions that every agent of a profile that allows it reads, so read the preview before an install.",
+			Description: "Fetch a skill from a url, a marketplace with name, a text, or files, and check it, for an admin. It installs nothing. The answer holds the front matter, the body, the files with their sizes, the digest, and each problem. An installed skill is instructions that every agent of a profile that allows it reads, so read the preview before an install.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{` + importProps + `}}`),
 			Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: &yes},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in importArgs) (*sdk.CallToolResult, any, error) {

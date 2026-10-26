@@ -164,7 +164,7 @@ func ptr[T any](v T) *T { return &v }
 func (t *toolSet) store(ctx context.Context, write bool) (*Store, *sdk.CallToolResult) {
 	s := Of(t.a)
 	if s == nil {
-		return nil, mcp.ErrorResult("The wiki is off in this process. It runs on a server that serves, with the bus nats or mem.")
+		return nil, mcp.ErrorResult("The wiki is off in this process. It runs in a process of fw-workbench serve, with the bus nats or mem.")
 	}
 	if err := Allowed(ctx, t.a, write); err != nil {
 		return nil, mcp.ErrorResult(mcp.Explain(err))

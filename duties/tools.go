@@ -247,7 +247,7 @@ func explain(err error) string {
 
 // off is the result of a tool in a process without duties.
 func off() *sdk.CallToolResult {
-	return mcp.ErrorResult("The duties are off in this process. They run on a server that serves, with the bus nats or mem.")
+	return mcp.ErrorResult("The duties are off in this process. They run in a process of fw-workbench serve, with the bus nats or mem.")
 }
 
 // listTool is the tool duties_list.

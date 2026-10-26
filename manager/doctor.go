@@ -97,7 +97,7 @@ func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duratio
 	where := fmt.Sprintf("the profile %s runs in the pool %s of %d %s", name, pool.Name, pool.Wanted(), tasks)
 	switch {
 	case len(front) == 0:
-		return false, fmt.Sprintf("manager: %s, but it reaches no tools.mcp entry that sends the static token (auth.bearer %s), so it cannot call the MCP server of the server", where, tokenEnv)
+		return false, fmt.Sprintf("manager: %s, but it reaches no tools.mcp entry that sends the static token (auth.bearer %s), so it cannot call the MCP tools of this server", where, tokenEnv)
 	case len(trusted) == 0:
 		return false, fmt.Sprintf("manager: %s, but the tools.mcp entry %s that reaches the server is not trusted, so _meta names no person and the server acts as the token; set trusted: true", where, strings.Join(front, ", "))
 	}

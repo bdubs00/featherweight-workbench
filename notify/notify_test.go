@@ -712,7 +712,7 @@ func TestDoctorCheck(t *testing.T) {
 	cfg.Extensions = workbench(t, "notifications:\n  ntfy:\n    server: https://ntfy.lab.internal\n  shared:\n    - {name: ops, kind: slack, urlEnv: FW_TEST_OPS_URL}\n")
 	t.Setenv("FW_TEST_OPS_URL", "https://hooks.slack.com/services/x")
 	ok, line := DoctorCheck(context.Background(), cfg, nil, 0)
-	if !ok || !strings.Contains(line, "the ntfy server of the server is ntfy.lab.internal") || !strings.Contains(line, "a channel reaches public hosts only") ||
+	if !ok || !strings.Contains(line, "the default ntfy server is ntfy.lab.internal") || !strings.Contains(line, "a channel reaches public hosts only") ||
 		!strings.Contains(line, "a person picks ntfy, slack, discord, teams, webhook, shared") || !strings.Contains(line, "the shared channel ops (slack)") || strings.Contains(line, "services/x") {
 		t.Fatalf("doctor = %v, %q", ok, line)
 	}

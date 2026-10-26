@@ -666,7 +666,7 @@ func (im *Importer) check(files map[string][]byte, hint string) Preview {
 	}
 	switch {
 	case name == "":
-		add(ProblemNameMissing, fw.SkillFile, "the server matter names no skill; add name: to SKILL.md", true)
+		add(ProblemNameMissing, fw.SkillFile, "the front matter names no skill; add name: to SKILL.md", true)
 	case len(name) > maxNameBytes || fw.ValidSkillName(name) != name:
 		add(ProblemNameInvalid, fw.SkillFile, fmt.Sprintf("the name %q is no name of a skill: at most %d letters, digits, dashes, underscores, and dots, with no dot first, on one line without a comment", name, maxNameBytes), true)
 	}

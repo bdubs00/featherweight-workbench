@@ -1069,14 +1069,14 @@ func frontMatter(text string) (string, []string, error) {
 		}
 		if end >= 0 {
 			if end > maxFrontMatter {
-				return "", nil, fail(ErrInvalid, "the server matter holds more than %d KB", maxFrontMatter>>10)
+				return "", nil, fail(ErrInvalid, "the front matter holds more than %d KB", maxFrontMatter>>10)
 			}
 			var fm struct {
 				Title yaml.Node `yaml:"title"`
 				Tags  yaml.Node `yaml:"tags"`
 			}
 			if err := yaml.Unmarshal([]byte(body[:end]), &fm); err != nil {
-				return "", nil, fail(ErrInvalid, "the server matter is not valid YAML: %s; fix it, or remove the lines between the two --- lines", strings.TrimPrefix(err.Error(), "yaml: "))
+				return "", nil, fail(ErrInvalid, "the front matter is not valid YAML: %s; fix it, or remove the lines between the two --- lines", strings.TrimPrefix(err.Error(), "yaml: "))
 			}
 			title, err := titleOf(fm.Title)
 			if err != nil {
@@ -1100,11 +1100,11 @@ func titleOf(n yaml.Node) (string, error) {
 		return "", nil
 	}
 	if n.Kind != yaml.ScalarNode {
-		return "", fail(ErrInvalid, "the title of the server matter is not one line of text")
+		return "", fail(ErrInvalid, "the title of the front matter is not one line of text")
 	}
 	t := strings.TrimSpace(n.Value)
 	if strings.ContainsFunc(t, unicode.IsControl) {
-		return "", fail(ErrInvalid, "the title of the server matter holds a control character")
+		return "", fail(ErrInvalid, "the title of the front matter holds a control character")
 	}
 	if utf8.RuneCountInString(t) > MaxTitleRunes {
 		return "", fail(ErrInvalid, "the title has more than %d characters", MaxTitleRunes)
@@ -1122,12 +1122,12 @@ func tagsOf(n yaml.Node) ([]string, error) {
 	case yaml.SequenceNode:
 		for _, c := range n.Content {
 			if c.Kind != yaml.ScalarNode {
-				return nil, fail(ErrInvalid, "a tag of the server matter is not text")
+				return nil, fail(ErrInvalid, "a tag of the front matter is not text")
 			}
 			raw = append(raw, c.Value)
 		}
 	default:
-		return nil, fail(ErrInvalid, "the tags of the server matter are not a list of words")
+		return nil, fail(ErrInvalid, "the tags of the front matter are not a list of words")
 	}
 	var out []string
 	for _, t := range raw {
@@ -1141,7 +1141,7 @@ func tagsOf(n yaml.Node) ([]string, error) {
 		out = append(out, t)
 	}
 	if len(out) > MaxTags {
-		return nil, fail(ErrInvalid, "the server matter has %d tags; a page has at most %d", len(out), MaxTags)
+		return nil, fail(ErrInvalid, "the front matter has %d tags; a page has at most %d", len(out), MaxTags)
 	}
 	return out, nil
 }
