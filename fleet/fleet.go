@@ -150,6 +150,12 @@ type Fleet struct {
 	envStates bucket.Bucket
 	closeEnv  func()
 	envPushed envPushes
+
+	// The archive of the runs (archive.go), nil when the bus keeps no
+	// store or before it opened, and its end, which archiveMu guards.
+	archivePtr   atomic.Pointer[archive]
+	archiveMu    sync.Mutex
+	closeArchive func()
 }
 
 // Open builds the fleet of an agent from a configuration that Load filled
@@ -265,6 +271,7 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 		_ = f.Close()
 		return nil, err
 	}
+	f.startArchive(ctx, cfg, egress)
 	var src queueSource
 	var shared jobStore
 	if f.intake != "" {
@@ -320,6 +327,12 @@ func (f *Fleet) Close() error {
 		if f.closeEnv != nil {
 			f.closeEnv()
 		}
+		f.archiveMu.Lock()
+		if f.closeArchive != nil {
+			f.closeArchive()
+			f.closeArchive = nil
+		}
+		f.archiveMu.Unlock()
 		f.client.CloseIdleConnections()
 	})
 	return nil

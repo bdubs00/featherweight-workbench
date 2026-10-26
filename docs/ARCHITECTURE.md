@@ -365,7 +365,7 @@ When the MCP server acts for the person of a run of a worker (section 19), the p
 
 ### 4.5 Acting on a run of another member
 
-Run ids are unique across the fleet. A request can name a run that the process does not have but the view knows. Then the process forwards the request to the Task that owns it. This applies to the native routes under `/v1/runs/{id}` that the kernel serves. It also applies to the MCP tools `run_status`, `run_events`, `run_file`, `approve`, `cancel`, `send`, `fork`, and `run_budget`, which goes to `PATCH /v1/runs/{id}/budget` of the owner. The views of a run that only the front serves are not forwarded: `GET /v1/runs/{id}/result`, `GET /v1/runs/{id}/transcript`, and the MCP tool `run_result`. A worker serves the native API of the kernel alone, so the front reads the run and the events of the owner through the same forward, and builds the view here (`fleet.MemberEvents`, `fleet.MemberLedger`, `dashboard.ResultFrom`). `POST /v1/builder` and the MCP tool `agent_builder` with a `fromRun` of another member read the run and its events from the owner in the same way, apply the terms of Save as agent, and start the builder here (`dashboard.SaveAsAgentInputOn`). `POST /v1/runs?member=<name>` and the `member` argument of the MCP tool `run` start a run on another member. Through MCP, such a run does not wait, and the client follows it with `run_status`.
+Run ids are unique across the fleet. A request can name a run that the process does not have but the view knows. Then the process forwards the request to the Task that owns it. This applies to the native routes under `/v1/runs/{id}` that the kernel serves. It also applies to the MCP tools `run_status`, `run_events`, `run_file`, `approve`, `cancel`, `send`, `fork`, and `run_budget`, which goes to `PATCH /v1/runs/{id}/budget` of the owner. The views of a run that only the front serves are not forwarded: `GET /v1/runs/{id}/result`, `GET /v1/runs/{id}/transcript`, and the MCP tool `run_result`. A worker serves the native API of the kernel alone, so the front reads the run and the events of the owner through the same forward, and builds the view here (`fleet.MemberEvents`, `fleet.MemberLedger`, `dashboard.ResultFrom`). `POST /v1/builder` and the MCP tool `agent_builder` with a `fromRun` of another member read the run and its events from the owner in the same way, apply the terms of Save as agent, and start the builder here (`dashboard.SaveAsAgentInputOn`). `POST /v1/runs?member=<name>` and the `member` argument of the MCP tool `run` start a run on another member. Through MCP, such a run does not wait, and the client follows it with `run_status`. A pool can replace the worker of a run. Then no member holds the run, and it comes from the archive, read-only, with `"archived": true` (section 4.18).
 
 A request through the router wakes a Task that sleeps, whatever the request asks (section 4.12). Without a rule, a read of a run wakes its worker only to answer what the view already holds. The worker then flaps between sleep and wake while a person reads its conversation. So the relay splits the run routes of the kernel into two lists. `fleet.ViewRoutes` holds `GET /v1/runs/{id}`. The view answers it while the member of the run is quiet or stopped (section 4.3), and no request reaches the Task. A live member answers it itself, as before. `fleet.WorkerRoutes` holds the routes whose answer lives on the worker: `GET /v1/runs/{id}/events`, `GET /v1/runs/{id}/live`, `GET /v1/runs/{id}/files`, `GET /v1/runs/{id}/files/{path}`, and the writes `POST /v1/runs/{id}/messages`, `POST /v1/runs/{id}/reactions`, `PATCH /v1/runs/{id}/budget`, `POST /v1/runs/{id}/approvals/{approval}`, `POST /v1/runs/{id}/cancel`, and `POST /v1/runs/{id}/fork`. These routes always go to the member. A run route that neither list names goes to the member too, because only the member knows it.
 
@@ -662,6 +662,41 @@ The index has two limits. A run that started and went to sleep while no replica 
 Another package reads events of the egress stream through the view, without a subscription of its own. `fleet.Tap(fn, types...)` registers a function that gets each event of those types that the view reads, with the agent of its run and its line: the title that the start of the run names (`fw.title`), else the first line of its input, at most 200 bytes (`fleet.RunEvent`). A repeated event and an event that arrives after a later event of its run reach it too, because a bus can bring the events of a run out of order, though the view applies neither. The agent and the line are empty while the view has not seen the start of the run. The function runs while the view holds its lock, so it hands the event to a goroutine of its own and never blocks. Every replica of the front reads the stream, so every replica calls it for every event, and the consumer counts each event once, across replicas and repeats. A worker publishes a type only when its pool lists it in `bus.egressTypes`. The evidence of the routines hangs here (section 21.4).
 
 The view also marks two facts of each run of a Task for the summary of the routines (section 21.6): a routine completed the run (`fleet.AppliedOK`), and a quality observation of the run says `rejected` (`fleet.Verification`). `Fleet.Outcome(id)` returns both, and whether the view saw the start of the run on the stream, so it saw every such event after it. `fleet.RunsSince` and `fleet.FactsOf` read the runs of an agent in a window and these facts, from the view and from the ledgers of this process, for the day of an agent (section 17.8) and the summary of the routines.
+
+### 4.18 The archive of the runs
+
+A run lives in the ledger of its Task. A new Task starts with an empty `/workspace`, because the disk belongs to the Task and not to its Workspace. So a pool that replaces a Task erases the runs of that Task, and the view and the index forget them (section 4.16). On 2026-10-25, three deploys replaced every worker this way, the manager included. The egress stream of the workers still holds their events, so the front keeps an archive of the runs from that stream.
+
+The source. On a NATS bus, the front reads the stream of the bus from its start with the durable consumer `fw-workbench-archive`. The stream is `bus.options.stream`, `FW` by default. Its filter is `<workbench.fleet.egress>.>`, and it takes every event that the stream holds, also the events from before the first start of the front. So the first start of a front with the archive brings back the runs that the deploys erased. Every replica of the front shares the consumer. The consumer hands out one event at a time (`MaxAckPending` 1). So the replicas write the archive one event after another, in the order of the stream. The front acknowledges an event after it wrote it. When the archive fails to write an event, the event comes again after five seconds. An event that the consumer handed out twice writes once. On the bus `mem`, the archive takes the events of the egress stream from the start of the process. Another bus keeps no archive.
+
+The bucket. The archive lives in the key-value bucket `<stream>_ARCHIVE`. With NATS accounts, allow the front `$KV.<stream>_ARCHIVE.>` and the API of the consumer `fw-workbench-archive` of the stream. The bucket holds two kinds of entries:
+
+| Key | Value |
+|---|---|
+| `run.<id>` | The summary of the run. It holds the projection of its events (`fw.Run.Apply`) with every field of a live run, its metadata included. It also holds the member that held the run, and the parent that a `fw.run.child` of another run names. The keys of the last events that it applied make a second delivery apply once. |
+| `events_<id>.<seq>.<event id>` | One event of the run as the stream carried it. The sequence number of the run sorts the keys. The id of the event makes a second write fail, so each event is in the archive once. |
+
+An event is one entry, so the archive never reads an entry to add an event. A value holds at most 1 MiB. An event that is larger keeps its place without its data. Each replica keeps the summaries in memory. Every ten seconds, it reads the summaries that changed in the background, so it learns the runs that the other replica wrote. A request never waits for the bucket.
+
+The routes. When neither this process nor a member of the view holds a run, the routes of runs answer from the archive. The caller needs the view of the run, decided as for a run of a member (section 4.4). A run of the archive carries `"archived": true`:
+
+| Route | Answer for a run of the archive |
+|---|---|
+| `GET /v1/fleet/runs` | The list holds the runs of the archive that no member holds, each with `"archived": true`, beside the runs of the view. The query parameters narrow them as they narrow the other runs. `scope=local` leaves them out. The list leaves out an internal run and a check run as before (`fleet.Listed`). The metadata `workbench.internal`, `fw.batch`, and `fw.view` filter as for a live run. |
+| `GET /v1/runs/{id}` | The run with `member` and `"archived": true`. A person gets `can` with `operate` false. |
+| `GET /v1/runs/{id}/events` | The events of the archive, as the kernel answers them: `{"run", "events", "lines"}` for JSON, with `from` and `limit`, and else the events as server-sent events, after which the stream ends |
+| `GET /v1/runs/{id}/transcript` | The pages of the transcript, with `"archived": true` on `run` |
+| `GET /v1/runs/{id}/result` | The result, with `"archived": true` |
+| `POST /v1/runs/{id}/messages` and every other write | 409 with the detail "The worker of this conversation was replaced, so the conversation is read-only. Start a new one." |
+| `GET /v1/runs/{id}/live`, `GET /v1/runs/{id}/files` | 404: the worker and its files are gone |
+
+The stream carries no `fw.model.responded` (section 4.1). So the transcript and the result of a run of the archive show each tool call from its `fw.tool.requested`. They show the answer of the agent from the output of each `fw.run.finished`. An answer of the model between two tool calls is not in the stream. The egress cut each long string to 4,096 bytes, and the archive keeps the cut text.
+
+Limits:
+
+- The archive keeps every event of the stream and removes none. The stream keeps its events by the limits of its server.
+- On the bus `mem`, the archive holds only the events since the start of the process.
+- A run that a worker started while its egress did not reach the bus is not in the stream, and so not in the archive.
 
 ## 5. Browser sign-in
 
@@ -1741,26 +1776,34 @@ packages:
 
 A pool that sets no `packages` takes the key of its template, and so does a runtime pool. The overlay wins over both. The front checks each name as the kernel does. It trims the name, and a name that a list holds twice counts once. It refuses an empty name, a name that starts with a dash, and a name with a control character. A name holds at most 200 characters, and a list at most 100 names.
 
-The render. With `on` and a mirror, the render of a pool does these things:
+The render. On a front with a mirror, every pool and every template gets the infrastructure of the packages, whatever its setting. The render of a pool does these things:
 
-- It adds the block `environment` to the fw.yaml of the workers. The block holds both lists under `packages`, also an empty list, and both URLs under `mirrors`. Each name is escaped as a profile is (section 14.9), so the worker never expands a variable into a name.
+- It adds the block `environment` to the fw.yaml of the workers. The block holds `on` and `ask` of the setting, both lists under `packages`, and both URLs under `mirrors`. While the setting is off, both lists are empty. Each name is escaped as a profile is (section 14.9), so the worker never expands a variable into a name.
 - It adds the hosts of `workbench.packages.egress` to the egress of each Task.
 - When `fw` sets `tools.builtin`, it adds `env` to that list. Without the key, the kernel adds the tool itself.
 - When `fw` sets `policy.ask`, it adds `env: command=add` and `env: command=remove` to that list. Without the key, the kernel adds the two rules itself. The plan of the packages names the list `policy.rules.ask`, the name of the field in Go: the rules of the policy are inline in fw.yaml. So a pool never lets an agent add or remove a package without a person.
-- With `ask`, it adds `env` to the tool list of each profile of the pool. A profile without a tool list, and a list with `env` or `*`, stay as they are.
-- Without `ask`, it adds the two rules to `policy.deny` too.
+- It adds `env` to the tool list of each profile of the pool. A profile without a tool list, and a list with `env` or `*`, stay as they are.
 
-A pool without packages, and a pool with `on: false`, renders as before, with the same hash. The block `environment` and the egress are part of the hash, so a change of the packages makes every Task of the pool older. The pool replaces each Task once it is idle and keeps its Workspace, as for any change of the overlay (section 14.4). The kernel of the new Task installs the difference from the mirror. The dry run (section 14.2) names the packages of a pool with packages. A profile of a pool with packages can name the tool `env` (section 14.9).
+Without `ask`, the kernel refuses an add and a remove itself, and the two rules still ask a person (the kernel architecture, section 18).
+
+Changes in place. The hash of a pool leaves out the setting: `on`, `ask`, and the lists of the block `environment`. So a change of the setting replaces no worker, and each worker keeps its Workspace and its runs. On the walk of 2026-10-25, a change replaced each idle worker. The new Task started with an empty `/workspace`, so the runs of the agent were gone. The front now sends the setting to the workers itself:
+
+- After a change, the front sends `PUT /v1/environment` with `{"on", "ask", "python", "tools"}` to each worker of the pool whose Task runs, with its static token. The kernel takes the body as the base of the environment and installs the difference in the background (the kernel architecture, section 18).
+- At each pass, the front also sends it to a running worker whose last event names another setting. That event is the last `fw.env.ready` or `fw.env.failed` since the creation of the Task. It names another `on`, another `ask`, or other lists. The front sends the same body to one worker at most once in two minutes.
+- The front wakes no worker for this, because a request through the router wakes a Task that sleeps. A sleeping worker gets the setting at the first pass after it wakes, because its next event names the old setting.
+- A new Task boots with the setting of its pool from its fw.yaml.
+
+The check of a name. Before the front saves a new Python package, it asks the index of the mirror at `<mirrors.python>/<normalized name>/`. When the index answers 404, the request answers 400 with the detail "There is no Python package named X.". X is the name as the person wrote it, without the version. A mirror that does not answer within three seconds, or that answers anything else, blocks nothing, and the front saves the name.
 
 The overlay. The overlay of a pool keeps one entry for the packages: the key `packages` in the bucket `<stream>_POOL_<pool>` (section 14.9). It holds `on`, `ask`, both lists, and who wrote the entry last and when. It also holds the ids of the last events `fw.env.changed` that the front wrote into it. Each item of a list holds `name`. An item that a person added also holds `by` and `at`, and an item of an approval also holds `agent` and `run`. A write reads the entry and writes at the revision that it read, so two replicas of the front never lose a change. A delete of a profile keeps the entry.
 
-The events. The kernel of each worker publishes the state of its environment on the subject `fw.environment` of the bus (the kernel architecture, section 18.6). The field `node` of an event is `ax:<atespace>/<task>`. The front subscribes to the subject. For a Task that a pool owns (section 14.3), it keeps the last event in the bucket `<stream>_ENVIRONMENTS`. The bucket holds one entry per Task, so a restart of the front keeps the states. An event that is older than the entry, and the same event again, change nothing. On the bus `mem`, and on a bus that keeps no store, the states live in the memory of the process. With NATS accounts, allow the front `$KV.<stream>_ENVIRONMENTS.>`. An event of a child Task of a worker changes nothing, because such a Task belongs to no pool.
+The events. The kernel of each worker publishes the state of its environment on the subject `fw.environment` of the bus (the kernel architecture, section 18.6). `fw.env.ready` and `fw.env.failed` also name `on`, `ask`, and `lists`, the base of the worker with its local changes. The field `node` of an event is `ax:<atespace>/<task>`. The front subscribes to the subject. For a Task that a pool owns (section 14.3), it keeps the last event in the bucket `<stream>_ENVIRONMENTS`. The bucket holds one entry per Task, so a restart of the front keeps the states. An event that is older than the entry, and the same event again, change nothing. On the bus `mem`, and on a bus that keeps no store, the states live in the memory of the process. With NATS accounts, allow the front `$KV.<stream>_ENVIRONMENTS.>`. An event of a child Task of a worker changes nothing, because such a Task belongs to no pool.
 
 | Event | What the front does |
 |---|---|
 | `fw.env.ready` | The state of the Task is ready, with the digest and the versions of the installed packages. |
 | `fw.env.failed` | The state of the Task is failed. The answer names the step, the error, the end of the output of the manager, and the time of the next try. |
-| `fw.env.changed` | The state of the Task is ready, with the new digest. With the command `add` or `remove`, the front also writes the change into the overlay of the pool. |
+| `fw.env.changed` | With the command `add` or `remove`, the front writes the change into the overlay of the pool. The event keeps the last ready or failed state of the Task, so its installed versions stay. The next `fw.env.ready` names the change. |
 
 An approved change. When a person allows an add or a remove of the tool `env` on one worker, the worker installs the change and publishes `fw.env.changed`. The front then writes the change into the overlay of the pool, so every worker of the pool gets it. The item names the person who allowed it in `by`, the agent, and the run. An add of a package whose name the list holds replaces that item, so `pyyaml>=7` takes the place of `pyyaml>=6`. A remove takes away each item of that name. The front writes a change only on these conditions:
 
@@ -1799,17 +1842,17 @@ Both answer 200 with this shape:
 
 - `available` says whether the front can change the setting. It is true on a front that keeps the overlays of its pools.
 - `on`, `ask`, `python`, and `tools` are the setting that the workers get. An item of the configuration has no `by` and no `at`.
-- `applying` is true while a Task of the pool runs an older configuration, and from a change until the next pass of the pool.
+- `applying` is true while a Task of the pool runs an older configuration, or a worker is pending or materializing.
 - `workers` holds one entry for each Task of the pool, and none while the packages are off. `at` is the time of the last event of the Task. `installed` names the installed version of each package of the setting. `failure` holds the last failure.
 
 A state is one of these:
 
 | State | Meaning |
 |---|---|
-| `pending` | The Task runs an older configuration and gets the change once it is idle, or it does not run yet. |
+| `pending` | The last event of the Task names another `on`, `ask`, or lists, so the front sends it the setting. Or the Task runs an older configuration, or it does not run yet. |
 | `materializing` | The Task runs the current configuration and sent no event since its creation, because its kernel installs at its start. |
-| `ready` | The last event of the Task since its creation is `fw.env.ready` or `fw.env.changed`. |
-| `failed` | The last event of the Task since its creation is `fw.env.failed`. |
+| `ready` | The last event of the Task since its creation is `fw.env.ready`, and it names the setting. An event of an older kernel names no setting and counts as one that names it. |
+| `failed` | The last event of the Task since its creation is `fw.env.failed`, and it names the setting. |
 | `unknown` | The front holds no event of the Task. It also does not know the time at which ax created the Task. |
 
 An event from before the creation of a Task belongs to an earlier Task of the same name, so it counts as none.
@@ -1822,7 +1865,7 @@ The MCP tools `packages_get` and `packages_put` call the Go functions of the rou
 
 Security:
 
-- A person approves each change of the packages by an agent. The render keeps the two rules in `policy.ask`, or in `policy.deny` without `ask`. An allow rule of the overlay never names a rule with a field (section 14.9).
+- A person approves each change of the packages by an agent. The render keeps the two rules in `policy.ask`. Without `ask`, the kernel refuses the change. An allow rule of the overlay never names a rule with a field (section 14.9).
 - For packages, a worker reaches only the mirror, a host inside the cluster. The mirror holds no credential.
 - A worker that sends `fw.env.changed` also needs an approval that the view saw. A worker that forges both events on the bus can still reach the overlay of its pool. The approval of a person and the narrow egress stay the main defenses.
 - The log and the overlay hold no token. The log names the pool, the Task, the command, the list, the package, the agent, the run, and the person.
@@ -1832,6 +1875,7 @@ Known limits:
 - The view keeps the approvals of a run in memory. When the front restarts between an approval and `fw.env.changed`, it writes nothing, and the other workers do not get the package. The person then adds it on the page.
 - A change of a child Task of a worker stays with that Task.
 - `GET /v1/agents` comes from the kernel and lists the profiles of the front alone. The page finds the pool of an agent with `GET /v1/agents/{name}`, which names `pool` (section 14.9), or with `GET /v1/fleet`.
+- A deploy that adds `workbench.packages` changes the hash of every pool once, because the infrastructure joins the fw.yaml and the egress. The archive of the runs keeps the runs of the workers that such a roll replaces (section 4.18).
 
 ## 15. Pages
 

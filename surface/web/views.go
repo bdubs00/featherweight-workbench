@@ -121,6 +121,13 @@ func (s *server) result(w http.ResponseWriter, r *http.Request) {
 				s.failRemote(w, r, err)
 				return
 			}
+		} else if run, events, ok, aerr := fleet.ArchivedLedger(r.Context(), s.a, id); aerr != nil {
+			err = aerr
+		} else if ok {
+			// No member holds the run: the archive of the fleet answers.
+			if res, err = dashboard.ResultFrom(r.Context(), s.a, run, fleet.TranscriptEvents(events)); err == nil {
+				res.Archived = true
+			}
 		}
 	}
 	if err != nil {
@@ -197,6 +204,13 @@ func (s *server) transcript(w http.ResponseWriter, r *http.Request) {
 		}
 		if member != "" {
 			s.remoteTranscript(w, r, member, id)
+			return
+		}
+		if run, events, ok, aerr := fleet.ArchivedLedger(r.Context(), s.a, id); aerr != nil {
+			s.fail(w, r, aerr)
+			return
+		} else if ok {
+			s.archivedTranscript(w, r, run, events)
 			return
 		}
 	}
@@ -343,6 +357,50 @@ func (s *server) remoteTranscript(w http.ResponseWriter, r *http.Request, member
 		next = before
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"run": run, "items": dashboard.Transcript(events), "next": next, "prev": prev})
+}
+
+// archivedTranscript answers the transcript route for a run that only the
+// archive of the fleet holds, with the pages of the route and the run with
+// "archived": true. The pages count the events of the archive, and the
+// items come from fleet.TranscriptEvents.
+func (s *server) archivedTranscript(w http.ResponseWriter, r *http.Request, run *fw.Run, events []fw.Event) {
+	from, before, limit, ok := transcriptPage(w, r)
+	if !ok {
+		return
+	}
+	var page []fw.Event
+	var next, prev uint64
+	if from > 0 {
+		for _, e := range events {
+			if e.Seq < from {
+				continue
+			}
+			if len(page) == limit {
+				next = e.Seq
+				break
+			}
+			page = append(page, e)
+		}
+		if from > 1 {
+			prev = from
+		}
+	} else {
+		var older []fw.Event
+		for _, e := range events {
+			if before == 0 || e.Seq < before {
+				older = append(older, e)
+			}
+		}
+		page = older
+		if len(older) > limit {
+			page = older[len(older)-limit:]
+			prev = page[0].Seq
+		}
+		if before > 0 && before <= run.Seq {
+			next = before
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"run": archivedRun{Run: run, Archived: true}, "items": dashboard.Transcript(fleet.TranscriptEvents(page)), "next": next, "prev": prev})
 }
 
 // ui serves the dashboard page. The policy header lets the page run its

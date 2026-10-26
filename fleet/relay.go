@@ -33,6 +33,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-kernel/surface/view"
 )
 
 // maxRelayBytes bounds a JSON answer of a member that the relay rewrites.
@@ -127,7 +128,8 @@ type Can struct {
 // runAnswer is a run object with the field can, which only a person gets.
 type runAnswer struct {
 	*fw.Run
-	Can *Can `json:"can,omitempty"`
+	Can      *Can `json:"can,omitempty"`
+	Archived bool `json:"archived,omitempty"`
 }
 
 // RestView is a View that can stand in for a member that does not run, so
@@ -350,12 +352,116 @@ func (rl *Relay) owned(w http.ResponseWriter, r *http.Request, id string) (*fw.R
 	switch {
 	case err == nil && run.Member != "":
 		return run, true
-	case err == nil, errors.Is(err, fw.ErrRunNotFound):
+	case errors.Is(err, fw.ErrRunNotFound):
+		// No member holds the run: the archive answers for it, when it
+		// holds it (archive.go).
+		if rl.answerArchived(w, r, id) {
+			return nil, false
+		}
+		return nil, true
+	case err == nil:
 		return nil, true
 	default:
 		fail(w, r, err)
 		return nil, false
 	}
+}
+
+// answerArchived answers a run route for a run that only the archive holds
+// (archive.go), and reports whether it answered. GET /v1/runs/{id} answers
+// the run with "archived": true, and GET /v1/runs/{id}/events its events
+// from the archive. Every write answers 409 with ReadOnlyRun, because the
+// worker of the run is gone. Another read, such as the live text or the
+// files, answers 404.
+func (rl *Relay) answerArchived(w http.ResponseWriter, r *http.Request, id string) bool {
+	run, ok, err := ArchivedRun(r.Context(), rl.a, id)
+	switch {
+	case err != nil:
+		fail(w, r, err)
+		return true
+	case !ok:
+		return false
+	}
+	switch {
+	case r.Pattern == "GET /v1/runs/{id}":
+		var can *Can
+		if IsPerson(fw.PrincipalFrom(r.Context())) {
+			can = &Can{View: true}
+		}
+		native.WriteJSON(w, http.StatusOK, runAnswer{Run: run, Can: can, Archived: true})
+	case r.Pattern == "GET /v1/runs/{id}/events":
+		rl.archivedEvents(w, r, run)
+	case r.Method != http.MethodGet && r.Method != http.MethodHead:
+		native.WriteProblem(w, r, http.StatusConflict, ReadOnlyRun)
+	default:
+		native.WriteProblem(w, r, http.StatusNotFound, "The worker of the run "+id+" was replaced, so its live view and its files are gone. Its conversation stays readable.")
+	}
+	return true
+}
+
+// archivedEvents answers GET /v1/runs/{id}/events for a run of the
+// archive, as the kernel answers it: a page of {"run", "events", "lines"}
+// for JSON, from the query parameter from or the last limit events, and
+// else the events as server-sent events, after which the stream ends,
+// because the run takes no more events.
+func (rl *Relay) archivedEvents(w http.ResponseWriter, r *http.Request, run *fw.Run) {
+	var from uint64
+	if v := r.URL.Query().Get("from"); v != "" {
+		n, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			native.WriteProblem(w, r, http.StatusBadRequest, "the query parameter from must be a sequence number")
+			return
+		}
+		from = n
+	}
+	if v := strings.TrimSpace(r.Header.Get("Last-Event-ID")); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+			from = n + 1
+		}
+	}
+	limit := 200
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			native.WriteProblem(w, r, http.StatusBadRequest, "the query parameter limit must be a positive number")
+			return
+		}
+		limit = min(n, 1000)
+	}
+	f := Of(rl.a).(*Fleet)
+	all, err := f.arch().events(r.Context(), run.ID)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	events := []fw.Event{}
+	for _, e := range all {
+		if e.Seq >= from {
+			events = append(events, e)
+		}
+	}
+	if from > 0 && len(events) > limit {
+		events = events[:limit]
+	}
+	if from == 0 && len(events) > limit {
+		events = events[len(events)-limit:]
+	}
+	accept := r.Header.Get("Accept")
+	if strings.Contains(accept, "text/event-stream") || !strings.Contains(accept, "application/json") {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+		for _, e := range events {
+			data, _ := json.Marshal(e)
+			fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", e.Seq, e.Type, data)
+		}
+		return
+	}
+	lines := make([]view.EventLine, 0, len(events))
+	for _, e := range events {
+		lines = append(lines, view.Line(e))
+	}
+	native.WriteJSON(w, http.StatusOK, map[string]any{"run": runAnswer{Run: run, Archived: true}, "events": events, "lines": lines})
 }
 
 // Owner is Relay.Owner for the agent a.

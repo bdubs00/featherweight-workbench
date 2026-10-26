@@ -7,6 +7,7 @@ package web
 // a run on another member with POST /v1/runs?member=<name>.
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -74,8 +75,14 @@ func (s *server) fleetRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	var runs []*fw.Run
 	var err error
-	if parent := q.Get("parent"); parent != "" {
+	parent := q.Get("parent")
+	if parent != "" {
 		runs, err = dashboard.Children(r.Context(), s.a, parent)
+		if errors.Is(err, fw.ErrRunNotFound) && fleet.IsArchived(r.Context(), s.a, parent) {
+			// The parent lives in the archive alone, so its children do
+			// too.
+			runs, err = nil, nil
+		}
 	} else {
 		runs, err = dashboard.Runs(r.Context(), s.a, q.Get("scope"), q.Get("member"))
 	}
@@ -83,10 +90,49 @@ func (s *server) fleetRuns(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// The runs that no member holds come from the archive (section 4.18),
+	// where the lists leave out the same runs.
+	archived := map[string]bool{}
+	if q.Get("scope") != dashboard.ScopeLocal {
+		old, err := fleet.ArchivedRuns(r.Context(), s.a, q.Get("member"), parent)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		old = fleet.ListedOnly(old)
+		have := make(map[string]bool, len(runs))
+		for _, run := range runs {
+			have[run.ID] = true
+		}
+		for _, run := range old {
+			if !have[run.ID] {
+				archived[run.ID] = true
+				runs = append(runs, run)
+			}
+		}
+		if len(archived) > 0 {
+			view.SortRuns(runs)
+		}
+	}
 	matched := view.FilterBatch(view.Filter(runs, q.Get("agent"), q.Get("state"), q.Get("principal"), 0), q.Get("batch"))
 	glance, total := view.GlanceOf(matched, time.Now()), len(matched)
 	if limit > 0 && len(matched) > limit {
 		matched = matched[:limit]
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"runs": matched, "total": total, "glance": glance})
+	list := make([]any, 0, len(matched))
+	for _, run := range matched {
+		if archived[run.ID] {
+			list = append(list, archivedRun{Run: run, Archived: true})
+			continue
+		}
+		list = append(list, run)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": list, "total": total, "glance": glance})
+}
+
+// archivedRun is a run of the archive in an answer: the run object with
+// "archived": true.
+type archivedRun struct {
+	*fw.Run
+	Archived bool `json:"archived"`
 }

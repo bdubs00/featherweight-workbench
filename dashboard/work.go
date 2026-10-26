@@ -210,6 +210,9 @@ type Result struct {
 	Started time.Time    `json:"started"`
 	Changed time.Time    `json:"changed"`
 	Usage   *fw.RunUsage `json:"usage,omitempty"` // the usage of this run, for the limits beside the work
+	// Archived is true for a run that only the archive of the fleet holds,
+	// because its worker was replaced. Such a run takes no write.
+	Archived bool `json:"archived,omitempty"`
 }
 
 // ResultFile is the net change of the run to one path: the last
