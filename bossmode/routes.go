@@ -13,6 +13,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/bridges"
+	"github.com/bdubs00/featherweight-workbench/conversations"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/routines"
@@ -134,7 +135,9 @@ func settingsRoute(k *native.Kit, c Config) http.HandlerFunc {
 }
 
 // managerOf finds the member and the newest run of the manager for the
-// caller in ctx, from the fleet view.
+// caller in ctx, from the fleet view. A run that the caller hid from their
+// lists (package conversations) is no newest run, so a deleted
+// conversation never opens again as the current one.
 func managerOf(ctx context.Context, a *fw.Agent, agent string) (*Manager, error) {
 	m := &Manager{Agent: agent}
 	if v := fleet.Of(a); v != nil {
@@ -148,6 +151,7 @@ func managerOf(ctx context.Context, a *fw.Agent, agent string) (*Manager, error)
 	if err != nil {
 		return nil, err
 	}
+	runs, _ = conversations.Mark(ctx, a, runs, false)
 	p := fw.PrincipalFrom(ctx)
 	for _, r := range runs { // newest first
 		// The manager run of a spawn bridge, and the run that writes the

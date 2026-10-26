@@ -718,6 +718,7 @@ A person gives a conversation a title of their own, and hides it from their list
 - The caller needs the view of the run: a run of this process, of a member of the view, or of the archive. Any other run answers 404.
 - The answer is 200 with `{"run", "myTitle", "hidden"}`. `myTitle` is absent when the caller has no title of their own for the run.
 - A person keeps at most 1,000 conversations with a title of their own or hidden. One more answers 400 with the reason. An entry without a title and not hidden goes away.
+- `GET /v1/bossmode` names in `manager.run` the newest manager run of the caller that the caller did not hide, so a deleted conversation never opens again as the current one.
 - `GET /v1/fleet/runs` gives each run that the caller renamed `myTitle`, and leaves out each run that the caller hid. With `?hidden=true`, the list holds the hidden runs too, each with `"hidden": true`. `total` and `glance` count the runs of the list. Another person sees the runs as they are.
 
 The entries live in the key-value bucket `<stream>_CONVERSATIONS` on a NATS bus, one entry per person under `p.<subject in base64url>`, and in the memory of the process on the bus `mem`. With NATS accounts, allow the front `$KV.<stream>_CONVERSATIONS.>`. On another bus, the route and the tool answer 503 with the reason, and the lists show the runs as they are. The static token and a workload have a subject too, so they keep entries of their own, and a caller without a subject gets 403.

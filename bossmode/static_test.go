@@ -16,6 +16,8 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/bridges"
+	"github.com/bdubs00/featherweight-workbench/conversations"
+	"github.com/bdubs00/featherweight-workbench/internal/bucket"
 )
 
 // pageDir writes a built page into a directory inside a parent that also
@@ -275,6 +277,22 @@ func TestSettings(t *testing.T) {
 	}
 	if resp, _ := get(t, fr.url+"/v1/bossmode", ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("settings without a token: %d", resp.StatusCode)
+	}
+	// A conversation that ada deleted from her lists is no newest run.
+	conversations.Attach(fr.a, conversations.New(fr.a, bucket.NewMem(bucket.Config{Name: "CONVERSATIONS"}), nil))
+	t.Cleanup(func() { conversations.Attach(fr.a, nil) })
+	ada := fw.WithPrincipal(context.Background(), &fw.Principal{Subject: "ada", Kind: fw.KindUser})
+	hide := true
+	if _, err := conversations.Of(fr.a).Patch(ada, "01MGR1", conversations.Patch{Hidden: &hide}); err != nil {
+		t.Fatal(err)
+	}
+	_, body = get(t, fr.url+"/v1/bossmode", "ada")
+	if err := json.Unmarshal([]byte(body), &got); err != nil || got.Manager == nil || got.Manager.Run != "" {
+		t.Errorf("settings for ada after she hid her conversation = %s", body)
+	}
+	_, body = get(t, fr.url+"/v1/bossmode", "bob")
+	if err := json.Unmarshal([]byte(body), &got); err != nil || got.Manager == nil || got.Manager.Run != "01MGR2" {
+		t.Errorf("settings for bob = %s", body)
 	}
 }
 
