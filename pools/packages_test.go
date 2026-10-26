@@ -148,7 +148,7 @@ func TestPackagesRender(t *testing.T) {
 	if got := stringList(valueAt(env, "packages", "tools")); !slices.Equal(got, []string{"iproute2"}) {
 		t.Fatalf("environment.packages.tools = %v", got)
 	}
-	if valueAt(env, "mirrors", "python") != testMirrorPython || valueAt(env, "mirrors", "tools") != testMirrorTools {
+	if valueAt(env, "mirrors", "python") != testMirrorPython || valueAt(env, "mirrors", "tools") != testMirrorTools || env["on"] != true || env["ask"] != true {
 		t.Fatalf("environment.mirrors = %v", valueAt(env, "mirrors"))
 	}
 	if got := stringList(valueAt(m, "tools", "builtin")); !slices.Equal(got, []string{"files", "clock", "env"}) {
@@ -226,7 +226,7 @@ func TestPackagesRender(t *testing.T) {
 		t.Fatalf("the lists of a pool with the packages off = %v", valueAt(fileMap(t, off), "environment"))
 	}
 	off2 := loadPackages(t, withPackagesKey(fixture, `{on: false, python: [ansible-lint]}`))
-	if off2.Hash() != p.Hash() || strings.Contains(off2.files[0].Content, "ansible-lint") {
+	if off2.Hash() != p.Hash() || strings.Contains(off2.files[0].Content, "ansible-lint") || valueAt(fileMap(t, off2), "environment", "on") != false {
 		t.Fatal("a pool with the packages off gives its workers its lists")
 	}
 	if strings.Contains(plain.files[0].Content, "environment:") {

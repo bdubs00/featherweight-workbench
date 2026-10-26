@@ -304,9 +304,10 @@ func (p *Pool) taskEgress() *ax.EgressSpec {
 // the mirrors, the tool env in tools.builtin when the block sets that
 // list, the two rules of the tool env in policy.ask when the block sets
 // that list, and the tool env in each tool list of a profile that is not
-// empty. With hash, the block environment holds no lists, because the
-// hash of a pool leaves the setting of the packages out. Else it holds the
-// lists of the setting, and empty lists while the setting is off. The
+// empty. With hash, the block environment holds no switch and no lists,
+// because the hash of a pool leaves the setting of the packages out. Else
+// it holds on, ask, and the lists of the setting, with empty lists while
+// the setting is off. The
 // front sends a change of the setting to the running workers
 // (PUT /v1/environment), so a change replaces no worker. m does not
 // change: each level that the function changes is a copy.
@@ -329,6 +330,9 @@ func withPackages(m map[string]any, s PackageSetting, mirror *PackageMirror, has
 		"mirrors": map[string]any{ListPython: escapeDollars(mirror.Mirrors.Python), ListTools: escapeDollars(mirror.Mirrors.Tools)},
 	}
 	if !hash {
+		// A new Task boots with the switch and the lists of its pool. The
+		// hash leaves them out, so a change of the setting keeps the Task.
+		env["on"], env["ask"] = s.On, s.Ask
 		env["packages"] = map[string]any{ListPython: names(s.Python), ListTools: names(s.Tools)}
 	}
 	out["environment"] = env

@@ -99,7 +99,7 @@ func TestRenderedBlockFitsTheKernel(t *testing.T) {
 	if err := dec.Decode(&c); err != nil {
 		t.Fatalf("the block does not decode as the block of the kernel: %v\n%s", err, text)
 	}
-	if c.Packages == nil || c.Packages.Python == nil || c.Packages.Tools == nil || c.Mirrors == nil {
+	if c.Packages == nil || c.Packages.Python == nil || c.Packages.Tools == nil || c.Mirrors == nil || c.On == nil || !*c.On || c.Ask == nil || !*c.Ask {
 		t.Fatalf("the block = %+v", c)
 	}
 	if !slices.Equal(*c.Packages.Python, []string{"ansible-lint", "pyyaml>=6"}) || !slices.Equal(*c.Packages.Tools, []string{"iproute2"}) {
