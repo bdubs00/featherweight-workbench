@@ -842,8 +842,11 @@ func credential(raw string) bool {
 // header is the first line of the fw.yaml of a worker. It tells a reader
 // where the file comes from, and the front reads it to know that a
 // Workspace belongs to the pool.
+//
+// Its words never change: the front reads them, and they are part of the
+// hash of the pool, so a new wording replaces every worker.
 func header(pool string) string {
-	return "# This file is rendered by the pool " + pool + " of fw-workbench. Change the pool in the configuration of the server, not this file.\n"
+	return "# This file is rendered by the pool " + pool + " of fw-workbench. Change the pool in the configuration of the front, not this file.\n"
 }
 
 // workerFile renders the fw.yaml of the workers: the defaults of the

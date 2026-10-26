@@ -223,9 +223,11 @@ const markerFile = ".fw/generation"
 func (p *Pool) MarkerName() string { return p.Name + "-generation" }
 
 // markerHeader is the first line of the file of the marker. It names the
-// pool, so the front writes only a marker of its own pool.
+// pool, so the front writes only a marker of its own pool. markerOf reads
+// it to know a marker of the pool, so its words never change: a marker
+// with other words reads as the marker of no pool, and the pool holds.
 func markerHeader(pool string) string {
-	return "# This file is written by the pool " + pool + " of fw-workbench. It holds the newest generation of the pool that a server runs.\n"
+	return "# This file is written by the pool " + pool + " of fw-workbench. It holds the newest generation of the pool that a front runs.\n"
 }
 
 // Marker returns the Workspace that records the generation of the pool.
