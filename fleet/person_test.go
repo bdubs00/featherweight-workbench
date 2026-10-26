@@ -458,7 +458,7 @@ func TestRelayKeepsTheCredentialOfTheTokenAndOfAWorkload(t *testing.T) {
 	t.Setenv("FW_API_TOKEN", "")
 	before := len(pf.reached())
 	code, b := pf.do(t, http.MethodPost, "/v1/runs/r1/cancel", `{}`, "alice-token")
-	if code != http.StatusServiceUnavailable || !strings.HasPrefix(detail(t, b), "the front holds no static token of the fleet: the secret FW_API_TOKEN is empty") || len(pf.reached()) != before {
+	if code != http.StatusServiceUnavailable || !strings.HasPrefix(detail(t, b), "the server holds no static token of the fleet: the secret FW_API_TOKEN is empty") || len(pf.reached()) != before {
 		t.Fatalf("without the token = %d %s", code, b)
 	}
 }

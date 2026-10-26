@@ -61,11 +61,11 @@ func TestAgentGetResolvesSkills(t *testing.T) {
 	if out.Agent.ResolvedSkills[0].Description != "The skill review-go." {
 		t.Fatalf("ref = %+v", out.Agent.ResolvedSkills[0])
 	}
-	if !strings.Contains(text, "It can load these skills of the front: review-go, review-sql.") {
+	if !strings.Contains(text, "It can load these skills of the server: review-go, review-sql.") {
 		t.Fatalf("text = %q", text)
 	}
 	got, out, text = names("none")
-	if len(got) != 0 || out.Agent.Skills == nil || !strings.Contains(text, "It can load no skill of the front.") {
+	if len(got) != 0 || out.Agent.Skills == nil || !strings.Contains(text, "It can load no skill of the server.") {
 		t.Fatalf("none = %v, allowlist %v, text %q", got, out.Agent.Skills, text)
 	}
 	got, out, _ = names("every")

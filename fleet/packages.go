@@ -52,7 +52,7 @@ const (
 
 // ErrPackagesOff means that the front has no package mirror
 // (workbench.packages) or keeps no pool, so the packages are off.
-var ErrPackagesOff = errors.New("fleet: the packages are off, because the front has no package mirror (workbench.packages)")
+var ErrPackagesOff = errors.New("fleet: the packages are off, because the server has no package mirror (workbench.packages)")
 
 // EnvBucket is the bucket of the last event of the environment of each
 // Task of a pool.

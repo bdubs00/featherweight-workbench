@@ -169,8 +169,8 @@ func TestWriteNamesTheOverlay(t *testing.T) {
 	}
 	out := b.String()
 	for _, want := range []string{
-		"# The overlay of the front sets the profile helper in fw.agents by alice at 2026-10-20T09:00:00Z.",
-		`# The overlay of the front adds the rule "tickets.create_ticket" to fw.policy.allow by bob at 2026-10-20T09:00:00Z for the run 01RUN.`,
+		"# The overlay of the server sets the profile helper in fw.agents by alice at 2026-10-20T09:00:00Z.",
+		`# The overlay of the server adds the rule "tickets.create_ticket" to fw.policy.allow by bob at 2026-10-20T09:00:00Z for the run 01RUN.`,
 		"FW_POOL_SPEC=" + merged.Hash(),
 		"helper:",
 	} {

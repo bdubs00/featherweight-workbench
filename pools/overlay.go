@@ -271,7 +271,7 @@ func (p *Pool) WithOverlay(o Overlay) (*Pool, error) {
 	}
 	if len(c.skillFiles) > 0 {
 		if problems := c.render(p.front); len(problems) > 0 {
-			return nil, fmt.Errorf("pools: the pool %s with the skills of the front does not fit: %s", p.Name, strings.Join(problems, "; "))
+			return nil, fmt.Errorf("pools: the pool %s with the skills of the server does not fit: %s", p.Name, strings.Join(problems, "; "))
 		}
 	}
 	return &c, nil

@@ -126,7 +126,7 @@ func TestAllowanceComesFromTheStartOfTheRun(t *testing.T) {
 		t.Fatalf("the second follow-up gives %v, want deadline 30m", got.Body["budget"])
 	}
 	if n := len(fm.find(http.MethodGet, "/v1/runs/r-rev/events")); n != reads {
-		t.Fatalf("the front read the events of the run again: %d reads, then %d", reads, n)
+		t.Fatalf("the server read the events of the run again: %d reads, then %d", reads, n)
 	}
 }
 

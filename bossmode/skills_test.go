@@ -151,7 +151,7 @@ func TestSkillsCatalog(t *testing.T) {
 		t.Fatalf("skills_list: %s", textOf(res))
 	}
 	text := textOf(res)
-	for _, want := range []string{"3 skills of the front:", "- fix: Fixes an issue. (only a person hands it to a run; arguments <issue>)", "- fetched: An import. (from imported; only an agent loads it)"} {
+	for _, want := range []string{"3 skills of the server:", "- fix: Fixes an issue. (only a person hands it to a run; arguments <issue>)", "- fetched: An import. (from imported; only an agent loads it)"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("skills_list text holds no %q:\n%s", want, text)
 		}

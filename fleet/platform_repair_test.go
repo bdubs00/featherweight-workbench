@@ -162,7 +162,7 @@ func TestPlatformRepairAfterWake(t *testing.T) {
 					t.Fatal(err)
 				}
 				_ = resp.Body.Close()
-				eventually(t, "the front wake updates the phase", func() bool {
+				eventually(t, "the server wake updates the phase", func() bool {
 					p.mu.Lock()
 					defer p.mu.Unlock()
 					return p.members["team/alpha"].phase == phaseRunning

@@ -279,7 +279,7 @@ func (s *Store) asToken(ctx context.Context) (context.Context, error) {
 func (s *Store) call(ctx context.Context, member, method, path string, body any, idem string, out any) error {
 	v := fleet.Of(s.a)
 	if v == nil {
-		return fmt.Errorf("bridges: %w: the fleet is off, so the front reaches no member", fleet.ErrNoRoute)
+		return fmt.Errorf("bridges: %w: the fleet is off, so the server reaches no member", fleet.ErrNoRoute)
 	}
 	ctx, err := s.asToken(ctx)
 	if err != nil {

@@ -330,12 +330,12 @@ func parseMeta(fm string) meta {
 		return m
 	}
 	if len(fm) > maxFrontMatter {
-		m.problems = append(m.problems, fmt.Sprintf("the front matter is larger than %d bytes, so every key takes its default", maxFrontMatter))
+		m.problems = append(m.problems, fmt.Sprintf("the server matter is larger than %d bytes, so every key takes its default", maxFrontMatter))
 		return m
 	}
 	var raw map[string]any
 	if err := yaml.Unmarshal([]byte(fm), &raw); err != nil {
-		m.problems = append(m.problems, "the front matter is not YAML ("+oneLine(err.Error())+"), so the keys are read one per line")
+		m.problems = append(m.problems, "the server matter is not YAML ("+oneLine(err.Error())+"), so the keys are read one per line")
 		return lineMeta(fm, m)
 	}
 	if v, ok := raw[KeyUserInvocable]; ok {

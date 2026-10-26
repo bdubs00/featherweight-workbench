@@ -186,7 +186,7 @@ func agentPutSchema() json.RawMessage {
 }
 
 // workersArgSchema is the argument workers of agent_put.
-const workersArgSchema = `{"type":"object","description":"With worker templates only: the workers of a new agent that no pool runs. The front creates a runtime pool named after the agent from template, else the default template, with replicas workers, 2 when it is left out, and writes the profile into the overlay of that pool. Without workers, a new agent gets such a pool when a default template exists and pool is left out. templates_list names the templates.","properties":{
+const workersArgSchema = `{"type":"object","description":"With worker templates only: the workers of a new agent that no pool runs. The server creates a runtime pool named after the agent from template, else the default template, with replicas workers, 2 when it is left out, and writes the profile into the overlay of that pool. Without workers, a new agent gets such a pool when a default template exists and pool is left out. templates_list names the templates.","properties":{
 	"template":{"type":"string","minLength":1,"description":"The worker template of the pool; the default template when it is left out."},
 	"replicas":{"type":"integer","minimum":0,"maximum":64,"description":"The number of workers; 2 when it is left out."}}}`
 
@@ -331,14 +331,14 @@ func (s *server) addManageTools() {
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolAgentPut,
 		Title:       "Create or replace an agent",
-		Description: "Create an agent profile, or replace the one with that name. The arguments mirror the profile: name, description, system, instructions, skills, tools, model, effort, timeZone, policy, budget, and access. Creating needs the creator role, and replacing needs the owner role on the agent. Without access, a new profile gets the caller as its owner, and a replaced profile keeps the access block it has. With pools, the profile goes to the pool whose workers run it, or to the pool that pool names, and every worker of the pool takes it. With worker templates, a new agent that no pool runs gets workers in one call: with workers, or when a default template exists and pool is left out, the front creates a runtime pool named after the agent from the template, with 2 workers unless workers names replicas, writes the profile into that pool, and returns the pool. Without a default template and without workers, the error names the templates.",
+		Description: "Create an agent profile, or replace the one with that name. The arguments mirror the profile: name, description, system, instructions, skills, tools, model, effort, timeZone, policy, budget, and access. Creating needs the creator role, and replacing needs the owner role on the agent. Without access, a new profile gets the caller as its owner, and a replaced profile keeps the access block it has. With pools, the profile goes to the pool whose workers run it, or to the pool that pool names, and every worker of the pool takes it. With worker templates, a new agent that no pool runs gets workers in one call: with workers, or when a default template exists and pool is left out, the server creates a runtime pool named after the agent from the template, with 2 workers unless workers names replicas, writes the profile into that pool, and returns the pool. Without a default template and without workers, the error names the templates.",
 		InputSchema: agentPutSchema(),
 		Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, s.agentPut)
 	sdk.AddTool(s.srv, &sdk.Tool{
 		Name:        toolAgentDelete,
 		Title:       "Delete an agent",
-		Description: "Remove an agent profile. It needs the owner role on the agent. The runs of the agent stay in the ledger. With pools, it removes what the front added to the pool; a profile of the configuration of the pool stays.",
+		Description: "Remove an agent profile. It needs the owner role on the agent. The runs of the agent stay in the ledger. With pools, it removes what the server added to the pool; a profile of the configuration of the pool stays.",
 		InputSchema: json.RawMessage(agentGetSchema),
 		Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, s.agentDelete)
@@ -451,7 +451,7 @@ func explain(err error) string {
 	case errors.Is(err, fleet.ErrNoCredential):
 		return "Forbidden: this request carries no bearer credential, so it cannot act on a run of another fleet member. Connect with a bearer token."
 	case errors.Is(err, fleet.ErrNoToken):
-		return "Unavailable: " + strings.TrimPrefix(err.Error(), "fleet: ") + ". Until an operator sets it, the front acts for no person on another fleet member."
+		return "Unavailable: " + strings.TrimPrefix(err.Error(), "fleet: ") + ". Until an operator sets it, the server acts for no person on another fleet member."
 	case errors.Is(err, fleet.ErrNoRoute):
 		return "No route: " + strings.TrimPrefix(err.Error(), "fw: ") + "."
 	}
@@ -507,11 +507,11 @@ func agentLine(v fleet.PoolAgent) string {
 	fmt.Fprintf(&b, "- %s (you are %s)", v.Name, roleWord(v.Role))
 	switch {
 	case v.Pool != "" && v.Overlay != "":
-		fmt.Fprintf(&b, " in the pool %s, %s by the front%s", v.Pool, v.Overlay, byWhom(v))
+		fmt.Fprintf(&b, " in the pool %s, %s by the server%s", v.Pool, v.Overlay, byWhom(v))
 	case v.Pool != "":
 		fmt.Fprintf(&b, " in the pool %s", v.Pool)
 	case v.Front:
-		b.WriteString(" on the front only, which no worker of a pool runs")
+		b.WriteString(" on the server only, which no worker of a pool runs")
 	}
 	if v.Description != "" {
 		b.WriteString(": " + v.Description)
@@ -579,9 +579,9 @@ func (s *server) agentNamed(ctx context.Context, name, pool string) (fleet.PoolA
 func skillsText(refs []skills.Ref, pooled bool) string {
 	var b strings.Builder
 	if len(refs) == 0 {
-		b.WriteString("It can load no skill of the front.")
+		b.WriteString("It can load no skill of the server.")
 	} else {
-		b.WriteString("It can load these skills of the front: ")
+		b.WriteString("It can load these skills of the server: ")
 		for i, r := range refs {
 			if i > 0 {
 				b.WriteString(", ")
@@ -695,12 +695,12 @@ func (s *server) agentPut(ctx context.Context, _ *sdk.CallToolRequest, in agentP
 		st, ok, err := fleet.PoolNamed(ctx, s.a, made)
 		if err == nil && ok {
 			res.Pool = &st
-			text = fmt.Sprintf("Created the agent profile %s and its runtime pool %s from the template %s, with %d %s. The front creates the workers at its next pass, and each takes the profile at its start.\n", v.Name, made, st.Template, st.Wanted, workerWord(st.Wanted))
+			text = fmt.Sprintf("Created the agent profile %s and its runtime pool %s from the template %s, with %d %s. The server creates the workers at its next pass, and each takes the profile at its start.\n", v.Name, made, st.Template, st.Wanted, workerWord(st.Wanted))
 		} else {
-			text = fmt.Sprintf("Created the agent profile %s and its runtime pool %s. The front creates the workers at its next pass.\n", v.Name, made)
+			text = fmt.Sprintf("Created the agent profile %s and its runtime pool %s. The server creates the workers at its next pass.\n", v.Name, made)
 		}
 	case pool != "":
-		text = fmt.Sprintf("%s the agent profile %s in the pool %s. The front replaces each Task of the pool once it is idle, so each worker takes the profile at its next start.\n", verb, v.Name, pool)
+		text = fmt.Sprintf("%s the agent profile %s in the pool %s. The server replaces each Task of the pool once it is idle, so each worker takes the profile at its next start.\n", verb, v.Name, pool)
 		if in.Workers != nil {
 			text += fmt.Sprintf("The pool %s runs the agent already, so workers changes nothing; pool_put changes the workers of a runtime pool.\n", pool)
 		}
@@ -734,9 +734,9 @@ func (s *server) agentDelete(ctx context.Context, _ *sdk.CallToolRequest, in age
 	text := fmt.Sprintf("Deleted the agent profile %s. Its runs stay in the ledger.", in.Name)
 	switch {
 	case fleet.DroppedPool(at) != "":
-		text = fmt.Sprintf("Deleted the agent profile %s and its runtime pool %s. The front deletes each worker of the pool once it is idle, and then the pool. Its runs stay in the ledgers.", in.Name, pool)
+		text = fmt.Sprintf("Deleted the agent profile %s and its runtime pool %s. The server deletes each worker of the pool once it is idle, and then the pool. Its runs stay in the ledgers.", in.Name, pool)
 	case pool != "":
-		text = fmt.Sprintf("Removed the agent profile %s from what the front adds to the pool %s. Each worker of the pool runs the configuration of the pool again after the front replaces its Task. Its runs stay in the ledgers.", in.Name, pool)
+		text = fmt.Sprintf("Removed the agent profile %s from what the server adds to the pool %s. Each worker of the pool runs the configuration of the pool again after the server replaces its Task. Its runs stay in the ledgers.", in.Name, pool)
 	}
 	return result(text, deletedResult{View: viewAgents, Deleted: in.Name}), nil, nil
 }

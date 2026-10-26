@@ -722,7 +722,7 @@ func decidedCard(run, seat string, card uint64, question bool, tool string, v *v
 		now := time.Now().UTC()
 		return &Message{Seq: card, Decision: &Decision{State: DecisionDeny, DecidedAt: &now, Note: "The run no longer waits for this decision."}}, nil
 	}
-	line := system(EventFailed, fmt.Sprintf("%s no longer waits for its decision, and the front failed to read its run", seat))
+	line := system(EventFailed, fmt.Sprintf("%s no longer waits for its decision, and the server failed to read its run", seat))
 	if card == 0 {
 		return nil, &line
 	}
@@ -730,7 +730,7 @@ func decidedCard(run, seat string, card uint64, question bool, tool string, v *v
 }
 
 // unknownNote is the note of a card with the state unknown.
-const unknownNote = "The front failed to read the run, so it cannot tell whether anyone decided this card. Nobody can decide it here."
+const unknownNote = "The server failed to read the run, so it cannot tell whether anyone decided this card. Nobody can decide it here."
 
 // answerOf words the answer to a question: the value of a form with one
 // field, Yes or No for a boolean, the fields of a larger form, or the

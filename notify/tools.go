@@ -29,14 +29,14 @@ const (
 	emptySchema = `{"type":"object","properties":{}}`
 
 	putSchema = `{"type":"object","properties":{
-		"channels":{"type":"array","maxItems":10,"description":"The channels of the person. The list replaces the channels; leave it out to keep them, or send [] to remove every channel. Each channel has an id (the front gives one when it is empty), a kind of the list offered of notifications_get, a label, send, and the fields of its kind: url for slack (an incoming webhook on hooks.slack.com), discord (a webhook on discord.com under /api/webhooks/), teams (a webhook of a Teams workflow), and webhook (an https address, with secret as an option for the HMAC header X-Featherweight-Signature); ntfy {server, topic, token}; email {to}; agent {agent, how, budget}, a run of the agent as the person that delivers the message, with a budget that is required; shared, the name of a shared channel of the list shared of notifications_get. url, secret, and ntfy.token are write only: \"set\" keeps the stored value of the channel with the same id, an empty text clears it, and any other text replaces it.","items":{"type":"object","properties":{
+		"channels":{"type":"array","maxItems":10,"description":"The channels of the person. The list replaces the channels; leave it out to keep them, or send [] to remove every channel. Each channel has an id (the server gives one when it is empty), a kind of the list offered of notifications_get, a label, send, and the fields of its kind: url for slack (an incoming webhook on hooks.slack.com), discord (a webhook on discord.com under /api/webhooks/), teams (a webhook of a Teams workflow), and webhook (an https address, with secret as an option for the HMAC header X-Featherweight-Signature); ntfy {server, topic, token}; email {to}; agent {agent, how, budget}, a run of the agent as the person that delivers the message, with a budget that is required; shared, the name of a shared channel of the list shared of notifications_get. url, secret, and ntfy.token are write only: \"set\" keeps the stored value of the channel with the same id, an empty text clears it, and any other text replaces it.","items":{"type":"object","properties":{
 			"id":{"type":"string","maxLength":40},
 			"kind":{"type":"string","enum":["ntfy","slack","discord","teams","webhook","email","agent","shared"]},
 			"label":{"type":"string","maxLength":80},
 			"send":{"type":"object","description":"Which kinds the channel sends. questions: a run of a duty that waits for the person, and a decision while the person was away. failures: a failed run, a duty that paused itself, and a daily cap. digest: once a day, what the duties did. A field left out is off.","properties":{"questions":{"type":"boolean"},"failures":{"type":"boolean"},"digest":{"type":"boolean"}}},
 			"url":{"type":"string","maxLength":2048},
 			"secret":{"type":"string","maxLength":512},
-			"ntfy":{"type":"object","description":"server is the address of the ntfy server, or empty for the server of the front; the front never picks a public server by itself. topic is 1 to 64 of A-Z, a-z, 0-9, '-', and '_'. token is the access token of the server.","properties":{"server":{"type":"string","maxLength":512},"topic":{"type":"string","maxLength":64},"token":{"type":"string","maxLength":512}}},
+			"ntfy":{"type":"object","description":"server is the address of the ntfy server, or empty for the server of the server; the server never picks a public server by itself. topic is 1 to 64 of A-Z, a-z, 0-9, '-', and '_'. token is the access token of the server.","properties":{"server":{"type":"string","maxLength":512},"topic":{"type":"string","maxLength":64},"token":{"type":"string","maxLength":512}}},
 			"email":{"type":"object","properties":{"to":{"type":"string","maxLength":254}}},
 			"agent":{"type":"object","description":"agent names the agent, which the person needs the right to run. how says in words how the agent delivers the message, such as: Send it to me on Signal. budget bounds each run and is required, such as {\"maxCostUSD\": 0.02}.","properties":{"agent":{"type":"string"},"how":{"type":"string","maxLength":2000},"budget":{"type":"object","properties":{"maxCostUSD":{"type":"number"},"maxTurns":{"type":"integer"},"maxTokens":{"type":"integer"},"maxToolCalls":{"type":"integer"}}}}},
 			"shared":{"type":"string","maxLength":63}
@@ -76,7 +76,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolGet,
 			Title:       "Read my notifications",
-			Description: "Read the notifications of the person: the channels (ntfy, Slack, Discord, Teams, webhook, email, agent, or a shared channel), each with its switches, the quiet hours, the kinds that the front offers, the shared channels of the operator, and off, which says why no channel reaches the person. An address, a secret, or a token reads as \"set\" or an empty text.",
+			Description: "Read the notifications of the person: the channels (ntfy, Slack, Discord, Teams, webhook, email, agent, or a shared channel), each with its switches, the quiet hours, the kinds that the server offers, the shared channels of the operator, and off, which says why no channel reaches the person. An address, a secret, or a token reads as \"set\" or an empty text.",
 			InputSchema: json.RawMessage(emptySchema),
 			Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
@@ -119,7 +119,7 @@ func explain(err error) string {
 
 // off is the result of a tool in a process without the notifications.
 func off() *sdk.CallToolResult {
-	return mcp.ErrorResult("The notifications are off in this process. They run on a front that serves, with the bus nats or mem.")
+	return mcp.ErrorResult("The notifications are off in this process. They run on a server that serves, with the bus nats or mem.")
 }
 
 // answerText words the settings of a person. It never holds an address,
@@ -157,7 +157,7 @@ func answerText(ans Answer) string {
 	for _, o := range ans.Offered {
 		offered = append(offered, o.Kind)
 	}
-	b.WriteString("\nThe front offers: " + strings.Join(offered, ", ") + ".")
+	b.WriteString("\nThe server offers: " + strings.Join(offered, ", ") + ".")
 	if len(ans.Shared) > 0 {
 		var names []string
 		for _, sc := range ans.Shared {

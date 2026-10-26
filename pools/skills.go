@@ -87,7 +87,7 @@ func (p *Pool) shipSkills() error {
 		}
 		files, skipped, err := readSkill(s)
 		if err != nil {
-			return fmt.Errorf("%w: %s cannot read the skill %s of the front: %v", ErrSkills, p.key(), s.Name, err)
+			return fmt.Errorf("%w: %s cannot read the skill %s of the server: %v", ErrSkills, p.key(), s.Name, err)
 		}
 		if len(files) > MaxSkillFiles {
 			return fmt.Errorf("%w: %s: the skill %s holds %d files, and a pool ships at most %d files of one skill; make the skill smaller, or leave it out of the skills of the profiles of the pool", ErrSkills, p.key(), s.Name, len(files), MaxSkillFiles)

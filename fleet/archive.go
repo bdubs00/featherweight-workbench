@@ -32,7 +32,7 @@ import (
 // ArchiveBucket is the bucket of the archive of the runs.
 var ArchiveBucket = bucket.Config{
 	Name:        "ARCHIVE",
-	Description: "The archive of the runs of the workers of a featherweight fleet: the summary of each run and each event that the egress stream carried. The front writes it from a durable consumer of the stream.",
+	Description: "The archive of the runs of the workers of a featherweight fleet: the summary of each run and each event that the egress stream carried. The server writes it from a durable consumer of the stream.",
 	History:     1,
 	MaxValue:    1 << 20,
 }

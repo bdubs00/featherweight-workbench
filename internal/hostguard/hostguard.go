@@ -91,4 +91,4 @@ func Transport(refuse error) *http.Transport {
 }
 
 // ErrRedirect is the error of a client that follows no redirect.
-var ErrRedirect = errors.New("the server answered with a redirect, which the front does not follow")
+var ErrRedirect = errors.New("the server answered with a redirect, which the server does not follow")

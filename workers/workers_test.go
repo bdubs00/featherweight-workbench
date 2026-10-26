@@ -208,7 +208,7 @@ func TestRoutes(t *testing.T) {
 		want string
 	}{
 		{create, http.StatusConflict, "the store holds a runtime pool named helper"},
-		{`{"name":"triage","agent":"triage","replicas":1}`, http.StatusConflict, "the configuration file of the front holds a pool named triage"},
+		{`{"name":"triage","agent":"triage","replicas":1}`, http.StatusConflict, "the configuration file of the server holds a pool named triage"},
 		{`{"name":"other","agent":"other"}`, http.StatusBadRequest, "set replicas"},
 		{`{"name":"other","agent":"other","replicas":1,"image":"x"}`, http.StatusBadRequest, "unknown field"},
 		{`{"name":"other","agent":"other","replicas":1,"env":[{"name":"FW_X","value":"1"}]}`, http.StatusBadRequest, "remove FW_X"},

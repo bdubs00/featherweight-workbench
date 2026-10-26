@@ -203,7 +203,7 @@ func manifestOf(b []byte) ([]IndexEntry, error) {
 		return nil, fetchErr(502, "the manifest is not JSON: a list of {name, description, url}, or an object with skills")
 	}
 	if obj.Skills == nil && len(obj.Plugins) > 0 {
-		return nil, fetchErr(400, "the manifest lists plugins, not skills; name the repository of the plugin marketplace as the url, and the front reads its skills directories")
+		return nil, fetchErr(400, "the manifest lists plugins, not skills; name the repository of the plugin marketplace as the url, and the server reads its skills directories")
 	}
 	return obj.Skills, nil
 }

@@ -58,7 +58,7 @@ func TestMembersText(t *testing.T) {
 		"- here (this process): live, access rules; agents reviewer (you are owner); 1 active run, 0 waiting for input",
 		"- there: quiet, heard 3m ago, access external; agents deployer (you are operator); 0 active runs, 2 waiting for input; this process can act on its runs",
 		"- far: stopped, heard 2d ago; no agent you can see",
-		"- full: quiet, heard 10s ago; blocked by a storage failure (storage unavailable: no space left on device), so the front suspends its Task, and the next request restarts it; no agent you can see",
+		"- full: quiet, heard 10s ago; blocked by a storage failure (storage unavailable: no space left on device), so the server suspends its Task, and the next request restarts it; no agent you can see",
 		"read-only from here",
 	} {
 		if !strings.Contains(text, want) {

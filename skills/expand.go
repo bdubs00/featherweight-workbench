@@ -222,7 +222,7 @@ func Prepare(a *fw.Agent, cmd Command, text string) (Expansion, error) {
 		return Expansion{}, err
 	}
 	if !e.UserInvocable {
-		return Expansion{}, fmt.Errorf("%w: the front matter of the skill %s says user-invocable: false, so only an agent loads it", ErrNotInvocable, e.Name)
+		return Expansion{}, fmt.Errorf("%w: the server matter of the skill %s says user-invocable: false, so only an agent loads it", ErrNotInvocable, e.Name)
 	}
 	names := make([]string, len(e.Arguments))
 	for i, arg := range e.Arguments {

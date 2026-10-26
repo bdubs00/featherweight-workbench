@@ -306,7 +306,7 @@ func TestPoolsKeepTheTasks(t *testing.T) {
 		t.Fatalf("Tasks = %v", got)
 	}
 	if n := tasks.count("team/triage-1"); n == 0 {
-		t.Fatal("the front replaced the Task without a status read")
+		t.Fatal("the server replaced the Task without a status read")
 	}
 }
 

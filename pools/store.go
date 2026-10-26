@@ -218,7 +218,7 @@ func (s *Store) Remove(ctx context.Context, name string, rev uint64) error {
 		if _, gerr := s.Get(ctx, name); errors.Is(gerr, ErrRuntimeNotFound) {
 			return nil
 		}
-		return fmt.Errorf("%w: %s changed since the front read it", ErrRuntimeConflict, name)
+		return fmt.Errorf("%w: %s changed since the server read it", ErrRuntimeConflict, name)
 	}
 	if err != nil {
 		return fmt.Errorf("pools: remove the runtime pool %s: %w", name, err)

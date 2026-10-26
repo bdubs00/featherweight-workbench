@@ -260,7 +260,7 @@ type BatchRuns struct {
 var (
 	ErrNoRoute      = errors.New("fleet: no route to the fleet member")
 	ErrNoCredential = errors.New("fleet: the request carries no bearer credential to forward")
-	ErrNoToken      = errors.New("fleet: the front holds no static token of the fleet")
+	ErrNoToken      = errors.New("fleet: the server holds no static token of the fleet")
 )
 
 // views ties a View to the agent that it serves. Start attaches the fleet

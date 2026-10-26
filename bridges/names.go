@@ -137,7 +137,7 @@ func (s *Store) nameOf(ctx context.Context, p *fw.Principal) string {
 		return "the " + as + " for " + s.personName(p.Subject, "")
 	}
 	if p == nil {
-		return "the front"
+		return "the server"
 	}
 	if p.Subject == "" && strings.TrimSpace(p.Name) == "" {
 		return "somebody"

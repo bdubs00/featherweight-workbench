@@ -204,7 +204,7 @@ func Open(ctx context.Context, a *fw.Agent, fc Config) (*Fleet, error) {
 	if len(fc.Pools) > 0 || len(fc.Templates) > 0 {
 		if len(fc.Atespaces) == 0 {
 			f.cancel()
-			return nil, errors.New("fleet: the pools and the templates need workbench.fleet.atespaces, the atespaces whose Tasks the front lists")
+			return nil, errors.New("fleet: the pools and the templates need workbench.fleet.atespaces, the atespaces whose Tasks the server lists")
 		}
 		// The front reads the variables that the Tasks of the pools and of
 		// the templates copy once, and a missing one stops the start, not

@@ -313,7 +313,7 @@ func TestWakeForTeachesTheFrontAboutUnknownTasks(t *testing.T) {
 		cfg.AX.Server = ax.addr
 		cfg.AX.Router = strings.TrimPrefix(tasks.srv.URL, "http://")
 	})
-	eventually(t, "the front sees the sleeping Task", func() bool {
+	eventually(t, "the server sees the sleeping Task", func() bool {
 		ms, err := front.f.Members(ctx)
 		return err == nil && memberStates(ms)["team/fresh"] == MemberQuiet
 	})
@@ -322,7 +322,7 @@ func TestWakeForTeachesTheFrontAboutUnknownTasks(t *testing.T) {
 	}
 	eventually(t, "the unknown sleeper is woken", func() bool { return tasks.count("team/fresh") > 0 })
 	eventually(t, "its phase follows", func() bool { return ax.phase("team", "fresh") == "Running" })
-	eventually(t, "the front learns its profiles", func() bool {
+	eventually(t, "the server learns its profiles", func() bool {
 		p := front.f.platform
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -467,20 +467,20 @@ func TestSuspendBlockedBusyTask(t *testing.T) {
 	if got := gather(t, reg)["fw_fleet_members_blocked{}"]; got != 1 {
 		t.Fatalf("fw_fleet_members_blocked = %v, want 1", got)
 	}
-	eventually(t, "the front logs the suspend", func() bool { return len(sink.lines("suspended a Task that a storage failure blocked")) > 0 })
+	eventually(t, "the server logs the suspend", func() bool { return len(sink.lines("suspended a Task that a storage failure blocked")) > 0 })
 	if lines := sink.lines("suspended a Task that a storage failure blocked"); len(lines) != 1 ||
 		!strings.Contains(lines[0], "member=team/stuck") || !strings.Contains(lines[0], reason) {
 		t.Fatalf("the log of the suspend = %q", lines)
 	}
 
 	// The slow Task stays awake, and its status was read.
-	eventually(t, "the front reads the status of the slow Task", func() bool { return tasks.count("team/slow") > 0 })
+	eventually(t, "the server reads the status of the slow Task", func() bool { return tasks.count("team/slow") > 0 })
 	time.Sleep(3 * interval)
 	if ax.phase("team", "slow") != "Running" {
 		t.Fatal("the Task that is busy and not blocked was suspended")
 	}
 	if reads, most := tasks.count("team/slow"), int(time.Since(start)/interval)+1; reads > most {
-		t.Fatalf("the front read the status of the slow Task %d times, more than once per interval (%d)", reads, most)
+		t.Fatalf("the server read the status of the slow Task %d times, more than once per interval (%d)", reads, most)
 	}
 	for _, line := range sink.lines("team/slow") {
 		if !strings.Contains(line, "level=DEBUG") {

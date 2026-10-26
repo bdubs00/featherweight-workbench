@@ -294,7 +294,7 @@ func skillSendTool(a *fw.Agent) mcp.Tool {
 	return mcp.NewTool(&sdk.Tool{
 		Name:        ToolSkillSend,
 		Title:       "Send a skill",
-		Description: "Hand a skill to a running conversation as a slash command of yours: the front expands the skill with the arguments and sends it to the run, or to the members of a bridge, as your message, pinned, so it survives every compaction. It starts work. Only a person sends a skill; a run of the fleet cannot.",
+		Description: "Hand a skill to a running conversation as a slash command of yours: the server expands the skill with the arguments and sends it to the run, or to the members of a bridge, as your message, pinned, so it survives every compaction. It starts work. Only a person sends a skill; a run of the fleet cannot.",
 		InputSchema: json.RawMessage(skillSendSchema),
 		Annotations: &sdk.ToolAnnotations{DestructiveHint: &yes, OpenWorldHint: &no},
 	}, func(ctx context.Context, req *sdk.CallToolRequest, in skillSendArgs) (*sdk.CallToolResult, any, error) {

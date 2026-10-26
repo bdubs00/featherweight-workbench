@@ -138,7 +138,7 @@ func tools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolTemplatesList,
 			Title:       "List worker templates",
-			Description: "List the worker templates of the front: what a worker is, without its agent. Each has a name, its atespace, its model when it names one, and a mark for the default, which a new agent gets when its request names no template.",
+			Description: "List the worker templates of the server: what a worker is, without its agent. Each has a name, its atespace, its model when it names one, and a mark for the default, which a new agent gets when its request names no template.",
 			InputSchema: json.RawMessage(emptySchema),
 			Annotations: readOnly,
 		}, func(context.Context, *sdk.CallToolRequest, struct{}) (*sdk.CallToolResult, any, error) {
@@ -148,7 +148,7 @@ func tools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolPoolPut,
 			Title:       "Create or change a pool",
-			Description: "Create a runtime pool of workers for an agent, or change one. With agent, the call creates the pool from template, else from the default template, with replicas workers; it needs the creator role. The profile of the agent comes from the overlay of the pool, so the pool makes no worker until agent_put with pool writes the profile; agent_put with workers creates a new agent and its pool in one call instead. Without agent, the call changes the replicas, the variables, the resources, or the template of the pool of the name; it needs the owner role on the agent of the pool. The front replaces each worker of the pool once it is idle.",
+			Description: "Create a runtime pool of workers for an agent, or change one. With agent, the call creates the pool from template, else from the default template, with replicas workers; it needs the creator role. The profile of the agent comes from the overlay of the pool, so the pool makes no worker until agent_put with pool writes the profile; agent_put with workers creates a new agent and its pool in one call instead. Without agent, the call changes the replicas, the variables, the resources, or the template of the pool of the name; it needs the owner role on the agent of the pool. The server replaces each worker of the pool once it is idle.",
 			InputSchema: json.RawMessage(putSchema),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: false, OpenWorldHint: ptr(false)},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in putArgs) (*sdk.CallToolResult, any, error) {
@@ -157,7 +157,7 @@ func tools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolPoolDelete,
 			Title:       "Delete a pool",
-			Description: "Delete a runtime pool. It needs the owner role on the agent of the pool. The front deletes each worker of the pool once it is idle, and then the pool. The profile of the agent stays in the overlay of the pool, and its runs stay in the ledgers. A pool of the configuration file changes in fw.yaml only.",
+			Description: "Delete a runtime pool. It needs the owner role on the agent of the pool. The server deletes each worker of the pool once it is idle, and then the pool. The profile of the agent stays in the overlay of the pool, and its runs stay in the ledgers. A pool of the configuration file changes in fw.yaml only.",
 			InputSchema: json.RawMessage(deleteSchema),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in deleteArgs) (*sdk.CallToolResult, any, error) {
@@ -166,7 +166,7 @@ func tools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolOrphansList,
 			Title:       "List orphan Tasks",
-			Description: "List the orphan Tasks of the fleet: the child Tasks whose parent Task is gone, each after the Tasks under it, with its parent, its phase, its pool, and its open runs, and how long an orphan sleeps before the front removes it. It needs the admin role of the process.",
+			Description: "List the orphan Tasks of the fleet: the child Tasks whose parent Task is gone, each after the Tasks under it, with its parent, its phase, its pool, and its open runs, and how long an orphan sleeps before the server removes it. It needs the admin role of the process.",
 			InputSchema: json.RawMessage(emptySchema),
 			Annotations: readOnly,
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
@@ -263,7 +263,7 @@ func put(ctx context.Context, a *fw.Agent, in putArgs) *sdk.CallToolResult {
 	if err != nil {
 		return mcp.ErrorResult(explain(err))
 	}
-	text := fmt.Sprintf("Changed the runtime pool %s: it wants %d %s at generation %d, and the front replaces each worker once it is idle.\n%s", st.Name, st.Wanted, plural(st.Wanted, "worker", "workers"), st.Generation, poolText(st))
+	text := fmt.Sprintf("Changed the runtime pool %s: it wants %d %s at generation %d, and the server replaces each worker once it is idle.\n%s", st.Name, st.Wanted, plural(st.Wanted, "worker", "workers"), st.Generation, poolText(st))
 	return mcp.Result(text, poolResult{View: "pool", Pool: st})
 }
 
@@ -274,7 +274,7 @@ func remove(ctx context.Context, a *fw.Agent, in deleteArgs) *sdk.CallToolResult
 	if err != nil {
 		return mcp.ErrorResult(explain(err))
 	}
-	text := fmt.Sprintf("Deleted the runtime pool %s: the front deletes each worker of it once the worker is idle, and then the pool. The profile of the agent %s stays in the overlay of the pool.\n%s", st.Name, st.Agent, poolText(st))
+	text := fmt.Sprintf("Deleted the runtime pool %s: the server deletes each worker of it once the worker is idle, and then the pool. The profile of the agent %s stays in the overlay of the pool.\n%s", st.Name, st.Agent, poolText(st))
 	return mcp.Result(text, poolResult{View: "pool", Pool: st})
 }
 
@@ -317,7 +317,7 @@ func packagesText(p fleet.Packages) string {
 	if !p.On {
 		fmt.Fprintf(&b, "The packages of the pool %s are off. Its workers use only the programs of their image.", p.Pool)
 		if !p.Available {
-			b.WriteString(" The front cannot change them here.")
+			b.WriteString(" The server cannot change them here.")
 		}
 		if p.Applying {
 			b.WriteString("\nWorkers take a change in about a minute. Work in progress does not stop.")
@@ -358,7 +358,7 @@ func packagesText(p fleet.Packages) string {
 			ready++
 		case fleet.EnvFailed:
 			failed++
-			why := "the front holds no reason"
+			why := "the server holds no reason"
 			if w.Failure != nil && w.Failure.Error != "" {
 				why = w.Failure.Error
 			}
@@ -400,9 +400,9 @@ func orphans(ctx context.Context, a *fw.Agent) *sdk.CallToolResult {
 		}
 	}
 	if after > 0 {
-		fmt.Fprintf(&b, "\nThe front removes an orphan that sleeps for %s.", after)
+		fmt.Fprintf(&b, "\nThe server removes an orphan that sleeps for %s.", after)
 	} else {
-		b.WriteString("\nThe front removes no orphan by itself.")
+		b.WriteString("\nThe server removes no orphan by itself.")
 	}
 	return mcp.Result(b.String(), orphansResult{Orphans: list, RemoveAfter: int64(after.Seconds())})
 }

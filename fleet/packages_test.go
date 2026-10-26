@@ -253,7 +253,7 @@ func TestPackagesStates(t *testing.T) {
 	r.publish("triage-1", EvEnvFailed, "e2b", at.Add(time.Second), with(base(false, true, nil, nil), map[string]any{"digest": "d1", "step": "python", "error": "uv sync failed", "output": "No solution found", "retryAt": at.Add(time.Minute)}))
 	time.Sleep(300 * time.Millisecond)
 	if got := r.tasks.envsOf("team/triage-1"); len(got) != 0 {
-		t.Fatalf("the front woke a sleeping worker: %+v", got)
+		t.Fatalf("the server woke a sleeping worker: %+v", got)
 	}
 	// An older event, and an event of a Task that no pool owns, change
 	// nothing.

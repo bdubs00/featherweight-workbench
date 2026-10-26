@@ -152,7 +152,7 @@ func (s *Service) targetOf(ctx context.Context, ch Channel, rec *record) (target
 func (s *Service) sharedTarget(ctx context.Context, name string) (target, error) {
 	sc := s.cfg.sharedNamed(name)
 	if sc == nil {
-		return target{}, permanent("the shared channel %s does not exist in this front now", name)
+		return target{}, permanent("the shared channel %s does not exist in this server now", name)
 	}
 	t := target{id: duties.NotifyChannelPrefix + name, kind: sc.Kind}
 	raw, err := s.secret(ctx, sc.URLEnv)
@@ -209,7 +209,7 @@ func (s *Service) send(ctx context.Context, t target, m *message) error {
 	case KindAgent:
 		err = s.sendAgent(ctx, t, m, link)
 	default:
-		err = permanent("the front does not send the kind %s", t.kind)
+		err = permanent("the server does not send the kind %s", t.kind)
 	}
 	if err == nil {
 		return nil
@@ -416,7 +416,7 @@ func detailOf(status int, data []byte) string {
 func (s *Service) sendEmail(ctx context.Context, t target, m *message, link string) error {
 	ec := s.cfg.Email
 	if ec.Host == "" {
-		return permanent("the front sends no mail now")
+		return permanent("the server sends no mail now")
 	}
 	if why := s.cfg.mailRefusal(t.to, t.person); why != "" {
 		return permanent("%s", why)
@@ -458,7 +458,7 @@ func (s *Service) sendEmail(ctx context.Context, t target, m *message, link stri
 	}
 	if ec.User != "" {
 		if _, tlsOn := c.TLSConnectionState(); !tlsOn {
-			return permanent("the mail server offers no STARTTLS, so the front does not send the password")
+			return permanent("the mail server offers no STARTTLS, so the server does not send the password")
 		}
 		if err := c.Auth(smtp.PlainAuth("", ec.User, password, ec.Host)); err != nil {
 			return fmt.Errorf("the mail server refused the login: %w", err)
@@ -531,7 +531,7 @@ func (s *Service) sendAgent(ctx context.Context, t target, m *message, link stri
 	ag := t.agent
 	switch {
 	case !s.cfg.Agent.Enabled:
-		return permanent("the front does not offer the kind agent now")
+		return permanent("the server does not offer the kind agent now")
 	case ag == nil || budgetProblem(ag.Budget) != "":
 		return permanent("the channel has no budget, so it runs no agent")
 	case t.person == "":

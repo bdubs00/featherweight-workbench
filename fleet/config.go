@@ -291,15 +291,15 @@ func check(c Config) []string {
 	if d := c.suspendAfter(); d < 0 {
 		p = append(p, fmt.Sprintf("workbench.fleet.suspendAfter %s is negative", d))
 	} else if d > 0 && len(c.Atespaces) == 0 {
-		p = append(p, "workbench.fleet.suspendAfter needs workbench.fleet.atespaces, the Tasks that the front can suspend")
+		p = append(p, "workbench.fleet.suspendAfter needs workbench.fleet.atespaces, the Tasks that the server can suspend")
 	}
 	if d := c.orphansAfter(); d < 0 {
 		p = append(p, fmt.Sprintf("workbench.fleet.orphansAfter %s is negative", d))
 	} else if d > 0 && len(c.Atespaces) == 0 {
-		p = append(p, "workbench.fleet.orphansAfter needs workbench.fleet.atespaces, the Tasks that the front can remove")
+		p = append(p, "workbench.fleet.orphansAfter needs workbench.fleet.atespaces, the Tasks that the server can remove")
 	}
 	if c.wakeOnQueue() && (len(c.Atespaces) == 0 || c.Intake == "") {
-		p = append(p, "workbench.fleet.wakeOnQueue needs workbench.fleet.atespaces, the Tasks that the front can wake, and workbench.fleet.intake, the queues that it reads")
+		p = append(p, "workbench.fleet.wakeOnQueue needs workbench.fleet.atespaces, the Tasks that the server can wake, and workbench.fleet.intake, the queues that it reads")
 	}
 	return p
 }

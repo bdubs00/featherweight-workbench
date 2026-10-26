@@ -232,7 +232,7 @@ func importTools(a *fw.Agent) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolSkillPreview,
 			Title:       "Preview a skill",
-			Description: "Fetch a skill from a url, a marketplace with name, a text, or files, and check it, for an admin. It installs nothing. The answer holds the front matter, the body, the files with their sizes, the digest, and each problem. An installed skill is instructions that every agent of a profile that allows it reads, so read the preview before an install.",
+			Description: "Fetch a skill from a url, a marketplace with name, a text, or files, and check it, for an admin. It installs nothing. The answer holds the server matter, the body, the files with their sizes, the digest, and each problem. An installed skill is instructions that every agent of a profile that allows it reads, so read the preview before an install.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{` + importProps + `}}`),
 			Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: &yes},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in importArgs) (*sdk.CallToolResult, any, error) {
@@ -248,7 +248,7 @@ func importTools(a *fw.Agent) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolSkillInstall,
 			Title:       "Install a skill",
-			Description: "Install a skill from a url, a marketplace with name, a text, or files into the skills of the front, for an admin, after the checks of skill_preview. An installed skill is instructions for every agent whose profile allows it, so read the preview first. A name that an imported skill holds needs replace true; a skill of the configuration is never replaced.",
+			Description: "Install a skill from a url, a marketplace with name, a text, or files into the skills of the server, for an admin, after the checks of skill_preview. An installed skill is instructions for every agent whose profile allows it, so read the preview first. A name that an imported skill holds needs replace true; a skill of the configuration is never replaced.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{` + importProps + `,
 	"replace":{"type":"boolean","description":"Take the place of an imported skill of the same name."},
 	"digest":{"type":"string","description":"The digest of the preview that you read, from skill_preview. A url and a marketplace need it, and the install refuses files that differ from the preview."}}}`),
@@ -265,7 +265,7 @@ func importTools(a *fw.Agent) []mcp.Tool {
 			if p.Exists != nil {
 				verb = "Replaced"
 			}
-			text := fmt.Sprintf("%s the skill %s (%s) under the imported skills of the front. A person can hand it to every agent whose profile allows it with a slash command from now on.", verb, e.Name, p.Digest)
+			text := fmt.Sprintf("%s the skill %s (%s) under the imported skills of the server. A person can hand it to every agent whose profile allows it with a slash command from now on.", verb, e.Name, p.Digest)
 			return mcp.Result(text, Installed{Skill: e, Replaced: p.Exists != nil, Preview: p}), nil, nil
 		}),
 	}

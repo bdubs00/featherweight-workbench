@@ -126,7 +126,7 @@ func (s *Service) accept(ctx context.Context, n duties.Notice) {
 		}
 		shared[name] = true
 		if s.cfg.sharedNamed(name) == nil {
-			s.log.Warn("notify: a duty names a shared channel that this front does not have", "duty", n.Duty, "channel", name)
+			s.log.Warn("notify: a duty names a shared channel that this server does not have", "duty", n.Duty, "channel", name)
 			continue
 		}
 		m := base
@@ -257,7 +257,7 @@ func (s *Service) sendOne(ctx context.Context, key string) time.Time {
 		}
 	case m.To == "" && m.Shared != "":
 	default:
-		s.drop(ctx, key, e.Revision, "it names no channel, as a notification of an older front does")
+		s.drop(ctx, key, e.Revision, "it names no channel, as a notification of an older server does")
 		return time.Time{}
 	}
 	m.Claim, m.ClaimAt = s.replica, now.UTC()
@@ -292,7 +292,7 @@ func (s *Service) sendOne(ctx context.Context, key string) time.Time {
 	}
 	m.Attempts++
 	if m.Attempts >= maxAttempts || isPermanent(err) {
-		s.log.Warn("notify: a notification did not go out, and the front drops it", "to", m.To, "channel", channel, "kind", t.kind, "event", m.Kind, "where", t.where(), "attempts", m.Attempts, "error", err)
+		s.log.Warn("notify: a notification did not go out, and the server drops it", "to", m.To, "channel", channel, "kind", t.kind, "event", m.Kind, "where", t.where(), "attempts", m.Attempts, "error", err)
 		_ = s.b.Delete(ctx, key, rev)
 		return time.Time{}
 	}
@@ -308,7 +308,7 @@ func (s *Service) sendOne(ctx context.Context, key string) time.Time {
 // drop removes a notification from the outbox, and the log says why.
 func (s *Service) drop(ctx context.Context, key string, rev uint64, why string) {
 	if err := s.b.Delete(ctx, key, rev); err == nil {
-		s.log.Info("notify: the front dropped a notification", "key", key, "reason", why)
+		s.log.Info("notify: the server dropped a notification", "key", key, "reason", why)
 	}
 }
 

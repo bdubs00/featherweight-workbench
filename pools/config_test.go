@@ -98,9 +98,9 @@ func TestLoadNamesWhatToSet(t *testing.T) {
 		{"no model", "      model: openai/some-model\n", "", "set fw.model"},
 		{"negative replicas", "replicas: 3", "replicas: -1", "replicas -1 is below 0"},
 		{"negative generation", "replicas: 3", "replicas: 3\n    generation: -1", "generation -1 is below 0"},
-		{"the generation in env", "- name: OPENAI_API_KEY", "- name: FW_POOL_GENERATION", "remove FW_POOL_GENERATION: the front sets it to the generation of the pool"},
+		{"the generation in env", "- name: OPENAI_API_KEY", "- name: FW_POOL_GENERATION", "remove FW_POOL_GENERATION: the server sets it to the generation of the pool"},
 		{"no replicas", "replicas: 3", "", "set replicas"},
-		{"the token in the file", "- name: OPENAI_API_KEY", "- name: FW_API_TOKEN", "remove FW_API_TOKEN: the front gives each worker its own static token"},
+		{"the token in the file", "- name: OPENAI_API_KEY", "- name: FW_API_TOKEN", "remove FW_API_TOKEN: the server gives each worker its own static token"},
 		{"value and fromEnv", "fromEnv: FRONT_TICKETS_TOKEN", "fromEnv: FRONT_TICKETS_TOKEN\n        value: x", "sets value and fromEnv"},
 		{"unknown key of a pool", "replicas: 3", "replicas: 3\n    replica: 2", "field replica not found"},
 		{"unknown key of the workers", "effort: low", "effort: low\n      modle: x", "fw.modle is not a key of the configuration of fw"},
@@ -148,7 +148,7 @@ func TestLoadNamesWhatToSet(t *testing.T) {
 	front = testFront()
 	front.Bus.URL = "nats://user:s3cretpass@nats.agents.svc.cluster.local:4222"
 	noURL := strings.Replace(fixture, `bus: {url: "ws://nats.agents.svc.cluster.local:8080"}`, "", 1)
-	if _, err := Load(configOf(t, noURL), front); err == nil || strings.Contains(err.Error(), "s3cretpass") || !strings.Contains(err.Error(), "the bus URL of the front holds a credential") {
+	if _, err := Load(configOf(t, noURL), front); err == nil || strings.Contains(err.Error(), "s3cretpass") || !strings.Contains(err.Error(), "the bus URL of the server holds a credential") {
 		t.Fatalf("Load = %v", err)
 	}
 	// A literal password beside a reference is a credential.
@@ -226,7 +226,7 @@ func TestRenderResolvesTheFront(t *testing.T) {
 		t.Fatalf("spec = %+v", task.Spec)
 	}
 	if _, _, err := p.Render(0, func(string) (string, bool) { return "", false }); err == nil || !strings.Contains(err.Error(), "FRONT_TICKETS_TOKEN") {
-		t.Fatalf("Render without the front = %v", err)
+		t.Fatalf("Render without the server = %v", err)
 	}
 }
 
@@ -301,7 +301,7 @@ func TestWriteHidesSecrets(t *testing.T) {
 			t.Fatalf("the dry run holds the secret %q", secret)
 		}
 	}
-	for _, want := range []string{"<secret: FW_API_TOKEN of the front>", "<secret: FRONT_TICKETS_TOKEN of the front>", "FW_POOL_SPEC=" + list[0].Hash(),
+	for _, want := range []string{"<secret: FW_API_TOKEN of the server>", "<secret: FRONT_TICKETS_TOKEN of the server>", "FW_POOL_SPEC=" + list[0].Hash(),
 		"Warning: workbench.pools[0] (triage): egress.hosts allows no https connection to mcp.example.com:443, the MCP server tickets"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the dry run has no %q", want)
@@ -339,7 +339,7 @@ func TestLoadGivesEachPoolAQueueOfItsOwn(t *testing.T) {
 		{"named after its agent", nil, front, "fw.jobs.triage"},
 		{"named after another name", []string{"- name: triage", "- name: crew-triage"}, front, "fw.jobs.crew-triage"},
 		{"named after an agent that a pool name cannot hold", []string{"- name: triage", "- name: sort-tickets", "        triage:\n", "        sort_tickets:\n"}, front, "fw.jobs.sort_tickets"},
-		{"a front without an intake prefix", []string{"- name: triage", "- name: crew-triage"}, bare, "fw.jobs.crew-triage"},
+		{"a server without an intake prefix", []string{"- name: triage", "- name: crew-triage"}, bare, "fw.jobs.crew-triage"},
 		{"an intake of its own", []string{"replicas: 3", "replicas: 3\n    intake: tickets.sort"}, front, "tickets.sort"},
 		{"an intake of its own on a pool named after another name", []string{"- name: triage", "- name: crew-triage", "replicas: 3", "replicas: 3\n    intake: fw.jobs.triage"}, front, "fw.jobs.triage"},
 	}

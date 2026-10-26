@@ -474,7 +474,7 @@ func TestReconcileReplacesAnOlderValue(t *testing.T) {
 	if !slices.Equal(r.check.tokens, []string{"the-token-before-the-rotation"}) {
 		t.Fatalf("tokens = %v", r.check.tokens)
 	}
-	if !hasGap(st, "triage-0 runs an older value of a variable of the front") {
+	if !hasGap(st, "triage-0 runs an older value of a variable of the server") {
 		t.Fatalf("gaps = %v", st.Gaps)
 	}
 	for _, g := range st.Gaps {

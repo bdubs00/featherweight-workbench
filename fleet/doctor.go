@@ -119,7 +119,7 @@ func doctorRuntime(ctx context.Context, cfg *fw.Config, files []*pools.Pool, tem
 		return "keeps no runtime pool, because they live " + where, true, nil
 	}
 	if strings.TrimSpace(cfg.Bus.Driver) == "mem" || strings.TrimSpace(cfg.Bus.Driver) == "" {
-		return "keeps its runtime pools in the memory of the front process, which this check does not reach", true, nil
+		return "keeps its runtime pools in the memory of the server process, which this check does not reach", true, nil
 	}
 	if timeout <= 0 {
 		timeout = 5 * time.Second
@@ -149,7 +149,7 @@ func doctorRuntime(ctx context.Context, cfg *fw.Config, files []*pools.Pool, tem
 			deleting++
 		}
 		if pools.TemplateNamed(templates, e.Template) == nil {
-			missing = append(missing, fmt.Sprintf("the runtime pool %s names the template %s, which workbench.templates does not hold, so the front changes nothing in it", e.Name, e.Template))
+			missing = append(missing, fmt.Sprintf("the runtime pool %s names the template %s, which workbench.templates does not hold, so the server changes nothing in it", e.Name, e.Template))
 			continue
 		}
 		if p, err := pools.FromRuntime(e.Runtime, templates); err == nil && !e.Deleting && !shadowed[e.Name] {
@@ -236,7 +236,7 @@ func doctorOutside(ctx context.Context, cfg *fw.Config, c Config, all []*pools.P
 		}
 	}
 	if len(unread) > 0 {
-		parts = append(parts, fmt.Sprintf("cannot tell what the %s %s outside any pool %s, because the front reads no configuration file in %s",
+		parts = append(parts, fmt.Sprintf("cannot tell what the %s %s outside any pool %s, because the server reads no configuration file in %s",
 			plural(len(unread), "Task", "Tasks"), strings.Join(unread, ", "), plural(len(unread), "serves", "serve"), plural(len(unread), "its Workspace", "their Workspaces")))
 	}
 	return parts
@@ -276,7 +276,7 @@ func outsideRisk(who, agent string, by, all []*pools.Pool, queue string, known b
 	head := fmt.Sprintf("%s serves the agent %s, which %s; jobs for %s go to %s", who, agent, runs, agent, goes)
 	switch {
 	case !known:
-		return head + ", and the front cannot tell which queue this Task reads"
+		return head + ", and the server cannot tell which queue this Task reads"
 	case queue == "":
 		return head + ", and this Task reads no queue"
 	}

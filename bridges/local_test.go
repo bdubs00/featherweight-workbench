@@ -125,7 +125,7 @@ func TestLocalSeatActivity(t *testing.T) {
 	})
 	want := fleet.ActivityPhrase(run)
 	if want != "bash" {
-		t.Fatalf("fleet.ActivityPhrase of a run of the front = %q, want the tool alone", want)
+		t.Fatalf("fleet.ActivityPhrase of a run of the server = %q, want the tool alone", want)
 	}
 	s.poll(ctx)
 	resp, body := do(t, http.MethodGet, url+"/v1/bridges/"+it.ID, "alice", "")

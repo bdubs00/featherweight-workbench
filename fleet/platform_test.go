@@ -151,7 +151,7 @@ func TestPlatformSources(t *testing.T) {
 	worker := newWorker(t, bus, "ax:team/alpha")
 
 	// The Tasks of the atespace are members, with the state of their phase.
-	eventually(t, "the front sees the Tasks", func() bool {
+	eventually(t, "the server sees the Tasks", func() bool {
 		ms, err := front.f.Members(ctx)
 		st := memberStates(ms)
 		return err == nil && st["team/alpha"] == MemberLive && st["team/beta"] == MemberQuiet && st["team/gamma"] == MemberLive

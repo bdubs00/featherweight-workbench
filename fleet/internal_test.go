@@ -114,7 +114,7 @@ func TestAwaitAndCancelARunOfAMember(t *testing.T) {
 	}
 	for _, c := range calls {
 		if c.auth != "Bearer fleet-secret" || c.person != "" {
-			t.Fatalf("a call of the front for itself = %+v", c)
+			t.Fatalf("a call of the server for itself = %+v", c)
 		}
 	}
 	if calls[0].path != "/v1/runs/r4" || calls[2].method != "POST" || calls[2].path != "/v1/runs/r4/cancel" {

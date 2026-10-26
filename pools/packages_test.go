@@ -230,7 +230,7 @@ func TestPackagesRender(t *testing.T) {
 		t.Fatal("a pool with the packages off gives its workers its lists")
 	}
 	if strings.Contains(plain.files[0].Content, "environment:") {
-		t.Fatal("a front without a mirror gave the workers the block environment")
+		t.Fatal("a server without a mirror gave the workers the block environment")
 	}
 }
 
@@ -279,7 +279,7 @@ func TestPackagesOverlayWins(t *testing.T) {
 	if err := Write(&b, []*Pool{merged}); err != nil {
 		t.Fatal(err)
 	}
-	if want := "# The overlay of the front turns the packages on: Python packages pyyaml, Programs nodejs>=22, from the package mirror of the front; the agent can ask for a change, and a person approves each one."; !strings.Contains(b.String(), want) {
+	if want := "# The overlay of the server turns the packages on: Python packages pyyaml, Programs nodejs>=22, from the package mirror of the server; the agent can ask for a change, and a person approves each one."; !strings.Contains(b.String(), want) {
 		t.Fatalf("the dry run lacks %q:\n%s", want, b.String())
 	}
 }
@@ -311,7 +311,7 @@ func TestPackagesOfTemplates(t *testing.T) {
 		t.Fatal("the key of the pool did not win over the template")
 	}
 	if _, _, err := LoadAll(configOf(t, text), testFront()); err == nil || !strings.Contains(err.Error(), "workbench.templates[0] (base): packages.on needs workbench.packages") {
-		t.Fatalf("a template with packages on a front without a mirror = %v", err)
+		t.Fatalf("a template with packages on a server without a mirror = %v", err)
 	}
 }
 

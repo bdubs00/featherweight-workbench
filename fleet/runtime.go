@@ -184,7 +184,7 @@ func (p *platform) passRuntime(ctx context.Context, e pools.Stored, listed map[s
 		// left the configuration, changes nothing; its Tasks stay.
 		st = pools.RuntimeStatus(e.Runtime, p.reconciler.Values.Redact(strings.TrimPrefix(err.Error(), "pools: ")+"; the pool changes nothing until it builds again"))
 	case failed[base.Atespace] != nil:
-		st = waiting(prev, base, p.reconciler.Values.Redact(fmt.Sprintf("the front could not list the Tasks of the atespace %s, so the pool waits: %v", base.Atespace, failed[base.Atespace])))
+		st = waiting(prev, base, p.reconciler.Values.Redact(fmt.Sprintf("the server could not list the Tasks of the atespace %s, so the pool waits: %v", base.Atespace, failed[base.Atespace])))
 	default:
 		use := base
 		if !e.Deleting {
@@ -240,17 +240,17 @@ func waiting(prev pools.Status, base *pools.Pool, why string) pools.Status {
 // (section 14.4). It reports whether the entry is gone.
 func (p *platform) finishDelete(ctx context.Context, e pools.Stored, base *pools.Pool, st *pools.Status) bool {
 	if len(st.Tasks) > 0 {
-		st.Gaps = append(st.Gaps, "a person deleted the pool, so the front deletes each Task of it once the Task is idle, and then the pool")
+		st.Gaps = append(st.Gaps, "a person deleted the pool, so the server deletes each Task of it once the Task is idle, and then the pool")
 		return false
 	}
 	if err := p.reconciler.Forget(ctx, base); err != nil {
-		st.Gaps = append(st.Gaps, p.reconciler.Values.Redact(fmt.Sprintf("the Tasks of the deleted pool are gone, and the front could not delete its marker (%v), so the pool stays until the next pass", err)))
+		st.Gaps = append(st.Gaps, p.reconciler.Values.Redact(fmt.Sprintf("the Tasks of the deleted pool are gone, and the server could not delete its marker (%v), so the pool stays until the next pass", err)))
 		return false
 	}
 	rctx, cancel := context.WithTimeout(ctx, overlayTimeout)
 	defer cancel()
 	if err := p.f.runtime.Remove(rctx, e.Name, e.Rev); err != nil {
-		st.Gaps = append(st.Gaps, fmt.Sprintf("the Tasks of the deleted pool are gone, and the front could not remove its entry (%v), so it tries again at the next pass", err))
+		st.Gaps = append(st.Gaps, fmt.Sprintf("the Tasks of the deleted pool are gone, and the server could not remove its entry (%v), so it tries again at the next pass", err))
 		return false
 	}
 	p.f.log.Info("fleet: removed a deleted runtime pool whose Tasks are gone", "pool", e.Name, "agent", e.Agent, "generation", e.Generation)
@@ -284,7 +284,7 @@ func (f *Fleet) runtimeState(ctx context.Context, e pools.Stored, profile bool) 
 	if ok && rt != nil && rt.stored.Rev == e.Rev {
 		return prev
 	}
-	why := fmt.Sprintf("the front applies generation %d of the pool at its next pass", base.Generation)
+	why := fmt.Sprintf("the server applies generation %d of the pool at its next pass", base.Generation)
 	if profile && f.overlays != nil && !e.Deleting {
 		octx, cancel := context.WithTimeout(ctx, overlayTimeout)
 		o, err := f.overlays.Read(octx, e.Name)
@@ -384,7 +384,7 @@ func CreatePool(ctx context.Context, a *fw.Agent, req PoolRequest) (pools.Status
 		return pools.Status{}, err
 	}
 	if f.fileNames()[e.Name] {
-		return pools.Status{}, fmt.Errorf("%w: the configuration file of the front holds a pool named %s; choose another name", ErrPoolExists, e.Name)
+		return pools.Status{}, fmt.Errorf("%w: the configuration file of the server holds a pool named %s; choose another name", ErrPoolExists, e.Name)
 	}
 	stored, err := f.createRuntime(ctx, e, false)
 	if err != nil {
@@ -526,7 +526,7 @@ func DeletePool(ctx context.Context, a *fw.Agent, name string) (pools.Status, er
 			return pools.Status{}, poolStoreError(err)
 		}
 		f.log.Info("fleet: removed a runtime pool that a pool of the file shadows", "pool", cur.Name, "principal", subjectOf(ctx))
-		st := pools.RuntimeStatus(cur.Runtime, "the front removed the entry at once, because the configuration file holds a pool of this name, which runs instead")
+		st := pools.RuntimeStatus(cur.Runtime, "the server removed the entry at once, because the configuration file holds a pool of this name, which runs instead")
 		st.Deleting = true
 		return st, nil
 	}
@@ -573,7 +573,7 @@ func runtimeTarget(ctx context.Context, a *fw.Agent, name string) (*Fleet, pools
 	cur, err := f.runtime.Get(ctx2, name)
 	cancel()
 	if errors.Is(err, pools.ErrRuntimeNotFound) && f.fileNames()[name] {
-		return nil, pools.Stored{}, fmt.Errorf("%w: the pool %s comes from the configuration file of the front, so change it in workbench.pools of fw.yaml", fw.ErrInvalidRequest, name)
+		return nil, pools.Stored{}, fmt.Errorf("%w: the pool %s comes from the configuration file of the server, so change it in workbench.pools of fw.yaml", fw.ErrInvalidRequest, name)
 	}
 	if err != nil {
 		return nil, pools.Stored{}, poolStoreError(err)

@@ -313,7 +313,7 @@ func TestIndexForgetsTheRunsThatAreGone(t *testing.T) {
 	tr := newTaskRouter(t)
 	tr.runs["team/beta"] = []*fw.Run{{ID: "RHELD", Agent: "default", State: fw.StateCompleted, Seq: 8, Input: "the task", CreatedAt: old, UpdatedAt: old}}
 	front := indexFront(t, fw.NewMemBus(), ax, tr, func(fc *Config) { fc.Expire = 30 * time.Minute })
-	eventually(t, "the front settles and cleans the index", func() bool {
+	eventually(t, "the server settles and cleans the index", func() bool {
 		if !front.f.Settled() {
 			return false
 		}

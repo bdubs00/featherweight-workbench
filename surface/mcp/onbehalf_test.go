@@ -169,7 +169,7 @@ func newBoss(t *testing.T, admins ...string) *boss {
 		fw.WithProfile(fw.AgentProfile{Name: "private", Access: &fw.Access{Owners: []string{"carol"}}}),
 	), view)
 	if !manager.Guarded(front) {
-		t.Fatal("the front has no guard")
+		t.Fatal("the server has no guard")
 	}
 	return &boss{owner: owner, front: front, view: view, url: serveAgent(t, front, nil).URL}
 }
@@ -452,7 +452,7 @@ func TestOnBehalfApproveNamesTheActor(t *testing.T) {
 		t.Fatalf("approve here = %s", textOf(res))
 	}
 	if d := decided(t, b.front, la.ID); d.Decider != "alice" || d.Note != "by manager run mgr-1 for alice" || d.Decision != "deny" {
-		t.Fatalf("the front recorded %+v", d)
+		t.Fatalf("the server recorded %+v", d)
 	}
 }
 

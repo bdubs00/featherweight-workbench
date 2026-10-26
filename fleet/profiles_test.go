@@ -103,7 +103,7 @@ func TestPoolProfileRollsTheTasks(t *testing.T) {
 		t.Fatalf("the Workspace = %+v", ws)
 	}
 	if front.a.ProfileSet()["triage"].Description != "" {
-		t.Fatal("the profile went into the store of the front")
+		t.Fatal("the profile went into the store of the server")
 	}
 }
 
@@ -184,7 +184,7 @@ func TestPoolProfileWrites(t *testing.T) {
 
 	// The front keeps its own profile default.
 	if at, err := PlaceOf(alice, front.a, "default", ""); err != nil || PoolOf(at) != "" {
-		t.Fatalf("PlaceOf of a profile of the front = %v, %v", PoolOf(at), err)
+		t.Fatalf("PlaceOf of a profile of the server = %v, %v", PoolOf(at), err)
 	}
 }
 
@@ -224,11 +224,11 @@ func TestPoolProfileToolsOfTheWorkers(t *testing.T) {
 		t.Fatalf("a profile with the tools of the pool = %v", err)
 	}
 	if at, err := PlaceOf(alice, front.a, "default", ""); err != nil || PoolOf(at) != "" || at.Check(fw.AgentProfile{Name: "default", Tools: []string{"tickets.*"}}) != nil {
-		t.Fatalf("the place of a profile of the front = %v, %v", PoolOf(at), err)
+		t.Fatalf("the place of a profile of the server = %v, %v", PoolOf(at), err)
 	}
 	// propose_agent asks nothing of a profile of the front.
 	if why := proposalTools(alice, front.a, "default", []string{"tickets.*"}); why != "" {
-		t.Fatalf("the check of a proposal for the front = %q", why)
+		t.Fatalf("the check of a proposal for the server = %q", why)
 	}
 }
 

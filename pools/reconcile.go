@@ -395,7 +395,7 @@ func (r *Reconciler) summary(st Status, p *Pool, owned []*member, created []stri
 	for _, name := range created {
 		note := "created"
 		if existed[name] {
-			note = "made by another replica of the front"
+			note = "made by another replica of the server"
 		}
 		st.Tasks = append(st.Tasks, TaskStatus{Name: name, Phase: phaseRunning, Current: true, Note: note})
 		st.Actual++
@@ -523,7 +523,7 @@ func (r *Reconciler) memberOf(t *v1alpha1.Task, idx int, p *Pool) *member {
 	case m.hash != p.hash:
 		m.older = "an older configuration"
 	case !r.sameValues(t, p):
-		m.older = "an older value of a variable of the front"
+		m.older = "an older value of a variable of the server"
 	default:
 		m.current = true
 	}
@@ -607,23 +607,23 @@ func (r *Reconciler) hold(ctx context.Context, p *Pool, owned []*member) string 
 	why, conflict := "", (*member)(nil)
 	switch {
 	case top > p.Generation:
-		why = fmt.Sprintf("superseded: generation %d of another front runs this pool, and this front holds generation %d, so it changes nothing in the pool", top, p.Generation)
+		why = fmt.Sprintf("superseded: generation %d of another server runs this pool, and this server holds generation %d, so it changes nothing in the pool", top, p.Generation)
 	case p.Generation == 0:
 	case err != nil:
-		why = fmt.Sprintf("the front could not read the generation of the pool (%v), so it changes nothing in the pool", err)
+		why = fmt.Sprintf("the server could not read the generation of the pool (%v), so it changes nothing in the pool", err)
 	case foreign:
-		why = fmt.Sprintf("the Workspace %s exists and belongs to no pool, so the front cannot record the generation of the pool and changes nothing in it; delete that Workspace or rename the pool", p.MarkerName())
+		why = fmt.Sprintf("the Workspace %s exists and belongs to no pool, so the server cannot record the generation of the pool and changes nothing in it; delete that Workspace or rename the pool", p.MarkerName())
 	default:
 		for _, m := range owned {
 			if theirs, ours := m.config(p); m.gen == p.Generation && theirs != ours {
 				conflict = m
-				why = fmt.Sprintf("conflict: %s carries generation %d with another configuration (%s, and this front has %s), so the pool changes nothing; give each configuration of the pool its own generation", m.name, m.gen, orWord(theirs, "no hash"), ours)
+				why = fmt.Sprintf("conflict: %s carries generation %d with another configuration (%s, and this server has %s), so the pool changes nothing; give each configuration of the pool its own generation", m.name, m.gen, orWord(theirs, "no hash"), ours)
 				break
 			}
 		}
 		if why == "" && mark < p.Generation {
 			if err := r.writeMarker(ctx, p); err != nil {
-				why = fmt.Sprintf("the front could not record generation %d of the pool (%v), so it changes nothing in the pool", p.Generation, err)
+				why = fmt.Sprintf("the server could not record generation %d of the pool (%v), so it changes nothing in the pool", p.Generation, err)
 			} else {
 				r.Log.Info("pools: recorded the generation of the pool", "pool", p.Name, "workspace", p.Atespace+"/"+p.MarkerName(), "generation", p.Generation, "from", mark)
 			}
@@ -739,7 +739,7 @@ func (r *Reconciler) saw(key string, gen int) int {
 // rest of that pass too.
 func (r *Reconciler) superseded(p *Pool) error {
 	if top := r.saw(p.Atespace+"/"+p.Name, 0); top > p.Generation {
-		return fmt.Errorf("pools: generation %d of another front runs the pool %s, and this front holds generation %d, so it changes nothing", top, p.Name, p.Generation)
+		return fmt.Errorf("pools: generation %d of another server runs the pool %s, and this server holds generation %d, so it changes nothing", top, p.Name, p.Generation)
 	}
 	return nil
 }
@@ -942,7 +942,7 @@ func (r *Reconciler) deleteTask(ctx context.Context, p *Pool, m *member, workspa
 	}
 	if g := genOf(cur); g > p.Generation {
 		r.saw(p.Atespace+"/"+p.Name, g)
-		return fmt.Errorf("pools: the Task %s carries generation %d now, newer than generation %d of this front, so the pool leaves it alone", m.name, g, p.Generation)
+		return fmt.Errorf("pools: the Task %s carries generation %d now, newer than generation %d of this server, so the pool leaves it alone", m.name, g, p.Generation)
 	}
 	if envOf(cur, EnvPool) != p.Name || envOf(cur, EnvSpec) != m.hash || genOf(cur) != m.gen || !sameTime(cur.GetMetadata().GetCreateTime(), m.created) ||
 		(m.phase == v1alpha1.PhaseTerminating && cur.GetStatus().GetPhase() != v1alpha1.PhaseTerminating) {

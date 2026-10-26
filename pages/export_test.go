@@ -45,7 +45,7 @@ func TestExportImport(t *testing.T) {
 		t.Fatalf("Import = %+v", out)
 	}
 	skipped := strings.Join(out.Skipped, "\n")
-	for _, want := range []string{"_index.md: the index", "notes/readme.txt: not a page", "notes/.draft.md: a hidden file", "bad/front.md: the front matter is not valid YAML", "big.md: a page holds at most 1 KB", "link.md: a symbolic link"} {
+	for _, want := range []string{"_index.md: the index", "notes/readme.txt: not a page", "notes/.draft.md: a hidden file", "bad/front.md: the server matter is not valid YAML", "big.md: a page holds at most 1 KB", "link.md: a symbolic link"} {
 		if !strings.Contains(skipped, want) {
 			t.Errorf("the skipped files lack %q:\n%s", want, skipped)
 		}

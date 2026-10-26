@@ -39,9 +39,9 @@ func DoctorCheck(ctx context.Context, cfg *fw.Config, secrets fw.Secrets, _ time
 	}
 	parts := []string{"the settings live in " + where, "a person picks " + strings.Join(offered, ", ")}
 	if c.Ntfy.Server == "" {
-		parts = append(parts, "no ntfy server of the front (workbench.notifications.ntfy.server), so an ntfy channel names its server")
+		parts = append(parts, "no ntfy server of the server (workbench.notifications.ntfy.server), so an ntfy channel names its server")
 	} else {
-		parts = append(parts, "the ntfy server of the front is "+hostOf(c.Ntfy.Server))
+		parts = append(parts, "the ntfy server of the server is "+hostOf(c.Ntfy.Server))
 	}
 	if len(c.Hosts) == 0 {
 		parts = append(parts, "a channel reaches public hosts only (workbench.notifications.hosts)")

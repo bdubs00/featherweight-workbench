@@ -385,6 +385,6 @@ func TestListenDropsTheTokensOfAnotherFront(t *testing.T) {
 		t.Fatalf("ada after the notice of another front: token %v, pending %v", tok, pending)
 	}
 	if tok, pending := has("bob"); !tok || !pending {
-		t.Fatalf("bob after the notice of this front: token %v, pending %v", tok, pending)
+		t.Fatalf("bob after the notice of this server: token %v, pending %v", tok, pending)
 	}
 }

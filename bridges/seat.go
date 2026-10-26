@@ -331,7 +331,7 @@ func (s *Store) enqueue(ctx context.Context, rec *record, seats []Member, inputs
 		}
 		s.log.Warn("bridges: a seat did not reach its queue", "bridge", rec.ID, "agent", at.agent, "pool", at.pool, "queue", queue, "error", err)
 		for _, h := range handles[at][sent:] {
-			s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The front failed to put the job of %s on its queue: %s", h, oneLine(strings.TrimPrefix(err.Error(), "fleet: "), 300))))
+			s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The server failed to put the job of %s on its queue: %s", h, oneLine(strings.TrimPrefix(err.Error(), "fleet: "), 300))))
 		}
 	}
 }

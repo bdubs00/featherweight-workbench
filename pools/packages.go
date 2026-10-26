@@ -239,7 +239,7 @@ func (p *Pool) checkPackages(front Front) []string {
 		*l.list = clean
 	}
 	if c.On && front.Packages == nil {
-		problems = append(problems, p.key()+": packages.on needs workbench.packages, the package mirror of the front; add it, or remove packages from the pool")
+		problems = append(problems, p.key()+": packages.on needs workbench.packages, the package mirror of the server; add it, or remove packages from the pool")
 	}
 	p.Packages = &c
 	return problems

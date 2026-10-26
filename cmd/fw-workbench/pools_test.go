@@ -49,7 +49,7 @@ func TestPoolsRender(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
 	text := out.String()
-	if !strings.Contains(text, "The routines of the front give the profile triage the routines close-duplicate version 2 (shadow).") || errs.Len() > 0 {
+	if !strings.Contains(text, "The routines of the server give the profile triage the routines close-duplicate version 2 (shadow).") || errs.Len() > 0 {
 		t.Errorf("the dry run does not name the routine: %s", errs.String())
 	}
 	for _, secret := range []string{"a-real-token-value", "a-real-tickets-token"} {
@@ -57,8 +57,8 @@ func TestPoolsRender(t *testing.T) {
 			t.Fatalf("the dry run holds the secret %q", secret)
 		}
 	}
-	for _, want := range []string{"name: triage-0-ws", "name: triage-2", "kind: Task", "intake: fw.jobs.triage", "<secret: FW_API_TOKEN of the front>", "<secret: TICKETS_TOKEN of the front>",
-		"The overlay of the front sets the profile helper in fw.agents by alice", "Helps the triage."} {
+	for _, want := range []string{"name: triage-0-ws", "name: triage-2", "kind: Task", "intake: fw.jobs.triage", "<secret: FW_API_TOKEN of the server>", "<secret: TICKETS_TOKEN of the server>",
+		"The overlay of the server sets the profile helper in fw.agents by alice", "Helps the triage."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the dry run has no %q", want)
 		}
@@ -126,7 +126,7 @@ func TestPoolsRenderRuntime(t *testing.T) {
 		t.Fatal("the dry run holds the token")
 	}
 	for _, want := range []string{"# Pool triage:", "# Runtime pool helper: 2 Tasks of the agent helper", "The pool takes each key that it does not set from the template general",
-		"The store of the front holds this pool, not the configuration file. The entry is generation 1 by alice", "name: helper-1", "Helps the people.", "intake: fw.jobs.helper",
+		"The store of the server holds this pool, not the configuration file. The entry is generation 1 by alice", "name: helper-1", "Helps the people.", "intake: fw.jobs.helper",
 		"# Runtime pool waiting:", "The overlay holds no profile waiting yet"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the dry run has no %q", want)

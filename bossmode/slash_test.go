@@ -270,7 +270,7 @@ func TestSkillToARunOfAMember(t *testing.T) {
 	fleet.Attach(fr.a, view{target: m.srv.URL})
 	t.Setenv("FW_API_TOKEN", "")
 	resp, body = send(t, http.MethodPost, fr.url+"/v1/bossmode/runs/remote-1/skill", "ada", `{"name":"fix"}`)
-	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, "the front holds no static token of the fleet") {
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, "the server holds no static token of the fleet") {
 		t.Fatalf("without the token = %d %s", resp.StatusCode, body)
 	}
 }

@@ -97,11 +97,11 @@ func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duratio
 	where := fmt.Sprintf("the profile %s runs in the pool %s of %d %s", name, pool.Name, pool.Wanted(), tasks)
 	switch {
 	case len(front) == 0:
-		return false, fmt.Sprintf("manager: %s, but it reaches no tools.mcp entry that sends the static token (auth.bearer %s), so it cannot call the MCP server of the front", where, tokenEnv)
+		return false, fmt.Sprintf("manager: %s, but it reaches no tools.mcp entry that sends the static token (auth.bearer %s), so it cannot call the MCP server of the server", where, tokenEnv)
 	case len(trusted) == 0:
-		return false, fmt.Sprintf("manager: %s, but the tools.mcp entry %s that reaches the front is not trusted, so _meta names no person and the front acts as the token; set trusted: true", where, strings.Join(front, ", "))
+		return false, fmt.Sprintf("manager: %s, but the tools.mcp entry %s that reaches the server is not trusted, so _meta names no person and the server acts as the token; set trusted: true", where, strings.Join(front, ", "))
 	}
-	parts := []string{where, fmt.Sprintf("the trusted tools.mcp entry %s reaches the front, so the front acts for the person of each manager run", strings.Join(trusted, ", "))}
+	parts := []string{where, fmt.Sprintf("the trusted tools.mcp entry %s reaches the server, so the server acts for the person of each manager run", strings.Join(trusted, ", "))}
 	if strings.TrimSpace(w.Spawn.Driver) == "ax" {
 		parts = append(parts, "the pool seats the members of a spawn bridge in child Tasks")
 	} else {
@@ -113,7 +113,7 @@ func DoctorCheck(_ context.Context, cfg *fw.Config, _ fw.Secrets, _ time.Duratio
 	if currentBridges() != nil {
 		parts = append(parts, "the bridges say what the operator of each bridge delegates")
 	} else {
-		parts = append(parts, "the service of the bridges tells the front what the operator of each bridge delegates; the line bossmode says where the bridges live, and without them the manager can approve, change, and cancel no run of a bridge")
+		parts = append(parts, "the service of the bridges tells the server what the operator of each bridge delegates; the line bossmode says where the bridges live, and without them the manager can approve, change, and cancel no run of a bridge")
 	}
 	return true, "manager: " + strings.Join(parts, "; ")
 }

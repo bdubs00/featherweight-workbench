@@ -64,7 +64,7 @@ func TestPlatformUsageFromLifecycleEvents(t *testing.T) {
 	if u := r.Usage; u.InputTokens != 200 || u.CacheReadTokens != 100 || u.Turns != 2 || u.ToolCalls != 1 || u.CostUSD <= 0 {
 		t.Fatalf("the usage on the worker = %+v", u)
 	}
-	eventually(t, "the front shows the usage of the run", func() bool {
+	eventually(t, "the server shows the usage of the run", func() bool {
 		got, err := front.f.Run(ctx, r.ID)
 		return err == nil && got.State == fw.StateCompleted && got.Usage == r.Usage
 	})
@@ -109,7 +109,7 @@ func TestPlatformUsageFromLifecycleEvents(t *testing.T) {
 	if err != nil || again.State != fw.StateCompleted || again.Usage.Turns != 4 || again.Usage.ToolCalls != 2 {
 		t.Fatalf("the follow-up = %+v, %v", again, err)
 	}
-	eventually(t, "the front shows the usage of both parts", func() bool {
+	eventually(t, "the server shows the usage of both parts", func() bool {
 		got, err := front.f.Run(ctx, r.ID)
 		return err == nil && got.Usage == again.Usage
 	})

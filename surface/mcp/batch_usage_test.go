@@ -177,7 +177,7 @@ func waitApplied(t *testing.T, f *fleet.Fleet, batch, id string, seq uint64) {
 	deadline := time.Now().Add(15 * time.Second)
 	for !applied(f, batch, id, seq) {
 		if time.Now().After(deadline) {
-			t.Fatalf("the front did not apply event %d of %s", seq, id)
+			t.Fatalf("the server did not apply event %d of %s", seq, id)
 		}
 		time.Sleep(time.Millisecond)
 	}

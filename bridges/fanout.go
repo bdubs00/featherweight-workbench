@@ -820,7 +820,7 @@ func (s *Store) placeAgain(ctx context.Context, rec *record, seats []Member, inp
 func (s *Store) seatFailed(id string, seats []Member, err error) {
 	lines := make([]Message, 0, len(seats))
 	for _, m := range seats {
-		lines = append(lines, system(EventFailed, fmt.Sprintf("The front failed to seat %s again: %s", m.Handle, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
+		lines = append(lines, system(EventFailed, fmt.Sprintf("The server failed to seat %s again: %s", m.Handle, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
 	}
 	_ = s.postLines(s.ctx, id, lines...)
 }
@@ -837,7 +837,7 @@ func (s *Store) submit(j *job) {
 	case s.jobs <- j:
 	default:
 		if j.fail != nil {
-			j.fail(errors.New("the fan-out of the front is full; the channel keeps the message"))
+			j.fail(errors.New("the fan-out of the server is full; the channel keeps the message"))
 		}
 	}
 }

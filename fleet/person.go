@@ -118,7 +118,7 @@ func headerSubject(s string) bool {
 // an error that wraps fw.ErrForbidden, so the front does not act for it.
 func ForPerson(ctx context.Context, cfg *fw.Config, p *fw.Principal) (context.Context, error) {
 	if p == nil || !headerSubject(p.Subject) {
-		return nil, fmt.Errorf("%w: the front names a person to another member by the subject of the person, and this credential names no subject that a header can carry", fw.ErrForbidden)
+		return nil, fmt.Errorf("%w: the server names a person to another member by the subject of the person, and this credential names no subject that a header can carry", fw.ErrForbidden)
 	}
 	who := onBehalf{subject: p.Subject, env: TokenEnv(cfg)}
 	if c := behalf.Caller(ctx); c != nil && c.Kind == fw.KindToken && fw.CredentialFrom(ctx) != "" {

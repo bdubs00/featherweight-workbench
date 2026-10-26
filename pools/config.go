@@ -417,19 +417,19 @@ func decodeKey(cfg *fw.Config, k string, out any, shape string) error {
 func (f Front) problems(what string) []string {
 	var p []string
 	if len(f.Atespaces) == 0 {
-		p = append(p, what+" needs workbench.fleet.atespaces, the atespaces whose Tasks the front lists")
+		p = append(p, what+" needs workbench.fleet.atespaces, the atespaces whose Tasks the server lists")
 	}
 	if strings.TrimSpace(f.Egress) == "" {
-		p = append(p, what+" needs workbench.fleet.egress, the stream on which the front sees the runs of the workers")
+		p = append(p, what+" needs workbench.fleet.egress, the stream on which the server sees the runs of the workers")
 	}
 	if d := strings.TrimSpace(f.Bus.Driver); d == "" || d == "mem" {
-		p = append(p, what+" needs a bus that the workers share with the front; set bus.driver to nats or redis")
+		p = append(p, what+" needs a bus that the workers share with the server; set bus.driver to nats or redis")
 	}
 	if strings.TrimSpace(f.AX.Server) == "" {
 		p = append(p, what+" needs ax.server, the ax API that creates the Tasks")
 	}
 	if strings.TrimSpace(f.AX.Router) == "" {
-		p = append(p, what+" needs ax.router, the router through which the front asks a worker whether it works")
+		p = append(p, what+" needs ax.router, the router through which the server asks a worker whether it works")
 	}
 	return p
 }
@@ -476,7 +476,7 @@ func (p *Pool) complete(front Front) []string {
 	case p.Atespace == "" && len(front.Atespaces) > 1:
 		add("set atespace: workbench.fleet.atespaces names %s", strings.Join(front.Atespaces, ", "))
 	case p.Atespace != "" && !slices.Contains(front.Atespaces, p.Atespace):
-		add("atespace %q is not in workbench.fleet.atespaces; add it there, so the front lists the Tasks of the pool", p.Atespace)
+		add("atespace %q is not in workbench.fleet.atespaces; add it there, so the server lists the Tasks of the pool", p.Atespace)
 	}
 	p.Image = strings.TrimSpace(p.Image)
 	switch {
@@ -534,15 +534,15 @@ const EnvBashHide = "FW_BASH_HIDE"
 func (p *Pool) reserved(name, tokenEnv string) string {
 	switch {
 	case name == tokenEnv:
-		return "the front gives each worker its own static token from its environment, never from the file"
+		return "the server gives each worker its own static token from its environment, never from the file"
 	case name == EnvPool:
-		return "the front sets it to the name of the pool"
+		return "the server sets it to the name of the pool"
 	case name == EnvSpec:
-		return "the front sets it to the hash of the configuration of the pool"
+		return "the server sets it to the hash of the configuration of the pool"
 	case name == EnvBase:
-		return "the front sets it to the hash of the configuration of the pool without its overlay"
+		return "the server sets it to the hash of the configuration of the pool without its overlay"
 	case name == EnvGeneration:
-		return "the front sets it to the generation of the pool; set generation instead"
+		return "the server sets it to the generation of the pool; set generation instead"
 	case name == "FW_CONFIG":
 		return "the pool writes the configuration of the workers to " + WorkspacePath + "/" + ConfigFile
 	case strings.HasPrefix(name, "FW_"):
@@ -587,7 +587,7 @@ func (p *Pool) checkEnv(front Front) []string {
 		case e.Value != nil && e.FromEnv != "":
 			add(i, "%s sets value and fromEnv; set one of them", e.Name)
 		case e.Value == nil && e.FromEnv == "":
-			add(i, "%s needs value, or fromEnv with the name of a variable of the front", e.Name)
+			add(i, "%s needs value, or fromEnv with the name of a variable of the server", e.Name)
 		case e.FromEnv != "" && !envName.MatchString(e.FromEnv):
 			add(i, "fromEnv %q is not a variable name", e.FromEnv)
 		}
@@ -646,7 +646,7 @@ func (p *Pool) render(front Front) []string {
 		return problems
 	}
 	if bus, ok := p.FW["bus"].(map[string]any); ok {
-		for _, k := range []struct{ key, from string }{{"intake", "intake of the pool"}, {"egress", "workbench.fleet.egress"}, {"egressTypes", "event types that the front reads"}} {
+		for _, k := range []struct{ key, from string }{{"intake", "intake of the pool"}, {"egress", "workbench.fleet.egress"}, {"egressTypes", "event types that the server reads"}} {
 			if _, set := bus[k.key]; set {
 				add("remove fw.bus.%s: the pool sets it from the %s", k.key, k.from)
 			}
@@ -699,22 +699,22 @@ func (p *Pool) render(front Front) []string {
 		add("set fw.model, the provider/model selector of the workers, such as openai/<model>: a pool has no default model")
 	}
 	if !slices.Contains(wc.Auth.Modes(), "token") {
-		add("fw.auth.mode %q leaves out token: the front reads a worker with the static token, so list token there", wc.Auth.Mode)
+		add("fw.auth.mode %q leaves out token: the server reads a worker with the static token, so list token there", wc.Auth.Mode)
 	}
 	switch {
 	case wc.Bus.URL == "" && credential(front.Bus.URL):
-		add("the bus URL of the front holds a credential, which the pool does not copy into a Workspace; set fw.bus.url, with $${NAME} for the credential and NAME in env with fromEnv")
+		add("the bus URL of the server holds a credential, which the pool does not copy into a Workspace; set fw.bus.url, with $${NAME} for the credential and NAME in env with fromEnv")
 	case credential(wc.Bus.URL):
 		add("fw.bus.url holds a credential, which the Workspace and the dry run show; write $${NAME} for it and set NAME in env with fromEnv")
 	}
 	if strings.TrimSpace(wc.Bus.Driver) != strings.TrimSpace(front.Bus.Driver) {
-		add("fw.bus.driver %q is not the bus of the front, %q: the front sees the runs of a worker only on its own bus", wc.Bus.Driver, front.Bus.Driver)
+		add("fw.bus.driver %q is not the bus of the server, %q: the server sees the runs of a worker only on its own bus", wc.Bus.Driver, front.Bus.Driver)
 	}
 	switch blind := tokenBlind(wc); {
 	case len(blind) > 0 && p.probe:
-		add("the static token cannot see the runs of an agent that a person creates from the template, because such an agent has an access block with its owner, so the front cannot tell that a worker is idle before it replaces or deletes it; add kind:token to fw.access.admins")
+		add("the static token cannot see the runs of an agent that a person creates from the template, because such an agent has an access block with its owner, so the server cannot tell that a worker is idle before it replaces or deletes it; add kind:token to fw.access.admins")
 	case len(blind) > 0:
-		add("the static token cannot see the runs of the agent %s, so the front cannot tell that a worker is idle before it replaces or deletes it; add kind:token to fw.access.admins", strings.Join(blind, ", "))
+		add("the static token cannot see the runs of the agent %s, so the server cannot tell that a worker is idle before it replaces or deletes it; add kind:token to fw.access.admins", strings.Join(blind, ", "))
 	}
 	// The default intake holds the name of the pool, so a pool without a
 	// name, which complete refuses, has none.
@@ -843,7 +843,7 @@ func credential(raw string) bool {
 // where the file comes from, and the front reads it to know that a
 // Workspace belongs to the pool.
 func header(pool string) string {
-	return "# This file is rendered by the pool " + pool + " of fw-workbench. Change the pool in the configuration of the front, not this file.\n"
+	return "# This file is rendered by the pool " + pool + " of fw-workbench. Change the pool in the configuration of the server, not this file.\n"
 }
 
 // workerFile renders the fw.yaml of the workers: the defaults of the

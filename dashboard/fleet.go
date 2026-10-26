@@ -47,7 +47,7 @@ func MemberLine(m fleet.Member) string {
 		b.WriteString(", access " + m.AccessMode)
 	}
 	if m.BlockedReason != "" {
-		b.WriteString("; blocked by a storage failure (" + m.BlockedReason + "), so the front suspends its Task, and the next request restarts it")
+		b.WriteString("; blocked by a storage failure (" + m.BlockedReason + "), so the server suspends its Task, and the next request restarts it")
 	}
 	if len(m.Agents) == 0 {
 		b.WriteString("; no agent you can see")
@@ -77,7 +77,7 @@ func MemberLine(m fleet.Member) string {
 // queue, and one line per reason for a gap.
 func PoolsText(ps []pools.Status) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s of the front:", count(len(ps), "pool", "pools"))
+	fmt.Fprintf(&b, "%s of the server:", count(len(ps), "pool", "pools"))
 	for _, p := range ps {
 		from := ""
 		switch {

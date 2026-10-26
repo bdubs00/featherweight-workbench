@@ -195,7 +195,7 @@ func (s *Store) addMember(ctx context.Context, id string, spec SeatSpec, by *fw.
 	s.land(ctx, id, line)
 	m := *rec.member(spec.Handle)
 	if err := s.place(ctx, rec, []Member{m}, nil); err != nil {
-		_ = s.postLines(ctx, id, system(EventFailed, fmt.Sprintf("The front failed to seat %s: %s", m.Handle, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
+		_ = s.postLines(ctx, id, system(EventFailed, fmt.Sprintf("The server failed to seat %s: %s", m.Handle, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
 	}
 	out := s.memberOf(ctx, rec, m.Handle)
 	emitMember(id, out)
@@ -581,7 +581,7 @@ func (s *Store) giveTask(ctx context.Context, rec *record, m Member, by *fw.Prin
 			_ = s.postLines(ctx, rec.ID, system(EventTask, fmt.Sprintf("%s seated %s again on its task: %s", s.nameOf(ctx, by), m.Handle, oneLine(m.Task, 300))))
 		}
 		if err := s.seatAgain(ctx, rec.ID, m.Handle); err != nil {
-			_ = s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The front failed to seat %s again: %s", m.Handle, oneLine(err.Error(), 300))))
+			_ = s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The server failed to seat %s again: %s", m.Handle, oneLine(err.Error(), 300))))
 		}
 		return
 	}
@@ -730,7 +730,7 @@ func (s *Store) askReport(ctx context.Context, rec *record) {
 	input := header(rec, []string{HandleManager}, HandleOperator) + ask
 	mgr, err := s.startManager(ctx, rec, input, fmt.Sprintf("bridge:%s:report:%d", rec.ID, rec.LastSeq))
 	if err != nil {
-		_ = s.postLines(ctx, rec.ID, system(EventFailed, "The front failed to ask the manager for the report: "+oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300)))
+		_ = s.postLines(ctx, rec.ID, system(EventFailed, "The server failed to ask the manager for the report: "+oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300)))
 		return
 	}
 	_, err = s.b.update(ctx, rec.ID, func(rec *record) error {

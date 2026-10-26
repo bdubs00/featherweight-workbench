@@ -83,7 +83,7 @@ func mayReadCatalog(ctx context.Context, a *fw.Agent) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: the skills of the front are for the people who can start an agent; ask an owner for the operator role on an agent", fw.ErrForbidden)
+	return fmt.Errorf("%w: the skills of the server are for the people who can start an agent; ask an owner for the operator role on an agent", fw.ErrForbidden)
 }
 
 // skillTools builds the tools of the skills for one MCP server. A process
@@ -99,7 +99,7 @@ func skillTools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolSkillsList,
 			Title:       "Skills",
-			Description: "List the skills of the front: each with its name, description, origin, whether a person can hand it to a run as a slash command, whether a model loads it on its own, its arguments, and its files. A skill is a set of instructions that an agent reads.",
+			Description: "List the skills of the server: each with its name, description, origin, whether a person can hand it to a run as a slash command, whether a model loads it on its own, its arguments, and its files. A skill is a set of instructions that an agent reads.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 			Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: &no},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
@@ -118,10 +118,10 @@ func skillTools(s *mcp.Server) []mcp.Tool {
 // catalogText is the catalog as text for a model: one line per skill.
 func catalogText(list []skills.Entry) string {
 	if len(list) == 0 {
-		return "The front knows no skill."
+		return "The server knows no skill."
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d skills of the front:", len(list))
+	fmt.Fprintf(&b, "%d skills of the server:", len(list))
 	for _, e := range list {
 		b.WriteString("\n- " + e.Name)
 		if e.Description != "" {

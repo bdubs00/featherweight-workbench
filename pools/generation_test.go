@@ -110,7 +110,7 @@ func TestGenerationEndsTheFight(t *testing.T) {
 		t.Fatalf("the marker records generation %d", gen)
 	}
 	st := old.pass()
-	if !hasGap(st, "superseded: generation 7 of another front runs this pool, and this front holds generation 6") {
+	if !hasGap(st, "superseded: generation 7 of another server runs this pool, and this server holds generation 6") {
 		t.Fatalf("gaps = %v", st.Gaps)
 	}
 	if strings.Count(old.log.String(), "another front runs a newer generation") != 1 {
@@ -269,7 +269,7 @@ func TestGenerationDeleteRereadLeavesANewerTask(t *testing.T) {
 	if after := ax.task("team", "triage-0"); after == nil || !sameTime(after.Metadata.CreateTime, before.Metadata.CreateTime) {
 		t.Fatal("the newer Task is gone")
 	}
-	if !hasGap(st, "carries generation 7 now, newer than generation 6 of this front") {
+	if !hasGap(st, "carries generation 7 now, newer than generation 6 of this server") {
 		t.Fatalf("gaps = %v", st.Gaps)
 	}
 	mid.rec.Reconcile(context.Background(), mid.p, stale, time.Now())

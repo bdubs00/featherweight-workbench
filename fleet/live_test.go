@@ -61,7 +61,7 @@ func TestRelayStreamsLive(t *testing.T) {
 		c.AX.Server = ax.addr
 		c.AX.Router = strings.TrimPrefix(router.URL, "http://")
 	}, fw.WithSurfaces(native.New()))
-	eventually(t, "the front sees the run of the Task", func() bool {
+	eventually(t, "the server sees the run of the Task", func() bool {
 		r, err := front.f.Run(context.Background(), "r1")
 		return err == nil && r.Member == "team/rev"
 	})

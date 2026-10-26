@@ -166,7 +166,7 @@ func checkURL(raw string) (*url.URL, error) {
 		return nil, fetchErr(400, "the URL %s is not http or https", u.Redacted())
 	}
 	if u.User != nil {
-		return nil, fetchErr(400, "the URL holds a user name or a password; the front sends no credential to a host of skills")
+		return nil, fetchErr(400, "the URL holds a user name or a password; the server sends no credential to a host of skills")
 	}
 	return u, nil
 }
@@ -191,7 +191,7 @@ func (f *Fetcher) get(ctx context.Context, raw string) ([]byte, string, error) {
 		case errors.As(err, &fe):
 			return nil, "", fe
 		case errors.Is(err, errPrivate):
-			return nil, "", fetchErr(400, "%s resolves to an address that is not on the public internet, and the front fetches no skill from there", u.Host)
+			return nil, "", fetchErr(400, "%s resolves to an address that is not on the public internet, and the server fetches no skill from there", u.Host)
 		case errors.Is(err, context.DeadlineExceeded):
 			return nil, "", fetchErr(502, "%s did not answer within %s", u.Host, FetchTimeout)
 		}
@@ -351,7 +351,7 @@ func unzipTree(ctx context.Context, b []byte) (tree, error) {
 		return tree{}, fetchErr(400, "the archive is no zip file: %v", err)
 	}
 	if len(zr.File) > maxListed {
-		return tree{}, fetchErr(413, "the archive holds %d entries, and the front reads at most %d", len(zr.File), maxListed)
+		return tree{}, fetchErr(413, "the archive holds %d entries, and the server reads at most %d", len(zr.File), maxListed)
 	}
 	out := tree{text: map[string][]byte{}}
 	var names []string
@@ -366,7 +366,7 @@ func unzipTree(ctx context.Context, b []byte) (tree, error) {
 		}
 		if off, err := zf.DataOffset(); err == nil {
 			if offsets[off] {
-				return tree{}, fetchErr(400, "two entries of the archive share their data, and the front reads no such archive")
+				return tree{}, fetchErr(400, "two entries of the archive share their data, and the server reads no such archive")
 			}
 			offsets[off] = true
 		}

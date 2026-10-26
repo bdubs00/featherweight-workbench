@@ -409,7 +409,7 @@ func TestFleetToolShowsPools(t *testing.T) {
 	var fl fleetResult
 	structured(t, res, &fl)
 	text := textOf(res)
-	for _, want := range []string{"1 pool of the front:", "- triage in team: 2 of 3 Tasks ready, 3 exist; agent triage on the queue fw.jobs.triage", "  - triage-1 runs an older configuration and holds the active run 01RUN"} {
+	for _, want := range []string{"1 pool of the server:", "- triage in team: 2 of 3 Tasks ready, 3 exist; agent triage on the queue fw.jobs.triage", "  - triage-1 runs an older configuration and holds the active run 01RUN"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the text has no %q: %s", want, text)
 		}

@@ -431,7 +431,7 @@ func TestWatchActivityFromACutStream(t *testing.T) {
 		t.Errorf("the view keeps %d bytes, kept %v: %.120s", len(in), kept, in)
 	}
 	close(release)
-	eventually(t, "the run ends on the front", func() bool {
+	eventually(t, "the run ends on the server", func() bool {
 		got, err := front.f.Run(context.Background(), r.ID)
 		return err == nil && got.State == fw.StateCompleted && got.Activity == nil
 	})

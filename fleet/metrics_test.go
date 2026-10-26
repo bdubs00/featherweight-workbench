@@ -71,7 +71,7 @@ func TestFleetMetrics(t *testing.T) {
 
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(NewCollector(front.a))
-	eventually(t, "the front reads the queues and their dead letters", func() bool {
+	eventually(t, "the server reads the queues and their dead letters", func() bool {
 		states, _ := f.queueStates()
 		st := states["fw.jobs.default"]
 		return st.depthKnown && st.dead == 1 && st.deadAt.Equal(deadAt)

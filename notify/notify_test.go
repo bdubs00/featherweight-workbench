@@ -70,7 +70,7 @@ func noSecrets(t *testing.T, where, text string, secrets ...string) {
 func TestSettingsRoutes(t *testing.T) {
 	f := newFront(t, ntfyBlock, false)
 	resp, body := send(t, http.MethodGet, f.url+"/v1/notifications", "alice", "")
-	if resp.StatusCode != http.StatusOK || body != `{"channels":[],"quietHours":{"from":"","to":"","timeZone":"UTC"},"offered":[{"kind":"ntfy","label":"ntfy"},{"kind":"slack","label":"Slack"},{"kind":"discord","label":"Discord"},{"kind":"teams","label":"Microsoft Teams"},{"kind":"webhook","label":"Webhook"}],"shared":[],"serverDefault":"https://ntfy.example.com","off":"You have no channel. Add one, such as ntfy, Slack, or a webhook, and the front tells you of questions, failures, and the daily digest. Activity in the page always shows what needs you."}`+"\n" {
+	if resp.StatusCode != http.StatusOK || body != `{"channels":[],"quietHours":{"from":"","to":"","timeZone":"UTC"},"offered":[{"kind":"ntfy","label":"ntfy"},{"kind":"slack","label":"Slack"},{"kind":"discord","label":"Discord"},{"kind":"teams","label":"Microsoft Teams"},{"kind":"webhook","label":"Webhook"}],"shared":[],"serverDefault":"https://ntfy.example.com","off":"You have no channel. Add one, such as ntfy, Slack, or a webhook, and the server tells you of questions, failures, and the daily digest. Activity in the page always shows what needs you."}`+"\n" {
 		t.Fatalf("a first read = %d %s", resp.StatusCode, body)
 	}
 	put := `{"channels": [
@@ -125,7 +125,7 @@ func TestSettingsRoutes(t *testing.T) {
 		Problems []string `json:"problems"`
 	}
 	decodeJSON(t, body, &doc)
-	want := []string{"channels[0].ntfy.server: ", "channels[0].ntfy.topic: ", "channels[0].ntfy.token: ", "channels[1].url: Write the address of an incoming webhook of Slack, on hooks.slack.com.", `channels[2].kind: This front does not offer "pager".`, "quietHours.timeZone: ", "quietHours.from: ", "quietHours.to: "}
+	want := []string{"channels[0].ntfy.server: ", "channels[0].ntfy.topic: ", "channels[0].ntfy.token: ", "channels[1].url: Write the address of an incoming webhook of Slack, on hooks.slack.com.", `channels[2].kind: This server does not offer "pager".`, "quietHours.timeZone: ", "quietHours.from: ", "quietHours.to: "}
 	if resp.StatusCode != http.StatusBadRequest || len(doc.Problems) != len(want) {
 		t.Fatalf("a bad write = %d %s", resp.StatusCode, body)
 	}
@@ -200,9 +200,9 @@ func TestWriteRules(t *testing.T) {
 		{Channel{Kind: KindWebhook}, "channels[0].url: Write the address of the webhook."},
 		{Channel{ID: "a b", Kind: KindWebhook, URL: new("https://example.com/hook")}, "channels[0].id: Write 1 to 40 of"},
 		{Channel{Kind: KindWebhook, Label: strings.Repeat("x", 81), URL: new("https://example.com/hook")}, "channels[0].label: Write a label of at most 80 characters"},
-		{Channel{Kind: KindEmail}, `channels[0].kind: This front does not offer "email". Pick one of ntfy, slack, discord, teams, webhook.`},
-		{Channel{Kind: KindAgent}, `channels[0].kind: This front does not offer "agent".`},
-		{Channel{Kind: KindShared}, `channels[0].kind: This front does not offer "shared".`},
+		{Channel{Kind: KindEmail}, `channels[0].kind: This server does not offer "email". Pick one of ntfy, slack, discord, teams, webhook.`},
+		{Channel{Kind: KindAgent}, `channels[0].kind: This server does not offer "agent".`},
+		{Channel{Kind: KindShared}, `channels[0].kind: This server does not offer "shared".`},
 		{Channel{}, "channels[0].kind: Pick a kind: ntfy, slack, discord, teams, webhook."},
 		{Channel{Kind: KindNtfy, Ntfy: &Ntfy{Topic: "alice"}}, "channels[0].ntfy.server: No ntfy server is set."},
 	} {
@@ -395,7 +395,7 @@ func TestRetryThenDrop(t *testing.T) {
 	if keys, _ := bucket.KeysUnder(context.Background(), f.b, "out"); len(keys) != 0 {
 		t.Fatalf("the outbox holds %v after %d attempts", keys, maxAttempts)
 	}
-	if !strings.Contains(f.logs.String(), "the front drops it") || !strings.Contains(f.logs.String(), "attempts=5") {
+	if !strings.Contains(f.logs.String(), "the server drops it") || !strings.Contains(f.logs.String(), "attempts=5") {
 		t.Fatalf("the log = %s", f.logs.String())
 	}
 	// A retry waits for its time.
@@ -502,7 +502,7 @@ func TestDigestDecisions(t *testing.T) {
 	}
 	for _, d := range []duties.Decided{
 		{By: duties.DecidedByManager, Verdict: "allow", Tool: "bash", Reason: "it only reads"},
-		{By: duties.DecidedByTimeout, Verdict: "deny", Tool: "git.push", Reason: "Nobody decided within 2h, so the front denied it, as whileAway of the duty report says."},
+		{By: duties.DecidedByTimeout, Verdict: "deny", Tool: "git.push", Reason: "Nobody decided within 2h, so the server denied it, as whileAway of the duty report says."},
 		{By: "alice", Verdict: "allow", Tool: "files"},
 		{By: "bob@example.com", Verdict: "cancel", Tool: "deploy", Reason: "wrong host"},
 		{By: duties.DecidedByManager, Verdict: "deny", Tool: "http"},
@@ -514,7 +514,7 @@ func TestDigestDecisions(t *testing.T) {
 	text, ok := f.s.digestText(context.Background(), "alice", time.UTC, time.Now())
 	want := ": queued, $0.00\n" +
 		"  - The manager allowed bash: it only reads.\n" +
-		"  - Nobody answered in time, so the front denied git.push.\n" +
+		"  - Nobody answered in time, so the server denied git.push.\n" +
 		"  - You allowed files.\n" +
 		"  - and 2 more decisions"
 	if !ok || !strings.HasPrefix(text, "1 run of your duties in the last day, $0.00 in all:\n- report, ") || !strings.HasSuffix(text, want) {
@@ -568,8 +568,8 @@ func TestDecidedWords(t *testing.T) {
 	}{
 		{duties.Decided{By: "manager", Verdict: "allow", Tool: "bash", Reason: "it only reads"}, "The manager allowed bash: it only reads."},
 		{duties.Decided{By: "manager", Verdict: "deny", Tool: "shell.exec"}, "The manager denied shell.exec."},
-		{duties.Decided{By: "timeout", Verdict: "deny", Tool: "git.push", Reason: "Nobody decided within 2h."}, "Nobody answered in time, so the front denied git.push."},
-		{duties.Decided{By: "timeout", Verdict: "cancel", Tool: "git.push"}, "Nobody answered in time, so the front stopped the run at git.push."},
+		{duties.Decided{By: "timeout", Verdict: "deny", Tool: "git.push", Reason: "Nobody decided within 2h."}, "Nobody answered in time, so the server denied git.push."},
+		{duties.Decided{By: "timeout", Verdict: "cancel", Tool: "git.push"}, "Nobody answered in time, so the server stopped the run at git.push."},
 		{duties.Decided{By: "bob@example.com", Verdict: "cancel", Tool: "bash", Reason: "wrong host!"}, "Bob stopped the run at bash: wrong host!"},
 		{duties.Decided{By: "alice@example.com", Verdict: "allow", Tool: "bash"}, "You allowed bash."},
 		{duties.Decided{By: "carol", Verdict: "deny"}, "Carol denied a tool."},
@@ -577,7 +577,7 @@ func TestDecidedWords(t *testing.T) {
 		// A question is answered or declined.
 		{duties.Decided{By: "alice@example.com", Verdict: "allow", Tool: "ask_user", Question: true}, "You answered the question."},
 		{duties.Decided{By: "token", Verdict: "deny", Tool: "ask_user", Question: true}, "Token declined the question."},
-		{duties.Decided{By: "timeout", Verdict: "deny", Tool: "ask_user", Question: true}, "Nobody answered the question in time, so the front declined it."},
+		{duties.Decided{By: "timeout", Verdict: "deny", Tool: "ask_user", Question: true}, "Nobody answered the question in time, so the server declined it."},
 	} {
 		if got := decidedWords(x.d, "alice@example.com"); got != x.want {
 			t.Errorf("decidedWords(%+v) = %q, want %q", x.d, got, x.want)
@@ -712,7 +712,7 @@ func TestDoctorCheck(t *testing.T) {
 	cfg.Extensions = workbench(t, "notifications:\n  ntfy:\n    server: https://ntfy.lab.internal\n  shared:\n    - {name: ops, kind: slack, urlEnv: FW_TEST_OPS_URL}\n")
 	t.Setenv("FW_TEST_OPS_URL", "https://hooks.slack.com/services/x")
 	ok, line := DoctorCheck(context.Background(), cfg, nil, 0)
-	if !ok || !strings.Contains(line, "the ntfy server of the front is ntfy.lab.internal") || !strings.Contains(line, "a channel reaches public hosts only") ||
+	if !ok || !strings.Contains(line, "the ntfy server of the server is ntfy.lab.internal") || !strings.Contains(line, "a channel reaches public hosts only") ||
 		!strings.Contains(line, "a person picks ntfy, slack, discord, teams, webhook, shared") || !strings.Contains(line, "the shared channel ops (slack)") || strings.Contains(line, "services/x") {
 		t.Fatalf("doctor = %v, %q", ok, line)
 	}

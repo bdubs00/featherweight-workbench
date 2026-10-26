@@ -58,7 +58,7 @@ func TestGetAgentOfAPool(t *testing.T) {
 	cfg.Access.Default = "closed"
 	cfg.Agents = map[string]fw.AgentProfile{
 		"default": {Access: &fw.Access{Viewers: []string{"alice", "bob"}}},
-		"triage":  {Description: "The copy of the front.", Access: &fw.Access{Viewers: []string{"alice", "bob"}}},
+		"triage":  {Description: "The copy of the server.", Access: &fw.Access{Viewers: []string{"alice", "bob"}}},
 	}
 	cfg.Bus.Driver, cfg.Bus.URL = "nats", "nats://nats.agents.svc.cluster.local:4222"
 	cfg.AX.Server, cfg.AX.Router = "127.0.0.1:1", "127.0.0.1:1"
@@ -72,7 +72,7 @@ func TestGetAgentOfAPool(t *testing.T) {
 
 	// Without the fleet the kernel answers with the profile of the front.
 	resp, b := do(t, "GET", srv.URL+"/v1/agents/triage", "", "Authorization", asAlice)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), "The copy of the front.") || strings.Contains(string(b), `"pool"`) {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), "The copy of the server.") || strings.Contains(string(b), `"pool"`) {
 		t.Fatalf("without the fleet = %d %s", resp.StatusCode, b)
 	}
 
@@ -121,7 +121,7 @@ func TestGetAgentOfAPool(t *testing.T) {
 	// A profile of the front itself keeps the answer of the kernel.
 	resp, b = do(t, "GET", srv.URL+"/v1/agents/default", "", "Authorization", asBob)
 	if resp.StatusCode != http.StatusOK || strings.Contains(string(b), `"pool"`) || !strings.Contains(string(b), `"name":"default"`) {
-		t.Fatalf("the profile of the front = %d %s", resp.StatusCode, b)
+		t.Fatalf("the profile of the server = %d %s", resp.StatusCode, b)
 	}
 	resp, b = do(t, "GET", srv.URL+"/v1/agents/nope", "", "Authorization", asAlice)
 	decodeProblem(t, resp, b, http.StatusNotFound)

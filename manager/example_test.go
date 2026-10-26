@@ -137,7 +137,7 @@ func TestTheExampleIsAPoolOfTheFront(t *testing.T) {
 	if strings.Contains(text, "a-real-token-value") {
 		t.Fatal("the dry run holds the token")
 	}
-	for _, want := range []string{"name: manager-0", "kind: Task", "<secret: FW_API_TOKEN of the front>", "maxRuns: 4", "trusted: true"} {
+	for _, want := range []string{"name: manager-0", "kind: Task", "<secret: FW_API_TOKEN of the server>", "maxRuns: 4", "trusted: true"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the dry run has no %q", want)
 		}
@@ -155,8 +155,8 @@ func TestDoctorLineOfTheExample(t *testing.T) {
 	}
 	SetBridges(nil)
 	ok, line := DoctorCheck(context.Background(), cfg, nil, 0)
-	for _, want := range []string{"manager: the profile manager runs in the pool manager of 1 Task;", "the trusted tools.mcp entry front reaches the front",
-		"child Tasks", "the service of the bridges tells the front what the operator of each bridge delegates"} {
+	for _, want := range []string{"manager: the profile manager runs in the pool manager of 1 Task;", "the trusted tools.mcp entry front reaches the server",
+		"child Tasks", "the service of the bridges tells the server what the operator of each bridge delegates"} {
 		if !ok || !strings.Contains(line, want) {
 			t.Errorf("doctor = %v %q, want %q", ok, line, want)
 		}
@@ -196,7 +196,7 @@ func TestDoctorLineFindsTheGaps(t *testing.T) {
 		old, new, want string
 	}{
 		{"    manager: manager\n", "    manager: boss\n", "no pool of workbench.pools runs the profile boss"},
-		{"              trusted: true\n", "              trusted: false\n", "the tools.mcp entry front that reaches the front is not trusted"},
+		{"              trusted: true\n", "              trusted: false\n", "the tools.mcp entry front that reaches the server is not trusted"},
 		{"                bearer: FW_API_TOKEN\n", "                bearer: OTHER_TOKEN\n", "reaches no tools.mcp entry that sends the static token"},
 		{"            tools: [front.*, memory, recall, clock, files]\n", "            tools: [memory, recall, clock, files]\n", "reaches no tools.mcp entry that sends the static token"},
 	}

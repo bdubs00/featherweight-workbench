@@ -107,7 +107,7 @@ func (s *server) onMember(ctx context.Context, id string, actions ...string) (co
 
 // viaRefusal is the answer to a caller that names the metadata key of an
 // actor itself.
-const viaRefusal = "Invalid request: the metadata key " + manager.MetaVia + " names the run that started a run, and only the front sets it."
+const viaRefusal = "Invalid request: the metadata key " + manager.MetaVia + " names the run that started a run, and only the server sets it."
 
 // hasVia reports whether metadata names manager.MetaVia.
 func hasVia(md map[string]string) bool {

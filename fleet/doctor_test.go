@@ -71,9 +71,9 @@ func TestDoctorNamesATaskOutsideThePools(t *testing.T) {
 		"the Task fw-fleet-reviewer outside any pool serves the agent reviewer, which the pool crew-reviewer runs; jobs for reviewer go to crew-reviewer, and this Task gets only jobs that others publish on fw.jobs.reviewer",
 		"the Task old-manager outside any pool serves the agent manager, which the pool manager runs; jobs for manager go to manager on fw.jobs.manager, and this Task reads that queue too, so it takes some of them",
 		"the Task quiet outside any pool serves the agent reviewer, which the pool crew-reviewer runs; jobs for reviewer go to crew-reviewer, and this Task reads no queue",
-		"the Task templated outside any pool serves the agent reviewer, which the pool crew-reviewer runs; jobs for reviewer go to crew-reviewer, and the front cannot tell which queue this Task reads",
+		"the Task templated outside any pool serves the agent reviewer, which the pool crew-reviewer runs; jobs for reviewer go to crew-reviewer, and the server cannot tell which queue this Task reads",
 		"the Task wild outside any pool reads fw.jobs.>, which covers the queues of the pools crew-reviewer, manager, so it takes jobs of those pools",
-		"cannot tell what the Task bare outside any pool serves, because the front reads no configuration file in its Workspace",
+		"cannot tell what the Task bare outside any pool serves, because the server reads no configuration file in its Workspace",
 	} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the doctor line lacks %q:\n%s", want, line)

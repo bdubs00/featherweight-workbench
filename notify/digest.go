@@ -269,11 +269,11 @@ func decidedWords(d duties.Decided, me string) string {
 	if d.By == duties.DecidedByTimeout {
 		switch d.Verdict {
 		case "cancel":
-			return "Nobody answered in time, so the front stopped the run at " + tool + "."
+			return "Nobody answered in time, so the server stopped the run at " + tool + "."
 		case "allow":
-			return "Nobody answered in time, so the front allowed " + tool + "."
+			return "Nobody answered in time, so the server allowed " + tool + "."
 		}
-		return "Nobody answered in time, so the front denied " + tool + "."
+		return "Nobody answered in time, so the server denied " + tool + "."
 	}
 	why := "."
 	if r := strings.Join(strings.Fields(d.Reason), " "); r != "" {
@@ -303,9 +303,9 @@ func decidedWords(d duties.Decided, me string) string {
 func questionWords(d duties.Decided, me string) string {
 	if d.By == duties.DecidedByTimeout {
 		if d.Verdict == "cancel" {
-			return "Nobody answered the question in time, so the front stopped the run."
+			return "Nobody answered the question in time, so the server stopped the run."
 		}
-		return "Nobody answered the question in time, so the front declined it."
+		return "Nobody answered the question in time, so the server declined it."
 	}
 	var who string
 	switch {

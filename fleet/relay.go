@@ -1026,7 +1026,7 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 		native.WriteProblem(w, r, http.StatusForbidden, detail+"; sign in with a bearer token to act on a run of another member")
 	case errors.Is(err, ErrNoToken):
 		// An operator sets the token; the person can do nothing about it.
-		native.WriteProblem(w, r, http.StatusServiceUnavailable, detail+"; until an operator sets it, the front acts for no person on another member")
+		native.WriteProblem(w, r, http.StatusServiceUnavailable, detail+"; until an operator sets it, the server acts for no person on another member")
 	case errors.Is(err, fw.ErrRunNotFound):
 		native.WriteProblem(w, r, http.StatusNotFound, "no run has the id "+strconv.Quote(r.PathValue("id")))
 	default:

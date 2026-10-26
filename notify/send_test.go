@@ -310,7 +310,7 @@ func TestEmail(t *testing.T) {
 	// A server without STARTTLS gets no password.
 	k := newFront(t, smtpBlock(t, plain.addr, allowExample+"    user: fw\n    passwordEnv: FW_TEST_SMTP_PASSWORD\n"), true)
 	k.set(t, "alice", Body{Channels: []Channel{{ID: "mail", Kind: KindEmail, Email: &Email{To: "alice@example.com"}}}})
-	if res, _ := k.s.Test(as("alice"), "mail"); res.Results[0].Sent || res.Results[0].Error != "The mail server offers no STARTTLS, so the front does not send the password." {
+	if res, _ := k.s.Test(as("alice"), "mail"); res.Results[0].Sent || res.Results[0].Error != "The mail server offers no STARTTLS, so the server does not send the password." {
 		t.Fatalf("a login in the clear = %+v", res)
 	}
 	if len(plain.list()) != 1 {
@@ -331,20 +331,20 @@ func TestEmailAllow(t *testing.T) {
 	mail := func(to string) Body {
 		return Body{Channels: []Channel{{ID: "mail", Kind: KindEmail, Send: on, Email: &Email{To: to}}}}
 	}
-	if got := f.problems(t, "alice", mail("alice@example.com")); len(got) != 1 || got[0] != "channels[0].email.to: Without workbench.notifications.email.allow, the front sends email only to your own address, and your sign-in gives it none. An operator can list the addresses in workbench.notifications.email.allow." {
+	if got := f.problems(t, "alice", mail("alice@example.com")); len(got) != 1 || got[0] != "channels[0].email.to: Without workbench.notifications.email.allow, the server sends email only to your own address, and your sign-in gives it none. An operator can list the addresses in workbench.notifications.email.allow." {
 		t.Fatalf("a person whose subject is no address = %q", got)
 	}
 	f.set(t, "carol@example.com", mail("Carol@Example.com"))
-	if got := f.problems(t, "carol@example.com", mail("bob@example.com")); len(got) != 1 || got[0] != "channels[0].email.to: Without workbench.notifications.email.allow, the front sends email only to your own address, carol@example.com." {
+	if got := f.problems(t, "carol@example.com", mail("bob@example.com")); len(got) != 1 || got[0] != "channels[0].email.to: Without workbench.notifications.email.allow, the server sends email only to your own address, carol@example.com." {
 		t.Fatalf("another address without the list = %q", got)
 	}
 	resp, body := send(t, http.MethodPut, f.url+"/v1/notifications", "carol@example.com", `{"channels":[{"kind":"email","email":{"to":"bob@example.com"}}]}`)
-	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, `"problems":["channels[0].email.to: Without workbench.notifications.email.allow, the front sends email only to your own address, carol@example.com."]`) {
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, `"problems":["channels[0].email.to: Without workbench.notifications.email.allow, the server sends email only to your own address, carol@example.com."]`) {
 		t.Fatalf("PUT of another address = %d %s", resp.StatusCode, body)
 	}
 	cs := connectMCP(t, f.a, "carol@example.com")
 	if res := call(t, cs, ToolPut, map[string]any{"channels": []any{map[string]any{"kind": "email", "email": map[string]any{"to": "bob@example.com"}}}}); !res.IsError ||
-		!strings.Contains(textOf(res), "- channels[0].email.to: Without workbench.notifications.email.allow, the front sends email only to your own address, carol@example.com.") {
+		!strings.Contains(textOf(res), "- channels[0].email.to: Without workbench.notifications.email.allow, the server sends email only to your own address, carol@example.com.") {
 		t.Fatalf("notifications_put of another address = %s", textOf(res))
 	}
 
@@ -356,7 +356,7 @@ func TestEmailAllow(t *testing.T) {
 		{ID: "mail", Kind: KindEmail, Send: on, Email: &Email{To: "bob@example.com"}},
 		{ID: "ops", Kind: KindEmail, Send: on, Email: &Email{To: "ops@lab.internal"}},
 	}})
-	if got := g.problems(t, "alice", mail("x@y.org")); len(got) != 1 || got[0] != "channels[0].email.to: The front sends email only to the addresses that workbench.notifications.email.allow lists, and it lists no match for x@y.org." {
+	if got := g.problems(t, "alice", mail("x@y.org")); len(got) != 1 || got[0] != "channels[0].email.to: The server sends email only to the addresses that workbench.notifications.email.allow lists, and it lists no match for x@y.org." {
 		t.Fatalf("an address that the list does not match = %q", got)
 	}
 
@@ -370,7 +370,7 @@ func TestEmailAllow(t *testing.T) {
 	if len(mails) != 1 || mails[0].To[0] != "ops@lab.internal" {
 		t.Fatalf("the server got %+v", mails)
 	}
-	want := "The front sends email only to the addresses that workbench.notifications.email.allow lists, and it lists no match for the address at example.com."
+	want := "The server sends email only to the addresses that workbench.notifications.email.allow lists, and it lists no match for the address at example.com."
 	if res, err := h.s.Test(as("alice"), "mail"); err != nil || res.Results[0].Sent || res.Results[0].Error != want {
 		t.Fatalf("a test of a channel that the list no longer matches = %+v, %v", res, err)
 	}
@@ -381,7 +381,7 @@ func TestEmailAllow(t *testing.T) {
 	// Without the list, a channel to another address than the subject
 	// does not send either.
 	k := newFrontOn(t, smtpBlock(t, plain.addr, ""), true, b)
-	if res, _ := k.s.Test(as("alice"), "ops"); res.Results[0].Sent || res.Results[0].Error != "Without workbench.notifications.email.allow, the front sends email only to the address of the person, and the channel names another address at lab.internal." {
+	if res, _ := k.s.Test(as("alice"), "ops"); res.Results[0].Sent || res.Results[0].Error != "Without workbench.notifications.email.allow, the server sends email only to the address of the person, and the channel names another address at lab.internal." {
 		t.Fatalf("a test without the list = %+v", res)
 	}
 	if len(plain.list()) != 1 {
@@ -408,7 +408,7 @@ func TestAgentChannel(t *testing.T) {
 	}
 	ghost := ch
 	ghost.Agent = &AgentChannel{Agent: "ghost", How: "x", Budget: ch.Agent.Budget}
-	if got := f.problems(t, "alice", Body{Channels: []Channel{ghost}}); len(got) != 1 || got[0] != "channels[0].agent.agent: ghost is not an agent of this front or of a pool of the fleet." {
+	if got := f.problems(t, "alice", Body{Channels: []Channel{ghost}}); len(got) != 1 || got[0] != "channels[0].agent.agent: ghost is not an agent of this server or of a pool of the fleet." {
 		t.Fatalf("an unknown agent = %q", got)
 	}
 	ans := f.set(t, "alice", Body{Channels: []Channel{ch}})
@@ -452,8 +452,8 @@ func TestAgentChannel(t *testing.T) {
 	}
 	// Without agent.enabled, the front does not offer the kind.
 	g := newFront(t, "", false)
-	if got := g.problems(t, "alice", Body{Channels: []Channel{ch}}); len(got) != 1 || !strings.HasPrefix(got[0], `channels[0].kind: This front does not offer "agent".`) {
-		t.Fatalf("an agent channel on a front without agents = %q", got)
+	if got := g.problems(t, "alice", Body{Channels: []Channel{ch}}); len(got) != 1 || !strings.HasPrefix(got[0], `channels[0].kind: This server does not offer "agent".`) {
+		t.Fatalf("an agent channel on a server without agents = %q", got)
 	}
 }
 
@@ -479,7 +479,7 @@ func TestSharedChannels(t *testing.T) {
 	d := duties.Duty{Name: "other", Agent: "triage", When: duties.When{Webhook: &duties.Webhook{Auth: duties.WebhookAuth{Mode: "none"}}},
 		Do: duties.Do{Ask: &duties.Ask{Message: "x"}}, Limits: duties.Limits{Budget: &duties.Budget{MaxCostUSD: 0.5}}, Notify: &duties.Notify{Failure: []string{"channel:nope"}}}
 	_, err := duties.Of(f.a).Put(as("alice"), "other", duties.DutyBody{Duty: d}, duties.PutOptions{})
-	if err == nil || !strings.Contains(err.Error(), "notify.failure: channel:nope is not a shared channel of this front.") {
+	if err == nil || !strings.Contains(err.Error(), "notify.failure: channel:nope is not a shared channel of this server.") {
 		t.Fatalf("a duty with an unknown shared channel = %v", err)
 	}
 	// alice picks the same room, so the notice reaches it once.
@@ -487,7 +487,7 @@ func TestSharedChannels(t *testing.T) {
 	if c := ans.Channels[0]; c.Label != "Ops room" || c.Shared != "ops-room" || c.URL != nil {
 		t.Fatalf("the shared channel = %+v", c)
 	}
-	if got := f.problems(t, "alice", Body{Channels: []Channel{{Kind: KindShared, Shared: "nope"}}}); len(got) != 1 || got[0] != "channels[0].shared: nope is not a shared channel of this front." {
+	if got := f.problems(t, "alice", Body{Channels: []Channel{{Kind: KindShared, Shared: "nope"}}}); len(got) != 1 || got[0] != "channels[0].shared: nope is not a shared channel of this server." {
 		t.Fatalf("an unknown shared channel = %q", got)
 	}
 	f.tell(t, duties.NoticeFailed, "report", "It failed.")

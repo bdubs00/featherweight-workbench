@@ -63,7 +63,7 @@ const (
 		"decision":{"type":"string","enum":["allow","deny"],"description":"allow lets the tool call run. deny refuses it."},
 		"note":{"type":"string","description":"A note for the record. The model reads it after a deny. For a free-text question, the note is the answer."},
 		"content":{"type":"object","description":"The form answers when the pending approval is a question with a schema."},
-		"rule":{"type":"boolean","description":"With allow: also allow every later call of this tool for the agent, from now on. The front adds the tool to the policy of the pool whose workers run the agent, with your subject, the time, and the note. It needs the owner role on the agent and a pool."}
+		"rule":{"type":"boolean","description":"With allow: also allow every later call of this tool for the agent, from now on. The server adds the tool to the policy of the pool whose workers run the agent, with your subject, the time, and the note. It needs the owner role on the agent and a pool."}
 	},"required":["runId","approvalId","decision"]}`
 
 	cancelSchema = `{"type":"object","properties":{"runId":` + runIDSchema + `},"required":["runId"]}`
@@ -505,7 +505,7 @@ func (s *server) run(ctx context.Context, req *sdk.CallToolRequest, in runArgs) 
 			// request carries, and the front decides about the person first
 			// (fleet.ForStart).
 			if p := fw.PrincipalFrom(ctx); fleet.IsPerson(p) && strings.TrimSpace(in.Agent) == "" {
-				return errorResult("Invalid request: name the agent of the run with agent, so the front can check that " + p.Subject + " can run it on " + member + "."), nil, nil
+				return errorResult("Invalid request: name the agent of the run with agent, so the server can check that " + p.Subject + " can run it on " + member + "."), nil, nil
 			}
 			fctx, err := fleet.ForStart(withCredential(ctx, req), s.a, member, in.Agent)
 			if err != nil {
@@ -1016,7 +1016,7 @@ func (s *server) allowRule(ctx context.Context, in approveArgs) (string, *sdk.Ca
 		return "", errorResult(explain(err) + " Nothing is decided.")
 	}
 	s.log.Info("mcp approval rule added", "run", in.RunID, "approval", in.ApprovalID, "pool", pool, "rule", rule, "principal", subjectOf(ctx))
-	return fmt.Sprintf("Added the rule allow %s to the policy of the pool %s. The front replaces each Task of the pool once it is idle, and a worker asks again until then.\n", rule, pool), nil
+	return fmt.Sprintf("Added the rule allow %s to the policy of the pool %s. The server replaces each Task of the pool once it is idle, and a worker asks again until then.\n", rule, pool), nil
 }
 
 // approveNow records the decision of an approval, on this process or on

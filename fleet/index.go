@@ -35,7 +35,7 @@ import (
 // NATS bus.
 var IndexBucket = bucket.Config{
 	Name:        "RUNS",
-	Description: "The index of the runs of the workers of a featherweight fleet: one entry per run by its id, with its member, its agent, its person, its last known state, and the time. The front writes it.",
+	Description: "The index of the runs of the workers of a featherweight fleet: one entry per run by its id, with its member, its agent, its person, its last known state, and the time. The server writes it.",
 	History:     1,
 	MaxValue:    4 << 10,
 }

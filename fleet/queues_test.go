@@ -113,7 +113,7 @@ func queueFront(t *testing.T, wake bool) (*member, *fakeAX, *fakeTasks) {
 		cfg.AX.Server = ax.addr
 		cfg.AX.Router = strings.TrimPrefix(tasks.srv.URL, "http://")
 	})
-	eventually(t, "the front knows what both Tasks serve", func() bool {
+	eventually(t, "the server knows what both Tasks serve", func() bool {
 		p := front.f.platform
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -127,7 +127,7 @@ func queueFront(t *testing.T, wake bool) (*member, *fakeAX, *fakeTasks) {
 func waitReads(t *testing.T, q *fakeQueues, n int) {
 	t.Helper()
 	want := q.readCount() + n
-	eventually(t, "the front reads the queues", func() bool { return q.readCount() >= want })
+	eventually(t, "the server reads the queues", func() bool { return q.readCount() >= want })
 }
 
 // Jobs that wait in a queue wake the sleeping Tasks that serve the profile
@@ -252,7 +252,7 @@ func TestDeadLettersFromTheStream(t *testing.T) {
 		states, _ := front.f.queueStates()
 		return states["fw.jobs.default"]
 	}
-	eventually(t, "the front counts the stored dead letters", func() bool {
+	eventually(t, "the server counts the stored dead letters", func() bool {
 		st := state()
 		return st.deadStored && st.dead == 2 && st.deadAt.Equal(first)
 	})
@@ -261,7 +261,7 @@ func TestDeadLettersFromTheStream(t *testing.T) {
 	lasts := q.lasts
 	q.mu.Unlock()
 	if lasts != 1 {
-		t.Fatalf("the front read the last dead letter %d times for one count", lasts)
+		t.Fatalf("the server read the last dead letter %d times for one count", lasts)
 	}
 	second := first.Add(time.Minute)
 	q.set(func(q *fakeQueues) {
@@ -281,7 +281,7 @@ func TestDeadLettersBySubscription(t *testing.T) {
 	withBusServer(t, nil, nil)
 	bus := fw.NewMemBus()
 	front := newMember(t, bus, "front", func(_ *fw.Config, fc *Config) { fc.Intake = "fw.jobs" })
-	eventually(t, "the front subscribes to the dead letters", func() bool {
+	eventually(t, "the server subscribes to the dead letters", func() bool {
 		states, _ := front.f.queueStates()
 		st, ok := states["fw.jobs.default"]
 		return ok && st.deadKnown && !st.depthKnown
@@ -296,7 +296,7 @@ func TestDeadLettersBySubscription(t *testing.T) {
 			}
 		}
 	}
-	eventually(t, "the front counts both distinct IDs, not all four deliveries", func() bool {
+	eventually(t, "the server counts both distinct IDs, not all four deliveries", func() bool {
 		states, _ := front.f.queueStates()
 		st := states["fw.jobs.default"]
 		return st.dead == 2 && st.deadAt.Equal(at.Add(time.Second)) && !st.deadStored
@@ -499,7 +499,7 @@ func TestWakeFollowsTheIntakeOfThePool(t *testing.T) {
 	ax.put(child, "Running")
 	ax.put(&v1alpha1.Task{Metadata: &v1alpha1.ObjectMeta{Name: "loner", Atespace: "team"}, Spec: &v1alpha1.TaskSpec{Image: "x"}}, "Running")
 	names := []string{"team/crew-reviewer-0", "team/manager-0", "team/manager-0-01m5gvzyj4x8z8pw1gbxjryyb7", "team/loner"}
-	eventually(t, "the front knows the pool and the profiles of each Task", func() bool {
+	eventually(t, "the server knows the pool and the profiles of each Task", func() bool {
 		p := front.f.platform
 		p.mu.Lock()
 		defer p.mu.Unlock()

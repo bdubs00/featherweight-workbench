@@ -168,7 +168,7 @@ func (n *natsServer) bucket(ctx context.Context) (kvBucket, error) {
 	}
 	kv, err := n.js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
 		Bucket:      JobsBucket,
-		Description: "The jobs that the front of a featherweight fleet put on the intake queues, by batch and person.",
+		Description: "The jobs that the server of a featherweight fleet put on the intake queues, by batch and person.",
 		TTL:         n.ttl,
 		History:     1,
 	})
@@ -331,7 +331,7 @@ func (o *natsOverlays) bucket(ctx context.Context, pool string, create bool) (je
 	if create {
 		kv, err = o.n.js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
 			Bucket:      name,
-			Description: "The profiles and the allow rules that the front of a featherweight fleet adds to the pool " + pool + ".",
+			Description: "The profiles and the allow rules that the server of a featherweight fleet adds to the pool " + pool + ".",
 			History:     overlayHistory,
 			Storage:     jetstream.FileStorage,
 		})

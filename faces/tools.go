@@ -49,7 +49,7 @@ func tools(s *mcp.Server) []mcp.Tool {
 	return []mcp.Tool{mcp.NewTool(&sdk.Tool{
 		Name:        ToolPut,
 		Title:       "Set face",
-		Description: "Set the face of an agent: an SVG that the operator view shows beside the agent. The front keeps only an SVG that passes its sanitizer, and it refuses any other SVG with the reason, so fix the SVG and call again. A face replaces the face of the agent; the front keeps the last ten.",
+		Description: "Set the face of an agent: an SVG that the operator view shows beside the agent. The server keeps only an SVG that passes its sanitizer, and it refuses any other SVG with the reason, so fix the SVG and call again. A face replaces the face of the agent; the server keeps the last ten.",
 		InputSchema: json.RawMessage(putSchema),
 		Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(false), IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in putArgs) (*sdk.CallToolResult, any, error) {
@@ -63,7 +63,7 @@ func ptr[T any](v T) *T { return &v }
 func put(ctx context.Context, a *fw.Agent, in putArgs) *sdk.CallToolResult {
 	s := Of(a)
 	if s == nil {
-		return mcp.ErrorResult("The faces are off in this process. They run on a front that serves, with the bus nats or mem.")
+		return mcp.ErrorResult("The faces are off in this process. They run on a server that serves, with the bus nats or mem.")
 	}
 	if err := Check(ctx, a, in.Agent, fw.ActionAgentEdit); err != nil {
 		return mcp.ErrorResult(mcp.Explain(err))

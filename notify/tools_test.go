@@ -14,7 +14,7 @@ func TestTools(t *testing.T) {
 	f := newFront(t, "notifications:\n  ntfy:\n    server: "+n.URL+"\n", true)
 	cs := connectMCP(t, f.a, "alice")
 	res := call(t, cs, ToolGet, map[string]any{})
-	if res.IsError || !strings.HasPrefix(textOf(res), "Notifications are off: You have no channel.") || !strings.Contains(textOf(res), "The front offers: ntfy, slack, discord, teams, webhook.") {
+	if res.IsError || !strings.HasPrefix(textOf(res), "Notifications are off: You have no channel.") || !strings.Contains(textOf(res), "The server offers: ntfy, slack, discord, teams, webhook.") {
 		t.Fatalf("a first read = %s", textOf(res))
 	}
 	res = call(t, cs, ToolPut, map[string]any{

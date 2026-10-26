@@ -130,7 +130,7 @@ func putTool(ctx context.Context, a *fw.Agent, in putArgs) *sdk.CallToolResult {
 	ctx, _, _ = manager.OnBehalf(ctx)
 	s := Of(a)
 	if s == nil {
-		return mcp.ErrorResult("The routines are off in this process. They run on a front that serves, with the bus nats or mem.")
+		return mcp.ErrorResult("The routines are off in this process. They run on a server that serves, with the bus nats or mem.")
 	}
 	rec, res, err := put(ctx, a, s, in.Agent, in.Name, in.putBody)
 	if err != nil {
@@ -177,7 +177,7 @@ func listTool(ctx context.Context, a *fw.Agent, in listArgs) *sdk.CallToolResult
 	ctx, _, _ = manager.OnBehalf(ctx)
 	s := Of(a)
 	if s == nil {
-		return mcp.ErrorResult("The routines are off in this process. They run on a front that serves, with the bus nats or mem.")
+		return mcp.ErrorResult("The routines are off in this process. They run on a server that serves, with the bus nats or mem.")
 	}
 	if in.Name != "" {
 		if in.Agent == "" {
@@ -220,7 +220,7 @@ func standingTool(ctx context.Context, a *fw.Agent, in standingArgs) *sdk.CallTo
 	ctx, _, _ = manager.OnBehalf(ctx)
 	s := Of(a)
 	if s == nil {
-		return mcp.ErrorResult("The routines are off in this process. They run on a front that serves, with the bus nats or mem.")
+		return mcp.ErrorResult("The routines are off in this process. They run on a server that serves, with the bus nats or mem.")
 	}
 	rec, moved, err := move(ctx, a, s, in.Agent, in.Name, moveBody{Standing: in.Standing, Note: in.Note, Version: in.Version})
 	if err != nil {

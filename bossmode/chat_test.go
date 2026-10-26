@@ -75,7 +75,7 @@ func TestSettingsChat(t *testing.T) {
 	var got Settings
 	_, body = get(t, fr.url+"/v1/bossmode", "ada")
 	if err := json.Unmarshal([]byte(body), &got); err != nil || got.Chat == nil || *got.Chat != (QuickChat{Agent: "chat", Member: "front"}) {
-		t.Errorf("settings with the front alone = %s, %v", body, err)
+		t.Errorf("settings with the server alone = %s, %v", body, err)
 	}
 	// A Task that ran the profile holds it.
 	fr.event(t, "ax:team/manager-0", "01CHAT1", 1, fw.EvRunQueued, queued("ada", "chat"))

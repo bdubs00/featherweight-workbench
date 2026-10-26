@@ -81,7 +81,7 @@ func (p *platform) startPools(list []*pools.Pool, vals *pools.Values) {
 	var names []string
 	for _, pool := range list {
 		names = append(names, pool.Name)
-		p.poolState[pool.Name] = pools.Initial(pool, "the front has not read the Tasks of the atespace yet")
+		p.poolState[pool.Name] = pools.Initial(pool, "the server has not read the Tasks of the atespace yet")
 		for _, w := range pool.Warnings() {
 			p.f.log.Warn("fleet: a pool may not reach a host", "pool", pool.Name, "warning", w)
 		}
@@ -151,7 +151,7 @@ func (p *platform) reconcilePools(ctx context.Context, listed map[string][]*v1al
 			st.Gaps = []string{p.reconciler.Values.Redact(why)}
 		}
 		if err := failed[pool.Atespace]; err != nil {
-			wait(fmt.Sprintf("the front could not list the Tasks of the atespace %s, so the pool waits: %v", pool.Atespace, err))
+			wait(fmt.Sprintf("the server could not list the Tasks of the atespace %s, so the pool waits: %v", pool.Atespace, err))
 		} else if rterr != nil {
 			wait(fmt.Sprintf("the pool waits: %v", rterr))
 		} else if merged, err := p.f.mergedPoolWith(ctx, pool, routines); err != nil {
@@ -166,7 +166,7 @@ func (p *platform) reconcilePools(ctx context.Context, listed map[string][]*v1al
 			p.syncEnvironments(ctx, merged, st)
 		}
 		if e, ok := shadow[pool.Name]; ok {
-			st.Gaps = append(st.Gaps, fmt.Sprintf("the store of the runtime pools holds a pool of this name too, which %s created; the file wins, so the front runs this pool and leaves that entry alone; remove the entry with pool_delete or DELETE /v1/pools/%s", orWho(e.By), pool.Name))
+			st.Gaps = append(st.Gaps, fmt.Sprintf("the store of the runtime pools holds a pool of this name too, which %s created; the file wins, so the server runs this pool and leaves that entry alone; remove the entry with pool_delete or DELETE /v1/pools/%s", orWho(e.By), pool.Name))
 		}
 		p.mu.Lock()
 		prev := p.poolState[pool.Name]
@@ -181,7 +181,7 @@ func (p *platform) reconcilePools(ctx context.Context, listed map[string][]*v1al
 	if rerr != nil {
 		// Without the store, a runtime pool keeps its last state and its
 		// Tasks, with the reason.
-		why := p.reconciler.Values.Redact(fmt.Sprintf("the front could not read the runtime pools %s, so the pool waits: %v", p.f.runtime.Describe(), rerr))
+		why := p.reconciler.Values.Redact(fmt.Sprintf("the server could not read the runtime pools %s, so the pool waits: %v", p.f.runtime.Describe(), rerr))
 		p.mu.Lock()
 		var changed []string
 		for name := range p.rt {

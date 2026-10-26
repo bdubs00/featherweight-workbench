@@ -46,7 +46,7 @@ const (
 
 // ErrNoTaskList means that the fleet reads no Task list, so it cannot tell
 // which Tasks lost their parent.
-var ErrNoTaskList = errors.New("fleet: the front reads no Task list of the ax API (workbench.fleet.atespaces)")
+var ErrNoTaskList = errors.New("fleet: the server reads no Task list of the ax API (workbench.fleet.atespaces)")
 
 // ErrTaskList means that a Task list of the ax API failed.
 var ErrTaskList = errors.New("fleet: the ax API did not give the Task list")

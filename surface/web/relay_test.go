@@ -161,7 +161,7 @@ func TestRelayErrors(t *testing.T) {
 	p.fleet.fail(nil, "")
 	t.Setenv("FW_API_TOKEN", "")
 	resp, b = get()
-	if pr := decodeProblem(t, resp, b, http.StatusServiceUnavailable); !strings.Contains(pr.Detail, "the front holds no static token of the fleet: the secret FW_API_TOKEN is empty") {
+	if pr := decodeProblem(t, resp, b, http.StatusServiceUnavailable); !strings.Contains(pr.Detail, "the server holds no static token of the fleet: the secret FW_API_TOKEN is empty") {
 		t.Errorf("detail without a token = %q", pr.Detail)
 	}
 }

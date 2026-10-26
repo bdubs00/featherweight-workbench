@@ -308,7 +308,7 @@ func TestPlatformBackfillGivesIdentity(t *testing.T) {
 		cfg.Access.Default = "closed"
 	})
 	p := front.f.platform
-	eventually(t, "the front lists gamma", func() bool {
+	eventually(t, "the server lists gamma", func() bool {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		return p.members["team/gamma"] != nil
@@ -487,7 +487,7 @@ func TestPlatformBackfillClearsTheDroppedCopy(t *testing.T) {
 		cfg.AX.Router = strings.TrimPrefix(router.URL, "http://")
 	})
 	p := front.f.platform
-	eventually(t, "the front lists gamma", func() bool {
+	eventually(t, "the server lists gamma", func() bool {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		return p.members["team/gamma"] != nil

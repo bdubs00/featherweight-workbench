@@ -157,7 +157,7 @@ func LoadConfig(cfg *fw.Config) (Config, error) {
 		case u.User != nil:
 			add("workbench.notifications.link %q: the address holds a user or a password", c.Link)
 		case u.Fragment != "" || strings.Contains(c.Link, "#"):
-			add("workbench.notifications.link %q: the address has a fragment; the front adds #activity/<run> or #duties/<name> itself", c.Link)
+			add("workbench.notifications.link %q: the address has a fragment; the server adds #activity/<run> or #duties/<name> itself", c.Link)
 		}
 	}
 	e := &c.Email
@@ -289,11 +289,11 @@ func (c Config) mailProblem(to, subject string) string {
 	case c.mailAllowed(to, subject):
 		return ""
 	case len(c.Email.Allow) > 0:
-		return fmt.Sprintf("The front sends email only to the addresses that workbench.notifications.email.allow lists, and it lists no match for %s.", to)
+		return fmt.Sprintf("The server sends email only to the addresses that workbench.notifications.email.allow lists, and it lists no match for %s.", to)
 	case own != "":
-		return fmt.Sprintf("Without workbench.notifications.email.allow, the front sends email only to your own address, %s.", own)
+		return fmt.Sprintf("Without workbench.notifications.email.allow, the server sends email only to your own address, %s.", own)
 	}
-	return "Without workbench.notifications.email.allow, the front sends email only to your own address, and your sign-in gives it none. An operator can list the addresses in workbench.notifications.email.allow."
+	return "Without workbench.notifications.email.allow, the server sends email only to your own address, and your sign-in gives it none. An operator can list the addresses in workbench.notifications.email.allow."
 }
 
 // mailRefusal says why the front does not send a mail to the address to
@@ -308,9 +308,9 @@ func (c Config) mailRefusal(to, subject string) string {
 		domain = strings.ToLower(to[i+1:])
 	}
 	if len(c.Email.Allow) > 0 {
-		return "the front sends email only to the addresses that workbench.notifications.email.allow lists, and it lists no match for the address at " + domain
+		return "the server sends email only to the addresses that workbench.notifications.email.allow lists, and it lists no match for the address at " + domain
 	}
-	return "without workbench.notifications.email.allow, the front sends email only to the address of the person, and the channel names another address at " + domain
+	return "without workbench.notifications.email.allow, the server sends email only to the address of the person, and the channel names another address at " + domain
 }
 
 // globMatch matches a text against a glob in which "*" matches any text,
@@ -468,7 +468,7 @@ func (c Config) ntfyHostProblem(raw string) string {
 
 // errPrivate means that an address of a channel resolved to an address
 // that the front does not reach for a person.
-var errPrivate = errors.New("the address resolves to a loopback, private, or link-local address, which the front reaches only for a host of workbench.notifications.hosts")
+var errPrivate = errors.New("the address resolves to a loopback, private, or link-local address, which the server reaches only for a host of workbench.notifications.hosts")
 
 // clients returns the HTTP clients of the channels: one for the hosts
 // that the operator names, and one for any other host, whose dialer

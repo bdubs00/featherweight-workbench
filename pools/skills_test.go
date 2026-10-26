@@ -99,7 +99,7 @@ func TestPoolShipsTheSkillsOfTheFront(t *testing.T) {
 		t.Fatal("the Workspace holds no skill file")
 	}
 	var out strings.Builder
-	if err := Write(&out, []*Pool{merged}); err != nil || !strings.Contains(out.String(), "The front ships its skills deploy, review, which the profiles of the pool allow, to /workspace/.fw/skills of each worker.") {
+	if err := Write(&out, []*Pool{merged}); err != nil || !strings.Contains(out.String(), "The server ships its skills deploy, review, which the profiles of the pool allow, to /workspace/.fw/skills of each worker.") {
 		t.Fatalf("Write = %v %s", err, out.String())
 	}
 

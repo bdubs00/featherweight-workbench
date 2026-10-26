@@ -86,7 +86,7 @@ func (s *Store) hold(files []native.FileBody) (*upload, error) {
 	}
 	if s.held.Add(u.size) > maxHeldBytes {
 		s.held.Add(-u.size)
-		return nil, fmt.Errorf("%w: the front still sends the files of earlier messages: send these files in a minute", ErrConflict)
+		return nil, fmt.Errorf("%w: the server still sends the files of earlier messages: send these files in a minute", ErrConflict)
 	}
 	u.refs.Store(1)
 	return u, nil

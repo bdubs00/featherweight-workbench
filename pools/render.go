@@ -31,7 +31,7 @@ type Lookup func(name string) (string, bool)
 // Placeholders is the Lookup of the dry run: it gives each variable of the
 // front a placeholder that names it, never its value.
 func Placeholders(name string) (string, bool) {
-	return "<secret: " + name + " of the front>", true
+	return "<secret: " + name + " of the server>", true
 }
 
 // Values holds the values of the variables of the front that the pools
@@ -115,14 +115,14 @@ func Resolve(list []*Pool, getenv func(string) (string, bool)) (*Values, error) 
 		}
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("pools: the front has no value for the variable %s; set it in the environment of the front", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("pools: the server has no value for the variable %s; set it in the environment of the server", strings.Join(missing, ", "))
 	}
 	// The front can hide only a value of redactMin characters or more, so
 	// a shorter static token stops the start.
 	for _, p := range list {
 		for _, e := range p.env {
 			if e.Name == p.tokenEnv && e.FromEnv != "" && len(v.m[e.FromEnv]) < redactMin {
-				return nil, fmt.Errorf("pools: the static token in %s has fewer than %d characters; the front copies it into every Task, so use a longer token", e.FromEnv, redactMin)
+				return nil, fmt.Errorf("pools: the static token in %s has fewer than %d characters; the server copies it into every Task, so use a longer token", e.FromEnv, redactMin)
 			}
 		}
 	}
@@ -180,7 +180,7 @@ func (p *Pool) Render(index int, lookup Lookup) (*v1alpha1.Task, *v1alpha1.Works
 		case e.FromEnv != "":
 			got, ok := lookup(e.FromEnv)
 			if !ok {
-				return nil, nil, fmt.Errorf("pools: %s needs the variable %s of the front, which is not set", p.key(), e.FromEnv)
+				return nil, nil, fmt.Errorf("pools: %s needs the variable %s of the server, which is not set", p.key(), e.FromEnv)
 			}
 			v = got
 		case e.Value != nil:
@@ -225,7 +225,7 @@ func (p *Pool) MarkerName() string { return p.Name + "-generation" }
 // markerHeader is the first line of the file of the marker. It names the
 // pool, so the front writes only a marker of its own pool.
 func markerHeader(pool string) string {
-	return "# This file is written by the pool " + pool + " of fw-workbench. It holds the newest generation of the pool that a front runs.\n"
+	return "# This file is written by the pool " + pool + " of fw-workbench. It holds the newest generation of the pool that a server runs.\n"
 }
 
 // Marker returns the Workspace that records the generation of the pool.
@@ -313,31 +313,31 @@ func Write(w io.Writer, list []*Pool) error {
 			fmt.Fprintf(&b, "The pool takes each key that it does not set from the template %s of workbench.templates.\n", p.Template)
 		}
 		if r := p.runtime; r != nil {
-			fmt.Fprintf(&b, "The store of the front holds this pool, not the configuration file. The entry is generation %d%s.\n", r.Generation, written(r.By, r.At, ""))
+			fmt.Fprintf(&b, "The store of the server holds this pool, not the configuration file. The entry is generation %d%s.\n", r.Generation, written(r.By, r.At, ""))
 			if r.Deleting {
-				b.WriteString("A person deleted the pool, so the front deletes each Task of it once the Task is idle, and then the entry.\n")
+				b.WriteString("A person deleted the pool, so the server deletes each Task of it once the Task is idle, and then the entry.\n")
 			} else if _, ok := p.overlay.Profile(p.Agent); !ok {
-				fmt.Fprintf(&b, "The overlay holds no profile %s yet, so the front creates no Task of the pool. The documents below hold only the place of the profile.\n", p.Agent)
+				fmt.Fprintf(&b, "The overlay holds no profile %s yet, so the server creates no Task of the pool. The documents below hold only the place of the profile.\n", p.Agent)
 			}
 		}
 		if p.Generation > 0 {
-			fmt.Fprintf(&b, "Each Task carries %s=%s, %s=%s, and %s=%d. A Task of a lower generation runs an older configuration, and the front leaves a Task of a higher generation alone.\n", EnvPool, p.Name, EnvSpec, p.hash, EnvGeneration, p.Generation)
-			fmt.Fprintf(&b, "Before it changes a Task, the front records generation %d in the Workspace %s.\n", p.Generation, p.MarkerName())
+			fmt.Fprintf(&b, "Each Task carries %s=%s, %s=%s, and %s=%d. A Task of a lower generation runs an older configuration, and the server leaves a Task of a higher generation alone.\n", EnvPool, p.Name, EnvSpec, p.hash, EnvGeneration, p.Generation)
+			fmt.Fprintf(&b, "Before it changes a Task, the server records generation %d in the Workspace %s.\n", p.Generation, p.MarkerName())
 		} else {
 			fmt.Fprintf(&b, "Each Task carries %s=%s and %s=%s. A Task with another %s runs an older configuration.\n", EnvPool, p.Name, EnvSpec, p.hash, EnvSpec)
 		}
 		for _, name := range FromEnv([]*Pool{p}) {
-			fmt.Fprintf(&b, "The front copies the variable %s from its own environment; this output shows a placeholder.\n", name)
+			fmt.Fprintf(&b, "The server copies the variable %s from its own environment; this output shows a placeholder.\n", name)
 		}
-		b.WriteString("This output is for review. Do not apply it: a placeholder is not a value, and the front replaces a Task that holds one.\n")
+		b.WriteString("This output is for review. Do not apply it: a placeholder is not a value, and the server replaces a Task that holds one.\n")
 		for _, warn := range p.warnings {
 			fmt.Fprintf(&b, "Warning: %s\n", warn)
 		}
 		for _, e := range p.overlay.Profiles {
-			fmt.Fprintf(&b, "The overlay of the front sets the profile %s in fw.agents%s.\n", e.Profile.Name, written(e.By, e.At, ""))
+			fmt.Fprintf(&b, "The overlay of the server sets the profile %s in fw.agents%s.\n", e.Profile.Name, written(e.By, e.At, ""))
 		}
 		for _, r := range p.overlay.Allow {
-			fmt.Fprintf(&b, "The overlay of the front adds the rule %q to fw.policy.allow%s.\n", r.Rule, written(r.By, r.At, r.Run))
+			fmt.Fprintf(&b, "The overlay of the server adds the rule %q to fw.policy.allow%s.\n", r.Rule, written(r.By, r.At, r.Run))
 		}
 		for _, name := range slices.Sorted(maps.Keys(p.overlay.Routines)) {
 			if _, runs := p.Profiles()[name]; !runs {
@@ -348,10 +348,10 @@ func Write(w io.Writer, list []*Pool) error {
 				words = append(words, fmt.Sprintf("%s version %d (%s)", r.Name, r.Version, r.Standing))
 			}
 			if len(words) == 0 {
-				fmt.Fprintf(&b, "The routines of the front give the profile %s no routine.\n", name)
+				fmt.Fprintf(&b, "The routines of the server give the profile %s no routine.\n", name)
 				continue
 			}
-			fmt.Fprintf(&b, "The routines of the front give the profile %s the routines %s.\n", name, strings.Join(words, ", "))
+			fmt.Fprintf(&b, "The routines of the server give the profile %s the routines %s.\n", name, strings.Join(words, ", "))
 		}
 		if s := p.PackageSetting(); p.PackagesOn() {
 			where := "The configuration of the pool turns the packages on"
@@ -360,22 +360,22 @@ func Write(w io.Writer, list []*Pool) error {
 				if s.At != nil {
 					at = *s.At
 				}
-				where = "The overlay of the front turns the packages on" + written(s.By, at, "")
+				where = "The overlay of the server turns the packages on" + written(s.By, at, "")
 			}
 			ask := "the agent cannot ask for a change"
 			if s.Ask {
 				ask = "the agent can ask for a change, and a person approves each one"
 			}
-			fmt.Fprintf(&b, "%s: Python packages %s, Programs %s, from the package mirror of the front; %s. The front sends a change of the packages to the running workers and replaces no Task for it.\n", where, orWord(strings.Join(Names(s.Python), ", "), "none"), orWord(strings.Join(Names(s.Tools), ", "), "none"), ask)
+			fmt.Fprintf(&b, "%s: Python packages %s, Programs %s, from the package mirror of the server; %s. The server sends a change of the packages to the running workers and replaces no Task for it.\n", where, orWord(strings.Join(Names(s.Python), ", "), "none"), orWord(strings.Join(Names(s.Tools), ", "), "none"), ask)
 		}
 		if len(p.skillNames) > 0 {
-			fmt.Fprintf(&b, "The front ships its skills %s, which the profiles of the pool allow, to %s/%s of each worker.\n", strings.Join(p.skillNames, ", "), WorkspacePath, SkillsPath)
+			fmt.Fprintf(&b, "The server ships its skills %s, which the profiles of the pool allow, to %s/%s of each worker.\n", strings.Join(p.skillNames, ", "), WorkspacePath, SkillsPath)
 		}
 		if len(p.skillSkipped) > 0 {
-			fmt.Fprintf(&b, "The front leaves out these files of its skills, because they are hidden, links, or not text: %s.\n", strings.Join(p.skillSkipped, ", "))
+			fmt.Fprintf(&b, "The server leaves out these files of its skills, because they are hidden, links, or not text: %s.\n", strings.Join(p.skillSkipped, ", "))
 		}
 		if p.replicas() == 0 {
-			b.WriteString("The pool wants no Task, so the front deletes each Task of the pool once it is idle.\n")
+			b.WriteString("The pool wants no Task, so the server deletes each Task of the pool once it is idle.\n")
 		}
 		if docs > 0 {
 			out.WriteString("---\n")

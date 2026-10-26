@@ -281,13 +281,13 @@ func (s *Service) ntfyServer(n *Ntfy) string {
 // unusable says why a channel cannot send now, beside its switches, or "".
 func (s *Service) unusable(ch Channel) string {
 	if !s.cfg.offers(ch.Kind) {
-		return fmt.Sprintf("The front does not offer the kind %s now.", ch.Kind)
+		return fmt.Sprintf("The server does not offer the kind %s now.", ch.Kind)
 	}
 	switch ch.Kind {
 	case KindNtfy:
 		switch {
 		case s.ntfyServer(ch.Ntfy) == "":
-			return "No ntfy server is set. Name one in ntfy.server, or ask an operator to set workbench.notifications.ntfy.server. The front never picks a public server by itself."
+			return "No ntfy server is set. Name one in ntfy.server, or ask an operator to set workbench.notifications.ntfy.server. The server never picks a public server by itself."
 		case ch.Ntfy == nil || ch.Ntfy.Topic == "":
 			return "No topic is set. Name the ntfy topic that your phone subscribes to in ntfy.topic."
 		}
@@ -308,7 +308,7 @@ func (s *Service) unusable(ch Channel) string {
 		}
 	case KindShared:
 		if s.cfg.sharedNamed(ch.Shared) == nil {
-			return fmt.Sprintf("The shared channel %s does not exist in this front now.", ch.Shared)
+			return fmt.Sprintf("The shared channel %s does not exist in this server now.", ch.Shared)
 		}
 	}
 	return ""
@@ -317,7 +317,7 @@ func (s *Service) unusable(ch Channel) string {
 // off says why no channel reaches a person with the settings, or "".
 func (s *Service) off(st Settings) string {
 	if len(st.Channels) == 0 {
-		return "You have no channel. Add one, such as ntfy, Slack, or a webhook, and the front tells you of questions, failures, and the daily digest. Activity in the page always shows what needs you."
+		return "You have no channel. Add one, such as ntfy, Slack, or a webhook, and the server tells you of questions, failures, and the daily digest. Activity in the page always shows what needs you."
 	}
 	var why []string
 	for _, ch := range st.Channels {
@@ -547,7 +547,7 @@ func (s *Service) channelsFrom(ctx context.Context, in, old []Channel, add func(
 			if c.Kind == "" {
 				add(path+".kind", "Pick a kind: %s.", strings.Join(offered, ", "))
 			} else {
-				add(path+".kind", "This front does not offer %q. Pick one of %s.", c.Kind, strings.Join(offered, ", "))
+				add(path+".kind", "This server does not offer %q. Pick one of %s.", c.Kind, strings.Join(offered, ", "))
 			}
 			out = append(out, c)
 			continue
@@ -591,7 +591,7 @@ func (s *Service) channelsFrom(ctx context.Context, in, old []Channel, add func(
 			n.Token = keep(new(n.Token), new(pn.Token))
 			switch {
 			case n.Server == "" && s.cfg.Ntfy.Server == "":
-				add(path+".ntfy.server", "No ntfy server is set. Name one, or ask an operator to set workbench.notifications.ntfy.server. The front never picks a public server by itself.")
+				add(path+".ntfy.server", "No ntfy server is set. Name one, or ask an operator to set workbench.notifications.ntfy.server. The server never picks a public server by itself.")
 			case n.Server == "":
 			case len(n.Server) > 512:
 				add(path+".ntfy.server", "The address is longer than 512 characters.")
@@ -648,9 +648,9 @@ func (s *Service) channelsFrom(ctx context.Context, in, old []Channel, add func(
 			sc := s.cfg.sharedNamed(c.Shared)
 			switch {
 			case c.Shared == "":
-				add(path+".shared", "Name a shared channel of this front.")
+				add(path+".shared", "Name a shared channel of this server.")
 			case sc == nil:
-				add(path+".shared", "%s is not a shared channel of this front.", c.Shared)
+				add(path+".shared", "%s is not a shared channel of this server.", c.Shared)
 			case ch.Label == "":
 				c.Label = sc.Label
 			}
@@ -732,7 +732,7 @@ func (s *Service) agentProblem(ctx context.Context, agent string) string {
 	err := faces.Check(ctx, s.a, agent, fw.ActionAgentRun)
 	switch {
 	case errors.Is(err, fw.ErrProfileNotFound), errors.Is(err, fw.ErrInvalidRequest):
-		return fmt.Sprintf("%s is not an agent of this front or of a pool of the fleet.", agent)
+		return fmt.Sprintf("%s is not an agent of this server or of a pool of the fleet.", agent)
 	case errors.Is(err, fw.ErrForbidden), errors.Is(err, fw.ErrUnauthorized):
 		return fmt.Sprintf("You have no right to run the agent %s.", agent)
 	case err != nil:

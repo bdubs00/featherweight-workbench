@@ -158,7 +158,7 @@ func (b *buckets) update(ctx context.Context, id string, fn func(rec *record) er
 		}
 		return rec, nil
 	}
-	return nil, fmt.Errorf("bridges: the bridge %s changed %d times while the front wrote it; try again", id, casAttempts)
+	return nil, fmt.Errorf("bridges: the bridge %s changed %d times while the server wrote it; try again", id, casAttempts)
 }
 
 // list reads every record, in no order.
@@ -264,7 +264,7 @@ func (b *buckets) changeEntry(ctx context.Context, id string, seq uint64, fn fun
 		}
 		return m, true, nil
 	}
-	return Message{}, false, fmt.Errorf("bridges: entry %d of the bridge %s changed %d times while the front wrote it; try again", seq, id, casAttempts)
+	return Message{}, false, fmt.Errorf("bridges: entry %d of the bridge %s changed %d times while the server wrote it; try again", seq, id, casAttempts)
 }
 
 // remember keeps the summary of an entry.
@@ -483,7 +483,7 @@ func (b *buckets) setRead(ctx context.Context, id, subject string, seq uint64) e
 		}
 		return nil
 	}
-	return fmt.Errorf("bridges: the read mark of the bridge %s changed %d times while the front wrote it", id, casAttempts)
+	return fmt.Errorf("bridges: the read mark of the bridge %s changed %d times while the server wrote it", id, casAttempts)
 }
 
 // unreadScan bounds the entries that one count of the unread entries of a

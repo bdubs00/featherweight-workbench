@@ -23,7 +23,7 @@ func newCollector(a *fw.Agent) prometheus.Collector {
 		open: prometheus.NewDesc("fw_bossmode_streams_open",
 			"The streams of the page of bossmode that are open now.", nil, nil),
 		refused: prometheus.NewDesc("fw_bossmode_streams_refused_total",
-			"The streams of the page of bossmode that the front refused with 429, because MaxStreams were open.", nil, nil),
+			"The streams of the page of bossmode that the server refused with 429, because MaxStreams were open.", nil, nil),
 	}
 }
 

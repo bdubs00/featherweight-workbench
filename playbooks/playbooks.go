@@ -525,7 +525,7 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	}
 	err = s.b.Delete(ctx, name, st.rev)
 	if errors.Is(err, bucket.ErrConflict) {
-		return fmt.Errorf("%w: the playbook %s changed since the front read it; try again", ErrConflict, name)
+		return fmt.Errorf("%w: the playbook %s changed since the server read it; try again", ErrConflict, name)
 	}
 	if err != nil {
 		return fmt.Errorf("playbooks: remove the playbook %s: %w", name, err)
