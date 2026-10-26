@@ -13,8 +13,10 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
+	"github.com/bdubs00/featherweight-workbench/conversations"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/internal/bucket"
 	"github.com/bdubs00/featherweight-workbench/pools"
 )
 
@@ -243,6 +245,42 @@ func TestFleetOff(t *testing.T) {
 	resp, b = do(t, "GET", srv.URL+"/v1/runs?scope=local&member=owner", "")
 	var list struct{ Runs []*fw.Run }
 	decodeJSON(t, resp, b, http.StatusOK, &list)
+}
+
+// The runs of the list carry the title of the caller in myTitle, and a
+// run that the caller hid stays out unless the query holds hidden=true;
+// then it carries hidden: true. Another person sees the runs as they are.
+func TestFleetRunsCarryTheTitlesOfThePerson(t *testing.T) {
+	p := newFleetPair(t)
+	conversations.Attach(p.view, conversations.New(p.view, bucket.NewMem(bucket.Config{Name: "CONVERSATIONS"}), nil))
+	t.Cleanup(func() { conversations.Attach(p.view, nil) })
+	for id, body := range map[string]string{p.local.ID: `{"title": "Mine"}`, p.remote.ID: `{"hidden": true}`} {
+		if resp, b := do(t, "PATCH", p.viewURL+"/v1/conversations/"+id, body, "Authorization", asAlice); resp.StatusCode != http.StatusOK {
+			t.Fatalf("PATCH %s = %d %s", body, resp.StatusCode, b)
+		}
+	}
+	list := func(query string) (map[string]map[string]any, float64) {
+		t.Helper()
+		resp, b := do(t, "GET", p.viewURL+"/v1/fleet/runs"+query, "", "Authorization", asAlice)
+		var out struct {
+			Runs  []map[string]any
+			Total float64
+		}
+		decodeJSON(t, resp, b, http.StatusOK, &out)
+		byID := map[string]map[string]any{}
+		for _, r := range out.Runs {
+			byID[r["id"].(string)] = r
+		}
+		return byID, out.Total
+	}
+	runs, total := list("")
+	if len(runs) != 1 || total != 1 || runs[p.local.ID]["myTitle"] != "Mine" || runs[p.local.ID]["hidden"] != nil {
+		t.Fatalf("the list = %v, total %v", runs, total)
+	}
+	runs, total = list("?hidden=true")
+	if len(runs) != 2 || total != 2 || runs[p.remote.ID]["hidden"] != true || runs[p.remote.ID]["myTitle"] != nil {
+		t.Fatalf("the list with hidden runs = %v, total %v", runs, total)
+	}
 }
 
 func TestFleetListAndRead(t *testing.T) {

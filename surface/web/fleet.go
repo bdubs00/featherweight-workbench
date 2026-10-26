@@ -14,6 +14,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
+	"github.com/bdubs00/featherweight-workbench/conversations"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 )
@@ -57,7 +58,9 @@ func (s *server) fleet(w http.ResponseWriter, r *http.Request) {
 // parameter scope is fleet, the default, or local. The parameter member
 // narrows the list to one member, and parent lists the children of a run of
 // any member. The parameters agent, state, principal, batch, and limit
-// narrow the list as on GET /v1/runs.
+// narrow the list as on GET /v1/runs. A run that the caller renamed
+// carries myTitle, and a run that the caller hid stays out, unless hidden
+// is true; then it carries hidden: true (package conversations).
 func (s *server) fleetRuns(w http.ResponseWriter, r *http.Request) {
 	if fleet.Of(s.a) == nil {
 		problem(w, r, http.StatusNotFound, fleetOff)
@@ -115,17 +118,24 @@ func (s *server) fleetRuns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	matched := view.FilterBatch(view.Filter(runs, q.Get("agent"), q.Get("state"), q.Get("principal"), 0), q.Get("batch"))
+	// The titles of the caller, and the runs that the caller hid, which
+	// the list leaves out unless the query asks for them (section 4.20).
+	matched, marks := conversations.Mark(r.Context(), s.a, matched, q.Get("hidden") == "true")
 	glance, total := view.GlanceOf(matched, time.Now()), len(matched)
 	if limit > 0 && len(matched) > limit {
 		matched = matched[:limit]
 	}
 	list := make([]any, 0, len(matched))
 	for _, run := range matched {
-		if archived[run.ID] {
+		mark, marked := marks[run.ID]
+		switch {
+		case marked:
+			list = append(list, listedRun{Run: run, Archived: archived[run.ID], MyTitle: mark.MyTitle, Hidden: mark.Hidden})
+		case archived[run.ID]:
 			list = append(list, archivedRun{Run: run, Archived: true})
-			continue
+		default:
+			list = append(list, run)
 		}
-		list = append(list, run)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"runs": list, "total": total, "glance": glance})
 }
@@ -135,4 +145,13 @@ func (s *server) fleetRuns(w http.ResponseWriter, r *http.Request) {
 type archivedRun struct {
 	*fw.Run
 	Archived bool `json:"archived"`
+}
+
+// listedRun is a run of a list that the caller renamed or hid: the run
+// object with the title of the caller in myTitle, hidden, and archived.
+type listedRun struct {
+	*fw.Run
+	Archived bool   `json:"archived,omitempty"`
+	MyTitle  string `json:"myTitle,omitempty"`
+	Hidden   bool   `json:"hidden,omitempty"`
 }

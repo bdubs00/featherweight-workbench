@@ -193,6 +193,7 @@ The package `surface/web` mounts the routes for people on the native surface of 
 | `GET /v1/bridges/{id}/messages` | One page of the channel, as the transcript route pages a run: `before`, `from`, and `limit`. |
 | `POST /v1/bridges/{id}/messages` | A message of the caller, `{"text", "to", "replyTo", "pinned", "skill", "files"}`, which fans out to the members. With `pinned`, each delivery is a pinned follow-up, which survives every compaction of the run (section 18.5). `skill`, `{"name", "args"}`, makes it a slash command, which is always pinned, and `text` is optional then (section 20.3). `files`, `[{"name", "data"}]` with base64 data, go to the run of each member that gets the message, and the entry names them (section 18.5). 201 with the entry, 409 on a closed bridge and for files that cannot reach each member now. |
 | `POST /v1/bridges/{id}/messages/{seq}/reactions` | A reaction of the caller on an entry, `{"reaction", "note", "remove"}`: `up`, `down`, or `heart`. The same reaction again takes it back, and `remove` true only takes it back. 200 with the entry. |
+| `PATCH /v1/conversations/{run}` | A title of the caller for a conversation and whether it is hidden from the lists of the caller, `{"title", "hidden"}` (section 4.20). 200 with `{"run", "myTitle", "hidden"}`. |
 | `POST /v1/bridges/{id}/questions/{seq}/settle` | End the question of a seat at the entry without an answer, as "No answer needed" of the page. The seat does not wake. 204, also for a question that no longer waits; 404 for an entry that is no question. |
 | `POST /v1/bridges/{id}/members` | Add a seat, `{"handle", "agent", "task"}`, and start its run. 201 with the seat. |
 | `DELETE /v1/bridges/{id}/members/{handle}` | Fire a seat: cancel its open runs and mute it. 200 with the fired seat. |
@@ -708,6 +709,18 @@ A conversation of a replaced worker is read-only (section 4.18). A person who wr
 - `metadata` gets `workbench.continues` with the id of the earlier run (`fleet.MetaContinues`).
 
 A body without `continues` goes on as it came. A `continues` that is no text answers 400, a body without `input` answers 400, and a run that the caller cannot view answers 404 with "continues names no run that you can view". The earlier run stays as it was: the archive keeps it, and nothing links the two runs but the metadata of the new one.
+
+### 4.20 Rename and hide a conversation
+
+A person gives a conversation a title of their own, and hides it from their lists, with `PATCH /v1/conversations/{run}` and the body `{"title", "hidden"}`, or the tool `conversation_patch` with `run`, `title`, and `hidden`. These are Rename and Delete of the page. A field that the body leaves out stays as it was. Only the lists of the caller change: the run, its ledger, its archive, its own title, and the lists of other people stay as they are, and a hidden run stays readable by its id. The package `conversations` keeps the entries.
+
+- A title is one line of at most 100 characters without a control character, with its spaces folded. An empty title gives the run its own title back. A body without `title` and `hidden` answers 400.
+- The caller needs the view of the run: a run of this process, of a member of the view, or of the archive. Any other run answers 404.
+- The answer is 200 with `{"run", "myTitle", "hidden"}`. `myTitle` is absent when the caller has no title of their own for the run.
+- A person keeps at most 1,000 conversations with a title of their own or hidden. One more answers 400 with the reason. An entry without a title and not hidden goes away.
+- `GET /v1/fleet/runs` gives each run that the caller renamed `myTitle`, and leaves out each run that the caller hid. With `?hidden=true`, the list holds the hidden runs too, each with `"hidden": true`. `total` and `glance` count the runs of the list. Another person sees the runs as they are.
+
+The entries live in the key-value bucket `<stream>_CONVERSATIONS` on a NATS bus, one entry per person under `p.<subject in base64url>`, and in the memory of the process on the bus `mem`. With NATS accounts, allow the front `$KV.<stream>_CONVERSATIONS.>`. On another bus, the route and the tool answer 503 with the reason, and the lists show the runs as they are. The static token and a workload have a subject too, so they keep entries of their own, and a caller without a subject gets 403.
 
 ## 5. Browser sign-in
 
@@ -3903,6 +3916,7 @@ Each capability is a Go function. Its route and its MCP tool call that function,
 | `bridge_react` | `POST /v1/bridges/{id}/messages/{seq}/reactions` | `bridges.Store.React` |
 | `bridge_mark_read` | `PUT /v1/bridges/{id}/read` | `bridges.Store.MarkRead` |
 | `bridge_settle_question` | `POST /v1/bridges/{id}/questions/{seq}/settle` | `bridges.Store.Settle` |
+| `conversation_patch` | `PATCH /v1/conversations/{run}` | `conversations.Store.Patch` |
 | `bridge_post`, for a person | `POST /v1/bridges/{id}/messages` | `bridges.Store.Post` |
 | `orphans_list`, `orphans_remove` | `GET` and `DELETE /v1/fleet/orphans` | `fleet.Orphans`, `fleet.RemoveOrphans` |
 | `packages_get`, `packages_put` | `GET` and `PUT /v1/pools/{name}/packages` | `fleet.PackagesOf`, `fleet.PutPackages` |
