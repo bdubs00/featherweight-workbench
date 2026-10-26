@@ -14,6 +14,7 @@ package pools
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -179,18 +180,21 @@ func (s PackageSetting) Same(o PackageSetting) bool {
 	return s.On == o.On && s.Ask == o.Ask && slices.Equal(Names(s.Python), Names(o.Python)) && slices.Equal(Names(s.Tools), Names(o.Tools))
 }
 
-// CleanPackages checks a list of packages for a person: each name is
-// trimmed, a name that the list holds twice counts once, and the kernel
-// refuses a name that is empty, starts with a dash, holds a control
-// character, or holds more than 200 characters, and a list of more than
-// 100 names. key names the list in an error. The error names the bad
-// item.
-func CleanPackages(key string, list []string) ([]string, error) {
+// CleanPackages checks a list of packages of the manager, ListPython or
+// ListTools, for a person: each name is trimmed, a name that the list
+// holds twice counts once, and the kernel refuses a name that is not a
+// requirement of the manager (pkglist.CheckRequirement): for Python a
+// name of PEP 508 with optional extras and a version, without a URL, a
+// quote, or a condition after a semicolon, and for programs a conda name
+// with an optional version and build. It also refuses a list of more than
+// 100 names. key names the list in an error. A refused name gives a
+// *PackageError.
+func CleanPackages(manager, key string, list []string) ([]string, error) {
 	out := make([]string, 0, len(list))
 	for i, raw := range list {
 		name := strings.TrimSpace(raw)
-		if err := pkglist.CheckRequirement(name); err != nil {
-			return nil, fmt.Errorf("%s[%d] %v", key, i, err)
+		if err := pkglist.CheckRequirement(manager, name); err != nil {
+			return nil, &PackageError{Key: key, Index: i, Manager: manager, Name: name, Err: err}
 		}
 		if !slices.Contains(out, name) {
 			out = append(out, name)
@@ -200,6 +204,31 @@ func CleanPackages(key string, list []string) ([]string, error) {
 		return nil, fmt.Errorf("%s holds %d packages; the limit is %d", key, len(out), pkglist.MaxItems)
 	}
 	return out, nil
+}
+
+// PackageError is a name of a list that the kernel refuses: the list, the
+// index and the name of the item, and the reason, a clause such as "holds
+// a semicolon". Error names the item by its index, for a configuration.
+// Sentence says it to a person.
+type PackageError struct {
+	Key     string
+	Index   int
+	Manager string
+	Name    string
+	Err     error
+}
+
+func (e *PackageError) Error() string { return fmt.Sprintf("%s[%d] %v", e.Key, e.Index, e.Err) }
+
+func (e *PackageError) Unwrap() error { return e.Err }
+
+// Sentence says the refusal in one sentence for the person who wrote the
+// name: the name as written, then the reason.
+func (e *PackageError) Sentence() string {
+	if e.Name == "" {
+		return "Write the name of a package."
+	}
+	return strconv.Quote(e.Name) + " " + strings.TrimSuffix(e.Err.Error(), ".") + "."
 }
 
 // PackageName returns the name of the package of a requirement of the
@@ -228,10 +257,10 @@ func (p *Pool) checkPackages(front Front) []string {
 	var problems []string
 	c := *p.Packages
 	for _, l := range []struct {
-		key  string
-		list *[]string
-	}{{"packages.python", &c.Python}, {"packages.tools", &c.Tools}} {
-		clean, err := CleanPackages(l.key, *l.list)
+		manager, key string
+		list         *[]string
+	}{{ListPython, "packages.python", &c.Python}, {ListTools, "packages.tools", &c.Tools}} {
+		clean, err := CleanPackages(l.manager, l.key, *l.list)
 		if err != nil {
 			problems = append(problems, p.key()+": "+err.Error())
 			continue

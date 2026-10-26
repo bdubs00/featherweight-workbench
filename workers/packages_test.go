@@ -92,8 +92,9 @@ func TestPackagesRoutes(t *testing.T) {
 		want string
 	}{
 		{`{"ask":true}`, "set on"},
-		{`{"on":true,"python":["-r requirements.txt"]}`, "python[0] starts with a dash"},
-		{`{"on":true,"tools":["` + strings.Repeat("x", 201) + `"]}`, "tools[0] is longer than 200 characters"},
+		{`{"on":true,"python":["-r requirements.txt"]}`, `"detail":"\"-r requirements.txt\" starts with a dash."`},
+		{`{"on":true,"tools":["` + strings.Repeat("x", 201) + `"]}`, `is longer than 200 characters."`},
+		{`{"on":true,"python":["bad name;rm"]}`, `"detail":"\"bad name;rm\" holds a semicolon;`},
 		{`{"on":true,"registry":"pypi"}`, "unknown field"},
 	} {
 		if resp, body := do(t, "PUT", fr.url+"/v1/pools/triage/packages", "alice", c.body); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, c.want) {

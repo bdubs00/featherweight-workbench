@@ -291,7 +291,7 @@ func (f *Fleet) applyEnvChange(ctx context.Context, base *pools.Pool, member str
 	}
 	log := f.log.With("pool", base.Name, "task", member, "command", d.Command, "manager", d.Manager, "package", d.Package, "agent", d.Agent, "run", d.Run)
 	name := strings.TrimSpace(d.Package)
-	if err := pkglist.CheckRequirement(name); err != nil || (d.Manager != pools.ListPython && d.Manager != pools.ListTools) {
+	if err := pkglist.CheckRequirement(d.Manager, name); err != nil {
 		log.Warn("fleet: a worker changed a package that the front does not take", "reason", "the list or the name does not fit")
 		return
 	}
@@ -554,13 +554,13 @@ func PutPackages(ctx context.Context, a *fw.Agent, name string, req PackagesRequ
 	if req.On == nil {
 		return Packages{}, fmt.Errorf("%w: set on, true to give the workers packages and false to turn them off", fw.ErrInvalidRequest)
 	}
-	python, err := pools.CleanPackages("python", req.Python)
+	python, err := pools.CleanPackages(pools.ListPython, "python", req.Python)
 	if err != nil {
-		return Packages{}, fmt.Errorf("%w: %v", fw.ErrInvalidRequest, err)
+		return Packages{}, fmt.Errorf("%w: %s", fw.ErrInvalidRequest, packageSentence(err))
 	}
-	tools, err := pools.CleanPackages("tools", req.Tools)
+	tools, err := pools.CleanPackages(pools.ListTools, "tools", req.Tools)
 	if err != nil {
-		return Packages{}, fmt.Errorf("%w: %v", fw.ErrInvalidRequest, err)
+		return Packages{}, fmt.Errorf("%w: %s", fw.ErrInvalidRequest, packageSentence(err))
 	}
 	cur := t.merged.PackageSetting()
 	var added []string
@@ -606,6 +606,24 @@ func PutPackages(ctx context.Context, a *fw.Agent, name string, req PackagesRequ
 	// leaves the setting out, so the pool replaces no worker for it.
 	f.pushPool(base.Name, next)
 	return t.answer(ctx, proposed)
+}
+
+// packageSentence says a refusal of CleanPackages to a person: the
+// sentence of a refused name, else the error as it is.
+func packageSentence(err error) string {
+	var pe *pools.PackageError
+	if errors.As(err, &pe) {
+		return pe.Sentence()
+	}
+	return capitalFirst(err.Error()) + "."
+}
+
+// capitalFirst writes the first letter of s as a capital.
+func capitalFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // keepItems returns the items of names: an item that cur holds keeps its

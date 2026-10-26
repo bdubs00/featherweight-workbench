@@ -105,8 +105,8 @@ func TestRenderedBlockFitsTheKernel(t *testing.T) {
 	if !slices.Equal(*c.Packages.Python, []string{"ansible-lint", "pyyaml>=6"}) || !slices.Equal(*c.Packages.Tools, []string{"iproute2"}) {
 		t.Fatalf("the lists = %v %v", *c.Packages.Python, *c.Packages.Tools)
 	}
-	for _, l := range [][]string{*c.Packages.Python, *c.Packages.Tools} {
-		if err := pkglist.Check(l); err != nil {
+	for manager, l := range map[string][]string{pkglist.Python: *c.Packages.Python, pkglist.Tools: *c.Packages.Tools} {
+		if err := pkglist.Check(manager, l); err != nil {
 			t.Fatal(err)
 		}
 	}

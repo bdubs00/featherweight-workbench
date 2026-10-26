@@ -399,8 +399,12 @@ func TestPutPackages(t *testing.T) {
 		want string
 	}{
 		{PackagesRequest{Python: []string{"x"}}, "set on"},
-		{PackagesRequest{On: ptrTo(true), Python: []string{"--index-url=http://evil"}}, "python[0] starts with a dash"},
-		{PackagesRequest{On: ptrTo(true), Tools: []string{"bad\x00"}}, "tools[0] holds a control character"},
+		{PackagesRequest{On: ptrTo(true), Python: []string{"--index-url=http://evil"}}, `: "--index-url=http://evil" starts with a dash.`},
+		{PackagesRequest{On: ptrTo(true), Tools: []string{"bad\x00"}}, `: "bad\x00" holds a control character.`},
+		{PackagesRequest{On: ptrTo(true), Python: []string{"six", "bad name;rm"}}, `: "bad name;rm" holds a semicolon; a condition after a semicolon is not available, so write the name and the version alone, such as pyyaml>=6.`},
+		{PackagesRequest{On: ptrTo(true), Python: []string{"bad name"}}, `: "bad name" holds a space inside the name.`},
+		{PackagesRequest{On: ptrTo(true), Tools: []string{"walk tool"}}, `: "walk tool" is not a program: write a conda name with an optional version and build, such as jq, nodejs>=22, or nodejs 22.*.`},
+		{PackagesRequest{On: ptrTo(true), Python: []string{" "}}, ": Write the name of a package."},
 	} {
 		if _, err := PutPackages(as("alice"), front.a, "triage", x.req, false); !errors.Is(err, fw.ErrInvalidRequest) || !strings.Contains(err.Error(), x.want) {
 			t.Errorf("PutPackages(%+v) = %v, want %q", x.req, err, x.want)

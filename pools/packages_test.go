@@ -2,6 +2,7 @@ package pools
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -117,14 +118,26 @@ func TestPackagesChecks(t *testing.T) {
 		{[]string{"ok", "bad\nname"}, "python[1] holds a control character"},
 		{[]string{long}, "python[0] is longer than 200 characters"},
 		{[]string{"  "}, "python[0] is empty"},
+		{[]string{"six", "bad name;rm"}, "python[1] holds a semicolon"},
+		{[]string{"requests @ https://example.org/r.whl"}, "python[0] names a URL"},
 		{many, "python holds 101 packages; the limit is 100"},
 	} {
-		if _, err := CleanPackages("python", x.list); err == nil || !strings.Contains(err.Error(), x.want) {
+		if _, err := CleanPackages(ListPython, "python", x.list); err == nil || !strings.Contains(err.Error(), x.want) {
 			t.Errorf("CleanPackages(%q) = %v, want %q", x.list, err, x.want)
 		}
 	}
-	if got, err := CleanPackages("tools", nil); err != nil || got == nil || len(got) != 0 {
+	if got, err := CleanPackages(ListTools, "tools", nil); err != nil || got == nil || len(got) != 0 {
 		t.Fatalf("an empty list = %v, %v", got, err)
+	}
+	// A program is a conda name with a version, and a person reads the
+	// refusal of a name as one sentence.
+	if _, err := CleanPackages(ListTools, "tools", []string{"jq", "nodejs 22.*", "conda-forge::jq"}); err == nil || err.Error() != "tools[2] names a channel; a channel is not available, so name a package of conda-forge, such as jq" {
+		t.Fatalf("a channel = %v", err)
+	}
+	_, err := CleanPackages(ListPython, "python", []string{"bad name;rm"})
+	var pe *PackageError
+	if !errors.As(err, &pe) || pe.Sentence() != `"bad name;rm" holds a semicolon; a condition after a semicolon is not available, so write the name and the version alone, such as pyyaml>=6.` {
+		t.Fatalf("the sentence of a refusal = %v", err)
 	}
 }
 
@@ -234,12 +247,16 @@ func TestPackagesRender(t *testing.T) {
 	}
 }
 
-// A name with ${ reaches the worker escaped, so the worker never expands
-// a variable of its own into a package name.
+// A name with ${ never reaches the worker: it is no package name, so the
+// configuration does not load, and the worker never expands a variable of
+// its own into a package name. The render still escapes each name.
 func TestPackagesRenderEscapes(t *testing.T) {
-	p := loadPackages(t, withPackagesKey(fixture, `{on: true, python: ["x${FW_API_TOKEN}"]}`))
-	if !strings.Contains(p.files[0].Content, "x$${FW_API_TOKEN}") {
-		t.Fatalf("the file holds %s", p.files[0].Content)
+	_, err := Load(configOf(t, withPackagesKey(fixture, `{on: true, python: ["x${FW_API_TOKEN}"]}`)), packagesFront())
+	if err == nil || !strings.Contains(err.Error(), "packages.python[0] is not a Python package") {
+		t.Fatalf("Load = %v", err)
+	}
+	if got := escapeDollars("x${FW_API_TOKEN}"); got != "x$${FW_API_TOKEN}" {
+		t.Fatalf("escapeDollars = %q", got)
 	}
 }
 
