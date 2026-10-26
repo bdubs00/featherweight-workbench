@@ -301,6 +301,24 @@ func (p *Pool) PackageSetting() PackageSetting {
 	return p.ConfigPackages()
 }
 
+// PackageSwitch is the switch of the packages of the workers of a pool
+// and whether their agent can ask for a package, as a read of an agent
+// and the dry run of a new agent name it.
+type PackageSwitch struct {
+	On  bool `json:"on"`
+	Ask bool `json:"ask"`
+}
+
+// Switch returns the switch of the packages of the workers, or nil when
+// the front has no package mirror, so the workers get no packages at all.
+func (p *Pool) Switch() *PackageSwitch {
+	if p.front.Packages == nil {
+		return nil
+	}
+	s := p.PackageSetting()
+	return &PackageSwitch{On: s.On, Ask: s.Ask}
+}
+
 // PackagesOn reports whether the workers of the pool get packages: the
 // front has a package mirror, and the setting of the pool is on.
 func (p *Pool) PackagesOn() bool {

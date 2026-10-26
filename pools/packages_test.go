@@ -435,3 +435,23 @@ func TestPackagesChangeReplacesNoTask(t *testing.T) {
 		}
 	}
 }
+
+// Switch names the switch of the packages of the workers on a server with
+// a package mirror, and nothing on a server without one.
+func TestPackageSwitch(t *testing.T) {
+	on := loadPackages(t, withPackagesKey(fixture, `{on: true, ask: true, python: [six]}`))
+	if s := on.Switch(); s == nil || !s.On || !s.Ask {
+		t.Fatalf("Switch of a pool with the packages on = %+v", s)
+	}
+	off := loadPackages(t, fixture)
+	if s := off.Switch(); s == nil || s.On || s.Ask {
+		t.Fatalf("Switch of a pool without the key = %+v", s)
+	}
+	list, err := Load(configOf(t, fixture), testFront())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := list[0].Switch(); s != nil {
+		t.Fatalf("Switch on a server without a mirror = %+v", s)
+	}
+}

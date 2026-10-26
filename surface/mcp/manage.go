@@ -620,6 +620,9 @@ func agentText(v fleet.PoolAgent, refs []skills.Ref) string {
 		head += t + "\n"
 	}
 	head += skillsText(refs, v.Pool != "")
+	if len(v.Tools) == 0 && len(v.WorkerTools) > 0 {
+		head += "The profile names no tools, so it has the tools of the workers of its pool: " + strings.Join(v.WorkerTools, ", ") + ".\n"
+	}
 	if v.WorkerPolicy != nil {
 		head += "The workers of the pool decide each call by fw.policy of the pool, which the policy of the profile can only tighten: " + rulesText(*v.WorkerPolicy) + "\n"
 	}

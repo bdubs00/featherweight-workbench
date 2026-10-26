@@ -20,7 +20,10 @@ import (
 // the saved profile. With ?dryRun=true, it checks the profile, saves
 // nothing, and answers 200 with an agents.Draft; for a profile that workers
 // run, the draft also carries workerTools, the tools of the workers for a
-// profile that names none, and workerPolicy. With pools, the profile
+// profile that names none, workerPolicy, and workerPackages, the switch of
+// the packages of the workers on a server with a package mirror. A read of
+// the profile, GET /v1/agents/{name}, names the same three (fleet.PoolAgent).
+// With pools, the profile
 // goes to the pool whose workers run it, and ?pool= names the pool for a
 // profile that several pools run or that no pool runs yet. With worker
 // templates, a profile that no pool runs gets a runtime pool of its own
@@ -55,9 +58,10 @@ func (s *server) putAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		out := struct {
 			agents.Draft
-			Pool         *pools.Status `json:"pool,omitempty"`
-			WorkerTools  []string      `json:"workerTools,omitempty"`
-			WorkerPolicy *fw.Rules     `json:"workerPolicy,omitempty"`
+			Pool           *pools.Status        `json:"pool,omitempty"`
+			WorkerTools    []string             `json:"workerTools,omitempty"`
+			WorkerPolicy   *fw.Rules            `json:"workerPolicy,omitempty"`
+			WorkerPackages *pools.PackageSwitch `json:"workerPackages,omitempty"`
 		}{Draft: d}
 		if planned, ok := fleet.PlannedPool(at); ok {
 			out.Pool = &planned
@@ -65,6 +69,7 @@ func (s *server) putAgent(w http.ResponseWriter, r *http.Request) {
 		if tools, policy, ok := fleet.WorkerOffer(at); ok {
 			out.WorkerTools, out.WorkerPolicy = tools, &policy
 		}
+		out.WorkerPackages = fleet.PackageSwitchOf(at)
 		writeJSON(w, http.StatusOK, out)
 		return
 	}

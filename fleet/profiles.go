@@ -323,6 +323,18 @@ func WorkerOffer(at agents.Place) ([]string, fw.Rules, bool) {
 	return pl.pool.Tools(), pl.pool.Policy().Rules, true
 }
 
+// PackageSwitchOf returns the switch of the packages that the workers of
+// the pool of the place get, and nil for a place that no pool holds or a
+// server without a package mirror. A new runtime pool takes the setting
+// of its template.
+func PackageSwitchOf(at agents.Place) *pools.PackageSwitch {
+	pl, ok := at.(*poolPlace)
+	if !ok || pl.pool == nil {
+		return nil
+	}
+	return pl.pool.Switch()
+}
+
 // PoolNamed returns the pool of the name of the fleet of a as the caller
 // sees it, and false when the caller sees no such pool.
 func PoolNamed(ctx context.Context, a *fw.Agent, name string) (pools.Status, bool, error) {
@@ -662,8 +674,11 @@ func roleOrNone(role string) string {
 // replaces the profile of the configuration of the pool, and empty for the
 // profile of the configuration; By and At say who wrote the overlay entry
 // and when. WorkerPolicy is fw.policy of the workers with the rules of the
-// overlay, which the policy of the profile can only tighten. Front marks a
-// profile of this process instead, which no worker of a pool runs.
+// overlay, which the policy of the profile can only tighten. WorkerTools
+// is the tools that the workers give a profile that names none, as the
+// dry run of a new agent answers them (WorkerOffer): a profile without
+// tools has these tools. Front marks a profile of this process instead,
+// which no worker of a pool runs.
 type PoolAgent struct {
 	view.AgentView
 	Pool         string     `json:"pool,omitempty"`
@@ -671,7 +686,12 @@ type PoolAgent struct {
 	By           string     `json:"by,omitempty"`
 	At           *time.Time `json:"at,omitempty"`
 	WorkerPolicy *fw.Rules  `json:"workerPolicy,omitempty"`
-	Front        bool       `json:"front,omitempty"`
+	WorkerTools  []string   `json:"workerTools,omitempty"`
+	// WorkerPackages is the switch of the packages of the workers, nil
+	// when the server has no package mirror. The tool env of the workers
+	// adds a package only while it is on and asks.
+	WorkerPackages *pools.PackageSwitch `json:"workerPackages,omitempty"`
+	Front          bool                 `json:"front,omitempty"`
 }
 
 // Overlay states of a PoolAgent.
@@ -775,12 +795,13 @@ func (f *Fleet) poolAgents(ctx context.Context, base *pools.Pool, only string) (
 		return nil, err
 	}
 	policy := merged.Policy().Rules
+	tools := merged.Tools()
 	var out []PoolAgent
 	for i, name := range names {
 		if roles[i] == "" {
 			continue
 		}
-		pa := PoolAgent{AgentView: view.AgentView{AgentProfile: profiles[name], Role: roles[i]}, Pool: base.Name, WorkerPolicy: &policy}
+		pa := PoolAgent{AgentView: view.AgentView{AgentProfile: profiles[name], Role: roles[i]}, Pool: base.Name, WorkerPolicy: &policy, WorkerTools: tools, WorkerPackages: merged.Switch()}
 		if e, ok := merged.Overlay().Profile(name); ok {
 			pa.Overlay = OverlayAdded
 			if _, ok := given[name]; ok {

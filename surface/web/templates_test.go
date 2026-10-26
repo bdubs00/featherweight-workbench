@@ -136,6 +136,11 @@ func TestPutAgentCreatesARuntimePool(t *testing.T) {
 	if read.Pool != "writer" || read.Description != "Writes more." || read.Role != "owner" {
 		t.Fatalf("GET = %s", b)
 	}
+	// The profile names no tools, so it has the tools of its workers, and
+	// the read names them as the dry run did.
+	if len(read.Tools) != 0 || strings.Join(read.WorkerTools, ",") != "bash,files,ansible.*" || read.WorkerPolicy == nil {
+		t.Fatalf("GET names tools %v and worker tools %v", read.Tools, read.WorkerTools)
+	}
 	resp, b = do(t, "PUT", srv.URL+"/v1/agents/other?pool=writer", `{"workers":{}}`, "Authorization", asAlice)
 	if p := decodeProblem(t, resp, b, http.StatusBadRequest); !strings.Contains(p.Detail, "not both") {
 		t.Fatalf("PUT with pool and workers = %+v", p)

@@ -283,8 +283,9 @@ var _ native.AgentRelay = (*Relay)(nil)
 // TakeAgent implements native.AgentRelay. It answers GET /v1/agents/{name}
 // with the profile that the workers of a pool run, as the MCP tool
 // agent_get reads it (PoolAgentNamed): the profile with pool, the role of
-// the caller, and the policy of the workers, and with no abilities,
-// because the tools of the workers live in their Tasks. The query
+// the caller, the policy of the workers, and the tools that the workers
+// give a profile that names none, and with no abilities, because the
+// tools of the workers live in their Tasks. The query
 // parameter pool names the pool when several pools run the profile. The
 // kernel calls it after the authentication and checks no right, so the
 // read decides with the rules of the pool for the caller in the context.
