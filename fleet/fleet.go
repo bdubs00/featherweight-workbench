@@ -149,6 +149,7 @@ type Fleet struct {
 	mirror    *pools.PackageMirror
 	envStates bucket.Bucket
 	closeEnv  func()
+	envPushed envPushes
 }
 
 // Open builds the fleet of an agent from a configuration that Load filled

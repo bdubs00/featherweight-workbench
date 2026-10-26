@@ -178,10 +178,11 @@ type envFailure struct {
 }
 
 // onEnvironment handles an event of the subject fw.environment. An event
-// of a Task that no pool owns changes nothing. The front keeps the event
-// as the state of the Task, and it writes an approved change of the tool
-// env into the overlay of the pool. Each replica of the front gets each
-// event, so both steps are safe to repeat.
+// of a Task that no pool owns changes nothing. The front keeps fw.env.ready
+// and fw.env.failed as the state of the Task, and it writes an approved
+// change of the tool env (fw.env.changed) into the overlay of the pool.
+// Each replica of the front gets each event, so both steps are safe to
+// repeat.
 func (f *Fleet) onEnvironment(e fw.Event) error {
 	switch e.Type {
 	case EvEnvReady, EvEnvFailed, EvEnvChanged:
@@ -198,11 +199,15 @@ func (f *Fleet) onEnvironment(e fw.Event) error {
 	}
 	ctx, cancel := context.WithTimeout(f.ctx, overlayTimeout)
 	defer cancel()
+	if e.Type == EvEnvChanged {
+		// A change keeps the last ready or failed state of the Task, so
+		// its installed versions stay. The next fw.env.ready names the
+		// change.
+		f.applyEnvChange(ctx, base, member, e)
+		return nil
+	}
 	if err := f.recordEnv(ctx, base.Name, member, e); err != nil {
 		f.log.Warn("fleet: keep the state of the environment of a worker", "pool", base.Name, "task", member, "type", e.Type, "error", err)
-	}
-	if e.Type == EvEnvChanged {
-		f.applyEnvChange(ctx, base, member, e)
 	}
 	return nil
 }
@@ -302,9 +307,9 @@ func (f *Fleet) applyEnvChange(ctx context.Context, base *pools.Pool, member str
 	now := time.Now().UTC()
 	item := pools.PackageItem{Name: name, By: decider, At: &now, Agent: d.Agent, Run: d.Run}
 	refused := ""
-	wrote := false
+	var wrote *pools.PackageSetting
 	_, err := f.overlays.UpdatePackages(ctx, base.Name, func(cur *pools.PackageSetting) (*pools.PackageSetting, error) {
-		wrote, refused = false, ""
+		wrote, refused = nil, ""
 		s := base.ConfigPackages()
 		if cur != nil {
 			s = *cur
@@ -322,7 +327,7 @@ func (f *Fleet) applyEnvChange(ctx context.Context, base *pools.Pool, member str
 			return nil, nil
 		}
 		s.By, s.At = decider, &now
-		wrote = true
+		wrote = &s
 		return &s, nil
 	})
 	switch {
@@ -330,8 +335,10 @@ func (f *Fleet) applyEnvChange(ctx context.Context, base *pools.Pool, member str
 		log.Warn("fleet: write a package that a person approved into the overlay of the pool", "error", err)
 	case refused != "":
 		log.Warn("fleet: a worker changed a package that the pool does not take", "reason", refused)
-	case wrote:
+	case wrote != nil:
 		log.Info("fleet: the overlay of a pool takes a package that a person approved", "principal", decider)
+		// The other workers of the pool get the package now.
+		f.pushPool(base.Name, *wrote)
 	}
 }
 
@@ -530,8 +537,8 @@ func PackagesOf(ctx context.Context, a *fw.Agent, name string) (Packages, error)
 // kernel refuses is an error. An item that stays keeps its author, and a
 // new item names the caller. With dry, it checks the request, answers the
 // setting that it writes without dry, and writes nothing. A request
-// that changes nothing writes nothing. The workers get the change when
-// each is idle.
+// that changes nothing writes nothing. The front sends the change to each
+// running worker of the pool and replaces no worker for it.
 func PutPackages(ctx context.Context, a *fw.Agent, name string, req PackagesRequest, dry bool) (Packages, error) {
 	t, err := packagesPool(ctx, a, name)
 	if err != nil {
@@ -556,6 +563,15 @@ func PutPackages(ctx context.Context, a *fw.Agent, name string, req PackagesRequ
 		return Packages{}, fmt.Errorf("%w: %v", fw.ErrInvalidRequest, err)
 	}
 	cur := t.merged.PackageSetting()
+	var added []string
+	for _, n := range python {
+		if !slices.Contains(pools.Names(cur.Python), n) {
+			added = append(added, n)
+		}
+	}
+	if err := f.checkPython(ctx, added); err != nil {
+		return Packages{}, err
+	}
 	now, by := time.Now().UTC(), subjectOf(ctx)
 	next := pools.PackageSetting{On: *req.On, Ask: req.Ask, Python: keepItems(cur.Python, python, by, now), Tools: keepItems(cur.Tools, tools, by, now), By: by, At: &now}
 	if next.Same(cur) {
@@ -586,6 +602,9 @@ func PutPackages(ctx context.Context, a *fw.Agent, name string, req PackagesRequ
 	}
 	f.log.Info("fleet: the overlay of a pool sets the packages", "pool", base.Name, "on", next.On, "ask", next.Ask,
 		"python", len(next.Python), "tools", len(next.Tools), "principal", by)
+	// The running workers take the change in place: the hash of the pool
+	// leaves the setting out, so the pool replaces no worker for it.
+	f.pushPool(base.Name, next)
 	return t.answer(ctx, proposed)
 }
 
@@ -606,35 +625,28 @@ func keepItems(cur []pools.PackageItem, names []string, by string, now time.Time
 }
 
 // answer builds the answer for the pool p, the pool with the overlay of
-// the store or of a request.
+// the store or of a request. applying is true while a Task of the pool
+// runs an older configuration, or while a worker has not taken the
+// setting yet: it is pending or materializing.
 func (t *packagesTarget) answer(ctx context.Context, p *pools.Pool) (Packages, error) {
 	s := p.PackageSetting()
 	out := Packages{Pool: t.base.Name, Available: t.f.overlays != nil, On: s.On, Ask: s.Ask, Python: s.Python, Tools: s.Tools, Workers: []WorkerPackages{}}
-	for _, task := range t.st.Tasks {
-		if task.Phase == phaseTerminating {
-			continue
-		}
-		// A Task of an older configuration gets the change once it is
-		// idle. A state of the last pass with another hash has not seen
-		// the change of the setting yet.
-		if !task.Current || p.Hash() != t.st.Hash {
-			out.Applying = true
-		}
-	}
-	if !s.On {
-		return out, nil
-	}
 	ctx, cancel := context.WithTimeout(ctx, overlayTimeout)
 	defer cancel()
 	for _, task := range t.st.Tasks {
 		if task.Phase == phaseTerminating {
 			continue
 		}
-		w, err := t.worker(ctx, p, s, task, out.Applying)
+		w, err := t.worker(ctx, p, s, task)
 		if err != nil {
 			return Packages{}, err
 		}
-		out.Workers = append(out.Workers, w)
+		if w.State == EnvPending || w.State == EnvMaterializing {
+			out.Applying = true
+		}
+		if s.On {
+			out.Workers = append(out.Workers, w)
+		}
 	}
 	return out, nil
 }
@@ -642,15 +654,18 @@ func (t *packagesTarget) answer(ctx context.Context, p *pools.Pool) (Packages, e
 // phaseTerminating is the phase of a Task that ax deletes.
 const phaseTerminating = "Terminating"
 
-// worker returns the state of the environment of one Task of the pool p.
-// A Task of an older configuration is pending: it gets the change once it
-// is idle. An event since the creation of the Task decides for a Task of
-// the current configuration: fw.env.ready and fw.env.changed say ready,
-// and fw.env.failed says failed. Without such an event, a Task that runs
+// worker returns the state of the environment of one Task of the pool p
+// with the setting s. A Task of an older configuration is pending: it gets
+// the change once it is idle. An event since the creation of the Task
+// decides for a Task of the current configuration: fw.env.ready says
+// ready and fw.env.failed says failed, when the event names the switch
+// and the lists of the setting. An event that names another switch or
+// other lists says pending, because the front sends the setting to the
+// worker (PUT /v1/environment). Without such an event, a Task that runs
 // is materializing, because the kernel installs at its start, and a Task
 // that does not run yet is pending. Without an event and without the time
 // of its creation, the state is unknown.
-func (t *packagesTarget) worker(ctx context.Context, p *pools.Pool, s pools.PackageSetting, task pools.TaskStatus, applying bool) (WorkerPackages, error) {
+func (t *packagesTarget) worker(ctx context.Context, p *pools.Pool, s pools.PackageSetting, task pools.TaskStatus) (WorkerPackages, error) {
 	member := p.Atespace + "/" + task.Name
 	w := WorkerPackages{Task: task.Name, State: EnvUnknown}
 	rec, ok, err := t.f.envState(ctx, member)
@@ -678,15 +693,12 @@ func (t *packagesTarget) worker(ctx context.Context, p *pools.Pool, s pools.Pack
 					w.Failure.RetryAt = &r
 				}
 			}
-		case EvEnvChanged:
-			var c envChanged
-			if json.Unmarshal(rec.Data, &c) == nil {
-				w.Digest = c.Digest
-			}
 		}
 	}
 	switch {
-	case !task.Current || (applying && p.Hash() != t.st.Hash):
+	case !task.Current || p.Hash() != t.st.Hash:
+		w.State = EnvPending
+	case fresh && !envTook(rec, s):
 		w.State = EnvPending
 	case fresh && rec.Type == EvEnvFailed:
 		w.State = EnvFailed
@@ -700,6 +712,57 @@ func (t *packagesTarget) worker(ctx context.Context, p *pools.Pool, s pools.Pack
 		w.State = EnvPending
 	}
 	return w, nil
+}
+
+// envBase is what fw.env.ready and fw.env.failed name of the base of the
+// environment: the switch, whether the agent can ask, and the lists with
+// the local changes of the tool env. An event of an older kernel names
+// none of them.
+type envBase struct {
+	On    *bool `json:"on"`
+	Ask   *bool `json:"ask"`
+	Lists *struct {
+		Python []string `json:"python"`
+		Tools  []string `json:"tools"`
+	} `json:"lists"`
+}
+
+// envTook reports whether the event of a worker names the setting s: the
+// same switch, the same ask, and, while the packages are on, the same
+// names in both lists in any order. An event that names no switch comes
+// from a kernel that takes no setting, and it counts as taken.
+func envTook(rec envRecord, s pools.PackageSetting) bool {
+	var b envBase
+	if json.Unmarshal(rec.Data, &b) != nil || b.On == nil {
+		return true
+	}
+	if *b.On != s.On || (b.Ask != nil && *b.Ask != s.Ask) {
+		return false
+	}
+	if !s.On {
+		return true
+	}
+	var py, tools []string
+	if b.Lists != nil {
+		py, tools = b.Lists.Python, b.Lists.Tools
+	}
+	return sameNames(py, pools.Names(s.Python)) && sameNames(tools, pools.Names(s.Tools))
+}
+
+// sameNames reports whether two lists hold the same trimmed names, in any
+// order.
+func sameNames(a, b []string) bool {
+	norm := func(l []string) []string {
+		out := make([]string, 0, len(l))
+		for _, n := range l {
+			if n = strings.TrimSpace(n); n != "" && !slices.Contains(out, n) {
+				out = append(out, n)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	return slices.Equal(norm(a), norm(b))
 }
 
 // installed returns the installed version of each package of the setting

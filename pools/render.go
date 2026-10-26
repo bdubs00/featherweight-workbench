@@ -133,7 +133,9 @@ func Resolve(list []*Pool, getenv func(string) (string, bool)) (*Values, error) 
 // computeHash is the hash of what every Task of the pool shares: the image,
 // the variables with the name of each variable of the front instead of its
 // value, the egress, the resources, the files with the rendered fw.yaml,
-// the revision, and the generation. The dry run therefore computes the
+// the revision, and the generation. The fw.yaml of the hash leaves out
+// the lists of the packages, so a change of the packages replaces no Task
+// (packages.go). The dry run therefore computes the
 // same hash as the front, and the hash never depends on a secret. A
 // generation of 0 leaves the hash as it was before pools had one.
 func (p *Pool) computeHash() string {
@@ -150,7 +152,10 @@ func (p *Pool) computeHash() string {
 		Egress     *ax.EgressSpec   `json:"egress,omitempty"`
 		Resources  ax.ResourcesSpec `json:"resources"`
 		Files      []ax.File        `json:"files"`
-	}{Image: p.Image, Revision: p.Revision, Generation: p.Generation, Egress: p.taskEgress(), Resources: p.Resources, Files: p.files}
+	}{Image: p.Image, Revision: p.Revision, Generation: p.Generation, Egress: p.taskEgress(), Resources: p.Resources, Files: slices.Clone(p.files)}
+	if len(in.Files) > 0 && p.hashFile != "" {
+		in.Files[0].Content = p.hashFile
+	}
 	for _, e := range p.env {
 		in.Env = append(in.Env, envEntry{Name: e.Name, Value: e.Value, FromEnv: e.FromEnv})
 	}
@@ -357,11 +362,11 @@ func Write(w io.Writer, list []*Pool) error {
 				}
 				where = "The overlay of the front turns the packages on" + written(s.By, at, "")
 			}
-			ask := "the agent cannot change them, because fw.policy.deny holds the rules of the tool env"
+			ask := "the agent cannot ask for a change"
 			if s.Ask {
 				ask = "the agent can ask for a change, and a person approves each one"
 			}
-			fmt.Fprintf(&b, "%s: Python packages %s, Programs %s, from the package mirror of the front; %s.\n", where, orWord(strings.Join(Names(s.Python), ", "), "none"), orWord(strings.Join(Names(s.Tools), ", "), "none"), ask)
+			fmt.Fprintf(&b, "%s: Python packages %s, Programs %s, from the package mirror of the front; %s. The front sends a change of the packages to the running workers and replaces no Task for it.\n", where, orWord(strings.Join(Names(s.Python), ", "), "none"), orWord(strings.Join(Names(s.Tools), ", "), "none"), ask)
 		}
 		if len(p.skillNames) > 0 {
 			fmt.Fprintf(&b, "The front ships its skills %s, which the profiles of the pool allow, to %s/%s of each worker.\n", strings.Join(p.skillNames, ", "), WorkspacePath, SkillsPath)

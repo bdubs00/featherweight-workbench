@@ -163,6 +163,7 @@ func (p *platform) reconcilePools(ctx context.Context, listed map[string][]*v1al
 			p.mu.Lock()
 			p.merged[pool.Name] = merged
 			p.mu.Unlock()
+			p.syncEnvironments(ctx, merged, st)
 		}
 		if e, ok := shadow[pool.Name]; ok {
 			st.Gaps = append(st.Gaps, fmt.Sprintf("the store of the runtime pools holds a pool of this name too, which %s created; the file wins, so the front runs this pool and leaves that entry alone; remove the entry with pool_delete or DELETE /v1/pools/%s", orWho(e.By), pool.Name))

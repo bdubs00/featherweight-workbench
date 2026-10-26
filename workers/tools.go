@@ -198,7 +198,7 @@ func tools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolPackagesPut,
 			Title:       "Set the packages of a pool",
-			Description: "Turn the packages of the workers of a pool on or off, and replace its lists of Python packages and Programs. It needs the owner role on the agent of the pool. Each worker gets the change when it is idle, and work in progress does not stop. With dryRun, it checks the request and changes nothing. Read the setting with packages_get first, because the lists replace the lists of the pool.",
+			Description: "Turn the packages of the workers of a pool on or off, and replace its lists of Python packages and Programs. It needs the owner role on the agent of the pool. A running worker takes the change in about a minute, and work in progress does not stop. A sleeping worker takes it when it wakes. With dryRun, it checks the request and changes nothing. Read the setting with packages_get first, because the lists replace the lists of the pool.",
 			InputSchema: json.RawMessage(packagesPutSchema),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(true), IdempotentHint: true, OpenWorldHint: ptr(false)},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in packagesPutArgs) (*sdk.CallToolResult, any, error) {
@@ -320,7 +320,7 @@ func packagesText(p fleet.Packages) string {
 			b.WriteString(" The front cannot change them here.")
 		}
 		if p.Applying {
-			b.WriteString("\nWhen a worker is idle, it gets the change. Work in progress does not stop.")
+			b.WriteString("\nWorkers take a change in about a minute. Work in progress does not stop.")
 		}
 		return b.String()
 	}
@@ -371,10 +371,10 @@ func packagesText(p fleet.Packages) string {
 	case ready == n:
 		fmt.Fprintf(&b, "\nReady on %d of %d %s.", ready, n, plural(n, "worker", "workers"))
 	case failed == 0:
-		fmt.Fprintf(&b, "\nInstalling on %d of %d %s.", n-ready, n, plural(n, "worker", "workers"))
+		fmt.Fprintf(&b, "\nUpdating on %d of %d %s.", n-ready, n, plural(n, "worker", "workers"))
 	}
 	if p.Applying {
-		b.WriteString("\nWhen a worker is idle, it gets the change. Work in progress does not stop.")
+		b.WriteString("\nWorkers take a change in about a minute. Work in progress does not stop.")
 	}
 	return b.String()
 }

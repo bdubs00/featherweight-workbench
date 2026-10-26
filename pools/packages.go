@@ -279,9 +279,11 @@ func (p *Pool) PackagesOn() bool {
 }
 
 // taskEgress returns spec.egress of each Task: the egress of the pool,
-// and with packages the hosts of the mirror that it does not hold yet.
+// and on a front with a package mirror the hosts of the mirror that it
+// does not hold yet. Every pool of such a front reaches the mirror, so a
+// change of the setting changes no Task.
 func (p *Pool) taskEgress() *ax.EgressSpec {
-	if !p.PackagesOn() || len(p.front.Packages.Egress) == 0 {
+	if p.front.Packages == nil || len(p.front.Packages.Egress) == 0 {
 		return p.Egress
 	}
 	out := &ax.EgressSpec{}
@@ -296,30 +298,40 @@ func (p *Pool) taskEgress() *ax.EgressSpec {
 	return out
 }
 
-// withPackages returns the block fw of the workers m with the packages of
-// the pool: the block environment with the lists and the mirrors, the
-// tool env in tools.builtin when the block sets that list, and the rules
-// of the tool env in policy.ask when the block sets that list. With ask,
-// each profile with a tool list gets the tool env. Without ask, the rules
-// go to policy.deny too, so the tool only lists. A pool never lets an
-// agent change its packages without a person. m does not change: each
-// level that the function changes is a copy.
-func withPackages(m map[string]any, s PackageSetting, mirror *PackageMirror) map[string]any {
+// withPackages returns the block fw of the workers m with the
+// infrastructure of the packages, which every pool of a front with a
+// package mirror gets, whatever its setting: the block environment with
+// the mirrors, the tool env in tools.builtin when the block sets that
+// list, the two rules of the tool env in policy.ask when the block sets
+// that list, and the tool env in each tool list of a profile that is not
+// empty. With hash, the block environment holds no lists, because the
+// hash of a pool leaves the setting of the packages out. Else it holds the
+// lists of the setting, and empty lists while the setting is off. The
+// front sends a change of the setting to the running workers
+// (PUT /v1/environment), so a change replaces no worker. m does not
+// change: each level that the function changes is a copy.
+func withPackages(m map[string]any, s PackageSetting, mirror *PackageMirror, hash bool) map[string]any {
 	out := make(map[string]any, len(m)+1)
 	for k, v := range m {
 		out[k] = v
 	}
 	names := func(list []PackageItem) []any {
 		l := make([]any, 0, len(list))
+		if !s.On {
+			return l
+		}
 		for _, it := range list {
 			l = append(l, escapeDollars(it.Name))
 		}
 		return l
 	}
-	out["environment"] = map[string]any{
-		"packages": map[string]any{ListPython: names(s.Python), ListTools: names(s.Tools)},
-		"mirrors":  map[string]any{ListPython: escapeDollars(mirror.Mirrors.Python), ListTools: escapeDollars(mirror.Mirrors.Tools)},
+	env := map[string]any{
+		"mirrors": map[string]any{ListPython: escapeDollars(mirror.Mirrors.Python), ListTools: escapeDollars(mirror.Mirrors.Tools)},
 	}
+	if !hash {
+		env["packages"] = map[string]any{ListPython: names(s.Python), ListTools: names(s.Tools)}
+	}
+	out["environment"] = env
 	if tools, ok := m["tools"].(map[string]any); ok {
 		if _, set := tools["builtin"]; set {
 			t := copyMap(tools)
@@ -327,21 +339,14 @@ func withPackages(m map[string]any, s PackageSetting, mirror *PackageMirror) map
 			out["tools"] = t
 		}
 	}
-	policy, _ := m["policy"].(map[string]any)
-	pol := copyMap(policy)
-	changed := false
-	if _, set := pol["ask"]; set {
-		pol["ask"] = addStrings(pol["ask"], EnvAskRules...)
-		changed = true
+	if policy, ok := m["policy"].(map[string]any); ok {
+		if _, set := policy["ask"]; set {
+			pol := copyMap(policy)
+			pol["ask"] = addStrings(policy["ask"], EnvAskRules...)
+			out["policy"] = pol
+		}
 	}
-	if !s.Ask {
-		pol["deny"] = addStrings(pol["deny"], EnvAskRules...)
-		changed = true
-	}
-	if changed {
-		out["policy"] = pol
-	}
-	if agents, ok := m["agents"].(map[string]any); ok && s.Ask {
+	if agents, ok := m["agents"].(map[string]any); ok {
 		a := copyMap(agents)
 		for name, v := range agents {
 			prof, ok := v.(map[string]any)

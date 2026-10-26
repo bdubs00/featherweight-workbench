@@ -117,6 +117,7 @@ type Pool struct {
 	env      []EnvVar   // Env and the variables of the front, in the order of the Task
 	files    []ax.File  // the rendered fw.yaml first, then Files
 	hash     string
+	hashFile string // the fw.yaml that the hash covers: without the lists of the packages (packages.go)
 	base     string // the hash without the overlay, when WithOverlay merged one
 	warnings []string
 	front    Front   // what the pool took from the front, for a render with an overlay
@@ -657,7 +658,7 @@ func (p *Pool) render(front Front) []string {
 			add("fw.%s is not a key of the configuration of fw", k)
 		}
 	}
-	text, err := p.workerFile(front)
+	text, err := p.workerFile(front, false)
 	if err != nil {
 		add("fw: %v", err)
 		return problems
@@ -729,11 +730,15 @@ func (p *Pool) render(front Front) []string {
 	}
 	// The intake is part of the file, so the file is rendered again now
 	// that it is known.
-	if text, err = p.workerFile(front); err != nil {
+	if text, err = p.workerFile(front, false); err != nil {
 		add("fw: %v", err)
 		return problems
 	}
 	p.files = append(append([]ax.File{{Path: ConfigFile, Content: text}}, p.Files...), p.skillFiles...)
+	if p.hashFile, err = p.workerFile(front, true); err != nil {
+		add("fw: %v", err)
+		return problems
+	}
 	p.hash = p.computeHash()
 	return problems
 }
@@ -842,8 +847,10 @@ func header(pool string) string {
 }
 
 // workerFile renders the fw.yaml of the workers: the defaults of the
-// front, then fw over them, then the keys that the pool sets.
-func (p *Pool) workerFile(front Front) (string, error) {
+// front, then fw over them, then the keys that the pool sets. With hash,
+// it renders the file that the hash of the pool covers, without the lists
+// of the packages.
+func (p *Pool) workerFile(front Front, hash bool) (string, error) {
 	bus := map[string]any{"driver": front.Bus.Driver}
 	if front.Bus.URL != "" && !credential(front.Bus.URL) {
 		bus["url"] = front.Bus.URL
@@ -860,12 +867,11 @@ func (p *Pool) workerFile(front Front) (string, error) {
 		"ax":   map[string]any{"server": front.AX.Server, "router": front.AX.Router},
 	}
 	m := merge(defaults, p.FW)
-	if p.front.Packages != nil {
-		// The packages of the pool, with the overlay, go to the workers.
-		// The front gives them only with a package mirror.
-		if s := p.PackageSetting(); s.On {
-			m = withPackages(m, s, p.front.Packages)
-		}
+	if front.Packages != nil {
+		// Every pool of a front with a package mirror gets the
+		// infrastructure of the packages, and the lists of its setting
+		// with the overlay (packages.go).
+		m = withPackages(m, p.PackageSetting(), front.Packages, hash)
 	}
 	b, _ := m["bus"].(map[string]any)
 	if b == nil {

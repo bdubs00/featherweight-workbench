@@ -128,11 +128,12 @@ func TestPackagesChecks(t *testing.T) {
 	}
 }
 
-// With packages on, the render gives the workers the block environment
-// with the lists and the mirrors, the egress of the mirror, the tool env
-// in the built-in tools that the block names, the two rules of the tool
-// env in the ask list that the block names, and with ask, the tool env in
-// each tool list of a profile. The rules never reach the allow list.
+// On a front with a package mirror, the render gives the workers the
+// block environment with the lists and the mirrors, the egress of the
+// mirror, the tool env in the built-in tools that the block names, the two
+// rules of the tool env in the ask list that the block names, and the
+// tool env in each tool list of a profile. The rules never reach the allow
+// list. The setting changes only the lists, which the hash leaves out.
 func TestPackagesRender(t *testing.T) {
 	plain := loadFixture(t, fixture)[0]
 	p := loadPackages(t, withPackagesKey(fixture, `{on: true, ask: true, python: [ansible-lint, "pyyaml>=6"], tools: [iproute2]}`))
@@ -185,18 +186,21 @@ func TestPackagesRender(t *testing.T) {
 		t.Fatalf("ToolsProblem = %q", why)
 	}
 
-	// Without ask, the rules go to the deny list too, and no profile gets
-	// the tool: it only lists.
+	// Without ask, the render is the same: the kernel refuses an add
+	// and a remove, and the rules still ask a person.
 	q := loadPackages(t, withPackagesKey(fixture, `{on: true, python: [ansible-lint]}`))
 	m = fileMap(t, q)
-	if got := stringList(valueAt(m, "policy", "deny")); !slices.Equal(got, EnvAskRules) {
+	if got := stringList(valueAt(m, "policy", "deny")); len(got) != 0 {
 		t.Fatalf("policy.deny without ask = %v", got)
 	}
-	if got := stringList(valueAt(m, "agents", "triage", "tools")); slices.Contains(got, "env") {
+	if got := stringList(valueAt(m, "agents", "triage", "tools")); !slices.Contains(got, "env") {
 		t.Fatalf("the tools of the profile without ask = %v", got)
 	}
-	if d := q.Decide("triage", EnvTool, []byte(`{"command":"add","manager":"python","package":"x"}`)); d.Verdict != fw.VerdictDeny {
+	if d := q.Decide("triage", EnvTool, []byte(`{"command":"add","manager":"python","package":"x"}`)); d.Verdict != fw.VerdictAsk {
 		t.Fatalf("Decide(add) without ask = %+v", d)
+	}
+	if q.Hash() != p.Hash() {
+		t.Fatal("ask and the lists changed the hash")
 	}
 
 	// A block without its own lists keeps the defaults of the kernel,
@@ -211,15 +215,22 @@ func TestPackagesRender(t *testing.T) {
 		t.Fatalf("an empty list = %v", valueAt(m, "environment"))
 	}
 
-	// A pool with the packages off on a front with a mirror renders as
-	// before: no block, no egress, and the same hash.
+	// A pool with the packages off on a front with a mirror gets the
+	// infrastructure with empty lists, and the hash of a pool with them
+	// on. On a front without a mirror, a pool renders as before.
 	off := loadPackages(t, fixture)
-	if off.Hash() != plain.Hash() || fileMap(t, off)["environment"] != nil {
-		t.Fatal("a pool without packages changed on a front with a mirror")
+	if off.Hash() != p.Hash() || off.PackagesOn() {
+		t.Fatal("the setting changed the hash")
+	}
+	if got, ok := valueAt(fileMap(t, off), "environment", "packages", "python").([]any); !ok || len(got) != 0 {
+		t.Fatalf("the lists of a pool with the packages off = %v", valueAt(fileMap(t, off), "environment"))
 	}
 	off2 := loadPackages(t, withPackagesKey(fixture, `{on: false, python: [ansible-lint]}`))
-	if off2.Hash() != plain.Hash() {
-		t.Fatal("a pool with the packages off changed")
+	if off2.Hash() != p.Hash() || strings.Contains(off2.files[0].Content, "ansible-lint") {
+		t.Fatal("a pool with the packages off gives its workers its lists")
+	}
+	if strings.Contains(plain.files[0].Content, "environment:") {
+		t.Fatal("a front without a mirror gave the workers the block environment")
 	}
 }
 
@@ -234,7 +245,8 @@ func TestPackagesRenderEscapes(t *testing.T) {
 
 // The overlay wins over the configuration: its lists replace the lists
 // of the pool, and its switch turns the packages off. A change of the
-// overlay changes the hash and keeps the hash of the configuration.
+// packages in the overlay changes the file of the workers and keeps the
+// hash.
 func TestPackagesOverlayWins(t *testing.T) {
 	base := loadPackages(t, withPackagesKey(fixture, `{on: true, ask: true, python: [ansible-lint]}`))
 	at := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
@@ -243,8 +255,8 @@ func TestPackagesOverlayWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if merged.Hash() == base.Hash() || merged.baseHash() != base.Hash() {
-		t.Fatalf("hash %q, base %q, configuration %q", merged.Hash(), merged.baseHash(), base.Hash())
+	if merged.Hash() != base.Hash() || merged.files[0].Content == base.files[0].Content {
+		t.Fatalf("hash %q, configuration %q", merged.Hash(), base.Hash())
 	}
 	m := fileMap(t, merged)
 	if got := stringList(valueAt(m, "environment", "packages", "python")); !slices.Equal(got, []string{"pyyaml"}) {
@@ -260,7 +272,7 @@ func TestPackagesOverlayWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fileMap(t, off)["environment"] != nil || off.PackagesOn() {
+	if got, ok := valueAt(fileMap(t, off), "environment", "packages", "python").([]any); !ok || len(got) != 0 || off.PackagesOn() || off.Hash() != base.Hash() {
 		t.Fatal("the overlay did not turn the packages off")
 	}
 	var b strings.Builder
@@ -375,10 +387,9 @@ func TestMemOverlaysPackages(t *testing.T) {
 	}
 }
 
-// A change of the packages makes every worker of the pool older. The pool
-// replaces the idle workers one at a time and keeps their Workspaces, so
-// a worker takes the change without losing its files.
-func TestPackagesChangeReplacesAndKeepsWorkspaces(t *testing.T) {
+// A change of the packages keeps the hash, so the pool replaces no
+// worker: the front sends the change to the running workers instead.
+func TestPackagesChangeReplacesNoTask(t *testing.T) {
 	base := loadPackages(t, withPackagesKey(fixture, `{on: true, ask: true, python: [ansible-lint]}`))
 	first, err := base.WithOverlay(Overlay{})
 	if err != nil {
@@ -391,38 +402,19 @@ func TestPackagesChangeReplacesAndKeepsWorkspaces(t *testing.T) {
 	if st := r.pass(); st.Ready != 3 {
 		t.Fatalf("status = %+v", st)
 	}
-	next, err := base.WithOverlay(Overlay{}.WithPackages(&PackageSetting{On: true, Ask: true, Python: []PackageItem{{Name: "ansible-lint"}, {Name: "pyyaml"}}}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.p = next
-	var calls []string
-	for i := 0; i < 12; i++ {
+	for _, next := range []*PackageSetting{
+		{On: true, Ask: true, Python: []PackageItem{{Name: "ansible-lint"}, {Name: "pyyaml"}}},
+		{On: true, Ask: false, Tools: []PackageItem{{Name: "iproute2"}}},
+		{On: false},
+	} {
+		merged, err := base.WithOverlay(Overlay{}.WithPackages(next))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.p = merged
 		st := r.pass()
-		calls = append(calls, r.ax.took()...)
-		if st.Ready == 3 && st.Actual == 3 {
-			break
-		}
-	}
-	deletes := 0
-	for _, c := range calls {
-		if strings.HasPrefix(c, "delete workspace") {
-			t.Fatalf("the pool deleted a Workspace: %v", calls)
-		}
-		if strings.HasPrefix(c, "delete team/") {
-			deletes++
-		}
-	}
-	if deletes != 3 {
-		t.Fatalf("the pool replaced %d Tasks: %v", deletes, calls)
-	}
-	for _, task := range r.ax.list("team") {
-		if envOf(task, EnvSpec) != next.Hash() {
-			t.Fatalf("%s runs %s, want %s", task.Metadata.Name, envOf(task, EnvSpec), next.Hash())
-		}
-		ws := r.ax.workspaces["team/"+task.Metadata.Name+"-ws"]
-		if ws == nil || !strings.Contains(ws.Spec.Files[0].Content, "pyyaml") {
-			t.Fatalf("the Workspace of %s = %v", task.Metadata.Name, ws)
+		if calls := r.ax.took(); len(calls) != 0 || st.Ready != 3 || len(st.Gaps) != 0 {
+			t.Fatalf("a change of the packages to %+v made calls %v, status %+v", next, calls, st)
 		}
 	}
 }

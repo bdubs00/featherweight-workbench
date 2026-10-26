@@ -582,9 +582,9 @@ func (p *Pool) ToolsProblem(agent string, tools []string) string {
 			names = append(names, b)
 		}
 	}
-	if p.PackagesOn() && !slices.Contains(names, EnvTool) {
-		// The kernel gives a worker with packages the tool env, also when
-		// the block fw names no built-in tool.
+	if p.front.Packages != nil && !slices.Contains(names, EnvTool) {
+		// The kernel gives a worker with the block environment the tool
+		// env, also when the block fw names no built-in tool.
 		names = append(names, EnvTool)
 	}
 	for _, peer := range t.Peers {

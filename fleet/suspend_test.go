@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -66,11 +67,15 @@ type fakeTasks struct {
 	// block holds the requests to an actor until the channel closes, as a
 	// Task that just started holds a read.
 	block map[string]chan struct{}
+	// envs holds each body of PUT /v1/environment by actor, in order, as
+	// the kernel of a worker takes the setting of its packages.
+	envs map[string][]EnvironmentBody
 }
 
 func newFakeTasks(t *testing.T) *fakeTasks {
 	t.Helper()
-	ft := &fakeTasks{status: map[string]view.Status{}, reads: map[string]int{}, runs: map[string]map[string]*fw.Run{}, tokens: map[string]string{}, block: map[string]chan struct{}{}}
+	ft := &fakeTasks{status: map[string]view.Status{}, reads: map[string]int{}, runs: map[string]map[string]*fw.Run{}, tokens: map[string]string{}, block: map[string]chan struct{}{},
+		envs: map[string][]EnvironmentBody{}}
 	ft.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		actor := r.Header.Get("ate-target-actor")
 		ft.mu.Lock()
@@ -103,6 +108,17 @@ func newFakeTasks(t *testing.T) *fakeTasks {
 			return
 		}
 		switch r.URL.Path {
+		case EnvironmentPath:
+			var b EnvironmentBody
+			if r.Method != http.MethodPut || json.NewDecoder(r.Body).Decode(&b) != nil {
+				http.Error(w, "bad environment", http.StatusBadRequest)
+				return
+			}
+			ft.mu.Lock()
+			ft.envs[actor] = append(ft.envs[actor], b)
+			ft.mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]any{"on": b.On, "ask": b.Ask, "lists": map[string]any{"python": b.Python, "tools": b.Tools}, "state": "materializing"})
 		case "/v1/runs":
 			_ = json.NewEncoder(w).Encode(map[string]any{"runs": []*fw.Run{}})
 		case "/v1/agents":
@@ -125,6 +141,13 @@ func (ft *fakeTasks) set(actor string, st view.Status) {
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
 	ft.status[actor] = st
+}
+
+// envsOf returns the bodies of PUT /v1/environment that an actor took.
+func (ft *fakeTasks) envsOf(actor string) []EnvironmentBody {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	return slices.Clone(ft.envs[actor])
 }
 
 func (ft *fakeTasks) count(actor string) int {

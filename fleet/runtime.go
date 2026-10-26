@@ -205,6 +205,9 @@ func (p *platform) passRuntime(ctx context.Context, e pools.Stored, listed map[s
 		p.mu.Lock()
 		p.merged[e.Name] = use
 		p.mu.Unlock()
+		if !e.Deleting {
+			p.syncEnvironments(ctx, use, st)
+		}
 		if e.Deleting && p.finishDelete(ctx, e, base, &st) {
 			p.mu.Lock()
 			delete(p.rt, e.Name)
