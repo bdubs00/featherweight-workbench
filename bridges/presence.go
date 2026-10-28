@@ -7,6 +7,7 @@ package bridges
 // presence: the routes and the hooks compute it from the view.
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -128,12 +129,33 @@ func decorate(rec *record, runs map[string]*fw.Run, states map[string]string) []
 		if p, ok := unseatedPresence(rec, *m, runs); ok {
 			m.Presence = p
 		}
-		// A question of the seat waits for a person (ask.go).
-		if m.Question > 0 && m.Presence != PresenceFired && m.Presence != PresenceError {
+		// A question of the seat waits for a person (ask.go), unless the
+		// run of the seat is gone: then no answer moves it.
+		if m.Question > 0 && !m.Gone && m.Presence != PresenceFired && m.Presence != PresenceError {
 			m.Presence = PresenceNeedsYou
 		}
 	}
 	return out
+}
+
+// members decorates the seats of a record, and marks as gone each seat
+// that needs a person while the archive holds its newest run as lost
+// (fleet.LostRun): its worker went with a roll, so nobody can answer it
+// (walk finding R1). The count needsYou of the bridge, the badge of the
+// page, and Activity then leave it out, as the board shows it Lost.
+func (s *Store) members(ctx context.Context, rec *record, runs map[string]*fw.Run, states map[string]string) []Member {
+	ms := decorate(rec, runs, states)
+	for i := range ms {
+		m := &ms[i]
+		id := m.newest()
+		if m.Presence != PresenceNeedsYou || id == "" || runs[id] != nil {
+			continue
+		}
+		if fleet.LostRun(ctx, s.a, id) {
+			m.Presence, m.Activity, m.Gone = PresenceError, nil, true
+		}
+	}
+	return ms
 }
 
 // unseatedPresence is the presence of a seat that has no run yet: waiting

@@ -534,6 +534,26 @@ func (f *Fleet) startArchive(ctx context.Context, cfg *fw.Config, egress string)
 // without one.
 func (f *Fleet) arch() *archive { return f.archivePtr.Load() }
 
+// LostRun reports whether the archive holds the run id as lost: the run
+// never ended, and no member of the view or this process holds it, so its
+// worker went with a roll and nobody can move it.
+func LostRun(ctx context.Context, a *fw.Agent, id string) bool {
+	f, _ := Of(a).(*Fleet)
+	if f == nil || id == "" {
+		return false
+	}
+	arch := f.arch()
+	if arch == nil {
+		return false
+	}
+	s, ok := arch.summaries(ctx)[id]
+	if !ok {
+		return false
+	}
+	run := s.listed()
+	return run != nil && !run.State.Terminal() && !f.held(id)
+}
+
 // held reports whether a member of the view or this process holds the
 // run, so the archive does not answer for it.
 func (f *Fleet) held(id string) bool {

@@ -127,7 +127,7 @@ func (s *Store) item(ctx context.Context, rec *record, subject string, members b
 	if err != nil {
 		return Item{}, err
 	}
-	ms := decorate(rec, runs, s.taskStates(fctx))
+	ms := s.members(fctx, rec, runs, s.taskStates(fctx))
 	it := Item{Bridge: rec.public(), Read: read, Unread: unread, UnreadMore: more, MemberCount: len(rec.Members), NeedsYou: needsYou(ms)}
 	it.Caps.MaxTurns = rec.Caps.turnCap()
 	if at, ok := s.b.lastAt(fctx, rec); ok {
@@ -147,7 +147,7 @@ func (s *Store) memberOf(ctx context.Context, rec *record, handle string) Member
 	if err != nil {
 		runs = map[string]*fw.Run{}
 	}
-	for _, m := range decorate(rec, runs, s.taskStates(fctx)) {
+	for _, m := range s.members(fctx, rec, runs, s.taskStates(fctx)) {
 		if m.Handle == handle {
 			return m
 		}
