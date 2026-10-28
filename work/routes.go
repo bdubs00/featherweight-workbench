@@ -77,6 +77,38 @@ func For(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, erro
 	return ans, nil
 }
 
+// mergeRuns puts the runs of the view beside the runs of the archive, one
+// per id. The view holds a run as it is now, with its activity, and the
+// archive adds the facts of its work. A run that ended in both keeps the
+// run of the archive when the archive saw its end: after a start of the
+// front, the view knows the run of a Task that sleeps from the index of the
+// runs alone, without its title, its output, its metadata, or its done,
+// and the card then lost its title and its verdict.
+func mergeRuns(facts []fleet.WorkRun, live []*fw.Run) []Run {
+	var out []Run
+	byID := map[string]int{}
+	for _, w := range facts {
+		if w.Run == nil || !fleet.Listed(w.Run) {
+			continue
+		}
+		byID[w.Run.ID] = len(out)
+		out = append(out, Run{Run: w.Run, Work: w.Work, Lost: w.Lost})
+	}
+	for _, r := range live {
+		i, ok := byID[r.ID]
+		switch {
+		case !ok:
+			byID[r.ID] = len(out)
+			out = append(out, Run{Run: r})
+		case r.State.Terminal() && out[i].Run.State.Terminal() && out[i].Run.Seq >= r.Seq:
+			out[i].Lost = false
+		default:
+			out[i].Run, out[i].Lost = r, false
+		}
+	}
+	return out
+}
+
 // build gathers the records of the board and assembles it.
 func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, error) {
 	in := Input{Now: now, Window: time.Duration(q.Days) * 24 * time.Hour, All: q.All, Mine: map[string]bool{}, Queued: map[string]int{}}
@@ -96,24 +128,7 @@ func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, er
 	if err != nil {
 		return Answer{}, err
 	}
-	byID := map[string]int{}
-	for _, w := range facts {
-		if w.Run == nil || !fleet.Listed(w.Run) {
-			continue
-		}
-		byID[w.Run.ID] = len(in.Runs)
-		in.Runs = append(in.Runs, Run{Run: w.Run, Work: w.Work, Lost: w.Lost})
-	}
-	for _, r := range live {
-		// The view holds the run as it is now, with its activity; the
-		// archive adds the facts.
-		if i, ok := byID[r.ID]; ok {
-			in.Runs[i].Run, in.Runs[i].Lost = r, false
-			continue
-		}
-		byID[r.ID] = len(in.Runs)
-		in.Runs = append(in.Runs, Run{Run: r})
-	}
+	in.Runs = mergeRuns(facts, live)
 	all := make([]*fw.Run, 0, len(in.Runs))
 	for _, r := range in.Runs {
 		all = append(all, r.Run)

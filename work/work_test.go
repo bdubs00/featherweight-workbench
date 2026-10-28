@@ -392,3 +392,27 @@ func TestReasonWords(t *testing.T) {
 		t.Errorf("plainText = %q, want %q", got, want)
 	}
 }
+
+// A run that ended keeps the run of the archive when the view knows it
+// from the index of the runs alone, so its card keeps its title and its
+// verdict after a start of the front. A run that works takes the view.
+func TestMergeRunsKeepsTheArchiveOfAnEnd(t *testing.T) {
+	full := &fw.Run{ID: "R1", Agent: "checker", State: fw.StateCompleted, Seq: 45, Title: "Write a note", Output: "READY",
+		Done: &fw.RunDone{State: fw.DoneChecked}, Metadata: map[string]string{"fw.title": "Write a note"}}
+	thin := &fw.Run{ID: "R1", Agent: "checker", State: fw.StateCompleted, Seq: 45}
+	workingArch := &fw.Run{ID: "R2", Agent: "checker", State: fw.StateRunning, Seq: 3, Title: "Old"}
+	working := &fw.Run{ID: "R2", Agent: "checker", State: fw.StateRunning, Seq: 9, Activity: &fw.RunActivity{Tool: "bash"}}
+	got := mergeRuns([]fleet.WorkRun{{Run: full}, {Run: workingArch, Lost: true}}, []*fw.Run{thin, working, {ID: "R3", State: fw.StateQueued}})
+	if len(got) != 3 {
+		t.Fatalf("the runs = %d, want 3", len(got))
+	}
+	if got[0].Run != full || got[0].Done == nil || got[0].Title != "Write a note" {
+		t.Errorf("an ended run = %+v, want the run of the archive", got[0].Run)
+	}
+	if got[1].Run != working || got[1].Lost {
+		t.Errorf("a run that works = %+v lost %v, want the run of the view", got[1].Run, got[1].Lost)
+	}
+	if got[2].ID != "R3" {
+		t.Errorf("a run of the view alone = %+v", got[2].Run)
+	}
+}
