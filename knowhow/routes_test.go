@@ -455,3 +455,20 @@ func TestKernelWireShapes(t *testing.T) {
 	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/agent/p.md", "fleet", `{"text": "x", "ifHash": "absent", "by": "person"}`)
 	mustStatus(t, resp, body, http.StatusCreated)
 }
+
+// A 404 for a thing that the caller cannot view names neither the agent nor
+// the scope, and no detail starts with the name of the package.
+func TestReasonHidesWhatExists(t *testing.T) {
+	for _, err := range []error{
+		fmt.Errorf("%w: %s", ErrHidden, "triage"),
+		fmt.Errorf("%w: no note of that scope", ErrHidden),
+		ErrHidden,
+	} {
+		if got := reason(err); got != hiddenReason {
+			t.Errorf("reason(%v) = %q", err, got)
+		}
+	}
+	if got := reason(fmt.Errorf("%w: the name is empty", ErrInvalid)); got != "the name is empty" {
+		t.Errorf("reason = %q", got)
+	}
+}

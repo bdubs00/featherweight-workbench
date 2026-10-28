@@ -99,12 +99,21 @@ func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 
 // reason returns the words of an error without the prefix of its package.
 func reason(err error) string {
+	// A hidden thing gets one fixed sentence, which names neither the agent
+	// nor the scope, so the answer says nothing about what exists.
+	if errors.Is(err, ErrHidden) {
+		return hiddenReason
+	}
 	msg := err.Error()
-	for _, e := range []error{ErrInvalid, ErrNotFound, ErrLater, ErrHidden, ErrBusy, fw.ErrInvalidRequest, fw.ErrForbidden, routines.ErrNotFound, routines.ErrInvalid} {
+	for _, e := range []error{ErrInvalid, ErrNotFound, ErrLater, ErrBusy, fw.ErrInvalidRequest, fw.ErrForbidden, routines.ErrNotFound, routines.ErrInvalid} {
 		msg = strings.TrimPrefix(msg, e.Error()+": ")
 	}
-	return msg
+	return strings.TrimPrefix(msg, "knowhow: ")
 }
+
+// hiddenReason is the detail of a 404 for a thing that the caller cannot
+// view.
+const hiddenReason = "Nothing that you can view has this name."
 
 // agentParam returns the agent of the query, or writes the problem.
 func agentParam(w http.ResponseWriter, r *http.Request) (string, bool) {

@@ -4133,7 +4133,7 @@ The journal keeps 90 days or 5,000 entries per agent, whichever is less. The dai
 
 With the switch on, a change of the agent, of the review, or of a pass waits for a person. A change of a person never waits.
 
-- A new note goes to the store in the state `waiting`. So the kernel keeps its copy and leaves it out of the block at the start of a run. Keep gives the note its state. Not now puts it away.
+- A new note goes to the store in the state `waiting`. The kernel removes its copy at its next pull, so the note is not in the block at the start of a run. Keep gives the note its state. Not now puts it away.
 - A change or a put-away of a note that exists waits beside it, and the note stays as it is. The change pins the hash of the note.
 - A proposal of a routine stays `proposed`, and its move to `rehearsing` waits, pinned to the version of the routine.
 
