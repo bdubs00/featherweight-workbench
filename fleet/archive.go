@@ -196,6 +196,9 @@ type archivedRun struct {
 	Events  int       `json:"events"`
 	Seen    []string  `json:"seen,omitempty"`
 	Updated time.Time `json:"updated"`
+	// Work holds the facts of the work of the run (work.go), from every
+	// event that the summary applied.
+	Work Work `json:"work,omitzero"`
 }
 
 // listed returns the run of the summary as the lists show it, with its
@@ -300,6 +303,7 @@ func (a *archive) add(ctx context.Context, e fw.Event) error {
 		if e.Type == fw.EvRunQueued {
 			r.Queued = true
 		}
+		r.Work.Apply(e)
 		if member != "" {
 			r.Member = member
 		}
@@ -527,12 +531,23 @@ func (f *Fleet) archivedFor(ctx context.Context, keep func(*fw.Run) bool) ([]*fw
 	if arch == nil {
 		return nil, nil
 	}
-	byMember := map[string][]*fw.Run{}
+	var runs []*fw.Run
 	for id, r := range arch.summaries(ctx) {
 		run := r.listed()
 		if run == nil || (keep != nil && !keep(run)) || f.held(id) {
 			continue
 		}
+		runs = append(runs, run)
+	}
+	return f.visibleArchived(ctx, runs)
+}
+
+// visibleArchived returns the runs of the archive that the caller in ctx
+// can view, newest first. The front decides as for the runs of a member
+// (allow), with the access block of its own profile of each agent.
+func (f *Fleet) visibleArchived(ctx context.Context, runs []*fw.Run) ([]*fw.Run, error) {
+	byMember := map[string][]*fw.Run{}
+	for _, run := range runs {
 		byMember[run.Member] = append(byMember[run.Member], run)
 	}
 	cfg := f.a.Config()
