@@ -29,7 +29,9 @@ func (people) Authenticate(r *http.Request) (*fw.Principal, error) {
 	return &fw.Principal{Subject: tok, Kind: fw.KindUser}, nil
 }
 
-func (people) Challenge(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }
+func (people) Challenge(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusUnauthorized)
+}
 
 // model calls deploy for an input with deploy and ends the turn otherwise.
 func model() fw.Model {

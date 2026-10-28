@@ -42,6 +42,8 @@ func TestFold(t *testing.T) {
 	mgr := run("M1", "manager", fw.StateCompleted, 1*h, 0.50, nil)
 	old := run("O1", "triage", fw.StateCompleted, 9*h, 0.02, nil) // no facts
 	check := run("K1", "triage", fw.StateCompleted, 1*h, 0.01, map[string]string{fw.MetaKind: "check"})
+	lost := run("L1", "triage", fw.StateInputRequired, 6*h, 0, nil)
+	lost.Usage = fw.RunUsage{} // it waited from its first turn
 	runs := []fleet.WorkRun{
 		{Run: nightly1, Work: facts(26*h, 10*time.Minute, 0, fleet.VerdictAccepted)},
 		{Run: nightly2, Work: facts(2*h, 20*time.Minute, 0, "")},
@@ -55,11 +57,12 @@ func TestFold(t *testing.T) {
 		{Run: waiting, Work: fleet.Work{Facts: true, Queued: now.Add(-5 * h), Asked: now.Add(-2 * h)}},
 		{Run: free, Work: facts(4*h, 5*time.Minute, 0, "")},
 		{Run: mgr}, {Run: old}, {Run: check},
+		{Run: lost, Work: fleet.Work{Facts: true, Queued: now.Add(-6 * h), Asked: now.Add(-6 * h)}, Lost: true},
 	}
 	a := Fold(runs, Options{Now: now, Days: 7, Coordination: map[string]bool{"manager": true},
 		Estimates: map[string]Estimate{"duty:nightly-report": {Minutes: 45, By: "alice", At: now}}})
 
-	if a.Work != (Counts{Pieces: 7, Done: 5, Failed: 1, Open: 1}) {
+	if a.Work != (Counts{Pieces: 8, Done: 5, Failed: 1, Open: 1, Lost: 1}) {
 		t.Fatalf("the counts = %+v", a.Work)
 	}
 	if a.Checks != (Checks{Accepted: 1, SentBack: 1, Unchecked: 3}) {
@@ -101,7 +104,7 @@ func TestFold(t *testing.T) {
 		t.Fatalf("the periods = %+v", a.Periods)
 	}
 	for _, want := range []string{
-		"In the last 7 days, the agents finished 5 pieces of work, and 1 failed or stopped.",
+		"In the last 7 days, the agents finished 5 pieces of work, and 1 failed or stopped. 1 piece was lost when a pool replaced the worker.",
 		"People accepted 1 and sent back 1; 3 are unchecked.",
 		"3 of the 5 finished without an action of a person.",
 		"Work waited 2 h 30 min for people.",

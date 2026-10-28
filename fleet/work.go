@@ -174,9 +174,13 @@ func WorkOf(events []fw.Event) Work {
 }
 
 // WorkRun is a run that the caller can view, with the facts of its work.
+// Lost is true for a run of the archive that never ended and that no
+// member holds now: a pool replaced its Task while it worked or waited, so
+// it can never end, and no person can answer it.
 type WorkRun struct {
 	Run  *fw.Run
 	Work Work
+	Lost bool
 }
 
 // WorkSince returns the runs that were asked for at since or later and
@@ -218,7 +222,8 @@ func WorkSince(ctx context.Context, a *fw.Agent, since time.Time) ([]WorkRun, er
 		}
 		for _, run := range visible {
 			seen[run.ID] = true
-			out = append(out, WorkRun{Run: run, Work: sums[run.ID].Work})
+			lost := !run.State.Terminal() && !f.held(run.ID)
+			out = append(out, WorkRun{Run: run, Work: sums[run.ID].Work, Lost: lost})
 		}
 		return out, nil
 	}

@@ -81,13 +81,15 @@ type Answer struct {
 // that a person, a duty, a source, or a job asked for: a run without a
 // parent that is no branch, no run of the manager or of the quick chat,
 // and no run that the lists leave out. Done completed, Failed failed,
-// Stopped was canceled, and Open works or waits.
+// Stopped was canceled, and Open works or waits. Lost never ended because
+// a pool replaced its worker while it worked or waited (fleet.WorkRun).
 type Counts struct {
 	Pieces  int `json:"pieces"`
 	Done    int `json:"done"`
 	Failed  int `json:"failed"`
 	Stopped int `json:"stopped"`
 	Open    int `json:"open"`
+	Lost    int `json:"lost"`
 }
 
 // Checks splits the done pieces by the first verdict on their result:
@@ -321,7 +323,7 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 		ans.People.Handled += wk.Handled
 		ln.Actions += wk.Acts
 		wait := wk.WaitMS / 1000
-		if !wk.Asked.IsZero() && r.State == fw.StateInputRequired && until.After(wk.Asked) {
+		if !p.r.Lost && !wk.Asked.IsZero() && r.State == fw.StateInputRequired && until.After(wk.Asked) {
 			wait += int64(until.Sub(wk.Asked) / time.Second)
 			ans.People.WaitingNow++
 		}
@@ -330,7 +332,15 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 		if per != nil {
 			per.USD += p.usd
 		}
-		switch r.State {
+		state := r.State
+		if p.r.Lost {
+			state = "lost"
+		}
+		switch state {
+		case "lost":
+			ans.Work.Lost++
+			ln.Counts.Lost++
+			ans.Spend.FailedUSD += p.usd
 		case fw.StateCompleted:
 			ans.Work.Done++
 			ln.Counts.Done++
@@ -510,6 +520,9 @@ func sentence(a Answer) string {
 		fmt.Fprintf(&b, ", and %d failed or stopped", a.Work.Failed+a.Work.Stopped)
 	}
 	b.WriteString(".")
+	if a.Work.Lost > 0 {
+		fmt.Fprintf(&b, " %s lost when a pool replaced the worker.", plural(a.Work.Lost, "piece was", "pieces were"))
+	}
 	if a.Work.Done > 0 {
 		fmt.Fprintf(&b, " People accepted %d and sent back %d; %d %s unchecked.", a.Checks.Accepted, a.Checks.SentBack, a.Checks.Unchecked, isAre(a.Checks.Unchecked))
 		fmt.Fprintf(&b, " %d of the %d finished without an action of a person.", a.People.NoPerson, a.Work.Done)

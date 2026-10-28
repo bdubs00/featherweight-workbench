@@ -3991,7 +3991,7 @@ A summary that a server before this section wrote has no facts. The value counts
 
 `GET /v1/value?days=7|30|90` and the MCP tool `value` call `value.For` with the access rules of the runs (`fleet.WorkSince`). A piece of work is a run without a parent that is no branch, no check run, and no run of the manager or of the quick chat. The answer counts the pieces that people, duties, sources, and jobs asked for in the window:
 
-- `work`: done, failed, stopped, and open
+- `work`: done, failed, stopped, open, and lost. A lost piece is a run of the archive that never ended and that no member holds: a pool replaced its worker while it worked or waited. It counts as failed work in the spend, and its wait does not grow.
 - `checks`: the done pieces by verdict, accepted, sent back, and unchecked
 - `people`: the actions of people, the done pieces that needed none, the pieces that a person wrote to after the end, the time that work waited for a decision of a person, and the pieces that wait now
 - `lead`: the median time from the ask to the first end, and the part of all such time that waited for people. The time that a job waited in its queue is not in it.
