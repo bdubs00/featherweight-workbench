@@ -87,9 +87,9 @@ type DelegationPatch struct {
 
 // CapsPatch changes the caps of a bridge: a nil field stays.
 type CapsPatch struct {
-	MaxMessages        *int `json:"maxMessages,omitempty"`
-	MaxFanoutPerMinute *int `json:"maxFanoutPerMinute,omitempty"`
-	MaxPairMessages    *int `json:"maxPairMessages,omitempty"`
+	MaxMessages        *int     `json:"maxMessages,omitempty"`
+	MaxFanoutPerMinute *int     `json:"maxFanoutPerMinute,omitempty"`
+	MaxPairMessages    *int     `json:"maxPairMessages,omitempty"`
 	MaxTurns           *int     `json:"maxTurns,omitempty"`
 	MaxCostUSD         *float64 `json:"maxCostUSD,omitempty"`
 }
