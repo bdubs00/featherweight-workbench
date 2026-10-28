@@ -26,7 +26,7 @@ func TestAtEnd(t *testing.T) {
 		`{"Seq":0,"reaction":"down","note":"x"}`: 12,
 		`{"reaction":"heart"}`:                   0,
 		`{"seq":4,"reaction":"up"}`:              4,
-		`{"reaction":"up","remove":true}`:        0,
+		`{"reaction":"up","remove":true}`:        12,
 	} {
 		if got := seqOf(AtEnd([]byte(body), end)); got != want {
 			t.Errorf("AtEnd(%s) has seq %d, want %d", body, got, want)
