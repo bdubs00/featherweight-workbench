@@ -259,7 +259,7 @@ func (p *Pool) WithOverlay(o Overlay) (*Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pools: the overlay of the pool %s: %w", p.Name, err)
 	}
-	c.FW = merged
+	c.FW = withMemoryFront(merged, p.tokenEnv)
 	c.skillFiles, c.skillNames, c.skillSkipped = nil, nil, nil
 	if problems := c.render(p.front); len(problems) > 0 {
 		return nil, fmt.Errorf("pools: the overlay of the pool %s does not fit: %s", p.Name, strings.Join(problems, "; "))
@@ -379,6 +379,71 @@ func overlayFW(base map[string]any, o Overlay, configured map[string]fw.AgentPro
 		out["policy"] = policy
 	}
 	return out, nil
+}
+
+// FrontServer is the name of the entry of tools.mcp of a pool that reaches
+// the MCP server of the front, with the static token of the fleet as its
+// bearer. The seats of a bridge and the notes of Know-how find the front
+// through it; the front configures no pool.
+const FrontServer = "front"
+
+// frontMCPPath is the path of the MCP server of the front, which the
+// address of the entry FrontServer ends with.
+const frontMCPPath = "/mcp"
+
+// withMemoryFront returns the block fw of a pool with tools.memory.front
+// set to the front that its entry FrontServer of tools.mcp reaches: the
+// address of the entry without the path of the MCP server, and the
+// variable of its bearer, which holds the static token that the workers
+// get already, or tokenEnv when the entry names none. The notes of the
+// workers then live at the front (docs/KNOWHOW.md sections 4.2 and 6.1).
+// A pool without the entry, or one that sets tools.memory.front itself,
+// stays as it is. The argument does not change.
+func withMemoryFront(fwBlock map[string]any, tokenEnv string) map[string]any {
+	tools, _ := fwBlock["tools"].(map[string]any)
+	if tools == nil {
+		return fwBlock
+	}
+	memory, _ := tools["memory"].(map[string]any)
+	if _, set := memory["front"]; set {
+		return fwBlock
+	}
+	url, bearer := "", ""
+	list, _ := tools["mcp"].([]any)
+	for _, e := range list {
+		m, _ := e.(map[string]any)
+		if name, _ := m["name"].(string); strings.TrimSpace(name) != FrontServer {
+			continue
+		}
+		endpoint, _ := m["endpoint"].(string)
+		url = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(endpoint), "/"), frontMCPPath)
+		if auth, ok := m["auth"].(map[string]any); ok {
+			bearer, _ = auth["bearer"].(string)
+		}
+		break
+	}
+	if url == "" {
+		return fwBlock
+	}
+	if bearer = strings.TrimSpace(bearer); bearer == "" {
+		bearer = tokenEnv
+	}
+	nextMemory := make(map[string]any, len(memory)+1)
+	for k, v := range memory {
+		nextMemory[k] = v
+	}
+	nextMemory["front"] = map[string]any{"url": url, "tokenEnv": bearer}
+	nextTools := make(map[string]any, len(tools))
+	for k, v := range tools {
+		nextTools[k] = v
+	}
+	nextTools["memory"] = nextMemory
+	out := make(map[string]any, len(fwBlock))
+	for k, v := range fwBlock {
+		out[k] = v
+	}
+	out["tools"] = nextTools
+	return out
 }
 
 // stringList reads a list of strings of a decoded YAML value.
