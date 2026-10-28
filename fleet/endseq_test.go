@@ -5,9 +5,10 @@ import (
 	"testing"
 )
 
-// A thumb on the run as a whole goes on the end of the run. A heart, a
-// thumb on an event, a reaction that a person takes back, and a run
-// without an end keep the body, and the end is read only when needed.
+// A thumb on the run as a whole goes on the end of the run, and so does
+// the undo of such a thumb, where the thumb is. A heart, a thumb on an
+// event, and a run without an end keep the body, and the end is read only
+// when needed.
 func TestAtEnd(t *testing.T) {
 	reads := 0
 	end := func() uint64 { reads++; return 12 }
@@ -31,8 +32,8 @@ func TestAtEnd(t *testing.T) {
 			t.Errorf("AtEnd(%s) has seq %d, want %d", body, got, want)
 		}
 	}
-	if reads != 2 {
-		t.Fatalf("the end was read %d times, want 2", reads)
+	if reads != 3 {
+		t.Fatalf("the end was read %d times, want 3", reads)
 	}
 	var note struct {
 		Note string `json:"note"`
