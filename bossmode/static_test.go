@@ -312,7 +312,7 @@ func TestSettingsWithWork(t *testing.T) {
 	fr := newFront(t, nil)
 	OfferWork()
 	resp, body := get(t, fr.url+"/v1/bossmode", "ada")
-	if resp.StatusCode != http.StatusOK || !strings.HasSuffix(body, `"routines":false,"packages":false,"work":true}`+"\n") {
+	if resp.StatusCode != http.StatusOK || !strings.HasSuffix(body, `"routines":false,"knowhow":false,"packages":false,"work":true}`+"\n") {
 		t.Errorf("settings: %d %q", resp.StatusCode, body)
 	}
 }
