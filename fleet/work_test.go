@@ -143,3 +143,73 @@ func TestArchiveBackfill(t *testing.T) {
 		t.Fatalf("a second backfill gave %d runs their facts", got)
 	}
 }
+
+// A replica that finds the facts of a backfill of another replica in the
+// bucket takes them into its copy. refresh never reads a finished run
+// again, so without that the replica answered the value of the work as if
+// the run had no facts, until its next start.
+func TestArchiveBackfillOfAnotherReplica(t *testing.T) {
+	ctx := context.Background()
+	defer func(p time.Duration) { backfillPause = p }(backfillPause)
+	backfillPause = 0
+	b := bucket.NewMem(ArchiveBucket)
+	one := newArchive(b, nil, quietLogger())
+	start := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	for _, e := range conversation(t, "01OLD", "ax:team/manager-0", start) {
+		if err := one.add(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := one.modify(ctx, "01OLD", func(r *archivedRun) bool {
+		r.Work = Work{}
+		r.Queued = true
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	two := newArchive(b, nil, quietLogger())
+	two.refresh(ctx)
+	if w := two.summaries(ctx)["01OLD"].Work; w.Facts {
+		t.Fatalf("the second replica starts with facts: %+v", w)
+	}
+	if got := one.backfill(ctx); got != 1 {
+		t.Fatalf("the first replica gave %d runs their facts, want 1", got)
+	}
+	if got := two.backfill(ctx); got != 0 {
+		t.Fatalf("the second replica wrote %d runs that the first had filled", got)
+	}
+	if w := two.summaries(ctx)["01OLD"].Work; !w.Facts || !w.Backfilled {
+		t.Fatalf("the copy of the second replica = %+v, want the facts of the first", w)
+	}
+}
+
+// A replica reads again a finished run whose summary another replica
+// changed, such as a thumb after the end that the shared consumer gave to
+// the other replica. Without that, the value of the work named the
+// verdict on one replica only.
+func TestArchiveRefreshReadsAChangedRun(t *testing.T) {
+	ctx := context.Background()
+	b := bucket.NewMem(ArchiveBucket)
+	one := newArchive(b, nil, quietLogger())
+	start := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	for _, e := range conversation(t, "01DONE", "ax:team/manager-0", start) {
+		if err := one.add(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	two := newArchive(b, nil, quietLogger())
+	two.refresh(ctx)
+	if r := two.summaries(ctx)["01DONE"]; r.Run == nil || !r.Run.State.Terminal() || r.Work.Verdict != "" {
+		t.Fatalf("the copy of the second replica = %+v", r)
+	}
+	if err := one.modify(ctx, "01DONE", func(r *archivedRun) bool {
+		r.Work.Verdict = "accepted"
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	two.refresh(ctx)
+	if v := two.summaries(ctx)["01DONE"].Work.Verdict; v != "accepted" {
+		t.Fatalf("the second replica reads the verdict %q, want accepted", v)
+	}
+}

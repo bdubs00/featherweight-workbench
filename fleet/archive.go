@@ -240,15 +240,18 @@ type archive struct {
 	log    *slog.Logger
 	prices fw.Prices
 
-	mu      sync.Mutex
-	runs    map[string]archivedRun // by run id
+	mu   sync.Mutex
+	runs map[string]archivedRun // by run id
+	// revs holds the revision of the bucket of each summary of the copy,
+	// or 0 when this replica changed the summary since its last read.
+	revs    map[string]uint64
 	readAt  time.Time
 	loaded  bool
 	reading sync.Mutex
 }
 
 func newArchive(b bucket.Bucket, prices fw.Prices, log *slog.Logger) *archive {
-	return &archive{b: b, prices: prices, log: log, runs: map[string]archivedRun{}}
+	return &archive{b: b, prices: prices, log: log, runs: map[string]archivedRun{}, revs: map[string]uint64{}}
 }
 
 // add keeps one event of the egress stream: the event under its own key,
@@ -334,12 +337,16 @@ func (a *archive) add(ctx context.Context, e fw.Event) error {
 // modify changes the summary of a run with f and writes it at the
 // revision that it read. f reports whether it changed the summary.
 func (a *archive) modify(ctx context.Context, id string, f func(*archivedRun) bool) error {
-	var next archivedRun
+	var next, seen archivedRun
+	have := false
 	wrote, err := bucket.Modify(ctx, a.b, archiveRunKey(id), archiveAttempts, func(cur []byte, exists bool) ([]byte, error) {
 		var r archivedRun
 		if exists && json.Unmarshal(cur, &r) != nil {
 			r = archivedRun{}
 		}
+		// The summary as the bucket holds it, before f changes r.
+		seen = archivedRun{}
+		have = exists && json.Unmarshal(cur, &seen) == nil
 		if !f(&r) {
 			return nil, nil
 		}
@@ -350,9 +357,19 @@ func (a *archive) modify(ctx context.Context, id string, f func(*archivedRun) bo
 	if err != nil {
 		return fmt.Errorf("fleet: keep the summary of the run %s: %w", id, err)
 	}
-	if wrote {
+	// The copy takes what this replica wrote, or else the summary that the
+	// bucket holds. refresh never reads a finished run again, so without
+	// this a replica keeps its old copy of a run that another replica
+	// changed, such as the facts of a backfill, and two replicas answer the
+	// value of the work with different figures.
+	switch {
+	case wrote:
 		a.mu.Lock()
-		a.runs[id] = next
+		a.runs[id], a.revs[id] = next, 0
+		a.mu.Unlock()
+	case have:
+		a.mu.Lock()
+		a.runs[id], a.revs[id] = seen, 0
 		a.mu.Unlock()
 	}
 	return nil
@@ -383,11 +400,14 @@ func (a *archive) summaries(context.Context) map[string]archivedRun {
 }
 
 // refresh reads the summaries of the bucket that the copy does not hold,
-// and those of the runs that are not finished.
+// those of the runs that are not finished, and those whose revision in the
+// bucket is not the revision of the copy. Every replica shares the durable
+// consumer of the archive, so another replica applies most events, such as
+// a thumb on a finished run, and only the revision tells this replica.
 func (a *archive) refresh(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, archiveTimeout)
 	defer cancel()
-	keys, err := bucket.KeysUnder(ctx, a.b, "run")
+	keys, err := bucket.EntriesUnder(ctx, a.b, "run")
 	if err != nil {
 		a.log.Warn("fleet: read the summaries of the archive", "error", err)
 		a.mu.Lock()
@@ -398,9 +418,9 @@ func (a *archive) refresh(ctx context.Context) {
 	a.mu.Lock()
 	var want []string
 	for _, k := range keys {
-		id := strings.TrimPrefix(k, "run.")
+		id := strings.TrimPrefix(k.Key, "run.")
 		r, ok := a.runs[id]
-		if !ok || r.Run == nil || !r.Run.State.Terminal() {
+		if !ok || r.Run == nil || !r.Run.State.Terminal() || a.revs[id] != k.Revision {
 			want = append(want, id)
 		}
 	}
@@ -415,7 +435,7 @@ func (a *archive) refresh(ctx context.Context) {
 			continue
 		}
 		a.mu.Lock()
-		a.runs[id] = r
+		a.runs[id], a.revs[id] = r, e.Revision
 		a.mu.Unlock()
 	}
 	a.mu.Lock()
