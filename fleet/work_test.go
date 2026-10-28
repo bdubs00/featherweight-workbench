@@ -47,6 +47,9 @@ func TestWorkApply(t *testing.T) {
 	if w.Waits != 1 || w.WaitMS != (30*time.Minute).Milliseconds() || !w.Asked.IsZero() {
 		t.Fatalf("waits %d of %d ms, asked %v; want 1 of 30 min", w.Waits, w.WaitMS, w.Asked)
 	}
+	if w.Done != "" {
+		t.Fatalf("a run without a definition of done has done %q", w.Done)
+	}
 	if w.Verdict != VerdictRejected {
 		t.Fatalf("the verdict = %q, want the first thumb, %s", w.Verdict, VerdictRejected)
 	}
@@ -61,6 +64,17 @@ func TestWorkApply(t *testing.T) {
 	})
 	if w.Verdict != VerdictAccepted || !w.Asked.Equal(at(7)) || w.Acts != 0 {
 		t.Fatalf("a receipt and an open request = %+v", w)
+	}
+
+	// The newest end tells whether the definition of done passed.
+	w = WorkOf([]fw.Event{
+		ev(1, fw.EvRunQueued, at(0), fw.RunQueuedData{Agent: "fixer"}),
+		ev(2, fw.EvRunFinished, at(5), fw.RunFinishedData{Outcome: "failed", Done: fw.DoneFailed}),
+		ev(3, fw.EvMessageReceived, at(6), fw.MessageReceivedData{Role: fw.RoleUser, Origin: "http", By: "alice"}),
+		ev(4, fw.EvRunFinished, at(9), fw.RunFinishedData{Outcome: "completed", Done: fw.DoneChecked}),
+	})
+	if w.Done != fw.DoneChecked || w.FirstOutcome != "failed" || w.Rework != 1 {
+		t.Fatalf("a run that its checks ended and a follow-up fixed = %+v", w)
 	}
 
 	// A record that never saw the start has no facts.

@@ -42,6 +42,10 @@ const (
 //   - Verdict is the first verdict on a result of the run: a thumb or a
 //     heart of a person, or a quality receipt (VerdictAccepted or
 //     VerdictRejected). A grade of a model is no verdict.
+//   - Done is the field done of the newest fw.run.finished: fw.DoneChecked
+//     when the definition of done of the agent passed, fw.DoneFailed when
+//     its checks ended the run, and empty for a run without one or of an
+//     older kernel. It is no verdict of a person.
 //   - CanceledBy names the person who canceled the run, when one did.
 //
 // A branch counts the events that it kept from its source too, so a
@@ -58,6 +62,7 @@ type Work struct {
 	Waits        int       `json:"waits,omitempty"`
 	Asked        time.Time `json:"asked,omitzero"`
 	Verdict      string    `json:"verdict,omitempty"`
+	Done         string    `json:"done,omitempty"`
 	CanceledBy   string    `json:"canceledBy,omitempty"`
 }
 
@@ -81,6 +86,7 @@ func (w *Work) Apply(e fw.Event) {
 		if d.Outcome == string(fw.StateCanceled) && d.By != "" {
 			w.CanceledBy = d.By
 		}
+		w.Done = d.Done
 		w.Asked = time.Time{}
 	case fw.EvApprovalRequested:
 		if w.Asked.IsZero() {

@@ -370,7 +370,7 @@ func text(a Answer) string {
 	var b strings.Builder
 	b.WriteString(a.Sentence)
 	for _, l := range a.Lines {
-		fmt.Fprintf(&b, "\n- %s: %d done, %d failed or stopped, %d open; %d accepted, %d sent back, %d unchecked; %d without a person; $%.2f", l.Key, l.Counts.Done, l.Counts.Failed+l.Counts.Stopped, l.Counts.Open, l.Checks.Accepted, l.Checks.SentBack, l.Checks.Unchecked, l.NoPerson, l.USD)
+		fmt.Fprintf(&b, "\n- %s: %d done, %d failed or stopped, %d open; %d accepted, %d checked, %d sent back, %d unchecked; %d without a person; $%.2f", l.Key, l.Counts.Done, l.Counts.Failed+l.Counts.Stopped, l.Counts.Open, l.Checks.Accepted, l.Checks.Checked, l.Checks.SentBack, l.Checks.Unchecked, l.NoPerson, l.USD)
 		if l.Estimate != nil {
 			fmt.Fprintf(&b, "; %d min a piece by %s", l.Estimate.Minutes, l.Estimate.By)
 		}

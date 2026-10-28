@@ -105,7 +105,7 @@ func TestFold(t *testing.T) {
 	}
 	for _, want := range []string{
 		"In the last 7 days, the agents finished 5 pieces of work, and 1 failed or stopped. 1 piece was lost when a pool replaced the worker.",
-		"People accepted 1 and sent back 1; 3 are unchecked.",
+		"People accepted 1 and sent back 1. 3 are unchecked.",
 		"3 of the 5 finished without an action of a person.",
 		"Work waited 2 h 30 min for people.",
 		"The work cost at least $1.69, $0.34 for each finished piece.",
@@ -121,6 +121,39 @@ func TestFold(t *testing.T) {
 	empty := Fold(nil, Options{Now: now, Days: 30})
 	if empty.Sentence != "In the last 30 days, the agents finished no work that you can view." || len(empty.Periods) != 5 || empty.Lines == nil {
 		t.Fatalf("an empty fold = %+v", empty)
+	}
+}
+
+// A done piece whose definition of done passed in the kernel counts as
+// checked, from the facts of its work or from the run object of a newer
+// kernel. A verdict of a person wins over the checks, and a piece whose
+// checks failed is no done piece.
+func TestFoldChecked(t *testing.T) {
+	h := time.Hour
+	checked := facts(2*h, 5*time.Minute, 0, "")
+	checked.Done = fw.DoneChecked
+	overruled := facts(3*h, 5*time.Minute, 0, fleet.VerdictRejected)
+	overruled.Done = fw.DoneChecked
+	fromRun := run("R3", "fixer", fw.StateCompleted, 4*h, 0.01, nil)
+	fromRun.Done = &fw.RunDone{State: fw.DoneChecked}
+	notDone := facts(5*h, 5*time.Minute, 0, "")
+	notDone.Done = fw.DoneFailed
+	runs := []fleet.WorkRun{
+		{Run: run("R1", "fixer", fw.StateCompleted, 2*h, 0.01, nil), Work: checked},
+		{Run: run("R2", "fixer", fw.StateCompleted, 3*h, 0.01, nil), Work: overruled},
+		{Run: fromRun, Work: facts(4*h, 5*time.Minute, 0, "")},
+		{Run: run("R4", "fixer", fw.StateFailed, 5*h, 0.01, nil), Work: notDone},
+		{Run: run("R5", "fixer", fw.StateCompleted, 6*h, 0.01, nil), Work: facts(6*h, 5*time.Minute, 0, "")},
+	}
+	a := Fold(runs, Options{Now: now, Days: 7})
+	if a.Checks != (Checks{Checked: 2, SentBack: 1, Unchecked: 1}) || a.Work.Failed != 1 {
+		t.Fatalf("the checks = %+v, the work = %+v", a.Checks, a.Work)
+	}
+	if a.Lines[0].Checks.Checked != 2 || a.Periods[6].Checked != 2 {
+		t.Fatalf("the line = %+v, the period = %+v", a.Lines[0].Checks, a.Periods[6])
+	}
+	if want := "People accepted 0 and sent back 1. The checks of the agents passed for 2 more. 1 is unchecked."; !strings.Contains(a.Sentence, want) {
+		t.Fatalf("the sentence lacks %q:\n%s", want, a.Sentence)
 	}
 }
 

@@ -3983,6 +3983,7 @@ The archive (section 4.18) applies each event to the summary of its run. It also
 | `handled` | Each decision that no person made: the kind of the decider is token, workload, parent, or kernel |
 | `waitMs`, `waits`, `asked` | The time from each `fw.approval.requested` to its decision by a person, and the request that waits now |
 | `verdict` | The first thumb or heart (`fw.run.reacted`), or the first quality receipt (`fw.run.annotated`): `accepted` or `rejected`. A grade of a model is no verdict. |
+| `done` | The field `done` of the newest `fw.run.finished`: `checked` when the definition of done of the agent passed (the kernel architecture, section 24), `failed` when its checks ended the run, and empty without one |
 | `canceledBy` | The person of a cancel |
 
 A summary that a server before this section wrote has no facts. The value counts such a run as unknown and says so.
@@ -3992,7 +3993,7 @@ A summary that a server before this section wrote has no facts. The value counts
 `GET /v1/value?days=7|30|90` and the MCP tool `value` call `value.For` with the access rules of the runs (`fleet.WorkSince`). A piece of work is a run without a parent. A branch, a check run, and a run of the manager or of the quick chat are no pieces. The answer counts the pieces that people, duties, sources, and jobs asked for in the window:
 
 - `work`: done, failed, stopped, open, and lost. A lost piece is a run of the archive that never ended and that no member holds: a pool replaced its worker while it worked or waited. It counts as failed work in the spend, and its wait does not grow.
-- `checks`: the done pieces by verdict, accepted, sent back, and unchecked
+- `checks`: the done pieces by verdict: accepted, checked, sent back, and unchecked. Accepted and sent back are the first verdict of a person or of a receipt. Checked is a piece that no person judged and whose definition of done passed in the kernel. A verdict of a person wins over the checks. Unchecked is a piece that nobody and nothing judged. A worker of an older kernel sends no `done`, so its pieces are never checked.
 - `people`: the actions of people, and the done pieces that needed none. Also the pieces that a person wrote to after the end. Also the time that work waited for a decision of a person, and the pieces that wait now.
 - `lead`: the median time from the ask to the first end, and the part of all such time that waited for people. The time that a job waited in its queue is not in it.
 - `spend`: the cost of every run of the window at the prices of the workers, and the cost per done piece. Also the cost of failed work and of coordination. The runs with tokens without a price make the spend a lower bound.
