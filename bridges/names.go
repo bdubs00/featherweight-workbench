@@ -103,6 +103,16 @@ func (s *Store) knownName(subject, name string) string {
 	return ""
 }
 
+// Learn keeps the name of the person p, as a call of a route of the
+// bridges does, so a text of another package can name the person later.
+func (s *Store) Learn(p *fw.Principal) { s.learn(p) }
+
+// KnownName returns a name of a person that people read: name, when it is
+// one, else the name that the front learned for the subject, else the
+// subject when it is no opaque id. It returns "" when the front knows no
+// such name.
+func (s *Store) KnownName(subject, name string) string { return s.knownName(subject, name) }
+
 // personName names a person in a text: a name that people read, else "a
 // person".
 func (s *Store) personName(subject, name string) string {

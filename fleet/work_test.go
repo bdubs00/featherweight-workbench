@@ -263,3 +263,38 @@ func TestWorkRework(t *testing.T) {
 		t.Fatalf("the follow-up = %q", SendBackText("Shorter."))
 	}
 }
+
+// A run of a duty that tells only of what it finds waits for a check when
+// its answer found something, with the words of what it found, or the
+// first line of an answer without the line. An answer that found nothing
+// needs no check, a run without the metadata is no found result, and a
+// thumb ends the check. The relay puts a thumb on such a run on its end.
+func TestFound(t *testing.T) {
+	mk := func(out string, md map[string]string) *fw.Run {
+		return &fw.Run{ID: "r", State: fw.StateCompleted, Output: out, Metadata: md}
+	}
+	found := map[string]string{MetaFound: "1"}
+	for _, x := range []struct {
+		run   *fw.Run
+		what  string
+		check bool
+	}{
+		{mk("Found: 2 hosts drift\nweb-3 and web-4.", found), "2 hosts drift", true},
+		{mk("**Found:** nothing.\nAll match.", found), "", false},
+		{mk("## Two hosts drift\nweb-3 and web-4.", found), "Two hosts drift", true},
+		{mk("Found: 2 hosts drift", nil), "", false},
+		{&fw.Run{State: fw.StateFailed, Output: "Found: 2", Metadata: found}, "", false},
+	} {
+		what, ok := Found(x.run)
+		if what != x.what || ok != x.check || ToCheck(x.run, Work{}) != x.check {
+			t.Errorf("Found(%q, %v) = %q %v, ToCheck %v; want %q %v", x.run.Output, x.run.Metadata, what, ok, ToCheck(x.run, Work{}), x.what, x.check)
+		}
+	}
+	r := mk("Found: 2 hosts drift", found)
+	if ToCheck(r, Work{Ends: 1, Reviewed: 1, LastVerdict: VerdictAccepted}) || !ToCheck(r, Work{Ends: 2, Reviewed: 1, LastVerdict: VerdictRejected}) {
+		t.Fatal("a thumb does not end the check of a found result, or a new answer does not open it")
+	}
+	if !toCheck(mk("x", found)) || toCheck(mk("x", nil)) {
+		t.Fatal("the relay does not put the thumb of a found result on its end")
+	}
+}

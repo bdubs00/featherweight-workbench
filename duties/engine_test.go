@@ -690,3 +690,22 @@ func TestErrorLine(t *testing.T) {
 		t.Fatalf("a placeholder = %q", got)
 	}
 }
+
+// A run of a duty with a title takes the title of the duty, not the first
+// words of its message.
+func TestRunTakesTheTitleOfTheDuty(t *testing.T) {
+	f := newFront(t, "", nil)
+	d := daily("summary")
+	d.Title = "Weekly competitor summary"
+	d.Do = Do{Ask: &Ask{Message: "Every Monday at 9am, sum up what our competitors shipped last week."}}
+	d.Notify = &Notify{Result: []string{RunAsOwner}}
+	// The answer of the save says you to the person who saved it.
+	if v := f.put(t, "alice", d); !strings.Contains(v.Readback, "Each result goes to you.") {
+		t.Fatalf("the readback after the save = %q", v.Readback)
+	}
+	f.clock.Set(nine.Add(2 * time.Second))
+	f.pass(t)
+	if req := f.queue.last(t); req.Metadata[fw.MetaTitle] != "Weekly competitor summary" {
+		t.Fatalf("the title of the run = %q", req.Metadata[fw.MetaTitle])
+	}
+}

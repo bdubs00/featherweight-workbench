@@ -67,7 +67,8 @@ type PlanRequest struct {
 // limit. Asks lists when the task waits for the person, and Quiet when it
 // stays quiet. Gaps say what no agent here can do. Problems stop a start.
 // Start holds the record that Start sends: one of duty, bridge, or run.
-// Open is the place of the page that shows the task after the start.
+// Open is the place of the page that shows the task after the start. Same
+// names a duty of the person that does the same work already, or is nil.
 type Plan struct {
 	Words    string      `json:"words"`
 	Kind     string      `json:"kind"`
@@ -84,6 +85,14 @@ type Plan struct {
 	Problems []string    `json:"problems"`
 	Start    PlanStart   `json:"start"`
 	Open     string      `json:"open"`
+	Same     *PlanSame   `json:"same,omitempty"`
+}
+
+// PlanSame is a duty of the person that does the work of a plan already:
+// its name and its title. The page offers to open it beside Start.
+type PlanSame struct {
+	Duty  string `json:"duty"`
+	Title string `json:"title"`
 }
 
 // PlanWho is an agent of a plan and what it does in it. Count is the
@@ -112,7 +121,10 @@ type PlanWhen struct {
 // PlanCost is the basis of the cost of a plan: what runs of the agent
 // cost in the last 30 days, what the limit of the person bounds (a run,
 // or a bridge for a team), and about how many runs a month the schedule
-// starts. Low and High are 0 when no run of the agent reports a cost.
+// starts. Low and High are the least and the most that the whole task
+// cost in those days, in US dollars: one run of the agent, or for a team
+// one run of each seat together. Both are 0, and absent, when no run of
+// the agents reports a cost. Runs counts the runs with a cost.
 type PlanCost struct {
 	Basis        string  `json:"basis"`
 	Per          string  `json:"per"`
@@ -157,8 +169,8 @@ type Candidate struct {
 
 // PlanInput is everything that MakePlan reads: the request, the time zone
 // of the person, the moment, the agents that the person can run, the
-// agent of the quick chat with its member, and the names of the duties
-// that exist.
+// agent of the quick chat with its member, the names of the duties that
+// exist, and the duties that the person owns.
 type PlanInput struct {
 	PlanRequest
 	Zone       string
@@ -167,6 +179,7 @@ type PlanInput struct {
 	Chat       string
 	ChatMember string
 	Taken      map[string]bool
+	Own        []duties.Duty
 }
 
 // The patterns of the words. They read plain English and no syntax.
@@ -296,22 +309,26 @@ func MakePlan(in PlanInput) Plan {
 	}
 	if agent != "" {
 		c := byName[agent]
+		p.Cost.Low, p.Cost.High, p.Cost.Runs = taskCost(p.Who, byName)
 		if len(c.Costs) > 0 {
-			p.Cost.Low, p.Cost.High, p.Cost.Runs = slices.Min(c.Costs), slices.Max(c.Costs), len(c.Costs)
+			low, high := slices.Min(c.Costs), slices.Max(c.Costs)
 			switch {
-			case p.Cost.High < halfCent:
+			case high < halfCent:
 				// A cheap model costs less than a cent a run, and "$0.00
 				// to $0.00" reads as no cost.
 				p.Cost.Basis = fmt.Sprintf("Runs of %s cost under $0.01 each in the last 30 days.", c.Name)
-			case money(p.Cost.Low) == money(p.Cost.High):
-				p.Cost.Basis = fmt.Sprintf("Runs of %s cost %s each in the last 30 days.", c.Name, money(p.Cost.High))
+			case money(low) == money(high):
+				p.Cost.Basis = fmt.Sprintf("Runs of %s cost %s each in the last 30 days.", c.Name, money(high))
 			default:
-				p.Cost.Basis = fmt.Sprintf("Runs of %s cost %s to %s in the last 30 days.", c.Name, money(p.Cost.Low), money(p.Cost.High))
+				p.Cost.Basis = fmt.Sprintf("Runs of %s cost %s to %s in the last 30 days.", c.Name, money(low), money(high))
 			}
 		} else {
 			p.Cost.Basis = fmt.Sprintf("No run of %s in the last 30 days reports a cost.", c.Name)
 		}
 		if p.Kind == PlanTeam {
+			if p.Cost.High > 0 {
+				p.Cost.Basis += " " + spanWords("The whole team", p.Cost.Low, p.Cost.High)
+			}
 			p.Cost.Basis += " The team stops at your limit."
 		}
 	}
@@ -366,6 +383,9 @@ func MakePlan(in PlanInput) Plan {
 
 	// What no agent here can do for these words, said before the start.
 	p.Gaps = gapsOf(w, agent, byName)
+	if p.Kind == PlanRepeat {
+		p.Same = sameDuty(words, said, agent, in.Own)
+	}
 
 	// The record that Start sends.
 	switch {
@@ -388,7 +408,7 @@ func MakePlan(in PlanInput) Plan {
 			"title":     p.Title,
 			"agent":     agent,
 			"when":      map[string]any{"schedule": *when},
-			"do":        map[string]any{"ask": map[string]any{"message": words + "\n\nWrite the result to the wiki page " + base + "/{date}.md. When you find nothing, say so in one line."}},
+			"do":        map[string]any{"ask": map[string]any{"message": words + doorSuffix + base + "/{date}.md. When you find nothing, say so in one line."}},
 			"limits":    map[string]any{"budget": map[string]any{}, "overlap": "skip", "catchUp": "6h"},
 			"whileAway": map[string]any{"decider": "nobody", "timeout": "24h", "then": "deny"},
 			"notify":    map[string]any{"failure": []string{"owner"}, "needsYou": []string{"owner"}, "result": result, "resultWhen": resultWhen},
@@ -418,6 +438,97 @@ func MakePlan(in PlanInput) Plan {
 	}
 	return p
 }
+
+// taskCost is the least and the most that the whole task cost in the last
+// 30 days: the sum over the agents of the plan, each as many times as its
+// seats, of the least and the most of its runs. An agent without a run
+// with a cost adds nothing, and with none, both are 0. runs counts the
+// runs with a cost of the agents.
+func taskCost(who []PlanWho, byName map[string]Candidate) (low, high float64, runs int) {
+	for _, w := range who {
+		costs := byName[w.Agent].Costs
+		if len(costs) == 0 {
+			continue
+		}
+		n := float64(max(w.Count, 1))
+		low += n * slices.Min(costs)
+		high += n * slices.Max(costs)
+		runs += len(costs)
+	}
+	return math.Round(low*1e4) / 1e4, math.Round(high*1e4) / 1e4, runs
+}
+
+// spanWords says what something costs, from low to high, in words.
+func spanWords(what string, low, high float64) string {
+	switch {
+	case high < halfCent:
+		return what + " cost under $0.01."
+	case money(low) == money(high):
+		return what + " cost about " + money(high) + "."
+	}
+	return what + " cost " + money(low) + " to " + money(high) + "."
+}
+
+// doorSuffix starts the part of the message of a duty that the door adds
+// to the words of the person (MakePlan).
+const doorSuffix = "\n\nWrite the result to the wiki page "
+
+// sameDuty returns a duty of the person that does the work of the words
+// already, or nil: a duty of the same agent whose title and message share
+// most of the words of the task, without the words of a schedule. At
+// least two words must match, and at least three in five of the words of
+// the task, or of the duty when it has fewer. The duty with the most of
+// them wins, then the name that comes first.
+func sameDuty(words, said, agent string, own []duties.Duty) *PlanSame {
+	want := workStems(strings.Replace(strings.ToLower(words), said, " ", 1))
+	if len(want) < 2 {
+		return nil
+	}
+	var best *PlanSame
+	bestScore := 0.0
+	list := slices.Clone(own)
+	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
+	for _, d := range list {
+		if agent != "" && d.Agent != agent {
+			continue
+		}
+		msg, _, _ := strings.Cut(d.Do.Message(), doorSuffix)
+		have := workStems(d.Title + " " + strings.ReplaceAll(d.Name, "-", " ") + " " + msg)
+		shared := 0
+		for s := range want {
+			if have[s] {
+				shared++
+			}
+		}
+		if len(have) == 0 {
+			continue
+		}
+		score := float64(shared) / float64(min(len(want), len(have)))
+		if shared >= 2 && score >= 0.6 && score > bestScore {
+			best, bestScore = &PlanSame{Duty: d.Name, Title: cmp.Or(strings.TrimSpace(d.Title), d.Name)}, score
+		}
+	}
+	return best
+}
+
+// workStems are the stems of a text without the words of a schedule and
+// the words with a digit, such as 9am, with the verbs of sameAction
+// folded, so "sum up" and "summarize" meet.
+func workStems(text string) map[string]bool {
+	out := map[string]bool{}
+	for s := range stems(text) {
+		if scheduleWords[s] || dayWords[s] || strings.ContainsAny(s, "0123456789") {
+			continue
+		}
+		out[actionStem(s)] = true
+	}
+	return out
+}
+
+// dayWords are the words of a schedule that stems keeps: the days as
+// stems drops their plural, and the words around a time.
+var dayWords = map[string]bool{"monday": true, "tuesday": true, "wednesday": true, "thursday": true, "friday": true, "saturday": true, "sunday": true,
+	"weekday": true, "hour": true, "minute": true, "first": true, "last": true, "weekly": true, "daily": true, "nightly": true}
 
 // bestAgent picks the agent whose name and description share the most
 // words with the words of the person, or "" when none shares one. A word
@@ -485,7 +596,7 @@ func reviewerOf(agents []Candidate, agent, chat string) string {
 var sameAction = map[string]string{
 	"draft": "write", "compose": "write", "author": "write", "writer": "write",
 	"summarize": "sum", "summarise": "sum", "recap": "sum",
-	"proofread": "review", "reviewer": "review",
+	"proofread": "review", "reviewer": "review", "summary": "sum",
 }
 
 // actionsOf are the actions of a text: the stem of its first word that is
@@ -643,8 +754,11 @@ func perMonth(s schedule.Schedule) int {
 // asksOf words the patterns of a policy that ask a person. With tools,
 // the tools that the agent can call, it leaves out a pattern of a tool
 // that the agent lacks, so the readback names no ask that cannot happen.
-// A pattern with an argument of a tool other than bash names the tool, as
-// in "Before it uses ansible.playbook with check=false".
+// A tool reads as what its call does (toolWords), as in "Before it writes
+// a page of the wiki" for front.pages_write, and never by its name. A
+// pattern with an argument of bash names the command, as in "Before it
+// runs git push", and of another tool adds the argument, as in "Before it
+// calls playbook in ansible, with check=false".
 func asksOf(patterns, tools []string) []string {
 	var out []string
 	for _, p := range patterns {
@@ -662,16 +776,16 @@ func asksOf(patterns, tools []string) []string {
 			arg = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(arg), "*"))
 			switch {
 			case arg == "":
-				out = append(out, "Before it uses "+tool)
+				out = append(out, "Before it "+toolWords(tool))
 			case tool == "bash":
 				out = append(out, "Before it runs "+arg)
 			default:
-				out = append(out, "Before it uses "+tool+" with "+arg)
+				out = append(out, "Before it "+toolWords(tool)+", with "+arg)
 			}
 		case strings.HasSuffix(p, ".*"):
-			out = append(out, "Before it uses a tool of "+strings.TrimSuffix(p, ".*"))
+			out = append(out, "Before it uses a tool of "+serverWords(strings.TrimSuffix(p, ".*")))
 		default:
-			out = append(out, "Before it uses "+strings.TrimRight(p, "*"))
+			out = append(out, "Before it "+toolWords(strings.TrimRight(p, "*")))
 		}
 	}
 	return out
@@ -950,8 +1064,15 @@ func PlanFor(ctx context.Context, a *fw.Agent, now time.Time, zone string, req P
 		if err != nil {
 			return Plan{}, err
 		}
+		me := ""
+		if p := fw.PrincipalFrom(ctx); p != nil {
+			me = p.Subject
+		}
 		for _, r := range recs {
 			in.Taken[r.Duty.Name] = true
+			if me != "" && r.Duty.Owner == me {
+				in.Own = append(in.Own, r.Duty)
+			}
 		}
 	}
 	return MakePlan(in), nil

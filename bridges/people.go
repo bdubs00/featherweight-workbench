@@ -8,6 +8,7 @@ package bridges
 
 import (
 	"context"
+	"strings"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 )
@@ -26,6 +27,50 @@ func (s *Store) Patch(ctx context.Context, id string, p BridgePatch) (Item, erro
 		return Item{}, err
 	}
 	if closed {
+		s.askReport(ctx, rec)
+	}
+	return s.item(ctx, rec, subjectOf(ctx), true)
+}
+
+// VerdictAccepted is the verdict of a bridge whose result a person
+// accepted with Looks right (Bridge.Verdict).
+const VerdictAccepted = "accepted"
+
+// SendBackPrefix starts the message of Needs work in the channel.
+const SendBackPrefix = "Needs work: "
+
+// Check is the check of the result of a bridge by the caller in ctx, a
+// person (docs/ARCHITECTURE.md section 26.4). With up, Looks right, the
+// bridge closes with the verdict accepted, as a close does: it cancels
+// nothing, ends the questions, and asks the manager for the report when
+// the bridge delegates it. A bridge that was closed already takes the
+// verdict alone. Without up, Needs work, the note goes in the channel to
+// every seat, and the bridge stays open, so the seats work again. The
+// caller needs the rule of the routes (allows). It returns the bridge with
+// its members.
+func (s *Store) Check(ctx context.Context, id string, up bool, note string) (Item, error) {
+	rec, err := s.load(ctx, id)
+	if err != nil {
+		return Item{}, err
+	}
+	if !up {
+		if strings.TrimSpace(note) == "" {
+			return Item{}, invalid("Needs work needs a note that says what must change")
+		}
+		if _, err := s.postAs(ctx, rec.ID, PostSpec{Text: SendBackPrefix + strings.TrimSpace(note)}); err != nil {
+			return Item{}, err
+		}
+		if rec, err = s.load(ctx, rec.ID); err != nil {
+			return Item{}, err
+		}
+		return s.item(ctx, rec, subjectOf(ctx), true)
+	}
+	closed := StateClosed
+	rec, report, err := s.patch(ctx, rec.ID, BridgePatch{State: &closed, verdict: VerdictAccepted}, fw.PrincipalFrom(ctx))
+	if err != nil {
+		return Item{}, err
+	}
+	if report {
 		s.askReport(ctx, rec)
 	}
 	return s.item(ctx, rec, subjectOf(ctx), true)

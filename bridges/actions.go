@@ -619,6 +619,9 @@ type BridgePatch struct {
 	Delegation *DelegationPatch `json:"delegation,omitempty"`
 	Caps       *CapsPatch       `json:"caps,omitempty"`
 	State      *string          `json:"state,omitempty"`
+	// verdict is the verdict of a close by the check of a person (Check).
+	// The route takes none, so only Check sets it.
+	verdict string
 }
 
 // patch changes a bridge. A close marks the record closed, stops the
@@ -674,8 +677,11 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 		var l Message
 		switch {
 		case p.State != nil && *p.State == StateClosed && rec.State == StateOpen:
-			rec.State, rec.ClosedAt = StateClosed, &now
+			rec.State, rec.ClosedAt, rec.Verdict = StateClosed, &now, p.verdict
 			text := fmt.Sprintf("%s closed the bridge", s.nameOf(ctx, by))
+			if p.verdict == VerdictAccepted {
+				text = fmt.Sprintf("%s said that the result looks right and closed the bridge", s.nameOf(ctx, by))
+			}
 			// Nobody answers in a closed bridge, so its questions end.
 			switch settled := rec.closeQuestions(); len(settled) {
 			case 0:
@@ -690,8 +696,12 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 				closed = true
 			}
 		case p.State != nil && *p.State == StateOpen && rec.State == StateClosed:
-			rec.State, rec.ClosedAt, rec.Report = StateOpen, nil, nil
+			rec.State, rec.ClosedAt, rec.Report, rec.Verdict = StateOpen, nil, nil, ""
 			l = system(EventReopened, fmt.Sprintf("%s opened the bridge again", s.nameOf(ctx, by)))
+		case p.verdict != "" && rec.State == StateClosed && rec.Verdict != p.verdict:
+			// A person checks a bridge that was closed already.
+			rec.Verdict = p.verdict
+			l = system(EventChanged, fmt.Sprintf("%s said that the result looks right", s.nameOf(ctx, by)))
 		case changed:
 			l = system(EventChanged, fmt.Sprintf("%s changed the settings of the bridge", s.nameOf(ctx, by)))
 		default:

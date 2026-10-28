@@ -5,6 +5,7 @@ package work
 // native surface and the MCP tool work, which call the same Go function.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,7 @@ import (
 )
 
 func init() {
+	fw.RegisterService(Service)
 	native.Extend(mount)
 	mcp.RegisterTools(tools)
 }
@@ -111,10 +113,22 @@ func mergeRuns(facts []fleet.WorkRun, live []*fw.Run) []Run {
 
 // build gathers the records of the board and assembles it.
 func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, error) {
-	in := Input{Now: now, Window: time.Duration(q.Days) * 24 * time.Hour, All: q.All, Mine: map[string]bool{}, Queued: map[string]int{}}
+	in := Input{Now: now, Window: time.Duration(q.Days) * 24 * time.Hour, All: q.All, Mine: map[string]bool{}, Queued: map[string]int{}, Names: map[string]string{}}
+	st := bridges.Of(a)
 	if p := fw.PrincipalFrom(ctx); p != nil {
 		in.Me = p.Subject
+		if n := personName(p.Name); n != "" && p.Subject != "" {
+			in.Names[p.Subject] = n
+		}
+		if st != nil {
+			st.Learn(p)
+		}
 	}
+	letGo, err := Of(a).All(ctx)
+	if err != nil {
+		return Answer{}, err
+	}
+	in.LetGo = letGo
 	live, err := dashboard.Runs(ctx, a, dashboard.ScopeFleet, "")
 	if err != nil {
 		return Answer{}, err
@@ -140,12 +154,24 @@ func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, er
 	for _, r := range near {
 		in.Mine[r.ID] = true
 	}
-	if st := bridges.Of(a); st != nil {
+	if st != nil {
 		if in.Bridges, err = st.List(ctx, true); err != nil {
 			return Answer{}, err
 		}
 		if in.Waiting, err = st.Waiting(ctx); err != nil {
 			return Answer{}, err
+		}
+		// The names of the people that the bridges learned, for the
+		// subjects of the runs and of the bridges.
+		for _, r := range in.Runs {
+			if _, ok := in.Names[r.Principal]; !ok && r.Principal != "" {
+				in.Names[r.Principal] = st.KnownName(r.Principal, "")
+			}
+		}
+		for _, it := range in.Bridges {
+			if _, ok := in.Names[it.Operator]; !ok && it.Operator != "" {
+				in.Names[it.Operator] = st.KnownName(it.Operator, it.OperatorName)
+			}
 		}
 	}
 	if svc := duties.Of(a); svc != nil {
@@ -202,7 +228,8 @@ func jobBatches(in Input) []string {
 	return out
 }
 
-// mount serves GET /v1/work, POST /v1/work/plan, and POST /v1/work/review.
+// mount serves GET /v1/work, POST /v1/work/plan, POST /v1/work/review, and
+// POST /v1/work/letgo.
 func mount(k *native.Kit) error {
 	a := k.Agent()
 	bossmode.OfferWork()
@@ -263,20 +290,50 @@ func mount(k *native.Kit) error {
 		cacheOf(a).clear()
 		native.WriteJSON(w, http.StatusOK, ans)
 	})
+	k.Handle("POST /v1/work/letgo", func(w http.ResponseWriter, r *http.Request) {
+		var req LetGoRequest
+		if !k.Decode(w, r, &req) {
+			return
+		}
+		ctx, _, acting := manager.OnBehalf(r.Context())
+		if acting {
+			native.WriteProblem(w, r, http.StatusForbidden, "only a person lets a card go")
+			return
+		}
+		c, err := LetGoCard(ctx, a, time.Now(), req)
+		if err != nil {
+			fail(w, r, k, err)
+			return
+		}
+		native.WriteJSON(w, http.StatusOK, c)
+	})
 	return nil
 }
 
 // fail answers an error of the package with its problem document: a
 // request that does not read is 400, a check by a run of an agent is 403,
-// a member that refused is its status, and the rest as the kernel answers
+// a bridge or a card that is not there is 404, a closed bridge is 409, a
+// member that refused is its status, and the rest as the kernel answers
 // it.
 func fail(w http.ResponseWriter, r *http.Request, k *native.Kit, err error) {
 	var me *fleet.MemberError
 	switch {
 	case errors.Is(err, fw.ErrInvalidRequest):
-		native.WriteProblem(w, r, http.StatusBadRequest, strings.ReplaceAll(err.Error(), fw.ErrInvalidRequest.Error()+": ", ""))
+		native.WriteProblem(w, r, http.StatusBadRequest, strings.ReplaceAll(bridges.Detail(err), fw.ErrInvalidRequest.Error()+": ", ""))
 	case errors.Is(err, ErrNotPerson):
 		native.WriteProblem(w, r, http.StatusForbidden, ErrNotPerson.Error())
+	case errors.Is(err, bridges.ErrNotFound):
+		native.WriteProblem(w, r, http.StatusNotFound, bridges.Detail(err))
+	case errors.Is(err, bridges.ErrConflict):
+		native.WriteProblem(w, r, http.StatusConflict, bridges.Detail(err))
+	case errors.Is(err, ErrNoCard):
+		native.WriteProblem(w, r, http.StatusNotFound, strings.TrimPrefix(err.Error(), ErrNoCard.Error()+": "))
+	case errors.Is(err, ErrNotStopped):
+		native.WriteProblem(w, r, http.StatusConflict, strings.TrimPrefix(err.Error(), ErrNotStopped.Error()+": "))
+	case errors.Is(err, ErrOff):
+		native.WriteProblem(w, r, http.StatusServiceUnavailable, strings.TrimPrefix(err.Error(), ErrOff.Error()+": "))
+	case errors.Is(err, ErrNoBridges):
+		native.WriteProblem(w, r, http.StatusServiceUnavailable, "the bridges are off in this process")
 	case errors.As(err, &me) && me.Status >= 400 && me.Status < 500:
 		native.WriteProblem(w, r, me.Status, me.Detail)
 	default:
@@ -289,12 +346,13 @@ const (
 	ToolWork   = "work"
 	ToolPlan   = "work_plan"
 	ToolReview = "work_review"
+	ToolLetGo  = "work_letgo"
 )
 
 func ptr[T any](v T) *T { return &v }
 
-// tools builds the tools work, work_plan, and work_review for one MCP
-// server.
+// tools builds the tools work, work_plan, work_review, and work_letgo for
+// one MCP server.
 func tools(srv *mcp.Server) []mcp.Tool {
 	a := srv.Agent()
 	type planIn struct {
@@ -306,7 +364,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 		Title: "Where the work stands",
 		Description: "Show the board of the work of the person: one card per task, from the request to its end. A task is a bridge, a start of a duty, a job of many items, an event of a source, or a conversation with an agent. " +
 			"Each card has a stage (waiting: coming up, working, needs-you, stopped, review: a result to check, done), the reason in words, since when, who moves it next (worker, agent, you, person, manager), who asked for it, and its links: the run to open, the approval to decide with approve, the bridge, the duty, and the batch. " +
-			"A done card has a verdict: accepted, checked, sent-back, or unchecked. A card that did not end stays on the board however old it is, so work that stopped never drops out of sight; lost means that the worker of the task was replaced. " +
+			"A done card has a verdict: accepted, checked, sent-back, or unchecked, or let-go for a stopped card that a person let go with work_letgo. A card that did not end stays on the board however old it is, so work that stopped never drops out of sight; lost means that the worker of the task was replaced. from.display is a name of the person that people read. " +
 			"days is the window for the cards that ended: 7, 30, or 90, 7 by default. all true shows every card that the person can view, not only the cards of the person and of the teams of the person.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"days":{"type":"integer","enum":[7,30,90]},"all":{"type":"boolean"}}}`),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
@@ -337,9 +395,10 @@ func tools(srv *mcp.Server) []mcp.Tool {
 	}), mcp.NewTool(&sdk.Tool{
 		Name:  ToolReview,
 		Title: "Check a result",
-		Description: "Check the result of a run for the person. verdict right is Looks right: a thumb up on the run. verdict work is Needs work: a thumb down with the note, and the note goes to the agent as a follow-up message, so the run works again. " +
-			"Only a person checks a result: a run of an agent cannot. The person needs the operator role on the run.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"run":{"type":"string"},"verdict":{"type":"string","enum":["right","work"]},"note":{"type":"string","maxLength":4000}},"required":["run","verdict"]}`),
+		Description: "Check the result of a run or of a bridge (a team) for the person: name run or bridge, not both. verdict up (or right) is Looks right: a thumb up on the run, or the bridge closes with the verdict accepted. " +
+			"verdict down (or work) is Needs work and needs a note: a thumb down on the run, and the note goes to the agent as a follow-up message, so the run works again; for a bridge, the note goes in its channel to every seat, and the bridge stays open. " +
+			"Only a person checks a result: a run of an agent cannot. The person needs the operator role on the run, or the right to use the bridge.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"run":{"type":"string"},"bridge":{"type":"string"},"verdict":{"type":"string","enum":["up","down","right","work"]},"note":{"type":"string","maxLength":4000}},"required":["verdict"]}`),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, IdempotentHint: false, OpenWorldHint: ptr(false)},
 	}, func(ctx context.Context, req *sdk.CallToolRequest, in ReviewRequest) (*sdk.CallToolResult, any, error) {
 		ctx, _, acting := manager.OnBehalf(ctx)
@@ -352,10 +411,32 @@ func tools(srv *mcp.Server) []mcp.Tool {
 		}
 		cacheOf(a).clear()
 		text := "Looks right: the run " + ans.Run + " has a thumb up."
-		if ans.Reaction == fw.ReactionDown {
+		switch {
+		case ans.Bridge != "" && ans.Reaction == fw.ReactionDown:
+			text = "Needs work: the note went in the channel of the bridge " + ans.Bridge + " to every seat, and the bridge stays open."
+		case ans.Bridge != "":
+			text = "Looks right: the bridge " + ans.Bridge + " is closed with the verdict accepted."
+		case ans.Reaction == fw.ReactionDown:
 			text = "Needs work: the run " + ans.Run + " has a thumb down, and the note went to the agent."
 		}
 		return mcp.Result(text, ans), nil, nil
+	}), mcp.NewTool(&sdk.Tool{
+		Name:  ToolLetGo,
+		Title: "Let a stopped task go",
+		Description: "Let a stopped card of the board go, for the person: card is the id of the card, as the tool work answers it. The card moves to done with the verdict let-go, and the front keeps who let it go and when. Its runs keep their state, so the value of the work counts them as before. " +
+			"Only a person whose move the card is (next is you), or an owner of one of its agents, can let it go. A card that a person let go already stays as it is. A card that is not stopped cannot go.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"card":{"type":"string"}},"required":["card"]}`),
+		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, IdempotentHint: true, OpenWorldHint: ptr(false)},
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in LetGoRequest) (*sdk.CallToolResult, any, error) {
+		ctx, _, acting := manager.OnBehalf(ctx)
+		if acting {
+			return mcp.ErrorResult("Forbidden: only a person lets a card go; a run of an agent cannot."), nil, nil
+		}
+		c, err := LetGoCard(ctx, a, time.Now(), in)
+		if err != nil {
+			return mcp.ErrorResult(mcp.Explain(err)), nil, nil
+		}
+		return mcp.Result("Let go: "+c.Title+". "+c.Reason+" It is in Done now.", c), nil, nil
 	})}
 }
 
@@ -401,6 +482,9 @@ func PlanText(p Plan) string {
 	for _, x := range p.Problems {
 		b.WriteString("\nProblem: " + x)
 	}
+	if p.Same != nil {
+		b.WriteString("\nThe same work: your duty " + p.Same.Title + " (" + p.Same.Duty + ") does it already.")
+	}
 	return b.String()
 }
 
@@ -417,7 +501,7 @@ var stageWords = map[string]string{
 // kindWords names a kind of card with its article.
 var kindWords = map[string]string{
 	KindConversation: "a conversation",
-	KindBridge:       "a bridge",
+	KindBridge:       "a team",
 	KindDuty:         "a duty",
 	KindJob:          "a job",
 	KindEvent:        "an event",
@@ -438,8 +522,8 @@ func Text(ans Answer, now time.Time) string {
 				continue
 			}
 			fmt.Fprintf(&b, "\n- %s, %s", c.Title, kindWords[c.Kind])
-			if c.From.Name != "" {
-				fmt.Fprintf(&b, " from %s", c.From.Name)
+			if who := cmp.Or(c.From.Display, c.From.Name); who != "" {
+				fmt.Fprintf(&b, " from %s", who)
 			}
 			if c.Reason != "" {
 				b.WriteString(": " + c.Reason)

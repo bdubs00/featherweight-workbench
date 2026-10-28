@@ -77,11 +77,15 @@ const (
 
 // From says who asked for the work: Kind is person, duty, app, manager,
 // or agent; Name names it; Via says how the request came: page, mcp,
-// queue, bridge, schedule, event, call, or now.
+// queue, bridge, schedule, event, call, or now. Display is a name of a
+// person that people read, beside the subject, such as the email for a
+// subject that the issuer made as an id. It is empty when the front knows
+// no such name.
 type From struct {
-	Kind string `json:"kind"`
-	Name string `json:"name,omitempty"`
-	Via  string `json:"via,omitempty"`
+	Kind    string `json:"kind"`
+	Name    string `json:"name,omitempty"`
+	Display string `json:"display,omitempty"`
+	Via     string `json:"via,omitempty"`
 }
 
 // Parts counts the parts of a card by stage: the seats of a bridge, or the
@@ -152,8 +156,8 @@ type Card struct {
 	Links   Links      `json:"links"`
 	CostUSD float64    `json:"costUSD"`
 	// Verdict says who or what checked the result of a done card:
-	// accepted, checked, sent-back, or unchecked. A canceled card has
-	// none.
+	// accepted, checked, sent-back, or unchecked, or let-go for a stopped
+	// card that a person let go. A canceled card has none.
 	Verdict string `json:"verdict,omitempty"`
 	// Lost is true when no worker holds a part of the card that had not
 	// ended: the pool replaced its worker, so the part cannot go on.
@@ -216,6 +220,12 @@ type Input struct {
 	// schedule and is not paused, by name.
 	Next   map[string]time.Time
 	Queued map[string]int
+	// LetGo holds the let-go of the cards that people let go, by the id of
+	// the card (letgo.go).
+	LetGo map[string]LetGo
+	// Names holds a name of a person that people read, by subject, for
+	// the subjects that the records name alone (From.Display).
+	Names  map[string]string
 	Now    time.Time
 	Window time.Duration
 }
@@ -328,7 +338,12 @@ func (b *board) bridge(it bridges.Item) {
 		if it.ClosedAt != nil {
 			at = *it.ClosedAt
 		}
-		d.parts = append(d.parts, part{stage: StageDone, reason: "Closed.", since: at, verdict: VerdictUnchecked})
+		p := part{stage: StageDone, reason: "Closed.", since: at, verdict: VerdictUnchecked}
+		if it.Verdict == bridges.VerdictAccepted {
+			// A person said Looks right, which closed the bridge.
+			p.reason, p.verdict = "Accepted.", VerdictAccepted
+		}
+		d.parts = append(d.parts, p)
 		for _, m := range it.Members {
 			d.agents[m.Agent] = true
 		}
@@ -349,6 +364,19 @@ func (b *board) bridge(it bridges.Item) {
 				p.since = r.UpdatedAt
 			}
 		}
+		lost := m.Gone
+		if r, ok := b.byID[p.run]; ok && r.Lost {
+			lost = true
+		}
+		switch {
+		case m.Presence == bridges.PresenceNeedsYou && lost:
+			// The seat asked, and then its worker went: nobody can move
+			// the seat by an answer, so it stopped (walk finding L20).
+			p.stage, p.lost = StageStopped, true
+			p.reason = m.Handle + " lost its worker while its question waited, so it cannot go on."
+			d.parts = append(d.parts, p)
+			continue
+		}
 		switch m.Presence {
 		case bridges.PresenceNeedsYou:
 			p.stage = StageNeedsYou
@@ -363,7 +391,7 @@ func (b *board) bridge(it bridges.Item) {
 				p.reason = m.Handle + " waits for you."
 			}
 		case bridges.PresenceWorking:
-			p.stage, p.reason = StageWorking, m.Handle+" works."
+			p.stage, p.reason = StageWorking, m.Handle+" works on its part."
 		case bridges.PresenceWaiting:
 			p.stage, p.reason = StageWaiting, m.Handle+" waits for a worker."
 		case bridges.PresenceError:
@@ -379,13 +407,13 @@ func (b *board) bridge(it bridges.Item) {
 			continue
 		default:
 			// idle and asleep: the seat ended its turn.
-			p.stage, p.reason = StageReview, "The seats ended their turns."
+			p.stage, p.reason = StageReview, teamDone
 			p.since = last
 		}
 		d.parts = append(d.parts, p)
 	}
 	if len(d.parts) == 0 {
-		d.parts = append(d.parts, part{stage: StageStopped, reason: "No seat.", since: last})
+		d.parts = append(d.parts, part{stage: StageStopped, reason: "The team has no agent.", since: last})
 	}
 }
 
@@ -404,10 +432,9 @@ func (b *board) start(s Start) {
 	}
 	d, _ := b.card(dutyKey(s.Duty.Name, e.Slot))
 	d.Kind, d.settled = KindDuty, true
-	d.Title = e.Title
-	if d.Title == "" {
-		d.Title = cmp.Or(s.Duty.Title, s.Duty.Name)
-	}
+	// A start reads as its duty: the title of the duty, else the title of
+	// its run, else the name of the duty.
+	d.Title = cmp.Or(strings.TrimSpace(s.Duty.Title), e.Title, s.Duty.Name)
 	d.Opened = e.Slot
 	if e.At.Before(d.Opened) || d.Opened.IsZero() {
 		d.Opened = e.At
@@ -444,7 +471,7 @@ func (b *board) start(s Start) {
 			p.stage = StageNeedsYou
 		}
 		if p.reason == "" {
-			p.reason = "Works."
+			p.reason = agentWorks
 		}
 	case duties.StateCanceled:
 		p.stage, p.reason = StageDone, "Canceled."
@@ -596,7 +623,7 @@ func (b *board) newCard(d *draft, r Run) {
 	switch {
 	case strings.HasPrefix(d.ID, "duty:"):
 		name := md[duties.MetaDuty]
-		d.Kind, d.Title = KindDuty, titleOf(r.Run)
+		d.Kind, d.Title = KindDuty, cmp.Or(strings.TrimSpace(b.dutyOf[name].Title), titleOf(r.Run))
 		d.From = From{Kind: "duty", Name: name}
 		d.Links.Duty = name
 		d.mine = b.ownsDuty("duty:"+name) || b.notifies(b.dutyOf[name])
@@ -650,7 +677,23 @@ func (b *board) fromSubject(subject, name, via string) From {
 	case strings.HasPrefix(subject, "source:"):
 		return From{Kind: "app", Name: strings.TrimPrefix(subject, "source:"), Via: via}
 	}
-	return From{Kind: "person", Name: cmp.Or(name, subject), Via: via}
+	return From{Kind: "person", Name: cmp.Or(name, subject), Display: b.display(subject, name), Via: via}
+}
+
+// display is a name of a person that people read: the name that the
+// record keeps, else the name that the front knows for the subject, else
+// the subject when it is no id that the issuer made, else "".
+func (b *board) display(subject, name string) string {
+	if n := personName(name); n != "" {
+		return n
+	}
+	if n := personName(b.in.Names[subject]); n != "" {
+		return n
+	}
+	if subject != "" && !opaqueID(subject) {
+		return subject
+	}
+	return ""
 }
 
 // ownsDuty reports whether the caller owns the duty of a principal
@@ -664,8 +707,8 @@ func (b *board) ownsDuty(subject string) bool {
 	return ok && b.in.Me != "" && d.Owner == b.in.Me
 }
 
-// notifies reports whether a duty tells the caller of its failures or its
-// questions.
+// notifies reports whether a duty tells the caller of its failures, its
+// questions, or its results.
 func (b *board) notifies(d duties.Duty) bool {
 	if b.in.Me == "" {
 		return false
@@ -676,7 +719,7 @@ func (b *board) notifies(d duties.Duty) bool {
 	if d.Notify == nil {
 		return false
 	}
-	return slices.Contains(d.Notify.Failure, b.in.Me) || slices.Contains(d.Notify.NeedsYou, b.in.Me)
+	return slices.Contains(d.Notify.Failure, b.in.Me) || slices.Contains(d.Notify.NeedsYou, b.in.Me) || slices.Contains(d.Notify.Result, b.in.Me)
 }
 
 // runPart is the stage of one run.
@@ -705,9 +748,9 @@ func (b *board) runPart(r Run) part {
 		p.stage, p.reason, p.since = StageWaiting, "Waits for a worker.", r.CreatedAt
 	case fw.StateRunning, fw.StateSuspended:
 		p.stage, p.since = StageWorking, r.CreatedAt
-		p.reason = "Works."
+		p.reason = agentWorks
 		if a := r.Activity; a != nil && a.Tool != "" {
-			p.reason = "Runs " + a.Tool + "."
+			p.reason = capital(toolWords(a.Tool)) + "."
 		}
 	case fw.StateCompleted:
 		p.stage = StageDone
@@ -718,8 +761,13 @@ func (b *board) runPart(r Run) part {
 				p.reason = "A new answer to check. Your note: " + oneLine(n, 120)
 			}
 		case fleet.ToCheck(r.Run, r.Work):
-			// The owner asked to check each result, and nobody did yet.
+			// The owner asked to check each result, or a duty that tells
+			// only of what it finds found something, and nobody checked it
+			// yet.
 			p.stage, p.reason = StageReview, "A result to check."
+			if what, ok := fleet.Found(r.Run); ok {
+				p.reason = "Found: " + oneLine(plainText(what), 200)
+			}
 		case v == VerdictAccepted:
 			p.verdict, p.reason = v, "Accepted."
 		case v == VerdictSentBack:
@@ -746,10 +794,17 @@ func (b *board) runPart(r Run) part {
 	case fw.StateCanceled:
 		p.stage, p.reason = StageDone, "Canceled."
 	default:
-		p.stage, p.reason = StageWorking, "Works."
+		p.stage, p.reason = StageWorking, agentWorks
 	}
 	return p
 }
+
+// Reasons of a card in plain words: no card says "Works." alone, and none
+// names the seats or the turns of a team (walk finding L8).
+const (
+	agentWorks = "The agent works on it."
+	teamDone   = "The agents finished, and the result waits for a check."
+)
 
 // judged is the verdict of a person, or of a receipt, on the result of a
 // run: the first verdict of its facts, else its reactions. A thumb down
@@ -799,7 +854,7 @@ func pendingWords(r *fw.Run) string {
 		}
 		return "Asks you a question."
 	case a.Tool != "":
-		return "Asks to run " + a.Tool + "."
+		return "Asks before it " + toolWords(a.Tool) + "."
 	}
 	return "Waits for you."
 }
@@ -820,6 +875,7 @@ func (b *board) answer() Answer {
 			continue
 		}
 		b.settle(d)
+		b.letGo(d)
 		if d.Stage == StageDone && d.Since.Before(b.in.Now.Add(-b.in.Window)) {
 			continue
 		}
@@ -893,7 +949,7 @@ func (b *board) settle(d *draft) {
 	d.Stage, d.Reason, d.Since = top.stage, top.reason, top.since
 	switch {
 	case d.Kind == KindBridge && d.Stage == StageReview:
-		d.Reason = "The seats ended their turns."
+		d.Reason = teamDone
 	case d.Kind == KindJob && d.Stage != StageNeedsYou,
 		d.Kind == KindBridge && d.Parts.Total > 1 && (d.Stage == StageWorking || d.Stage == StageWaiting):
 		if s := partWords(d.Parts); s != "" {
@@ -1045,17 +1101,17 @@ func titleOf(r *fw.Run) string {
 // oneLine cuts a text to one line of at most n bytes.
 // limitWords names the limit of a run that stopped at its budget, from
 // its error "budget exceeded: <limit>", in words for a person, such as
-// "its limit of turns" for maxTurns. An unknown limit is "a limit of its
+// "its limit of steps" for maxTurns. An unknown limit is "a limit of its
 // budget".
 func limitWords(err string) string {
 	name, _, _ := strings.Cut(strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(err, "budget exceeded"), ":")), " ")
 	switch strings.TrimRight(name, ".,;") {
 	case "maxTurns":
-		return "its limit of turns"
+		return "its limit of steps"
 	case "maxToolCalls":
 		return "its limit of tool calls"
 	case "maxCallsPerTurn":
-		return "its limit of tool calls in one turn"
+		return "its limit of tool calls in one step"
 	case "maxTokens":
 		return "its limit of tokens"
 	case "maxCostUSD":

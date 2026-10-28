@@ -60,6 +60,7 @@ const (
 	MetaSlot    = "workbench.dutySlot"    // the time of the start, RFC 3339 in UTC
 	MetaAttempt = "workbench.dutyAttempt" // the attempt, from 2, for a retry of the duty
 	MetaReview  = fleet.MetaReview        // 1 when the owner checks each result (Duty.Review)
+	MetaFound   = fleet.MetaFound         // 1 when a result reaches people only when the run finds something (Notify.ResultWhen found)
 )
 
 // BatchOf returns the batch of the runs of a duty, duty:<name>.

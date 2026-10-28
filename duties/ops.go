@@ -152,6 +152,15 @@ func caller(ctx context.Context) (string, string) {
 	return "fw-workbench", ""
 }
 
+// readerOf is the subject of the person who reads a readback in ctx, so
+// the readback says you for that person, or "" for the process itself.
+func readerOf(ctx context.Context) string {
+	if p := fw.PrincipalFrom(ctx); p != nil {
+		return p.Subject
+	}
+	return ""
+}
+
 // admin reports whether the caller in ctx is an admin of the process
 // (fw.ActionAdmin), or the process itself.
 func (s *Service) admin(ctx context.Context) bool {
@@ -268,7 +277,7 @@ func (s *Service) view(ctx context.Context, st *stored, withHistory bool) (View,
 		d.CheckFirst = &cf
 	}
 	words := s.worded(ctx, d)
-	v := View{Duty: d, Source: SourceStore, Origin: st.Origin, Locked: st.Locked, Template: st.templated(), Revision: st.rev, Readback: readback(&words), ForDevelopers: details(&d), Next: next(&d, now, 5)}
+	v := View{Duty: d, Source: SourceStore, Origin: st.Origin, Locked: st.Locked, Template: st.templated(), Revision: st.rev, Readback: readback(&words, readerOf(ctx)), ForDevelopers: details(&d), Next: next(&d, now, 5)}
 	if step, ok := st.pollStep(); ok {
 		// The interval of an imported poll can be shorter than the
 		// shortest step of a schedule, which the plan of a schedule reads.
@@ -507,7 +516,7 @@ func (s *Service) dryRun(ctx context.Context, d Duty, problems []string, test bo
 		ans.Readback = ""
 	} else {
 		words := s.worded(ctx, d)
-		ans.Readback, ans.ForDevelopers = readback(&words), details(&d)
+		ans.Readback, ans.ForDevelopers = readback(&words, readerOf(ctx)), details(&d)
 	}
 	if !test {
 		return PutAnswer{Dry: ans}, nil

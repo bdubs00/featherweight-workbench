@@ -164,7 +164,7 @@ func TestLostAndWaiting(t *testing.T) {
 		t.Fatalf("the lost run = %+v", l)
 	}
 	a := cardOf(t, ans, "run:R-ASK")
-	if a.Stage != StageNeedsYou || a.Links.Approval != "ap-1" || a.Reason != "Asks to run git.push." || !a.Since.Equal(ago(time.Hour)) {
+	if a.Stage != StageNeedsYou || a.Links.Approval != "ap-1" || a.Reason != "Asks before it calls push in git." || !a.Since.Equal(ago(time.Hour)) {
 		t.Fatalf("the approval = %+v", a)
 	}
 	if c := cardOf(t, ans, "run:R-Q"); c.Reason != "Asks: Which branch?" || c.Links.Approval != "ap-2" {
@@ -335,7 +335,7 @@ func TestReviewAndVerdicts(t *testing.T) {
 	if c := cardOf(t, ans, "run:NOTDONE"); c.Stage != StageStopped || c.Reason != "Not done: the check tests failed." {
 		t.Fatalf("a run that is not done = %+v", c)
 	}
-	if c := cardOf(t, ans, "run:LIMIT"); c.Stage != StageStopped || c.Reason != "Stopped at its limit of turns." {
+	if c := cardOf(t, ans, "run:LIMIT"); c.Stage != StageStopped || c.Reason != "Stopped at its limit of steps." {
 		t.Fatalf("a run at a limit = %+v", c)
 	}
 	if !fleet.InReview(asked) || fleet.InReview(upped) || fleet.InReview(plain) {
@@ -364,7 +364,7 @@ func TestDutyStartThatWorks(t *testing.T) {
 	if c := cardOf(t, ans, dutyKey("report", slot)); c.Stage != StageWorking {
 		t.Fatalf("the start whose run works = %+v", c)
 	}
-	if c := cardOf(t, ans, dutyKey("report", other)); c.Stage != StageWorking || c.Reason != "Works." {
+	if c := cardOf(t, ans, dutyKey("report", other)); c.Stage != StageWorking || c.Reason != "The agent works on it." {
 		t.Fatalf("the start whose run the view does not hold = %+v", c)
 	}
 	if c := cardOf(t, ans, dutyKey("report", other.Add(-time.Hour))); c.Stage != StageNeedsYou {
@@ -376,7 +376,7 @@ func TestDutyStartThatWorks(t *testing.T) {
 // name of a key, and shows a question without the marks of Markdown.
 func TestReasonWords(t *testing.T) {
 	for err, want := range map[string]string{
-		"budget exceeded: maxTurns":     "its limit of turns",
+		"budget exceeded: maxTurns":     "its limit of steps",
 		"budget exceeded: maxToolCalls": "its limit of tool calls",
 		"budget exceeded: maxCostUSD":   "its limit of cost",
 		"budget exceeded: deadline":     "its time limit",
@@ -414,5 +414,182 @@ func TestMergeRunsKeepsTheArchiveOfAnEnd(t *testing.T) {
 	}
 	if got[2].ID != "R3" {
 		t.Errorf("a run of the view alone = %+v", got[2].Run)
+	}
+}
+
+// A stopped card that a person let go is done with the verdict let-go,
+// and its reason names the person, or you for the caller. A let-go older
+// than the window drops out with the card. A card that moved on since its
+// let-go keeps its stage.
+func TestLetGoCards(t *testing.T) {
+	lost := run("R-LOST", "helper", fw.StateRunning, ago(10*24*time.Hour), ago(10*24*time.Hour), nil)
+	failed := run("R-FAIL", "helper", fw.StateFailed, ago(2*time.Hour), ago(time.Hour), nil)
+	failed.Error = "budget exceeded: maxTurns"
+	old := run("R-OLD", "helper", fw.StateFailed, ago(20*24*time.Hour), ago(20*24*time.Hour), nil)
+	again := run("R-AGAIN", "helper", fw.StateRunning, ago(time.Hour), ago(time.Minute), nil)
+	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: lost, Lost: true}, {Run: failed}, {Run: old, Lost: true}, {Run: again}},
+		LetGo: map[string]LetGo{
+			"run:R-LOST":  {Card: "run:R-LOST", By: "alice", Name: "Alice", At: ago(time.Hour)},
+			"run:R-FAIL":  {Card: "run:R-FAIL", By: "bob", Name: "Bob", At: ago(30 * time.Minute)},
+			"run:R-OLD":   {Card: "run:R-OLD", By: "bob", At: ago(9 * 24 * time.Hour)},
+			"run:R-AGAIN": {Card: "run:R-AGAIN", By: "fd1e8a14-ac12-5a00-b4d6-bb6e50d15c10", At: ago(2 * time.Hour)},
+		}}
+	in.Mine = mineAll(in.Runs...)
+	ans := Assemble(in)
+	l := cardOf(t, ans, "run:R-LOST")
+	if l.Stage != StageDone || l.Verdict != VerdictLetGo || l.Reason != "Let go by you." || l.Next != "" || l.Ended == nil || !l.Ended.Equal(ago(time.Hour)) || !l.Lost {
+		t.Fatalf("a lost card that alice let go = %+v", l)
+	}
+	if f := cardOf(t, ans, "run:R-FAIL"); f.Stage != StageDone || f.Reason != "Let go by Bob." {
+		t.Fatalf("a failed card that bob let go = %+v", f)
+	}
+	for _, c := range ans.Cards {
+		if c.ID == "run:R-OLD" {
+			t.Fatalf("a let-go older than the window shows %+v", c)
+		}
+	}
+	if a := cardOf(t, ans, "run:R-AGAIN"); a.Stage != StageWorking {
+		t.Fatalf("a card that works again = %+v", a)
+	}
+	if got := letGoName(LetGo{By: "fd1e8a14-ac12-5a00-b4d6-bb6e50d15c10"}, "alice"); got != "a person" {
+		t.Fatalf("the name of a person with an id = %q", got)
+	}
+	if ans.Lanes[5].Count != 2 || ans.Lanes[3].Count != 0 {
+		t.Fatalf("the lanes = %+v", ans.Lanes)
+	}
+}
+
+// A start of a duty that tells only of what it finds and whose run found
+// something waits in To check with the words of what it found. The card
+// is the move of a person of notify.result. A start that found nothing is
+// done.
+func TestFoundCard(t *testing.T) {
+	slot := ago(time.Hour)
+	md := map[string]string{duties.MetaDuty: "drift", duties.MetaSlot: slot.Format(time.RFC3339Nano), fleet.MetaFound: "1"}
+	found := run("R-F", "ops", fw.StateCompleted, slot, ago(50*time.Minute), md)
+	found.Principal, found.Output = "duty:drift", "**Found:** web-3 drifts from its role\nThe diff is in the wiki."
+	slot2 := ago(25 * time.Hour)
+	md2 := map[string]string{duties.MetaDuty: "drift", duties.MetaSlot: slot2.Format(time.RFC3339Nano), fleet.MetaFound: "1"}
+	nothing := run("R-N", "ops", fw.StateCompleted, slot2, slot2, md2)
+	nothing.Principal, nothing.Output = "duty:drift", "Found: nothing"
+	d := duties.Duty{Name: "drift", Title: "Drift check", Agent: "ops", Owner: "alice", Notify: &duties.Notify{Result: []string{"bob"}, ResultWhen: duties.ResultFound}}
+	in := Input{Me: "bob", Now: t0, Runs: []Run{{Run: found}, {Run: nothing}}, Duties: []duties.Duty{d},
+		Starts: []Start{{Duty: d, Entry: duties.RunEntry{Slot: slot, At: slot, Run: "R-F", State: duties.StateCompleted}}, {Duty: d, Entry: duties.RunEntry{Slot: slot2, At: slot2, Run: "R-N", State: duties.StateCompleted}}}}
+	ans := Assemble(in)
+	c := cardOf(t, ans, dutyKey("drift", slot))
+	if c.Stage != StageReview || c.Reason != "Found: web-3 drifts from its role" || c.Next != NextYou {
+		t.Fatalf("a found result = %+v", c)
+	}
+	if n := cardOf(t, ans, dutyKey("drift", slot2)); n.Stage != StageDone || n.Verdict != VerdictUnchecked {
+		t.Fatalf("a start that found nothing = %+v", n)
+	}
+}
+
+// A card names the person who asked by a name that people read beside
+// the subject: the name that a bridge keeps, the name that the front knows
+// for the subject, or the subject when it is no id. A subject that the
+// issuer made as an id, with no name known, has no display.
+func TestFromDisplay(t *testing.T) {
+	const erin = "fd1e8a14-ac12-5a00-b4d6-bb6e50d15c10"
+	mine := run("R-A", "helper", fw.StateCompleted, ago(time.Hour), ago(time.Hour), nil)
+	known := run("R-E", "helper", fw.StateCompleted, ago(time.Hour), ago(time.Hour), nil)
+	known.Principal = erin
+	stranger := run("R-X", "helper", fw.StateCompleted, ago(time.Hour), ago(time.Hour), nil)
+	stranger.Principal = "0b6e1f7c-4d1a-4a8e-9a63-2f0d61c5a9e1"
+	in := Input{Me: "alice", All: true, Now: t0, Runs: []Run{{Run: mine}, {Run: known}, {Run: stranger}},
+		Names:   map[string]string{erin: "erin@example.com"},
+		Bridges: []bridges.Item{{Bridge: bridges.Bridge{ID: "B1", Title: "Miners", Operator: erin, OperatorName: "Erin Example", State: bridges.StateClosed, CreatedAt: ago(time.Hour)}}}}
+	ans := Assemble(in)
+	for id, want := range map[string]string{"run:R-A": "alice", "run:R-E": "erin@example.com", "run:R-X": "", "bridge:B1": "Erin Example"} {
+		if c := cardOf(t, ans, id); c.From.Display != want || c.From.Kind != "person" {
+			t.Errorf("the from of %s = %+v, want the display %q", id, c.From, want)
+		}
+	}
+	raw, _ := json.Marshal(cardOf(t, ans, "run:R-X").From)
+	if strings.Contains(string(raw), "display") {
+		t.Fatalf("a from without a name = %s", raw)
+	}
+}
+
+// A question of a seat whose run no worker holds is no move of a person:
+// the seat that the channel called gone and the seat whose run the
+// archive holds as lost stop the card, which is lost.
+func TestLostQuestion(t *testing.T) {
+	lostRun := run("R-L", "writer", fw.StateInputRequired, ago(4*24*time.Hour), ago(4*24*time.Hour), map[string]string{fw.MetaBatch: "bridge:B2"})
+	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: lostRun, Lost: true}},
+		Bridges: []bridges.Item{
+			{Bridge: bridges.Bridge{ID: "B1", Title: "node_exporter, second try", Operator: "alice", State: bridges.StateOpen, CreatedAt: ago(4 * 24 * time.Hour), Members: []bridges.Member{
+				{Handle: "ops", Agent: "ops", Runs: []string{"R-GONE"}, Presence: bridges.PresenceNeedsYou, Question: 9, Gone: true},
+				{Handle: "rev", Agent: "reviewer", Presence: bridges.PresenceIdle},
+			}}},
+			{Bridge: bridges.Bridge{ID: "B2", Title: "Roles", Operator: "alice", State: bridges.StateOpen, CreatedAt: ago(4 * 24 * time.Hour), Members: []bridges.Member{
+				{Handle: "writer", Agent: "writer", Runs: []string{"R-L"}, Presence: bridges.PresenceNeedsYou},
+			}}},
+		},
+		Waiting: []bridges.Waiting{{Bridge: "B1", Handle: "ops", Question: 9, Text: "Which port?", At: ago(4 * 24 * time.Hour), Gone: true}},
+	}
+	in.Mine = mineAll(in.Runs...)
+	ans := Assemble(in)
+	b1 := cardOf(t, ans, "bridge:B1")
+	if b1.Stage != StageStopped || !b1.Lost || b1.Reason != "ops lost its worker while its question waited, so it cannot go on." || b1.Parts.NeedsYou != 0 {
+		t.Fatalf("a bridge whose seat asked and went = %+v", b1)
+	}
+	if b2 := cardOf(t, ans, "bridge:B2"); b2.Stage != StageStopped || !b2.Lost || b2.Links.Approval != "" {
+		t.Fatalf("a bridge whose seat run is lost = %+v", b2)
+	}
+	if ans.Lanes[2].Count != 0 {
+		t.Fatalf("the lane needs you = %+v", ans.Lanes[2])
+	}
+}
+
+// The reasons of the cards say what happens in plain words: no card says
+// "Works." alone or names the seats or the turns of a team, and a tool
+// reads as what its call does.
+func TestPlainReasons(t *testing.T) {
+	files := run("R-F", "writer", fw.StateRunning, ago(time.Hour), ago(time.Minute), nil)
+	files.Activity = &fw.RunActivity{Turn: 2, Tool: "files"}
+	thinks := run("R-T", "writer", fw.StateRunning, ago(time.Hour), ago(time.Minute), nil)
+	wiki := run("R-W", "writer", fw.StateInputRequired, ago(time.Hour), ago(time.Minute), nil)
+	wiki.Pending = &fw.Approval{ID: "ap", Tool: "front.pages_write"}
+	limit := run("R-L", "writer", fw.StateFailed, ago(time.Hour), ago(time.Minute), nil)
+	limit.Error = "budget exceeded: maxCallsPerTurn"
+	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: files}, {Run: thinks}, {Run: wiki}, {Run: limit}},
+		Bridges: []bridges.Item{
+			{Bridge: bridges.Bridge{ID: "B1", Title: "Email", Operator: "alice", State: bridges.StateOpen, CreatedAt: ago(time.Hour), Members: []bridges.Member{
+				{Handle: "writer", Agent: "writer", Presence: bridges.PresenceIdle}, {Handle: "reviewer", Agent: "reviewer", Presence: bridges.PresenceAsleep}}}},
+			{Bridge: bridges.Bridge{ID: "B2", Title: "Docs", Operator: "alice", State: bridges.StateOpen, CreatedAt: ago(time.Hour), Members: []bridges.Member{
+				{Handle: "writer", Agent: "writer", Presence: bridges.PresenceWorking}}}},
+			{Bridge: bridges.Bridge{ID: "B3", Title: "Empty", Operator: "alice", State: bridges.StateOpen, CreatedAt: ago(time.Hour)}},
+		}}
+	in.Mine = mineAll(in.Runs...)
+	ans := Assemble(in)
+	want := map[string]string{
+		"run:R-F":   "Works with files.",
+		"run:R-T":   "The agent works on it.",
+		"run:R-W":   "Asks before it writes a page of the wiki.",
+		"run:R-L":   "Stopped at its limit of tool calls in one step.",
+		"bridge:B1": "The agents finished, and the result waits for a check.",
+		"bridge:B2": "writer works on its part.",
+		"bridge:B3": "The team has no agent.",
+	}
+	for id, w := range want {
+		if c := cardOf(t, ans, id); c.Reason != w {
+			t.Errorf("the reason of %s = %q, want %q", id, c.Reason, w)
+		}
+	}
+	for _, c := range ans.Cards {
+		l := strings.ToLower(c.Reason)
+		if c.Reason == "Works." || strings.Contains(l, "seat") || strings.Contains(l, "turn") || strings.Contains(l, "front.") {
+			t.Errorf("the reason of %s = %q", c.ID, c.Reason)
+		}
+	}
+	for tool, w := range map[string]string{"bash": "runs a shell command", "front.pages_write": "writes a page of the wiki", "front.pages_trash": "uses the wiki",
+		"servicenow.update_incident": "calls update incident in servicenow", "front.duty_put": "calls duty put", "": "uses a tool"} {
+		if got := toolWords(tool); got != w {
+			t.Errorf("toolWords(%q) = %q, want %q", tool, got, w)
+		}
+	}
+	if got := strings.Join(asksOf([]string{"front.pages_write", "bash"}, nil), "|"); got != "Before it writes a page of the wiki|Before it runs a shell command" {
+		t.Errorf("the asks = %q", got)
 	}
 }

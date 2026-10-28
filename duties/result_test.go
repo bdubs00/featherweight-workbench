@@ -49,14 +49,27 @@ func TestResultRecord(t *testing.T) {
 	if p := d.problems(); len(p) != 0 {
 		t.Fatalf("problems of a good duty: %v", p)
 	}
-	rb := readback(&d)
+	rb := readback(&d, "")
 	if !strings.Contains(rb, "Each result goes to the owner, the channel ops-room and erin.") || !strings.Contains(rb, reviewWords) {
 		t.Fatalf("the readback = %q", rb)
 	}
 	d.Notify.ResultWhen = "found"
-	if rb := readback(&d); !strings.Contains(rb, "A result goes to the owner, the channel ops-room and erin when the run says that it found something.") {
+	if rb := readback(&d, ""); !strings.Contains(rb, "A result goes to the owner, the channel ops-room and erin when the run says that it found something.") {
 		t.Fatalf("the readback of found = %q", rb)
 	}
+	// The readback says you to the owner, and to a person of the list.
+	d.Owner = "alice"
+	if rb := readback(&d, "alice"); !strings.Contains(rb, "A result goes to you, the channel ops-room and erin when") {
+		t.Fatalf("the readback of the owner = %q", rb)
+	}
+	d.Notify.ResultWhen = ResultAlways
+	if rb := readback(&d, "alice"); !strings.Contains(rb, "Each result goes to you, the channel ops-room and erin.") || !strings.Contains(rb, "You check each result before it counts as done.") {
+		t.Fatalf("the readback of the owner = %q", rb)
+	}
+	if rb := readback(&d, "erin@example.com"); !strings.Contains(rb, "Each result goes to the owner, the channel ops-room and you.") || !strings.Contains(rb, reviewWords) {
+		t.Fatalf("the readback of erin = %q", rb)
+	}
+	d.Notify.ResultWhen = "found"
 	d.Notify.ResultWhen = "sometimes"
 	d.Notify.Result = append(d.Notify.Result, "bad\nname")
 	p := strings.Join(d.problems(), "\n")
@@ -88,7 +101,7 @@ func TestResultNotice(t *testing.T) {
 	f.clock.Set(nine.Add(time.Second))
 	f.pass(t)
 	req := f.queue.last(t)
-	if req.Metadata[MetaReview] != "1" || req.Instructions != FoundInstructions {
+	if req.Metadata[MetaReview] != "1" || req.Metadata[MetaFound] != "1" || req.Instructions != FoundInstructions {
 		t.Fatalf("the request = %+v", req)
 	}
 	f.view.set(req.ID, fw.StateCompleted, 0.02, func(r *fw.Run) { r.Output = "Found: nothing\nEvery host matches its role." })
@@ -120,7 +133,7 @@ func TestResultNotice(t *testing.T) {
 			ar = r
 		}
 	}
-	if ar.ID == "" || ar.Instructions != "" || ar.Metadata[MetaReview] != "" {
+	if ar.ID == "" || ar.Instructions != "" || ar.Metadata[MetaReview] != "" || ar.Metadata[MetaFound] != "" {
 		t.Fatalf("the request of always = %+v", ar)
 	}
 	f.view.set(ar.ID, fw.StateCompleted, 0.01, func(r *fw.Run) { r.Output = "Found: nothing\nNo new ticket." })

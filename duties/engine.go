@@ -736,7 +736,13 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 	slot := e.Slot.UTC().Format(time.RFC3339Nano)
 	input := fill(d.Do.Message(), placeholders(d, e, last))
 	md := map[string]string{MetaDuty: d.Name, MetaSlot: slot, fw.MetaBatch: BatchOf(d.Name)}
-	if title := fw.TitleFrom(fill(d.Do.Message(), titleValues(d, e, last))); title != "" {
+	// A run of a duty with a title takes the title of the duty, so its
+	// card reads as the duty, not as the first words of its message.
+	title := strings.TrimSpace(fill(d.Title, titleValues(d, e, last)))
+	if title == "" {
+		title = fw.TitleFrom(fill(d.Do.Message(), titleValues(d, e, last)))
+	}
+	if title != "" {
 		md[fw.MetaTitle] = title
 	}
 	key := "duty/" + d.Name + "/" + e.ID
@@ -751,8 +757,13 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 		md[MetaReview] = "1"
 	}
 	instructions := ""
-	if n := d.Notify; n != nil && len(n.Result) > 0 && n.ResultWhen == ResultFound && d.CheckFirst == nil {
-		instructions = FoundInstructions
+	if n := d.Notify; n != nil && len(n.Result) > 0 && n.ResultWhen == ResultFound {
+		// A result that found something waits in To check for the people
+		// of notify.result (fleet.Found).
+		md[MetaFound] = "1"
+		if d.CheckFirst == nil {
+			instructions = FoundInstructions
+		}
 	}
 	principal, kind := "duty:"+d.Name, fw.KindWorkload
 	if d.RunAs == RunAsOwner && d.Owner != "" {

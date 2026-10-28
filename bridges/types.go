@@ -119,10 +119,15 @@ type Bridge struct {
 	Placement    string     `json:"placement"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	ClosedAt     *time.Time `json:"closedAt"`
-	Manager      *Manager   `json:"manager"`
-	Delegation   Delegation `json:"delegation"`
-	Caps         Caps       `json:"caps"`
-	Members      []Member   `json:"members,omitempty"`
+	// Verdict is the check of the result of the bridge by a person:
+	// VerdictAccepted when a person said Looks right, which closed the
+	// bridge (Check). It is empty for a bridge that nobody checked, and an
+	// open again clears it.
+	Verdict    string     `json:"verdict,omitempty"`
+	Manager    *Manager   `json:"manager"`
+	Delegation Delegation `json:"delegation"`
+	Caps       Caps       `json:"caps"`
+	Members    []Member   `json:"members,omitempty"`
 	// LastSeq is the seq of the newest entry of the channel. A change of
 	// the record moves it, so two replicas never give two entries one seq.
 	LastSeq uint64 `json:"lastSeq"`

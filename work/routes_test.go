@@ -140,7 +140,7 @@ func TestRouteAndTool(t *testing.T) {
 	}
 	ask, done := ans.Cards[0], ans.Cards[1]
 	pending, _ := a.Get(context.Background(), r1.ID)
-	if ask.ID != "run:"+r1.ID || ask.Stage != StageNeedsYou || ask.Next != NextYou || pending.Pending == nil || ask.Links.Approval != pending.Pending.ID || ask.Reason != "Asks to run deploy." {
+	if ask.ID != "run:"+r1.ID || ask.Stage != StageNeedsYou || ask.Next != NextYou || pending.Pending == nil || ask.Links.Approval != pending.Pending.ID || ask.Reason != "Asks before it calls deploy." {
 		t.Fatalf("the card that needs alice = %+v", ask)
 	}
 	if done.ID != "run:"+r2.ID || done.Stage != StageDone || done.Verdict != VerdictUnchecked || done.Ended == nil {
@@ -182,7 +182,7 @@ func TestRouteAndTool(t *testing.T) {
 		t.Fatalf("the tool = %+v, %v", res, err)
 	}
 	txt := res.Content[0].(*sdk.TextContent).Text
-	if !strings.HasPrefix(txt, "1 task is open. 1 needs you") || !strings.Contains(txt, "\n\nNeeds you (1):\n- deploy the site, a conversation from alice: Asks to run deploy.") || !strings.Contains(txt, "Approval "+ask.Links.Approval+".") {
+	if !strings.HasPrefix(txt, "1 task is open. 1 needs you") || !strings.Contains(txt, "\n\nNeeds you (1):\n- deploy the site, a conversation from alice: Asks before it calls deploy.") || !strings.Contains(txt, "Approval "+ask.Links.Approval+".") {
 		t.Fatalf("the text of the tool = %s", txt)
 	}
 	b, _ := json.Marshal(res.StructuredContent)
@@ -240,7 +240,7 @@ func newFront(t *testing.T) (*fw.Agent, *httptest.Server) {
 		"ops": {Description: "Keeps the hosts in line with their roles.", Access: &fw.Access{Owners: []string{"carol"}}},
 	}
 	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(people{}), fw.WithModel(model()),
-		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithSurfaces(native.New()), fw.WithServices(duties.Start), fw.WithLogger(quiet()))
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithSurfaces(native.New()), fw.WithServices(duties.Start, Service), fw.WithLogger(quiet()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,6 +370,7 @@ func mustFor(t *testing.T, a *fw.Agent, who string) Answer {
 // person cannot run is no choice, and empty words or a time zone that does
 // not exist answer 400.
 func TestPlanRoute(t *testing.T) {
+	t.Setenv(fleet.EnvIntake, "fw.jobs")
 	a, srv := newFront(t)
 	code, b := post(t, srv, "alice", "/v1/work/plan", `{"words":"Summarize the changes of the week every Friday at 4pm"}`, "X-Time-Zone", "Europe/Berlin")
 	var p Plan
@@ -397,6 +398,15 @@ func TestPlanRoute(t *testing.T) {
 	}
 	if code, b := post(t, srv, "alice", "/v1/work/plan", `{"words":"Check the hosts", "agent":"ops"}`); code != http.StatusOK || !strings.Contains(string(b), "You cannot run an agent named ops") {
 		t.Fatalf("an agent of another person = %d %s", code, b)
+	}
+	// A duty of alice that does the same work is the same of the plan.
+	d := duties.Duty{Name: "week-notes", Title: "Notes of the week", Agent: "writer", When: duties.When{Say: "every friday at 4pm"},
+		Do: duties.Do{Ask: &duties.Ask{Message: "Summarize the changes of the week."}}, Limits: duties.Limits{Budget: &duties.Budget{MaxCostUSD: 0.5}}}
+	if _, err := duties.Of(a).Put(as("alice"), d.Name, duties.DutyBody{Duty: d}, duties.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if code, b := post(t, srv, "alice", "/v1/work/plan", `{"words":"Summarize the changes of the week every Friday at 4pm"}`); code != http.StatusOK || !strings.Contains(string(b), `"same":{"duty":"week-notes","title":"Notes of the week"}`) {
+		t.Fatalf("the plan with the same work = %d %s", code, b)
 	}
 	for _, x := range []struct{ body, zone string }{{`{"words":"  "}`, ""}, {`{"words":"Check the hosts"}`, "Mars/Olympus"}, {`{"words":"x","tell":"never"}`, ""}} {
 		if code, b := post(t, srv, "alice", "/v1/work/plan", x.body, "X-Time-Zone", x.zone); code != http.StatusBadRequest {

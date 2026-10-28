@@ -121,10 +121,13 @@ func sendsBack(body []byte) (string, bool) {
 	return note, ok && !d.Remove && d.Reaction == fw.ReactionDown && note != ""
 }
 
-// toCheck reports whether the owner of a run asked to check its result.
-// Only the reactions on such a run go on its end, so the thumbs of a chat
-// stay where they were.
-func toCheck(r *fw.Run) bool { return r != nil && r.Metadata[MetaReview] == "1" }
+// toCheck reports whether a person checks the result of a run: its owner
+// asked for it, or it is a run of a duty whose result reaches people only
+// when it finds something. Only the reactions on such a run go on its end,
+// so the thumbs of a chat stay where they were.
+func toCheck(r *fw.Run) bool {
+	return r != nil && (r.Metadata[MetaReview] == "1" || r.Metadata[MetaFound] == "1")
+}
 
 // localCheck answers a reaction on a run of this process whose owner asked
 // to check its result (section 26.4 of the architecture): the thumb goes
