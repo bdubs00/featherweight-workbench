@@ -246,3 +246,53 @@ func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 	r.Header.Set("Authorization", "Bearer "+b.token)
 	return http.DefaultTransport.RoundTrip(r)
 }
+
+// A run that completed with the metadata of a check is a result in the
+// inbox of its person until somebody reacts to it. A result of another
+// person, and a result that nobody asked to check, are no item.
+func TestInboxResult(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "")
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	cfg.Access.Default = "closed"
+	cfg.Agents = map[string]fw.AgentProfile{"writer": {Access: &fw.Access{Owners: []string{"alice", "bob"}}}}
+	answer := fw.ModelFunc{StreamFn: func(context.Context, *fw.Request, func(fw.Delta)) (*fw.Response, error) {
+		return &fw.Response{Content: []fw.Block{fw.Text("The draft.")}, StopReason: fw.StopEndTurn}, nil
+	}}
+	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(people{}), fw.WithModel(answer),
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithSurfaces(native.New()), fw.WithLogger(quiet()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		a.Close(ctx)
+	})
+	start := func(who string, md map[string]string) string {
+		t.Helper()
+		r, err := a.Start(as(who), "", fw.WithRequest(fw.RunRequest{Agent: "writer", Input: "Draft the notes", Metadata: md}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, a, r.ID, fw.StateCompleted)
+		return r.ID
+	}
+	check := map[string]string{fleet.MetaReview: "1"}
+	mine := start("alice", check)
+	start("alice", nil)
+	start("bob", check)
+	ans, err := For(as("alice"), a, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ans.Items) != 1 || ans.Items[0].Kind != KindResult || ans.Items[0].Run != mine || ans.Items[0].Agent != "writer" || !strings.HasSuffix(ans.Items[0].Text, ": a result to check.") {
+		t.Fatalf("the inbox of alice = %+v", ans.Items)
+	}
+	if err := a.React(as("alice"), mine, fw.ReactionData{Reaction: fw.ReactionUp}); err != nil {
+		t.Fatal(err)
+	}
+	if ans, err := For(as("alice"), a, time.Now()); err != nil || len(ans.Items) != 0 {
+		t.Fatalf("the inbox after a thumb up = %+v, %v", ans.Items, err)
+	}
+}

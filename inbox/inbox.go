@@ -1,11 +1,11 @@
 // Package inbox answers what needs the caller now (docs/ARCHITECTURE.md
 // section 23.3): the runs that wait for an approval or an answer, the
 // questions of the seats of the bridges, the failed runs of the duties of
-// the caller in the last day, and the duties of the caller that paused
-// themselves. It mounts GET /v1/inbox on the native surface and adds the
-// MCP tool inbox, which calls the same Go function, so a client of a
-// person reads the items of Activity and answers them with approve and
-// send.
+// the caller in the last day, the duties of the caller that paused
+// themselves, and the results that the caller asked to check. It mounts
+// GET /v1/inbox on the native surface and adds the MCP tool inbox, which
+// calls the same Go function, so a client of a person reads the items of
+// Activity and answers them with approve, send, and work_review.
 //
 // The package keeps no truth of its own. The runs that wait come from the
 // home of the dashboard (dashboard.HomeOf, its list needsYou), the
@@ -28,8 +28,10 @@ import (
 	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/duties"
+	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/manager"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
+	"github.com/bdubs00/featherweight-workbench/teams"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -44,7 +46,11 @@ const (
 	KindQuestion = "question" // a run or a seat waits for an answer
 	KindFailure  = "failure"  // a run of a duty of the caller failed in the last day
 	KindPaused   = "paused"   // a duty of the caller paused itself
+	KindResult   = "result"   // a result that the caller asked to check waits for the check
 )
+
+// ResultsFor is how far back the results to check reach.
+const ResultsFor = 7 * 24 * time.Hour
 
 // FailuresFor is how far back the failed runs of the duties reach.
 const FailuresFor = 24 * time.Hour
@@ -73,7 +79,7 @@ type Answer struct {
 }
 
 // rank orders the kinds of an item.
-var rank = map[string]int{KindApproval: 0, KindQuestion: 0, KindFailure: 1, KindPaused: 2}
+var rank = map[string]int{KindApproval: 0, KindQuestion: 0, KindFailure: 1, KindPaused: 2, KindResult: 3}
 
 // For returns the inbox of the caller in ctx at the time now.
 func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
@@ -124,6 +130,28 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 		}
 	}
 	items = append(items, mine...)
+	// The results that wait for a check: a run of the caller or of the
+	// teams of the caller, or a run of a duty whose questions go to the
+	// caller, that completed in the last ResultsFor with the metadata
+	// fleet.MetaReview and that nobody reacted to yet.
+	team, err := teams.By(ctx, a.Config(), runs, teams.ByTeam)
+	if err != nil {
+		return Answer{}, err
+	}
+	near := map[string]bool{}
+	for _, r := range team {
+		near[r.ID] = true
+	}
+	for _, r := range runs {
+		if r.Parent != "" || !fleet.InReview(r) || now.Sub(r.UpdatedAt) > ResultsFor || !(near[r.ID] || asks[duties.NameOf(r)]) {
+			continue
+		}
+		it := Item{Kind: KindResult, Run: r.ID, Duty: duties.NameOf(r), Agent: r.Agent, Since: r.UpdatedAt, Text: dashboard.TitleOf(r) + ": a result to check."}
+		if b, ok := strings.CutPrefix(r.Metadata[fw.MetaBatch], bridges.BatchPrefix); ok {
+			it.Bridge = b
+		}
+		items = append(items, it)
+	}
 	sort.SliceStable(items, func(i, j int) bool {
 		if rank[items[i].Kind] != rank[items[j].Kind] {
 			return rank[items[i].Kind] < rank[items[j].Kind]
@@ -273,7 +301,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 	return []mcp.Tool{mcp.NewTool(&sdk.Tool{
 		Name:        ToolInbox,
 		Title:       "What needs me",
-		Description: "List what needs the person now, the items of Activity: each run that waits for an approval or an answer, each question of a seat of a bridge, each failed run of a duty of the person in the last day, and each duty of the person that paused itself. Answer an approval with approve and a question with approve or send. Each item has kind (approval, question, failure, paused), run, duty, agent, bridge, approval (the id of the approval that the run waits for), text, and since.",
+		Description: "List what needs the person now, the items of Activity: each run that waits for an approval or an answer, each question of a seat of a bridge, each failed run of a duty of the person in the last day, each duty of the person that paused itself, and each result that the person asked to check, in the last week. Answer an approval with approve and a question with approve or send, and check a result with work_review. Each item has kind (approval, question, failure, paused, result), run, duty, agent, bridge, approval (the id of the approval that the run waits for), text, and since.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
