@@ -54,6 +54,12 @@ const metaSource = "workbench.source"
 // on a fork).
 const metaForkOf = "fw.forkOf"
 
+// metaKnowhowReview is the metadata of a run of the after-work review of
+// Know-how (knowhow.MetaReview). The front starts it for itself and no
+// person or duty asked for it, so it is no piece. Its cost is in the
+// spend.
+const metaKnowhowReview = "workbench.knowhow.review"
+
 // Answer is the value of the work for the caller over one window.
 type Answer struct {
 	Days     int       `json:"days"`
@@ -313,7 +319,7 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 	for i := range runs {
 		w := &runs[i]
 		r := w.Run
-		if r == nil || !fleet.Listed(r) || o.Coordination[r.Agent] {
+		if r == nil || !fleet.Listed(r) || o.Coordination[r.Agent] || r.Metadata[metaKnowhowReview] != "" {
 			continue
 		}
 		if t := teamOf(r); t != "" {

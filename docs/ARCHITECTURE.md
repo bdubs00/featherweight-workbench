@@ -4101,7 +4101,7 @@ A summary that a server before this section wrote has no facts. The archive keep
 
 ### 25.2 The answer
 
-`GET /v1/value?days=7|30|90` and the MCP tool `value` call `value.For` with the access rules of the runs (`fleet.WorkSince`). A piece of work is a run without a parent. A branch, a check run, and a run of the manager or of the quick chat are no pieces.
+`GET /v1/value?days=7|30|90` and the MCP tool `value` call `value.For` with the access rules of the runs (`fleet.WorkSince`). A piece of work is a run without a parent. A branch, a check run, a run of the manager or of the quick chat, and a run of the after-work review of Know-how (section 28.8) are no pieces. The cost of a review run is in the spend.
 
 A bridge is one piece too, as it is one card on the board. The runs of its seats are its parts and no pieces: a run with the batch `bridge:<id>`, or a child of the manager run of a spawn bridge. A helper of a seat and a branch add their cost to the bridge. The bridge is done at its close, with the verdict `accepted` when a person closed it with Looks right (section 26.4), else unchecked, and open before. Its cost is the sum of its seats and of their helpers, and the runs of its manager stay coordination. Its lead is the time from the open to the close, and its actions and waits are those of its seats. A bridge that a duty opened is in the line of the duty, else in the line of the agent of its first seat. A bridge that opened before the window is no piece of it. The fold reads the state of each bridge from `bridges.Store.Briefs`, which names no title and no seat. A bridge without a record is done once its seats ended.
 

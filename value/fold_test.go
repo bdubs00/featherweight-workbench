@@ -164,6 +164,23 @@ func TestFoldChecked(t *testing.T) {
 	}
 }
 
+// A run of the after-work review of Know-how is no piece: no person or
+// duty asked for it. Its cost is in the spend.
+func TestFoldKnowhowReview(t *testing.T) {
+	h := time.Hour
+	runs := []fleet.WorkRun{
+		{Run: run("R1", "fixer", fw.StateCompleted, 2*h, 0.01, nil), Work: facts(2*h, 5*time.Minute, 0, "")},
+		{Run: run("R2", "review", fw.StateCompleted, 3*h, 0.02, map[string]string{metaKnowhowReview: "fixer"}), Work: facts(3*h, time.Minute, 0, "")},
+	}
+	a := Fold(runs, Options{Now: now, Days: 7})
+	if a.Work.Pieces != 1 || a.Work.Done != 1 || a.Checks.Unchecked != 1 || len(a.Lines) != 1 || a.Lines[0].Name != "fixer" {
+		t.Fatalf("the work = %+v, the checks = %+v, the lines = %+v", a.Work, a.Checks, a.Lines)
+	}
+	if a.Spend.USD != 0.03 || a.Spend.CoordinationUSD != 0 {
+		t.Fatalf("the spend = %+v", a.Spend)
+	}
+}
+
 func TestDuration(t *testing.T) {
 	for s, want := range map[int64]string{40: "40 s", 720: "12 min", 3600: "1 h", 11400: "3 h 10 min"} {
 		if got := Duration(s); got != want {
