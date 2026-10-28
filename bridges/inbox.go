@@ -10,6 +10,34 @@ import (
 	"time"
 )
 
+// Brief is what the value of the work (package value) needs of a bridge:
+// its operator, its state, when it opened and closed, and the verdict of
+// a person. It names no title, no seat, and no entry of the channel.
+type Brief struct {
+	ID        string
+	Operator  string
+	State     string
+	Verdict   string
+	CreatedAt time.Time
+	ClosedAt  *time.Time
+}
+
+// Briefs returns the brief of every bridge, by id, read as the front.
+// The value of the work counts a bridge as one task from the runs of its
+// seats that the caller can view, so a brief tells the caller only the
+// state of a bridge whose runs it views already.
+func (s *Store) Briefs(ctx context.Context) (map[string]Brief, error) {
+	recs, err := s.b.list(s.asFront(ctx))
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]Brief, len(recs))
+	for _, rec := range recs {
+		out[rec.ID] = Brief{ID: rec.ID, Operator: rec.Operator, State: rec.State, Verdict: rec.Verdict, CreatedAt: rec.CreatedAt, ClosedAt: rec.ClosedAt}
+	}
+	return out, nil
+}
+
 // Waiting is a seat of an open bridge that needs a person: the bridge and
 // its title, the seat, its agent, and its newest run. Question is the seq
 // of the question of the seat, or 0 when its run waits for an approval

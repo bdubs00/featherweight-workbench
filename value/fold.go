@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/duties"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 )
@@ -80,9 +81,11 @@ type Answer struct {
 // Counts counts the pieces of work by their state now. A piece is a run
 // that a person, a duty, a source, or a job asked for: a run without a
 // parent that is no branch, no run of the manager or of the quick chat,
-// and no run that the lists leave out. Done completed, Failed failed,
-// Stopped was canceled, and Open works or waits. Lost never ended because
-// a pool replaced its worker while it worked or waited (fleet.WorkRun).
+// and no run that the lists leave out. A bridge is one piece too, a team,
+// and the runs of its seats are its parts, no pieces: it is done at its
+// close, and open before. Done completed, Failed failed, Stopped was
+// canceled, and Open works or waits. Lost never ended because a pool
+// replaced its worker while it worked or waited (fleet.WorkRun).
 type Counts struct {
 	Pieces  int `json:"pieces"`
 	Done    int `json:"done"`
@@ -206,12 +209,16 @@ type Line struct {
 
 // Options shape a fold. Coordination names the agents whose runs
 // coordinate the work and are no pieces: the manager and the quick chat.
-// Estimates holds the estimates of people by the key of a line.
+// Estimates holds the estimates of people by the key of a line. Teams
+// holds the bridges by id, for the state of the piece of a bridge; a
+// bridge that it does not hold is done once all the runs of its seats
+// ended.
 type Options struct {
 	Now          time.Time
 	Days         int
 	Coordination map[string]bool
 	Estimates    map[string]Estimate
+	Teams        map[string]bridges.Brief
 }
 
 // LineOf returns the key, the kind, and the name of the line of a run.
@@ -225,11 +232,16 @@ func LineOf(r *fw.Run) (key, kind, name string) {
 	return KindAgent + ":" + r.Agent, KindAgent, r.Agent
 }
 
-// piece is one piece of work while the fold runs.
+// piece is one piece of work while the fold runs. A piece of a bridge has
+// team true, a run that stands for the bridge, the facts of its seats
+// together, and the wait of its seats that wait now.
 type piece struct {
-	r    *fleet.WorkRun
-	line *Line
-	usd  float64
+	r       *fleet.WorkRun
+	line    *Line
+	usd     float64
+	team    bool
+	waitNow int64
+	waiting bool
 }
 
 // Fold folds the runs of a window into the answer. The runs are those
@@ -265,24 +277,90 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 		}
 		return r
 	}
-	lines := map[string]*Line{}
-	pieces := map[string]*piece{}
-	for i := range runs {
-		w := &runs[i]
-		r := w.Run
-		if r == nil || !fleet.Listed(r) || r.Parent != "" || r.Metadata[metaForkOf] != "" || o.Coordination[r.Agent] {
-			continue
+	// teamOf returns the bridge of a run: the batch bridge:<id> of the run
+	// or of a run above it, or "".
+	teamOf := func(r *fw.Run) string {
+		for range 64 {
+			if id, ok := strings.CutPrefix(r.Metadata[fw.MetaBatch], bridges.BatchPrefix); ok && id != "" {
+				return id
+			}
+			up := r.Parent
+			if up == "" {
+				up = r.Metadata[metaForkOf]
+			}
+			next, ok := byID[up]
+			if up == "" || !ok {
+				return ""
+			}
+			r = next.Run
 		}
-		key, kind, name := LineOf(r)
+		return ""
+	}
+	lines := map[string]*Line{}
+	lineOf := func(key, kind, name, agent string, at time.Time) *Line {
 		ln := lines[key]
 		if ln == nil {
 			ln = &Line{Key: key, Kind: kind, Name: name}
 			lines[key] = ln
 		}
-		if r.CreatedAt.After(ln.newest) || ln.Agent == "" {
-			ln.newest, ln.Agent = r.CreatedAt, r.Agent
+		if at.After(ln.newest) || ln.Agent == "" {
+			ln.newest, ln.Agent = at, agent
 		}
-		pieces[r.ID] = &piece{r: w, line: ln}
+		return ln
+	}
+	pieces := map[string]*piece{}
+	seats := map[string][]*fleet.WorkRun{}
+	for i := range runs {
+		w := &runs[i]
+		r := w.Run
+		if r == nil || !fleet.Listed(r) || o.Coordination[r.Agent] {
+			continue
+		}
+		if t := teamOf(r); t != "" {
+			// A run of a seat is a part of its bridge: a run with the batch
+			// of the bridge, or a child of the manager of a spawn bridge. A
+			// helper of a seat and a branch add their cost alone.
+			up, hasUp := byID[r.Parent]
+			if r.Metadata[metaForkOf] == "" && (r.Metadata[fw.MetaBatch] == bridges.BatchOf(t) || r.Parent == "" || hasUp && o.Coordination[up.Run.Agent]) {
+				seats[t] = append(seats[t], w)
+			}
+			continue
+		}
+		if r.Parent != "" || r.Metadata[metaForkOf] != "" {
+			continue
+		}
+		key, kind, name := LineOf(r)
+		pieces[r.ID] = &piece{r: w, line: lineOf(key, kind, name, r.Agent, r.CreatedAt)}
+	}
+	teams := map[string]*piece{}
+	for t, list := range seats {
+		p := teamPiece(t, list, o.Teams, until)
+		if p == nil || p.r.Run.CreatedAt.Before(since) {
+			// A bridge that opened before the window is no piece of it.
+			continue
+		}
+		r := p.r.Run
+		key, kind, name := LineOf(list[0].Run)
+		if b, ok := o.Teams[t]; ok {
+			if d, isDuty := strings.CutPrefix(b.Operator, "duty:"); isDuty && d != "" {
+				key, kind, name = KindDuty+":"+d, KindDuty, d
+			}
+		}
+		p.line = lineOf(key, kind, name, r.Agent, r.CreatedAt)
+		pieces[r.ID] = p
+		teams[t] = p
+	}
+	// pieceOf returns the piece that a run serves: the bridge of a run of
+	// a seat, else the piece of its root, or nil. A run of the manager or
+	// of the quick chat serves no piece.
+	pieceOf := func(r *fw.Run) *piece {
+		if o.Coordination[r.Agent] {
+			return nil
+		}
+		if t := teamOf(r); t != "" {
+			return teams[t]
+		}
+		return pieces[rootOf(r).ID]
 	}
 	// The spend: every run counts once, under the piece that it serves, or
 	// under coordination.
@@ -292,19 +370,19 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 			continue
 		}
 		u := r.Usage
+		p := pieceOf(r)
 		if u.UnpricedTokens > 0 || (u.CostUSD == 0 && u.InputTokens+u.OutputTokens+u.CacheReadTokens+u.CacheWriteTokens > 0) {
 			ans.Spend.Unpriced++
-			if p := pieces[rootOf(r).ID]; p != nil {
+			if p != nil {
 				p.line.Unpriced++
 			}
 		}
 		ans.Spend.USD += u.CostUSD
-		root := rootOf(r)
-		if p := pieces[root.ID]; p != nil {
+		if p != nil {
 			p.usd += u.CostUSD
 			continue
 		}
-		if o.Coordination[root.Agent] {
+		if o.Coordination[rootOf(r).Agent] || o.Coordination[r.Agent] {
 			ans.Spend.CoordinationUSD += u.CostUSD
 		}
 	}
@@ -328,7 +406,13 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 		ans.People.Handled += wk.Handled
 		ln.Actions += wk.Acts
 		wait := wk.WaitMS / 1000
-		if !p.r.Lost && !wk.Asked.IsZero() && r.State == fw.StateInputRequired && until.After(wk.Asked) {
+		switch {
+		case p.team:
+			wait += p.waitNow
+			if p.waiting {
+				ans.People.WaitingNow++
+			}
+		case !p.r.Lost && !wk.Asked.IsZero() && r.State == fw.StateInputRequired && until.After(wk.Asked):
 			wait += int64(until.Sub(wk.Asked) / time.Second)
 			ans.People.WaitingNow++
 		}
@@ -461,6 +545,66 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 	})
 	ans.Sentence = sentence(ans)
 	return ans
+}
+
+// teamPiece makes the piece of the bridge t from the runs of its seats:
+// a run that stands for the bridge, with the facts of the seats together.
+// The bridge opened at the time of its record, else at its first run. It
+// is done at its close, with the verdict of the person who closed it with
+// Looks right, else unchecked; and open before. A bridge without a record
+// is done once all the runs of its seats ended. The facts are whole only
+// when the facts of every seat are, and the time from the open to the
+// close is its lead.
+func teamPiece(t string, list []*fleet.WorkRun, known map[string]bridges.Brief, until time.Time) *piece {
+	if len(list) == 0 {
+		return nil
+	}
+	sort.SliceStable(list, func(i, j int) bool { return list[i].Run.CreatedAt.Before(list[j].Run.CreatedAt) })
+	first := list[0].Run
+	b, ok := known[t]
+	opened := b.CreatedAt
+	if !ok || opened.IsZero() {
+		opened = first.CreatedAt
+	}
+	stand := &fw.Run{ID: bridges.BatchOf(t), Agent: first.Agent, CreatedAt: opened, State: fw.StateRunning}
+	w := fleet.Work{Facts: true, Queued: opened}
+	p := &piece{team: true}
+	ended := true
+	var last time.Time
+	for _, x := range list {
+		r, f := x.Run, x.Work
+		w.Facts = w.Facts && f.Facts
+		w.Acts += f.Acts
+		w.Rework += f.Rework
+		w.Handled += f.Handled
+		w.WaitMS += f.WaitMS
+		w.Waits += f.Waits
+		if !x.Lost && !f.Asked.IsZero() && r.State == fw.StateInputRequired && until.After(f.Asked) {
+			p.waitNow += int64(until.Sub(f.Asked) / time.Second)
+			p.waiting = true
+		}
+		if !r.State.Terminal() && !x.Lost {
+			ended = false
+		}
+		if r.UpdatedAt.After(last) {
+			last = r.UpdatedAt
+		}
+	}
+	switch {
+	case ok && b.State == bridges.StateClosed:
+		stand.State = fw.StateCompleted
+		if b.ClosedAt != nil {
+			w.FirstEnd = *b.ClosedAt
+		}
+		if b.Verdict == bridges.VerdictAccepted {
+			w.Verdict = fleet.VerdictAccepted
+		}
+	case !ok && ended:
+		stand.State, w.FirstEnd = fw.StateCompleted, last
+	}
+	stand.UpdatedAt = last
+	p.r = &fleet.WorkRun{Run: stand, Work: w}
+	return p
 }
 
 // doneChecked reports whether the definition of done of a run passed in

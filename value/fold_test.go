@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/duties"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 )
@@ -168,5 +169,82 @@ func TestDuration(t *testing.T) {
 		if got := Duration(s); got != want {
 			t.Errorf("Duration(%d) = %q, want %q", s, got, want)
 		}
+	}
+}
+
+// A bridge is one task: the runs of its seats are its parts, no pieces. A
+// bridge that a person closed with Looks right is done and accepted at its
+// close, with the cost of its seats and of their children; its manager is
+// coordination. An open bridge is open. A bridge without a record is done
+// once its seats ended, and a bridge that opened before the window is no
+// piece of it.
+func TestFoldTeams(t *testing.T) {
+	h := time.Hour
+	b := func(id string) map[string]string { return map[string]string{fw.MetaBatch: "bridge:" + id} }
+	w1 := run("S1", "writer", fw.StateCompleted, 5*h, 0.10, b("b1"))
+	w2 := run("S2", "reviewer", fw.StateCompleted, 4*h, 0.20, b("b1"))
+	helper := run("S3", "writer", fw.StateCompleted, 4*h, 0.05, nil)
+	helper.Parent = "S1"
+	mgr := run("M1", "manager", fw.StateCompleted, 5*h, 0.50, b("b1"))
+	open1 := run("S4", "writer", fw.StateInputRequired, 2*h, 0.01, b("b2"))
+	gone1 := run("S5", "ops", fw.StateCompleted, 3*h, 0.02, b("b3"))
+	gone2 := run("S6", "ops", fw.StateFailed, 3*h, 0.03, b("b3"))
+	old := run("S7", "ops", fw.StateCompleted, 1*h, 0.04, b("b4"))
+	alone := run("A1", "writer", fw.StateCompleted, 1*h, 0.07, nil)
+	// A spawn bridge: the manager holds the bridge, and its child is the
+	// run of a seat.
+	mgr2 := run("M2", "manager", fw.StateCompleted, 2*h, 0.30, b("b5"))
+	spawned := run("S8", "migrator", fw.StateCompleted, 2*h, 0.40, nil)
+	spawned.Parent = "M2"
+	closed := now.Add(-time.Hour)
+	runs := []fleet.WorkRun{
+		{Run: w1, Work: facts(5*h, 30*time.Minute, 1, "")}, {Run: w2, Work: facts(4*h, 30*time.Minute, 0, fleet.VerdictRejected)},
+		{Run: helper}, {Run: mgr},
+		{Run: open1, Work: fleet.Work{Facts: true, Queued: now.Add(-2 * h), Asked: now.Add(-h)}},
+		{Run: gone1, Work: facts(3*h, time.Minute, 0, "")}, {Run: gone2, Work: facts(3*h, time.Minute, 0, "")},
+		{Run: old, Work: facts(h, time.Minute, 0, "")},
+		{Run: alone, Work: facts(h, time.Minute, 0, "")},
+		{Run: mgr2}, {Run: spawned, Work: facts(2*h, time.Minute, 0, "")},
+	}
+	teams := map[string]bridges.Brief{
+		"b1": {ID: "b1", Operator: "duty:launch", State: bridges.StateClosed, Verdict: bridges.VerdictAccepted, CreatedAt: now.Add(-6 * h), ClosedAt: &closed},
+		"b2": {ID: "b2", Operator: "alice", State: bridges.StateOpen, CreatedAt: now.Add(-3 * h)},
+		"b4": {ID: "b4", Operator: "alice", State: bridges.StateClosed, CreatedAt: now.Add(-10 * 24 * h), ClosedAt: &closed},
+		"b5": {ID: "b5", Operator: "alice", State: bridges.StateOpen, CreatedAt: now.Add(-2 * h)},
+	}
+	a := Fold(runs, Options{Now: now, Days: 7, Coordination: map[string]bool{"manager": true}, Teams: teams})
+	if a.Work != (Counts{Pieces: 5, Done: 3, Open: 2}) {
+		t.Fatalf("the counts = %+v", a.Work)
+	}
+	if a.Checks != (Checks{Accepted: 1, Unchecked: 2}) {
+		t.Fatalf("the checks = %+v", a.Checks)
+	}
+	if a.People.Actions != 1 || a.People.WaitingNow != 1 || a.People.WaitSeconds != 3600 {
+		t.Fatalf("the people = %+v", a.People)
+	}
+	if a.Spend.CoordinationUSD != 0.8 || a.Spend.USD != 1.72 {
+		t.Fatalf("the spend = %+v", a.Spend)
+	}
+	byKey := map[string]Line{}
+	for _, l := range a.Lines {
+		byKey[l.Key] = l
+	}
+	// The closed bridge of a duty is in the line of the duty, with the cost
+	// of its seats and of the helper of a seat, and its lead is from the
+	// open to the close.
+	if l := byKey["duty:launch"]; l.Counts.Pieces != 1 || l.Checks.Accepted != 1 || l.USD != 0.35 || l.MedianLeadSeconds != 5*3600 {
+		t.Fatalf("the line of the duty = %+v", l)
+	}
+	if l := byKey["agent:writer"]; l.Counts.Pieces != 2 || l.Counts.Open != 1 || l.Counts.Done != 1 || l.USD != 0.08 {
+		t.Fatalf("the line of the writer = %+v", l)
+	}
+	if l := byKey["agent:ops"]; l.Counts.Pieces != 1 || l.Counts.Done != 1 || l.Counts.Failed != 0 || l.USD != 0.05 {
+		t.Fatalf("the bridge without a record = %+v", l)
+	}
+	if l := byKey["agent:migrator"]; l.Counts.Pieces != 1 || l.Counts.Open != 1 || l.USD != 0.4 {
+		t.Fatalf("the spawn bridge = %+v", l)
+	}
+	if !strings.HasPrefix(a.Sentence, "In the last 7 days, the agents finished 3 tasks.") {
+		t.Fatalf("the sentence = %q", a.Sentence)
 	}
 }

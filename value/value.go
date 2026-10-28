@@ -22,6 +22,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/bossmode"
+	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/faces"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
@@ -185,7 +186,14 @@ func For(ctx context.Context, a *fw.Agent, now time.Time, days int) (Answer, err
 		a.Logger().Warn("value: the estimates do not read", "error", err)
 		est = nil
 	}
-	return Fold(runs, Options{Now: now, Days: days, Coordination: coordination(a), Estimates: est}), nil
+	// A bridge is one task: the fold reads its state from its record.
+	var teams map[string]bridges.Brief
+	if st := bridges.Of(a); st != nil {
+		if teams, err = st.Briefs(ctx); err != nil {
+			return Answer{}, err
+		}
+	}
+	return Fold(runs, Options{Now: now, Days: days, Coordination: coordination(a), Estimates: est, Teams: teams}), nil
 }
 
 // coordination names the agents whose runs coordinate the work: the
@@ -332,7 +340,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolValue,
 			Title:       "What the work gave",
-			Description: "Say what the work of the agents that you can view gave and took over the last 7, 30, or 90 days (days, 30 by default): the pieces of work that finished, failed, or stopped; the verdicts of people on the results (accepted, sent back, unchecked); the actions of people that the work needed and the time that it waited for them; the median time from the ask to the first end; and the spend, also per finished piece. Lines split the numbers by duty, source, and agent. An estimate of a person, the minutes that a person takes for one piece, turns the finished work of a line into hours of a person; value_estimate sets it. The numbers claim only what the records hold: an unchecked result is not a good one, and runs with tokens without a price make the spend a lower bound.",
+			Description: "Say what the work of the agents that you can view gave and took over the last 7, 30, or 90 days (days, 30 by default): the pieces of work that finished, failed, or stopped; the verdicts of people on the results (accepted, sent back, unchecked); the actions of people that the work needed and the time that it waited for them; the median time from the ask to the first end; and the spend, also per finished piece. A bridge (a team) counts as one piece, done at its close, with the cost of its seats. Lines split the numbers by duty, source, and agent. An estimate of a person, the minutes that a person takes for one piece, turns the finished work of a line into hours of a person; value_estimate sets it. The numbers claim only what the records hold: an unchecked result is not a good one, and runs with tokens without a price make the spend a lower bound.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"days":{"type":"integer","enum":[7,30,90],"description":"The window in days, 30 by default."}}}`),
 			Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in valueIn) (*sdk.CallToolResult, any, error) {
