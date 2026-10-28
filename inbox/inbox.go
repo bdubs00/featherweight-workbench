@@ -98,10 +98,10 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 		seen[it.ID] = true
 	}
 	var mine []Item
-	asks := map[string]bool{}
+	asks, hears := map[string]bool{}, map[string]bool{}
 	if svc := duties.Of(a); svc != nil {
 		if p := fw.PrincipalFrom(ctx); p != nil && p.Subject != "" {
-			if mine, asks, err = dutyItems(ctx, svc, p.Subject, now); err != nil {
+			if mine, asks, hears, err = dutyItems(ctx, svc, p.Subject, now); err != nil {
 				return Answer{}, err
 			}
 		}
@@ -131,8 +131,8 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 	}
 	items = append(items, mine...)
 	// The results that wait for a check: a run of the caller or of the
-	// teams of the caller, or a run of a duty whose questions go to the
-	// caller, that completed in the last ResultsFor with the metadata
+	// teams of the caller, or a run of a duty whose questions or results go
+	// to the caller, that completed in the last ResultsFor with the metadata
 	// fleet.MetaReview and that nobody reacted to yet.
 	team, err := teams.By(ctx, a.Config(), runs, teams.ByTeam)
 	if err != nil {
@@ -143,7 +143,7 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 		near[r.ID] = true
 	}
 	for _, r := range runs {
-		if r.Parent != "" || !fleet.InReview(r) || now.Sub(r.UpdatedAt) > ResultsFor || !(near[r.ID] || asks[duties.NameOf(r)]) {
+		if r.Parent != "" || !fleet.InReview(r) || now.Sub(r.UpdatedAt) > ResultsFor || !(near[r.ID] || asks[duties.NameOf(r)] || hears[duties.NameOf(r)]) {
 			continue
 		}
 		it := Item{Kind: KindResult, Run: r.ID, Duty: duties.NameOf(r), Agent: r.Agent, Since: r.UpdatedAt, Text: dashboard.TitleOf(r) + ": a result to check."}
@@ -209,18 +209,22 @@ func seatItem(w bridges.Waiting) Item {
 // paused themselves, of the duties that the person owns or whose
 // notify.failure names the person. It also returns the duties whose
 // questions go to the person: the person owns them, or their
-// notify.needsYou names the person.
-func dutyItems(ctx context.Context, svc *duties.Service, subject string, now time.Time) ([]Item, map[string]bool, error) {
+// notify.needsYou names the person. Last, it returns the duties whose
+// results go to the person by notify.result.
+func dutyItems(ctx context.Context, svc *duties.Service, subject string, now time.Time) ([]Item, map[string]bool, map[string]bool, error) {
 	recs, err := svc.Records(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var out []Item
-	asks := map[string]bool{}
+	asks, hears := map[string]bool{}, map[string]bool{}
 	for _, r := range recs {
 		d := r.Duty
 		if d.Owner == subject || (d.Notify != nil && slices.Contains(d.Notify.NeedsYou, subject)) {
 			asks[d.Name] = true
+		}
+		if d.Notify != nil && slices.Contains(d.Notify.Result, subject) {
+			hears[d.Name] = true
 		}
 		if !concerns(d, subject) {
 			continue
@@ -230,7 +234,7 @@ func dutyItems(ctx context.Context, svc *duties.Service, subject string, now tim
 		}
 		starts, err := svc.Starts(ctx, d.Name, now.Add(-FailuresFor))
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		for _, e := range starts {
 			if e.State != duties.StateFailed {
@@ -243,7 +247,7 @@ func dutyItems(ctx context.Context, svc *duties.Service, subject string, now tim
 			out = append(out, Item{Kind: KindFailure, Run: e.Run, Duty: d.Name, Agent: d.Agent, Text: text, Since: e.At})
 		}
 	}
-	return out, asks, nil
+	return out, asks, hears, nil
 }
 
 // concerns reports whether the failures of a duty concern a person: the

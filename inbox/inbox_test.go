@@ -296,3 +296,63 @@ func TestInboxResult(t *testing.T) {
 		t.Fatalf("the inbox after a thumb up = %+v, %v", ans.Items, err)
 	}
 }
+
+// A result to check of a duty reaches the people that notify.result of the
+// duty names, beside its owner. A person whom the duty does not name, and
+// who can view the run too, sees no item.
+func TestInboxResultOfDuty(t *testing.T) {
+	t.Setenv(fleet.EnvIntake, "fw.jobs")
+	t.Setenv("FW_ATESPACE", "")
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	cfg.Access.Default = "closed"
+	cfg.Agents = map[string]fw.AgentProfile{"writer": {Access: &fw.Access{Owners: []string{"alice"}, Viewers: []string{"carol", "dave"}}}}
+	answer := fw.ModelFunc{StreamFn: func(context.Context, *fw.Request, func(fw.Delta)) (*fw.Response, error) {
+		return &fw.Response{Content: []fw.Block{fw.Text("The summary.")}, StopReason: fw.StopEndTurn}, nil
+	}}
+	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(people{}), fw.WithModel(answer),
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithSurfaces(native.New()),
+		fw.WithServices(duties.Start), fw.WithLogger(quiet()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		a.Close(ctx)
+	})
+	d := duties.Duty{
+		Name: "summary", Agent: "writer",
+		When:   duties.When{Webhook: &duties.Webhook{Auth: duties.WebhookAuth{Mode: "none"}}},
+		Do:     duties.Do{Ask: &duties.Ask{Message: "Sum up the week."}},
+		Limits: duties.Limits{Budget: &duties.Budget{MaxCostUSD: 0.5}},
+		Notify: &duties.Notify{Result: []string{"carol"}},
+		Review: true,
+	}
+	if _, err := duties.Of(a).Put(as("alice"), "summary", duties.DutyBody{Duty: d}, duties.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(fleet.EnvIntake, "")
+	// A start of the duty acts as the duty, as the engine starts it.
+	r, err := a.Start(context.Background(), "", fw.WithRequest(fw.RunRequest{Agent: "writer", Input: "Sum up the week.", Principal: "duty:summary", PrincipalKind: fw.KindWorkload,
+		Metadata: map[string]string{duties.MetaDuty: "summary", fleet.MetaReview: "1"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, a, r.ID, fw.StateCompleted)
+	for who, want := range map[string]int{"alice": 1, "carol": 1, "dave": 0} {
+		ans, err := For(as(who), a, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, it := range ans.Items {
+			if it.Kind == KindResult && it.Run == r.ID && it.Duty == "summary" {
+				n++
+			}
+		}
+		if n != want {
+			t.Fatalf("the results to check of %s = %d, want %d: %+v", who, n, want, ans.Items)
+		}
+	}
+}
