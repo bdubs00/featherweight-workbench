@@ -1,9 +1,11 @@
 package work
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/bdubs00/featherweight-workbench/duties"
 	"github.com/bdubs00/featherweight-workbench/duties/schedule"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 )
@@ -214,5 +216,60 @@ func TestPlanActionAndTitle(t *testing.T) {
 	}
 	if sentenceEnd("See example.com/docs") != -1 || sentenceEnd("Done. Next") != 4 || sentenceEnd("Why? Because") != 3 {
 		t.Fatal("sentenceEnd")
+	}
+}
+
+// The cost of a plan is for the whole task: one run of the agent, or one
+// run of each seat of a team together. Without a run with a cost, both
+// numbers are absent.
+func TestPlanCostOfTask(t *testing.T) {
+	once := planOf(t, "Check the web hosts for drift from their Ansible roles", nil)
+	if once.Cost.Low != 0.02 || once.Cost.High != 0.15 {
+		t.Fatalf("the cost of one run = %+v", once.Cost)
+	}
+	team := planOf(t, "Migrate the Puppet modules to Ansible roles, split across four agents", nil)
+	if team.Kind != PlanTeam || team.Who[0].Agent != "migrator" || team.Who[0].Count != 4 {
+		t.Fatalf("the team = %+v", team.Who)
+	}
+	if team.Cost.Low != 1.2 || team.Cost.High != 7.2 || team.Cost.Runs != 2 || !strings.Contains(team.Cost.Basis, "The whole team cost $1.20 to $7.20. The team stops at your limit.") {
+		t.Fatalf("the cost of the team = %+v", team.Cost)
+	}
+	none := planOf(t, "Write a summary of the launch every Friday", nil)
+	raw, _ := json.Marshal(none.Cost)
+	if none.Who[0].Agent != "writer" || strings.Contains(string(raw), `"low"`) || strings.Contains(string(raw), `"high"`) {
+		t.Fatalf("the cost without a priced run = %s", raw)
+	}
+}
+
+// A plan that repeats names a duty of the person that does the same work:
+// the same agent and most of the same words, whatever the schedule. A duty
+// of another agent, a duty with other work, and a task once name none.
+func TestPlanSame(t *testing.T) {
+	own := []duties.Duty{
+		{Name: "weekly-competitor-summary", Title: "Weekly competitor summary", Agent: "writer",
+			Do: duties.Do{Ask: &duties.Ask{Message: "Sum up what our competitors shipped this week.\n\nWrite the result to the wiki page writer/x/{date}.md. When you find nothing, say so in one line."}}},
+		{Name: "launch-notes", Title: "Launch notes", Agent: "writer", Do: duties.Do{Ask: &duties.Ask{Message: "Write the notes of the launch."}}},
+		{Name: "competitor-drift", Agent: "ops", Do: duties.Do{Ask: &duties.Ask{Message: "Sum up what our competitors shipped."}}},
+	}
+	with := func(in *PlanInput) { in.Own = own }
+	p := planOf(t, "Every Monday at 9am, sum up what our competitors shipped last week", with)
+	if p.Kind != PlanRepeat || p.Same == nil || p.Same.Duty != "weekly-competitor-summary" || p.Same.Title != "Weekly competitor summary" {
+		t.Fatalf("the same duty = %+v (who %+v)", p.Same, p.Who)
+	}
+	if !strings.Contains(PlanText(p), "The same work: your duty Weekly competitor summary (weekly-competitor-summary) does it already.") {
+		t.Fatalf("the text = %s", PlanText(p))
+	}
+	if q := planOf(t, "Every Friday, write a poem about the office plants", with); q.Same != nil {
+		t.Fatalf("other work = %+v", q.Same)
+	}
+	if q := planOf(t, "Every Monday, sum up what our competitors shipped", func(in *PlanInput) { in.Own = own; in.Agent = "ops" }); q.Same == nil || q.Same.Duty != "competitor-drift" {
+		t.Fatalf("the duty of the picked agent = %+v", q.Same)
+	}
+	if q := planOf(t, "Sum up what our competitors shipped last week", with); q.Kind != PlanOnce || q.Same != nil {
+		t.Fatalf("a task once = %s %+v", q.Kind, q.Same)
+	}
+	raw, _ := json.Marshal(planOf(t, "Every Friday, write a poem about the office plants", nil))
+	if strings.Contains(string(raw), `"same"`) {
+		t.Fatalf("a plan without the same work = %s", raw)
 	}
 }

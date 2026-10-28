@@ -462,6 +462,9 @@ func PlanText(p Plan) string {
 	for _, x := range p.Problems {
 		b.WriteString("\nProblem: " + x)
 	}
+	if p.Same != nil {
+		b.WriteString("\nThe same work: your duty " + p.Same.Title + " (" + p.Same.Duty + ") does it already.")
+	}
 	return b.String()
 }
 

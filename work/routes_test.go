@@ -370,6 +370,7 @@ func mustFor(t *testing.T, a *fw.Agent, who string) Answer {
 // person cannot run is no choice, and empty words or a time zone that does
 // not exist answer 400.
 func TestPlanRoute(t *testing.T) {
+	t.Setenv(fleet.EnvIntake, "fw.jobs")
 	a, srv := newFront(t)
 	code, b := post(t, srv, "alice", "/v1/work/plan", `{"words":"Summarize the changes of the week every Friday at 4pm"}`, "X-Time-Zone", "Europe/Berlin")
 	var p Plan
@@ -397,6 +398,15 @@ func TestPlanRoute(t *testing.T) {
 	}
 	if code, b := post(t, srv, "alice", "/v1/work/plan", `{"words":"Check the hosts", "agent":"ops"}`); code != http.StatusOK || !strings.Contains(string(b), "You cannot run an agent named ops") {
 		t.Fatalf("an agent of another person = %d %s", code, b)
+	}
+	// A duty of alice that does the same work is the same of the plan.
+	d := duties.Duty{Name: "week-notes", Title: "Notes of the week", Agent: "writer", When: duties.When{Say: "every friday at 4pm"},
+		Do: duties.Do{Ask: &duties.Ask{Message: "Summarize the changes of the week."}}, Limits: duties.Limits{Budget: &duties.Budget{MaxCostUSD: 0.5}}}
+	if _, err := duties.Of(a).Put(as("alice"), d.Name, duties.DutyBody{Duty: d}, duties.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if code, b := post(t, srv, "alice", "/v1/work/plan", `{"words":"Summarize the changes of the week every Friday at 4pm"}`); code != http.StatusOK || !strings.Contains(string(b), `"same":{"duty":"week-notes","title":"Notes of the week"}`) {
+		t.Fatalf("the plan with the same work = %d %s", code, b)
 	}
 	for _, x := range []struct{ body, zone string }{{`{"words":"  "}`, ""}, {`{"words":"Check the hosts"}`, "Mars/Olympus"}, {`{"words":"x","tell":"never"}`, ""}} {
 		if code, b := post(t, srv, "alice", "/v1/work/plan", x.body, "X-Time-Zone", x.zone); code != http.StatusBadRequest {
