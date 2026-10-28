@@ -64,12 +64,10 @@ const ContinueNoteInline = "This conversation continues an earlier one with the 
 
 // nativeContext reports whether the native API of the kernel takes the
 // field context of POST /v1/runs (docs/KNOWHOW.md section 4.1). The kernel
-// of the contract commit 6b1a8b7 refuses a body with it, so until the
-// kernel of Know-how lands, a start over HTTP keeps the summary in its
-// instructions after ContinueNoteInline, as before. A start through Go,
-// such as the tool run, gives the summary as a data block already. Set it
-// to true with the kernel that takes the field.
-const nativeContext = false
+// of Know-how takes it, so a start over HTTP gives the summary as a data
+// block. With false, the summary stays in the instructions after
+// ContinueNoteInline, for a kernel without the field.
+const nativeContext = true
 
 // Continuation is what a new run takes from an earlier conversation: the
 // summary of its last messages.

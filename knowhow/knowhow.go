@@ -34,9 +34,12 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/duties"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
+	"github.com/bdubs00/featherweight-workbench/pages"
 	"github.com/bdubs00/featherweight-workbench/routines"
+	"github.com/bdubs00/featherweight-workbench/sources"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 )
 
@@ -45,6 +48,12 @@ func init() {
 	native.Extend(mount)
 	mcp.RegisterTools(tools)
 	fleet.Tap(tapped, fw.EvMemoryUsed)
+	// The seams of the other packages (docs/KNOWHOW.md section 6.4).
+	pages.OnWrite = PageWritten
+	sources.OnItem = ItemChanged
+	duties.OnItem = ItemChanged
+	routines.OnMove = RoutineMoved
+	routines.AskFirst = AskFirst
 }
 
 // bucketConfig is the bucket of Know-how.
