@@ -4023,22 +4023,29 @@ A person thinks in tasks, not in places. The package `work` answers where each t
 | `event` | A run that a source started | The run |
 | `conversation` | A run of a person, its child runs, its branches, and the runs that continue it | Its runs. The newest top-level run speaks for the card. |
 
-A card has an id, its kind, a title, `from` (who asked: a person, a duty, an app, or the manager, and how: page, mcp, queue, bridge, schedule, event, call, or now), its stage, `next`, a reason in words, `opened`, `since`, `ended`, its agents, its parts by stage, its links, its cost, `verdict`, and `lost`. The links name the run to open, the approval to decide, the bridge, the duty, the batch, the source, and at most 20 runs.
+A card has an id, its kind, a title, its stage, `next`, and a reason in words. `from` says who asked: a person, a duty, an app, or the manager. Its `via` says how: page, mcp, queue, bridge, schedule, event, call, or now. It has the times `opened`, `since`, and `ended`, and its agents. It also has its parts by stage, its links, its cost, `verdict`, and `lost`. The links name the run to open, the approval to decide, the bridge, the duty, the batch, the source, and at most 20 runs.
 
 ### 26.2 The stages
 
-The backend decides the stage, and the page only shows it. The stage of a card is the stage of its part with the highest weight: a part that needs a person first, then a part that works, one that waits for a worker, one that stopped, one to check, and one that is done. So a job with one failed item and ten that work reads as working, with the failed item in its parts.
+The backend decides the stage, and the page only shows it. The stage of a card is the stage of its part with the highest weight. The weights, the highest first: needs-you, working, waiting, stopped, review, and done. So a job with one failed item and ten that work reads as working, with the failed item in its parts.
 
 | Stage | A part in it |
 |---|---|
-| `waiting` | A run on a queue, a start of a duty that comes next or goes again, an item of a job that no worker took, or a seat that waits for a worker |
+| `waiting` | A run on a queue, or a seat that waits for a worker. A start of a duty that comes next or goes again. An item of a job that no worker took. |
 | `working` | A run that works, or a seat that works |
 | `needs-you` | An approval or a question that waits for a person |
-| `stopped` | A run that failed, stopped at a limit, or failed its definition of done ("Not done"), a run that is lost, a seat in error or at a limit, a seat that never started, or a start of a duty that failed, was missed, or is lost |
+| `stopped` | A run that failed or stopped at a limit. A run that failed its definition of done ("Not done"). A lost run. A seat in error, at a limit, or that never started. A start of a duty that failed, was missed, or is lost. |
 | `review` | A run that completed with the metadata `workbench.review` (`fleet.MetaReview`) and that nobody reacted to yet. An open bridge whose seats ended their turns is in review too: its operator reads the result and closes it or gives a new task. |
 | `done` | Everything else that ended: a completed run, a closed bridge, a canceled run |
 
-A done card carries its verdict: `accepted` (a thumb up, a heart, or a receipt that accepted it), `checked` (the kernel recorded `done: checked`, the checks of the definition of done of the agent passed), `sent-back` (a thumb down), or `unchecked`. A canceled card has none. The first verdict of the facts of the work (section 25.1) wins over the counts of the reactions.
+A done card carries its verdict:
+
+- `accepted`: a thumb up, a heart, or a receipt that accepted it
+- `checked`: the kernel recorded `done: checked`, so the checks of the definition of done of the agent passed
+- `sent-back`: a thumb down
+- `unchecked`: nothing and nobody checked it
+
+A canceled card has none. The first verdict of the facts of the work (section 25.1) wins over the counts of the reactions.
 
 `next` names who moves a card: `worker`, `agent`, `you`, `person`, or `manager`. A start of a duty whose decider while away is the manager names the manager for a plain approval. A card of the caller names `you`, and a card of another person names `person`.
 
@@ -4048,15 +4055,15 @@ A lost run is a run of the archive that never ended and that no member holds. Th
 
 ### 26.3 The route, the tool, and the read
 
-`GET /v1/work?days=7&all=0` and the MCP tool `work` call `work.For`. `days` is 7, 30, or 90. `all` is 0 or 1, also `false` or `true`: with 1, the board holds every card that the caller can view, else the cards of the caller and of the teams of the caller, the duties that the caller owns or that tell the caller, and the bridges that the caller operates. The answer is `{sentence, lanes, cards, days}`. A lane is `{stage, count, yours, oldest}`. The sentence speaks of tasks, such as "3 tasks are open. 1 needs you, the oldest for 2 hours." The tool adds a text with one line per card.
+`GET /v1/work?days=7&all=0` and the MCP tool `work` call `work.For`. `days` is 7, 30, or 90. `all` is 0 or 1, also `false` or `true`. With 1, the board holds every card that the caller can view. With 0, it holds the cards of the caller and of the teams of the caller. Those are the runs of the caller and of its teams, and the duties that the caller owns or that tell the caller. The bridges that the caller operates count too. The answer is `{sentence, lanes, cards, days}`. A lane is `{stage, count, yours, oldest}`. The sentence speaks of tasks, such as "3 tasks are open. 1 needs you, the oldest for 2 hours." The tool adds a text with one line per card.
 
-The runs come from the view (`dashboard.Runs`) and from one read of the archive through `fleet.WorkWhere`: the runs that did not end, however old, and the runs that changed in the window, with the facts of their work. The view gives the run as it is now, with its activity, and the archive adds the facts. The value of the work reads the archive through the same function. The board of one caller and one query stays for ten seconds (`work.CacheFor`), because the page reads the board every 30 seconds and after the events of its stream. A check of a result (section 26.4) clears the boards.
+The runs come from the view (`dashboard.Runs`) and from one read of the archive through `fleet.WorkWhere`: the runs that did not end, however old, and the runs that changed in the window, with the facts of their work. The view gives the run as it is now, with its activity, and the archive adds the facts. The value of the work reads the archive through the same function. The board of one caller and one query stays for ten seconds (`work.CacheFor`). The page reads the board every 30 seconds and after the events of its stream, so many reads come close together. A check of a result (section 26.4) clears the boards.
 
 ### 26.4 The check of a result
 
-`POST /v1/work/review` with the body `{"run", "verdict", "note"}` and the MCP tool `work_review` call `work.Review`. The verdict `right` is Looks right: a thumb up on the run. The verdict `work` is Needs work: a thumb down with the note, and the note goes to the agent as a follow-up message, so the run works again. Needs work needs a note of at most 4,000 bytes. The front acts for the person on the member that holds the run (`fleet.ForRun` with `run.operate`, then the routes of the reaction and of the message of the kernel), so the access rules are those of a reaction and of a message. A run that only the archive holds is read-only, and the check answers 400. Only a person checks a result: a call of a run of an agent, such as the manager, answers 403.
+`POST /v1/work/review` with the body `{"run", "verdict", "note"}` and the MCP tool `work_review` call `work.Review`. The verdict `right` is Looks right: a thumb up on the run. The verdict `work` is Needs work: a thumb down with the note, and the note goes to the agent as a follow-up message, so the run works again. Needs work needs a note of at most 4,000 bytes. The front acts for the person on the member that holds the run. It decides `run.operate` (`fleet.ForRun`), then it calls the routes of the reaction and of the message of the kernel. So the access rules are those of a reaction and of a message. A run that only the archive holds is read-only, and the check answers 400. Only a person checks a result: a call of a run of an agent, such as the manager, answers 403.
 
-A duty with review sets the metadata on each start, and a plan of section 27 sets it on a run when the words ask to see the result first. The inbox (section 23.3) lists the result until the first reaction.
+A duty with review sets the metadata on each start. When the words of a plan (section 27) ask to see the result first, the plan sets it on the run. The inbox (section 23.3) lists the result until the first reaction.
 
 ## 27. The plan of a task
 
@@ -4066,13 +4073,13 @@ A newcomer says what they need done in words. The front reads the words back bef
 
 | Slot | Rule |
 |---|---|
-| `kind` | `repeat` when the words hold a schedule, `team` when they split the work across agents or ask for a review and an agent that reviews exists, else `once` |
+| `kind` | For words with a schedule, `repeat`. For words that split the work across agents, `team`. If an agent that reviews exists, words that ask for a review make a `team` too. Else `once`. |
 | `when` | The grammar of the duties (section 22.2) reads the first phrase that starts with every, on the, weekdays, or hourly. Each, nightly, weekly, monthly, and daily read as every. Night is 2 AM, morning 9 AM, and evening 6 PM. The answer holds the readback and the next three times. |
-| `who` | The agent that the person picked, the quick chat for a question that holds no schedule, else the profile whose name and description share the most words with the words. A word of the name counts three times. The agents are the profiles of the pools and of this process that the caller can run, without the manager. With no fitting agent, `problems` says "No agent fits these words. Pick one." and `others` lists the agents. |
+| `who` | The agent that the person picked. For a question without a schedule, the quick chat. Else the profile whose name and description share the most words with the words. A word of the name counts three times. The agents are the profiles of the pools and of this process that the caller can run, without the manager. With no fitting agent, `problems` says "No agent fits these words. Pick one." and `others` lists the agents. |
 | `cost` | What the top-level runs of the agent cost in the last 30 days that the caller can view: the least and the most, and how many runs a month the schedule starts. `per` is `bridge` for a team. The plan never names a limit. |
 | `asks` | The patterns of the policy of the agent and of the policy of its workers that ask a person, in words: "Before it runs git push" for `bash: git push*`, and "Before a step that changes or deletes something" for `destructive`. Words that ask to see the result first add "Before it goes out". Every plan adds that a question waits for the person. |
-| `quiet`, `tell` | `tell` is `each`, `found`, or `failures`. Words that watch for a change make a task that repeats tell only when it finds something. |
-| `gaps` | A send of an email when no tool of the agent sends mail, and a host in the words that the egress of the pool of the agent does not reach (`fleet.PoolEgress`) |
+| `quiet`, `tell` | `tell` is `each`, `found`, or `failures`. For words that watch for a change, a task that repeats tells the person of a result only if it finds something. |
+| `gaps` | If no tool of the agent sends mail, a send of an email is a gap. A host in the words that the egress of the pool of the agent does not reach is a gap too (`fleet.PoolEgress`). |
 | `start` | One of `duty` (for `PUT /v1/duties/{name}`), `bridge` (for `POST /v1/bridges`), or `run` (`{"member", "body"}` for `POST /v1/runs?member=`). A duty that the plan makes asks the person while away (`whileAway.decider: nobody`), never the manager, and it takes a free name. The page adds the limit of the person: `limits.budget.maxCostUSD`, `caps.maxCostUSD`, or `budget.maxCostUSD`. |
 
 The page refuses Start until the person types a limit (no silent cost defaults). With these routes, `GET /v1/bossmode` says `"work": true`, and the page shows the places Work and Results.
