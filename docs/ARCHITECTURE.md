@@ -3965,3 +3965,40 @@ A record of a member in the view keeps the newest 50 finished runs that the list
 ### 24.7 Problems with the path of their field
 
 Each problem of a duty, of an action, and of a playbook starts with the dotted path of its field and a colon, such as `when.schedule.times: ...`, `do.post.bridge: ...`, `checkFirst.where[0].field: ...`, or `seats[1].task: ...`. The page shows the text after the colon beside the field. A problem of the whole duty has no path. The words of `when.say` that do not read are a problem of `when.say`, and the time zone of the caller that is not an IANA name is a problem of `when.schedule.timeZone`.
+
+## 25. The value of the work
+
+A sponsor pays for the agents and asks whether they are worth it. The package `value` answers from the records that the front already holds. It is a view for people, not a console for operators: the metrics of section 4.14 and of the kernel stay in Prometheus.
+
+### 25.1 The facts of the work of a run
+
+The archive (section 4.18) folds the facts of the work of each run into its summary, under `work`, as it applies each event (`fleet.Work`). A run of this process gets the same facts from its ledger. The facts are:
+
+| Fact | From |
+|---|---|
+| `queued`, `facts` | The first `fw.run.queued`. `facts` is true once the record saw it, so it saw every later event. |
+| `firstEnd`, `firstOutcome` | The first `fw.run.finished` |
+| `acts` | Each `fw.approval.decided` of a person, and each `fw.message.received` of a person after the start |
+| `rework` | Each message of a person after the first end |
+| `handled` | Each decision that no person made: the kind of the decider is token, workload, parent, or kernel |
+| `waitMs`, `waits`, `asked` | The time from each `fw.approval.requested` to its decision by a person, and the request that waits now |
+| `verdict` | The first thumb or heart (`fw.run.reacted`), or the first quality receipt (`fw.run.annotated`): `accepted` or `rejected`. A grade of a model is no verdict. |
+| `canceledBy` | The person of a cancel |
+
+A summary that a server before this section wrote has no facts. The value counts such a run as unknown and says so.
+
+### 25.2 The answer
+
+`GET /v1/value?days=7|30|90` and the MCP tool `value` call `value.For` with the access rules of the runs (`fleet.WorkSince`). A piece of work is a run without a parent that is no branch, no check run, and no run of the manager or of the quick chat. The answer counts the pieces that people, duties, sources, and jobs asked for in the window:
+
+- `work`: done, failed, stopped, and open
+- `checks`: the done pieces by verdict, accepted, sent back, and unchecked
+- `people`: the actions of people, the done pieces that needed none, the pieces that a person wrote to after the end, the time that work waited for a decision of a person, and the pieces that wait now
+- `lead`: the median time from the ask to the first end, and the part of all such time that waited for people. The time that a job waited in its queue is not in it.
+- `spend`: the cost of every run of the window at the prices of the workers, the cost per done piece, the cost of failed work and of coordination, and the runs with tokens without a price, which make the spend a lower bound
+- `periods`: a day each for 7 days, else a week each
+- `lines`: the same numbers per duty, source, and agent
+
+### 25.3 The estimates
+
+The front measures no time that a person spends. An owner of the agent of a line sets the minutes that a person takes for one piece with `PUT /v1/value/estimates` and the body `{"line", "minutes"}`, or with the tool `value_estimate`. The estimate keeps the person and the time. The answer then multiplies it by the done pieces of the line that nobody sent back, under `estimated`. Zero minutes removes it. The estimates live in the key-value bucket `<stream>_VALUE`; on a bus without a store the value answers without them.
