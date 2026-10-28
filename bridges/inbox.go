@@ -83,7 +83,7 @@ func (s *Store) Waiting(ctx context.Context) ([]Waiting, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, m := range decorate(rec, runs, s.taskStates(fctx)) {
+		for _, m := range s.members(fctx, rec, runs, s.taskStates(fctx)) {
 			if m.Presence != PresenceNeedsYou {
 				continue
 			}

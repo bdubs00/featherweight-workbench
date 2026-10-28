@@ -369,7 +369,7 @@ func (b *board) bridge(it bridges.Item) {
 			lost = true
 		}
 		switch {
-		case m.Presence == bridges.PresenceNeedsYou && lost:
+		case (m.Presence == bridges.PresenceNeedsYou || m.Question > 0) && lost:
 			// The seat asked, and then its worker went: nobody can move
 			// the seat by an answer, so it stopped (walk finding L20).
 			p.stage, p.lost = StageStopped, true

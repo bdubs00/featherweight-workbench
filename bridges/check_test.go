@@ -73,8 +73,9 @@ func TestCheck(t *testing.T) {
 }
 
 // A seat that asked a question and whose run the channel then called gone
-// still waits, and Waiting says that it is gone, so the inbox leaves it
-// out.
+// waits for no one: no answer moves it, so Waiting and the count needsYou
+// of the bridge leave it out (walk finding R1). The board still shows it
+// Stopped and Lost.
 func TestWaitingGone(t *testing.T) {
 	a := newAgent(t, nil)
 	s := newStore(t, a, nil)
@@ -84,8 +85,17 @@ func TestWaitingGone(t *testing.T) {
 	if err := s.b.create(context.Background(), rec); err != nil {
 		t.Fatal(err)
 	}
-	waits, err := s.Waiting(fw.WithPrincipal(context.Background(), callers["alice"]))
-	if err != nil || len(waits) != 1 || !waits[0].Gone || waits[0].Question != 3 {
+	ctx := fw.WithPrincipal(context.Background(), callers["alice"])
+	waits, err := s.Waiting(ctx)
+	if err != nil || len(waits) != 0 {
 		t.Fatalf("Waiting = %+v, %v", waits, err)
+	}
+	it, err := s.item(ctx, rec, "alice", true)
+	if err != nil || it.NeedsYou != 0 {
+		t.Fatalf("the item of the bridge = %+v, %v", it, err)
+	}
+	ms := decorate(rec, nil, nil)
+	if len(ms) != 1 || !ms[0].Gone || ms[0].Presence == PresenceNeedsYou || ms[0].Question != 3 {
+		t.Fatalf("the seat = %+v", ms)
 	}
 }
