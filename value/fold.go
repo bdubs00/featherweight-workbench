@@ -104,7 +104,8 @@ type Counts struct {
 // Checks splits the done pieces by the verdict on their result. Accepted
 // and SentBack are the first verdict of a person or of a receipt. Checked
 // is a piece that no person judged and whose definition of done passed in
-// the kernel (fw.run.finished with done checked). Unchecked is a piece
+// the kernel (fw.run.finished with done checked) with a pass that was not
+// weak (fleet.Checked). Unchecked is a piece
 // that nobody and nothing judged. The verdict of a person wins over the
 // checks of the kernel.
 type Checks struct {
@@ -456,7 +457,7 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 					per.SentBack++
 				}
 			case "":
-				if doneChecked(r, wk) {
+				if fleet.Checked(r, wk) {
 					ans.Checks.Checked++
 					ln.Checks.Checked++
 					if per != nil {
@@ -611,16 +612,6 @@ func teamPiece(t string, list []*fleet.WorkRun, known map[string]bridges.Brief, 
 	stand.UpdatedAt = last
 	p.r = &fleet.WorkRun{Run: stand, Work: w}
 	return p
-}
-
-// doneChecked reports whether the definition of done of a run passed in
-// the kernel: the facts of its work say so, else the run object of a newer
-// kernel does.
-func doneChecked(r *fw.Run, w fleet.Work) bool {
-	if w.Done != "" {
-		return w.Done == fw.DoneChecked
-	}
-	return r.Done != nil && r.Done.State == fw.DoneChecked
 }
 
 // periods returns the parts of a window: a day each for a window of a

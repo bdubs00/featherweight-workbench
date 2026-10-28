@@ -4093,8 +4093,8 @@ The archive (section 4.18) applies each event to the summary of its run. It also
 | `rework` | Each message of a person after the first end |
 | `handled` | Each decision that no person made: the kind of the decider is token, workload, parent, or kernel |
 | `waitMs`, `waits`, `asked` | The time from each `fw.approval.requested` to its decision by a person, and the request that waits now |
-| `verdict` | The first thumb or heart (`fw.run.reacted`), or the first quality receipt (`fw.run.annotated`): `accepted` or `rejected`. A grade of a model is no verdict. |
-| `done` | The field `done` of the newest `fw.run.finished`: `checked` when the definition of done of the agent passed (the kernel architecture, section 24), `failed` when its checks ended the run, and empty without one |
+| `verdict` | The first thumb (`fw.run.reacted`), or the first quality receipt (`fw.run.annotated`): `accepted` or `rejected`. A grade of a model is no verdict. A heart is none either: it keeps a result on the wiki of the agent (section 18.8), and it says nothing of whether the result is right. |
+| `done`, `doneWeak` | The fields `done` and `doneWeak` of the newest `fw.run.finished`: `checked` when the definition of done of the agent passed (the kernel architecture, section 24), `failed` when its checks ended the run, and empty without one. `doneWeak` is true when the pass showed nothing about the work of the run, such as a check that only reads a file. Such a run is not checked (`fleet.Checked`, the rule `fw.CheckedDone` of the kernel). |
 | `canceledBy` | The person of a cancel |
 
 A summary that a server before this section wrote has no facts. The archive keeps every event of the run. So after each start, the front reads them again in the background and writes the facts, once per run (`fleet/backfill.go`). It pauses 20 milliseconds between two runs, so a large archive does not flood the server of the bus. An event that arrives during the read makes the summary count more events than the read found, and the read starts again. A run whose start the stream no longer holds gets the mark `backfilled` and no facts, so the next start does not read it again. Every replica runs the backfill, and a replica that finds the facts there writes nothing. Until the backfill reaches a run, the value counts it as unknown and says so.
@@ -4108,7 +4108,7 @@ A bridge is one piece too, as it is one card on the board. The runs of its seats
 The answer counts the pieces that people, duties, sources, jobs, and bridges asked for in the window:
 
 - `work`: done, failed, stopped, open, and lost. A lost piece is a run of the archive that never ended and that no member holds: a pool replaced its worker while it worked or waited. It counts as failed work in the spend, and its wait does not grow.
-- `checks`: the done pieces by verdict: accepted, checked, sent back, and unchecked. Accepted and sent back are the first verdict of a person or of a receipt. Checked is a piece that no person judged and whose definition of done passed in the kernel. A verdict of a person wins over the checks. Unchecked is a piece that nobody and nothing judged. A worker of an older kernel sends no `done`, so its pieces are never checked.
+- `checks`: the done pieces by verdict: accepted, checked, sent back, and unchecked. Accepted and sent back are the first verdict of a person or of a receipt. Checked is a piece that no person judged and whose definition of done passed in the kernel with a pass that was not weak (`fleet.Checked`). A weak pass, such as a check that only reads a file that was there before the run, is unchecked. A verdict of a person wins over the checks. Unchecked is a piece that nobody and nothing judged. A worker of an older kernel sends no `done`, so its pieces are never checked.
 - `people`: the actions of people, and the done pieces that needed none. Also the pieces that a person wrote to after the end. Also the time that work waited for a decision of a person, and the pieces that wait now.
 - `lead`: the median time from the ask to the first end, and the part of all such time that waited for people. The time that a job waited in its queue is not in it.
 - `spend`: the cost of every run of the window at the prices of the workers, and the cost per done piece. Also the cost of failed work and of coordination. The runs with tokens without a price make the spend a lower bound.
@@ -4150,8 +4150,8 @@ The backend decides the stage, and the page only shows it. The stage of a card i
 
 A done card carries its verdict:
 
-- `accepted`: a thumb up, a heart, or a receipt that accepted it
-- `checked`: the kernel recorded `done: checked`, so the checks of the definition of done of the agent passed
+- `accepted`: a thumb up, or a receipt that accepted it. A heart is no verdict.
+- `checked`: the kernel recorded `done: checked` without `weak`, so the checks of the definition of done of the agent passed and showed the work of the run (`fleet.Checked`). A weak pass is `unchecked`.
 - `sent-back`: a thumb down
 - `unchecked`: nothing and nobody checked it
 - `let-go`: a person let the stopped card go (section 26.5). It is a word of the board only, and Results does not count it.

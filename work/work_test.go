@@ -314,20 +314,27 @@ func TestReviewAndVerdicts(t *testing.T) {
 	receipt := mk("RECEIPT", review)
 	checked := mk("CHECKED", nil)
 	checked.Done = &fw.RunDone{State: fw.DoneChecked}
+	// A weak pass, such as a check that only reads a file that was there
+	// before the run, shows nothing about the work, so nobody checked it.
+	weak := mk("WEAK", nil)
+	weak.Done = &fw.RunDone{State: fw.DoneChecked, Weak: true}
 	plain := mk("PLAIN", nil)
+	// A heart keeps a result on the wiki, and it is no verdict.
+	hearted := mk("HEART", nil)
+	hearted.Reactions = map[string]int{fw.ReactionHeart: 1}
 	notDone := run("NOTDONE", "writer", fw.StateFailed, ago(time.Hour), ago(time.Hour), nil)
 	notDone.Done = &fw.RunDone{State: fw.DoneFailed, Checks: []fw.DoneResult{{Name: "tests", Tool: "bash"}, {Name: "lint", Tool: "bash", Passed: true}}}
 	limit := run("LIMIT", "writer", fw.StateFailed, ago(time.Hour), ago(time.Hour), nil)
 	limit.Error = "budget exceeded: maxTurns"
 	in := Input{Me: "alice", Now: t0, All: true, Runs: []Run{
 		{Run: asked}, {Run: upped}, {Run: downed}, {Run: receipt, Work: fleet.Work{Verdict: fleet.VerdictAccepted}},
-		{Run: checked}, {Run: plain}, {Run: notDone}, {Run: limit},
+		{Run: checked}, {Run: weak}, {Run: plain}, {Run: hearted}, {Run: notDone}, {Run: limit},
 	}}
 	ans := Assemble(in)
 	if c := cardOf(t, ans, "run:ASK"); c.Stage != StageReview || c.Next != NextPerson || c.Reason != "A result to check." || c.Verdict != "" {
 		t.Fatalf("a result to check = %+v", c)
 	}
-	for id, want := range map[string]string{"UP": VerdictAccepted, "DOWN": VerdictSentBack, "RECEIPT": VerdictAccepted, "CHECKED": VerdictChecked, "PLAIN": VerdictUnchecked} {
+	for id, want := range map[string]string{"UP": VerdictAccepted, "DOWN": VerdictSentBack, "RECEIPT": VerdictAccepted, "CHECKED": VerdictChecked, "WEAK": VerdictUnchecked, "PLAIN": VerdictUnchecked, "HEART": VerdictUnchecked} {
 		if c := cardOf(t, ans, "run:"+id); c.Stage != StageDone || c.Verdict != want {
 			t.Errorf("the card %s = %s %q, want done %q", id, c.Stage, c.Verdict, want)
 		}

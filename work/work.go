@@ -51,8 +51,8 @@ var weight = map[string]int{StageNeedsYou: 6, StageWorking: 5, StageWaiting: 4, 
 
 // Verdicts of a done card: who or what checked its result.
 const (
-	VerdictAccepted  = "accepted"  // a person gave a thumb up or a heart, or a receipt accepted it
-	VerdictChecked   = "checked"   // the checks of the definition of done of the agent passed
+	VerdictAccepted  = "accepted"  // a person gave a thumb up, or a receipt accepted it
+	VerdictChecked   = "checked"   // the checks of the definition of done of the agent passed, and the pass was not weak (fleet.Checked)
 	VerdictSentBack  = "sent-back" // a person gave a thumb down
 	VerdictUnchecked = "unchecked" // nothing and nobody checked it
 )
@@ -772,7 +772,7 @@ func (b *board) runPart(r Run) part {
 			p.verdict, p.reason = v, "Accepted."
 		case v == VerdictSentBack:
 			p.verdict, p.reason = v, "Sent back."
-		case r.Done != nil && r.Done.State == fw.DoneChecked:
+		case fleet.Checked(r.Run, r.Work):
 			p.verdict, p.reason = VerdictChecked, "Its checks passed."
 		case strings.TrimSpace(r.Output) == "":
 			p.verdict, p.reason = VerdictUnchecked, "Ended with nothing to read."
@@ -807,8 +807,9 @@ const (
 )
 
 // judged is the verdict of a person, or of a receipt, on the result of a
-// run: the first verdict of its facts, else its reactions. A thumb down
-// sends the result back, and a thumb up or a heart accepts it.
+// run: the newest verdict of its facts, else its reactions. A thumb down
+// sends the result back, and a thumb up accepts it. A heart keeps the
+// result on the wiki, and it is no verdict.
 func judged(r Run) string {
 	switch cmp.Or(r.Work.LastVerdict, r.Work.Verdict) {
 	case fleet.VerdictAccepted:
@@ -819,7 +820,7 @@ func judged(r Run) string {
 	switch {
 	case r.Reactions[fw.ReactionDown] > 0:
 		return VerdictSentBack
-	case r.Reactions[fw.ReactionUp] > 0 || r.Reactions[fw.ReactionHeart] > 0:
+	case r.Reactions[fw.ReactionUp] > 0:
 		return VerdictAccepted
 	}
 	return ""

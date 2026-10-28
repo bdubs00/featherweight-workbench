@@ -99,13 +99,14 @@ func FoundLine(output string) (string, bool) {
 
 // InReview reports whether a run waits for a person to check its result:
 // it completed, it carries MetaReview or found something (Found), and no
-// person reacted to it yet. It reads the counts of the run object alone.
+// person gave it a thumb yet. A heart is no check. It reads the counts of
+// the run object alone.
 // ToCheck reads the facts of the run too, and is right after Needs work.
 func InReview(r *fw.Run) bool {
 	if r == nil || r.State != fw.StateCompleted || !checks(r) {
 		return false
 	}
-	return r.Reactions[fw.ReactionUp]+r.Reactions[fw.ReactionDown]+r.Reactions[fw.ReactionHeart] == 0
+	return r.Reactions[fw.ReactionUp]+r.Reactions[fw.ReactionDown] == 0
 }
 
 // ToCheck reports whether a run waits for a person to check its newest

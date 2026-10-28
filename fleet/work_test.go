@@ -79,6 +79,38 @@ func TestWorkApply(t *testing.T) {
 	if w.Done != fw.DoneChecked || w.FirstOutcome != "failed" || w.Rework != 1 {
 		t.Fatalf("a run that its checks ended and a follow-up fixed = %+v", w)
 	}
+	if !Checked(nil, w) {
+		t.Fatalf("a run whose checks passed is not checked: %+v", w)
+	}
+
+	// A weak pass of done shows nothing about the work of the run, so the
+	// run is not checked, though its done says checked.
+	w = WorkOf([]fw.Event{
+		ev(1, fw.EvRunQueued, at(0), fw.RunQueuedData{Agent: "fixer"}),
+		ev(2, fw.EvRunFinished, at(5), fw.RunFinishedData{Outcome: "completed", Done: fw.DoneChecked, DoneWeak: true}),
+	})
+	if w.Done != fw.DoneChecked || !w.DoneWeak || Checked(nil, w) {
+		t.Fatalf("a weak pass = %+v, checked %v", w, Checked(nil, w))
+	}
+	weak := &fw.Run{Done: &fw.RunDone{State: fw.DoneChecked, Weak: true}}
+	if Checked(weak, Work{}) || !Checked(&fw.Run{Done: &fw.RunDone{State: fw.DoneChecked}}, Work{}) {
+		t.Fatal("Checked of the run object does not read Weak")
+	}
+
+	// A heart keeps a result on the wiki. It is no verdict, so the result
+	// still waits for a check, and a thumb after it gives the verdict.
+	w = WorkOf([]fw.Event{
+		ev(1, fw.EvRunQueued, at(0), fw.RunQueuedData{Agent: "writer"}),
+		ev(2, fw.EvRunFinished, at(5), fw.RunFinishedData{Outcome: "completed"}),
+		ev(3, fw.EvRunReacted, at(6), fw.ReactionData{Seq: 2, Reaction: fw.ReactionHeart, By: "alice"}),
+	})
+	if w.Verdict != "" || w.LastVerdict != "" || w.Reviewed != 0 {
+		t.Fatalf("a heart gave a verdict: %+v", w)
+	}
+	hearted := &fw.Run{State: fw.StateCompleted, Metadata: map[string]string{MetaReview: "1"}, Reactions: map[string]int{fw.ReactionHeart: 1}}
+	if !ToCheck(hearted, w) || !InReview(hearted) {
+		t.Fatal("a result with a heart alone no longer waits for a check")
+	}
 
 	// A record that never saw the start has no facts.
 	if w := WorkOf([]fw.Event{ev(9, fw.EvRunFinished, at(9), fw.RunFinishedData{Outcome: "failed"})}); w.Facts {
