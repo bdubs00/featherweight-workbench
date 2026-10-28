@@ -3993,7 +3993,7 @@ A summary that a server before this section wrote has no facts. The value counts
 
 - `work`: done, failed, stopped, open, and lost. A lost piece is a run of the archive that never ended and that no member holds: a pool replaced its worker while it worked or waited. It counts as failed work in the spend, and its wait does not grow.
 - `checks`: the done pieces by verdict, accepted, sent back, and unchecked
-- `people`: the actions of people, and the done pieces that needed none. Also the pieces that a person wrote to after the end, the time that work waited for a decision of a person, and the pieces that wait now.
+- `people`: the actions of people, and the done pieces that needed none. Also the pieces that a person wrote to after the end. Also the time that work waited for a decision of a person, and the pieces that wait now.
 - `lead`: the median time from the ask to the first end, and the part of all such time that waited for people. The time that a job waited in its queue is not in it.
 - `spend`: the cost of every run of the window at the prices of the workers, and the cost per done piece. Also the cost of failed work and of coordination. The runs with tokens without a price make the spend a lower bound.
 - `periods`: a day each for 7 days, else a week each
