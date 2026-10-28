@@ -104,11 +104,11 @@ func TestFold(t *testing.T) {
 		t.Fatalf("the periods = %+v", a.Periods)
 	}
 	for _, want := range []string{
-		"In the last 7 days, the agents finished 5 pieces of work, and 1 failed or stopped. 1 piece was lost when a pool replaced the worker.",
+		"In the last 7 days, the agents finished 5 tasks, and 1 failed or stopped. 1 task was lost when a pool replaced the worker.",
 		"People accepted 1 and sent back 1. 3 are unchecked.",
 		"3 of the 5 finished without an action of a person.",
 		"Work waited 2 h 30 min for people.",
-		"The work cost at least $1.69, $0.34 for each finished piece.",
+		"The work cost at least $1.69, $0.34 for each finished task.",
 		"1 run has tokens without a price.",
 		"would take a person 1 h 30 min.",
 		"1 piece has no record of the actions of people.",
