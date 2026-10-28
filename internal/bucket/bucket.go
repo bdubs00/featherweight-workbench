@@ -486,7 +486,21 @@ func (b *natsBucket) Keys(ctx context.Context) ([]Entry, error) {
 // keysUnder lists the keys under first with a filter of the server, so
 // the server sends those keys only.
 func (b *natsBucket) keysUnder(ctx context.Context, first string) ([]string, error) {
-	var out []string
+	list, err := b.entriesUnder(ctx, first)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(list))
+	for _, e := range list {
+		out = append(out, e.Key)
+	}
+	return out, nil
+}
+
+// entriesUnder lists the keys under first with their revisions, with a
+// filter of the server, so the server sends those keys only.
+func (b *natsBucket) entriesUnder(ctx context.Context, first string) ([]Entry, error) {
+	var out []Entry
 	err := b.read(ctx, func(kv jetstream.KeyValue) error {
 		w, err := kv.WatchFiltered(ctx, []string{first + ".>"}, jetstream.MetaOnly(), jetstream.IgnoreDeletes())
 		if err != nil {
@@ -503,7 +517,7 @@ func (b *natsBucket) keysUnder(ctx context.Context, first string) ([]string, err
 			if e == nil {
 				return nil
 			}
-			out = append(out, e.Key())
+			out = append(out, Entry{Key: e.Key(), Revision: e.Revision(), Created: e.Created()})
 		}
 	})
 	if errors.Is(err, ErrNotFound) {
@@ -512,7 +526,7 @@ func (b *natsBucket) keysUnder(ctx context.Context, first string) ([]string, err
 	if err != nil {
 		return nil, fmt.Errorf("bucket: list the keys under %s of %s: %w", first, b.name, err)
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out, nil
 }
 
@@ -672,6 +686,14 @@ func (m *memBucket) keysUnder(ctx context.Context, first string) ([]string, erro
 	return under(keys, first), nil
 }
 
+func (m *memBucket) entriesUnder(ctx context.Context, first string) ([]Entry, error) {
+	keys, err := m.Keys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return entriesUnder(keys, first), nil
+}
+
 func (m *memBucket) tooLarge(value []byte) bool {
 	return m.cfg.MaxValue > 0 && len(value) > m.cfg.MaxValue
 }
@@ -679,6 +701,7 @@ func (m *memBucket) tooLarge(value []byte) bool {
 // lister is a bucket that lists the keys under a first token itself.
 type lister interface {
 	keysUnder(ctx context.Context, first string) ([]string, error)
+	entriesUnder(ctx context.Context, first string) ([]Entry, error)
 }
 
 // remover is a bucket that lists the keys whose newest entry is a removal.
@@ -755,6 +778,35 @@ func KeysUnder(ctx context.Context, b Bucket, first string) ([]string, error) {
 		return nil, err
 	}
 	return under(keys, first), nil
+}
+
+// EntriesUnder is KeysUnder with the revision and the time of the newest
+// value of each key, without the values, so a store that keeps a copy of
+// its records reads only the entries whose revision changed. first can
+// hold several tokens, such as note.<agent>, and then names the keys that
+// start with those tokens.
+func EntriesUnder(ctx context.Context, b Bucket, first string) ([]Entry, error) {
+	if l, ok := b.(lister); ok {
+		return l.entriesUnder(ctx, first)
+	}
+	keys, err := b.Keys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return entriesUnder(keys, first), nil
+}
+
+// entriesUnder returns the entries whose key starts with first and a dot,
+// sorted by key.
+func entriesUnder(keys []Entry, first string) []Entry {
+	var out []Entry
+	for _, e := range keys {
+		if strings.HasPrefix(e.Key, first+".") {
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
 }
 
 // under returns the keys of the entries that start with first and a dot.

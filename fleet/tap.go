@@ -20,14 +20,15 @@ import (
 const tapInputLimit = 200
 
 // RunEvent is one event of the egress stream, with what the view knows of
-// its run: the profile of the run, and its line, the title that the start
-// of the run names (fw.MetaTitle), else the first line of its input, at
-// most 200 bytes. Agent and Line are empty
+// its run: the profile of the run, its principal, and its line, the title
+// that the start of the run names (fw.MetaTitle), else the first line of
+// its input, at most 200 bytes. Agent, Principal, and Line are empty
 // while the view has not seen the start of the run.
 type RunEvent struct {
-	Agent string
-	Line  string
-	Event fw.Event
+	Agent     string
+	Principal string
+	Line      string
+	Event     fw.Event
 }
 
 // tap is one function that Tap registered, with its types.
@@ -77,7 +78,7 @@ func (p *platform) tapped(r *platformRun, e fw.Event) {
 			if strings.TrimSpace(line) == "" {
 				line = r.run.Input
 			}
-			ev = &RunEvent{Agent: r.run.Agent, Line: firstLine(line, tapInputLimit), Event: e}
+			ev = &RunEvent{Agent: r.run.Agent, Principal: r.run.Principal, Line: firstLine(line, tapInputLimit), Event: e}
 		}
 		t.fn(p.f.a, *ev)
 	}
