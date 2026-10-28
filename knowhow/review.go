@@ -11,6 +11,7 @@ package knowhow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -25,6 +26,9 @@ const (
 	maxReviews = 10
 	// ReviewPrincipal is the workload principal of a run of the review.
 	ReviewPrincipal = "knowhow:review"
+	// reviewScan is how often a replica reads the candidates of every
+	// agent while a slot waits for its first candidate.
+	reviewScan = 10 * time.Minute
 )
 
 // ReviewTick starts the runs of the review of the slot of now, once across
@@ -34,7 +38,25 @@ func (s *Service) ReviewTick(ctx context.Context) ([]string, error) {
 	if !s.cfg.Review.On() || s.enqueue == nil {
 		return nil, nil
 	}
-	slot := s.now().UTC().Truncate(s.cfg.Review.Every)
+	now := s.now().UTC()
+	slot := now.Truncate(s.cfg.Review.Every)
+	if got, err := s.b.Get(ctx, "mark.review"); err == nil {
+		var m mark
+		if json.Unmarshal(got.Value, &m) == nil && m.Day == slot.Format(time.RFC3339) {
+			return nil, nil
+		}
+	}
+	// The candidates of every agent read at most every reviewScan, while
+	// the slot waits for its first candidate.
+	s.mu.Lock()
+	due := s.scanned.IsZero() || now.Sub(s.scanned) >= reviewScan || now.Before(s.scanned)
+	if due {
+		s.scanned = now
+	}
+	s.mu.Unlock()
+	if !due {
+		return nil, nil
+	}
 	agents, err := s.reviewable(ctx)
 	if err != nil || len(agents) == 0 {
 		return nil, err

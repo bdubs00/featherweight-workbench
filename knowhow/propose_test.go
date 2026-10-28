@@ -27,7 +27,9 @@ type ticket struct {
 	comment string // replaces the comment of the agent when set
 }
 
-func (k ticket) input() string { return fmt.Sprintf("Ticket #%d: something about %s", k.number, k.kind) }
+func (k ticket) input() string {
+	return fmt.Sprintf("Ticket #%d: something about %s", k.number, k.kind)
+}
 
 func (k ticket) script() []*fw.Response {
 	use := func(id, tool string, input any) fw.Block {

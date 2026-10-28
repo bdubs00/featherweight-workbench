@@ -146,6 +146,7 @@ type Service struct {
 	usesIn  chan fleet.RunEvent
 	full    bool
 	retried map[string]bool // the events that count again later
+	scanned time.Time       // the last read of the candidates for the review
 }
 
 // New returns the Know-how of the agent a on the bucket b with the
