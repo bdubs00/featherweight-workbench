@@ -22,50 +22,20 @@ import (
 	"context"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/bdubs00/featherweight-workbench/fleet"
 )
 
 // FoundInstructions are the instructions of a run of a duty whose results
 // reach people only when it finds something.
 const FoundInstructions = "The person hears of the result of this run only when it finds something. Start your answer with one line in this form: \"Found: <what you found, in a few words>\". When you found nothing, make that first line \"Found: nothing\"."
 
-// foundPrefix starts the line of the contract, in any case.
-const foundPrefix = "found:"
-
-// nothingWords are the values of the line that mean that the run found
-// nothing.
-var nothingWords = map[string]bool{"nothing": true, "none": true, "no": true, "0": true, "nothing new": true, "nothing found": true, "no items": true, "n/a": true}
-
 // cutMark ends an answer that the view of the fleet cut (fleet.cut).
 const cutMark = "…"
 
 // FoundLine reads the line of the contract from an answer: what the run
-// says that it found, and whether it found something. It reads the first
-// line, and the last line when the answer is whole. An answer without the
-// line found something, with no words.
-func FoundLine(output string) (string, bool) {
-	var lines []string
-	for l := range strings.SplitSeq(output, "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			lines = append(lines, l)
-		}
-	}
-	if len(lines) == 0 {
-		return "", true
-	}
-	candidates := []string{lines[0]}
-	if len(lines) > 1 && !strings.HasSuffix(strings.TrimSpace(output), cutMark) {
-		candidates = append(candidates, lines[len(lines)-1])
-	}
-	for _, l := range candidates {
-		l = strings.Trim(l, "*_`#> ")
-		if len(l) < len(foundPrefix) || !strings.EqualFold(l[:len(foundPrefix)], foundPrefix) {
-			continue
-		}
-		v := strings.Trim(strings.TrimSpace(l[len(foundPrefix):]), "*_`. ")
-		return v, !nothingWords[strings.ToLower(v)]
-	}
-	return "", true
-}
+// says that it found, and whether it found something (fleet.FoundLine).
+func FoundLine(output string) (string, bool) { return fleet.FoundLine(output) }
 
 // resultNotice tells the people of notify.result of a completed start, as
 // notify.resultWhen says: e is the start, and output the answer of its

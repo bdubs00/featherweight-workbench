@@ -458,3 +458,29 @@ func TestLetGoCards(t *testing.T) {
 		t.Fatalf("the lanes = %+v", ans.Lanes)
 	}
 }
+
+// A start of a duty that tells only of what it finds and whose run found
+// something waits in To check with the words of what it found. The card
+// is the move of a person of notify.result. A start that found nothing is
+// done.
+func TestFoundCard(t *testing.T) {
+	slot := ago(time.Hour)
+	md := map[string]string{duties.MetaDuty: "drift", duties.MetaSlot: slot.Format(time.RFC3339Nano), fleet.MetaFound: "1"}
+	found := run("R-F", "ops", fw.StateCompleted, slot, ago(50*time.Minute), md)
+	found.Principal, found.Output = "duty:drift", "**Found:** web-3 drifts from its role\nThe diff is in the wiki."
+	slot2 := ago(25 * time.Hour)
+	md2 := map[string]string{duties.MetaDuty: "drift", duties.MetaSlot: slot2.Format(time.RFC3339Nano), fleet.MetaFound: "1"}
+	nothing := run("R-N", "ops", fw.StateCompleted, slot2, slot2, md2)
+	nothing.Principal, nothing.Output = "duty:drift", "Found: nothing"
+	d := duties.Duty{Name: "drift", Title: "Drift check", Agent: "ops", Owner: "alice", Notify: &duties.Notify{Result: []string{"bob"}, ResultWhen: duties.ResultFound}}
+	in := Input{Me: "bob", Now: t0, Runs: []Run{{Run: found}, {Run: nothing}}, Duties: []duties.Duty{d},
+		Starts: []Start{{Duty: d, Entry: duties.RunEntry{Slot: slot, At: slot, Run: "R-F", State: duties.StateCompleted}}, {Duty: d, Entry: duties.RunEntry{Slot: slot2, At: slot2, Run: "R-N", State: duties.StateCompleted}}}}
+	ans := Assemble(in)
+	c := cardOf(t, ans, dutyKey("drift", slot))
+	if c.Stage != StageReview || c.Reason != "Found: web-3 drifts from its role" || c.Next != NextYou {
+		t.Fatalf("a found result = %+v", c)
+	}
+	if n := cardOf(t, ans, dutyKey("drift", slot2)); n.Stage != StageDone || n.Verdict != VerdictUnchecked {
+		t.Fatalf("a start that found nothing = %+v", n)
+	}
+}

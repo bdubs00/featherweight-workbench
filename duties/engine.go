@@ -751,8 +751,13 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 		md[MetaReview] = "1"
 	}
 	instructions := ""
-	if n := d.Notify; n != nil && len(n.Result) > 0 && n.ResultWhen == ResultFound && d.CheckFirst == nil {
-		instructions = FoundInstructions
+	if n := d.Notify; n != nil && len(n.Result) > 0 && n.ResultWhen == ResultFound {
+		// A result that found something waits in To check for the people
+		// of notify.result (fleet.Found).
+		md[MetaFound] = "1"
+		if d.CheckFirst == nil {
+			instructions = FoundInstructions
+		}
 	}
 	principal, kind := "duty:"+d.Name, fw.KindWorkload
 	if d.RunAs == RunAsOwner && d.Owner != "" {

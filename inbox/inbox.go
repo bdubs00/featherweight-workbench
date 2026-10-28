@@ -2,7 +2,8 @@
 // section 23.3): the runs that wait for an approval or an answer, the
 // questions of the seats of the bridges, the failed runs of the duties of
 // the caller in the last day, the duties of the caller that paused
-// themselves, and the results that the caller asked to check. It mounts
+// themselves, the results that the caller asked to check, and the results
+// of the duties that found something and tell the caller of them. It mounts
 // GET /v1/inbox on the native surface and adds the MCP tool inbox, which
 // calls the same Go function, so a client of a person reads the items of
 // Activity and answers them with approve, send, and work_review.
@@ -133,7 +134,9 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 	// The results that wait for a check: a run of the caller or of the
 	// teams of the caller, or a run of a duty whose questions or results go
 	// to the caller, that completed in the last ResultsFor with the metadata
-	// fleet.MetaReview and that nobody reacted to yet.
+	// fleet.MetaReview and that nobody reacted to yet. A run of a duty that
+	// tells only of what it finds and that found something (fleet.Found)
+	// goes to the people of notify.result alone.
 	team, err := teams.By(ctx, a.Config(), runs, teams.ByTeam)
 	if err != nil {
 		return Answer{}, err
@@ -155,10 +158,18 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 		}
 	}
 	for _, r := range runs {
-		if r.Parent != "" || !fleet.ToCheck(r, facts[r.ID]) || now.Sub(r.UpdatedAt) > ResultsFor || !(near[r.ID] || asks[duties.NameOf(r)] || hears[duties.NameOf(r)]) {
+		if r.Parent != "" || !fleet.ToCheck(r, facts[r.ID]) || now.Sub(r.UpdatedAt) > ResultsFor {
+			continue
+		}
+		_, found := fleet.Found(r)
+		found = found && r.Metadata[fleet.MetaReview] != "1"
+		if found && !hears[duties.NameOf(r)] || !found && !(near[r.ID] || asks[duties.NameOf(r)] || hears[duties.NameOf(r)]) {
 			continue
 		}
 		it := Item{Kind: KindResult, Run: r.ID, Duty: duties.NameOf(r), Agent: r.Agent, Since: r.UpdatedAt, Text: dashboard.TitleOf(r) + ": a result to check."}
+		if found {
+			it.Text = dashboard.TitleOf(r) + ": it found something."
+		}
 		if fleet.Again(facts[r.ID]) {
 			it.Text = dashboard.TitleOf(r) + ": a new answer to check, after your note."
 		}
@@ -238,7 +249,7 @@ func dutyItems(ctx context.Context, svc *duties.Service, subject string, now tim
 		if d.Owner == subject || (d.Notify != nil && slices.Contains(d.Notify.NeedsYou, subject)) {
 			asks[d.Name] = true
 		}
-		if d.Notify != nil && slices.Contains(d.Notify.Result, subject) {
+		if d.Notify != nil && (slices.Contains(d.Notify.Result, subject) || d.Owner == subject && slices.Contains(d.Notify.Result, duties.RunAsOwner)) {
 			hears[d.Name] = true
 		}
 		if !concerns(d, subject) {
@@ -320,7 +331,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 	return []mcp.Tool{mcp.NewTool(&sdk.Tool{
 		Name:        ToolInbox,
 		Title:       "What needs me",
-		Description: "List what needs the person now, the items of Activity: each run that waits for an approval or an answer, each question of a seat of a bridge, each failed run of a duty of the person in the last day, each duty of the person that paused itself, and each result that the person asked to check, in the last week. Answer an approval with approve and a question with approve or send, and check a result with work_review. Each item has kind (approval, question, failure, paused, result), run, duty, agent, bridge, approval (the id of the approval that the run waits for), text, and since.",
+		Description: "List what needs the person now, the items of Activity: each run that waits for an approval or an answer, each question of a seat of a bridge, each failed run of a duty of the person in the last day, each duty of the person that paused itself, and each result that the person asked to check or that a duty found and tells the person of, in the last week. Answer an approval with approve and a question with approve or send, and check a result with work_review. Each item has kind (approval, question, failure, paused, result), run, duty, agent, bridge, approval (the id of the approval that the run waits for), text, and since.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {

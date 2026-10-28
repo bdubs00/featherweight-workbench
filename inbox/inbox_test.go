@@ -407,3 +407,85 @@ func TestInboxResultAgain(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// A duty that tells only of what it finds and whose run found something
+// gives the people of notify.result an item of kind result that says so,
+// and nobody else; the owner is one of them by the word owner. A run that
+// found nothing gives no item, and Looks right ends the item.
+func TestInboxFound(t *testing.T) {
+	t.Setenv(fleet.EnvIntake, "fw.jobs")
+	t.Setenv("FW_ATESPACE", "")
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	cfg.Access.Default = "closed"
+	cfg.Agents = map[string]fw.AgentProfile{"ops": {Access: &fw.Access{Owners: []string{"alice"}, Viewers: []string{"carol", "dave"}}}}
+	answer := fw.ModelFunc{StreamFn: func(_ context.Context, req *fw.Request, _ func(fw.Delta)) (*fw.Response, error) {
+		text := "Found: web-3 drifts from its role\nThe diff is in the wiki."
+		if strings.Contains(req.Messages[0].Content[0].Text, "quiet") {
+			text = "Found: nothing\nEvery host matches."
+		}
+		return &fw.Response{Content: []fw.Block{fw.Text(text)}, StopReason: fw.StopEndTurn}, nil
+	}}
+	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(people{}), fw.WithModel(answer),
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithSurfaces(native.New()),
+		fw.WithServices(duties.Start), fw.WithLogger(quiet()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		a.Close(ctx)
+	})
+	d := duties.Duty{
+		Name: "drift", Title: "Drift check", Agent: "ops",
+		When:   duties.When{Webhook: &duties.Webhook{Auth: duties.WebhookAuth{Mode: "none"}}},
+		Do:     duties.Do{Ask: &duties.Ask{Message: "Compare the hosts."}},
+		Limits: duties.Limits{Budget: &duties.Budget{MaxCostUSD: 0.5}},
+		Notify: &duties.Notify{Result: []string{"owner", "carol"}, ResultWhen: duties.ResultFound},
+	}
+	if _, err := duties.Of(a).Put(as("alice"), "drift", duties.DutyBody{Duty: d}, duties.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(fleet.EnvIntake, "")
+	start := func(input string) string {
+		t.Helper()
+		r, err := a.Start(context.Background(), "", fw.WithRequest(fw.RunRequest{Agent: "ops", Input: input, Principal: "duty:drift", PrincipalKind: fw.KindWorkload,
+			Metadata: map[string]string{duties.MetaDuty: "drift", fleet.MetaFound: "1", fw.MetaTitle: "Drift check"}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, a, r.ID, fw.StateCompleted)
+		return r.ID
+	}
+	found, nothing := start("Compare the hosts."), start("Compare the hosts, quiet.")
+	items := func(who string) []Item {
+		t.Helper()
+		ans, err := For(as(who), a, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []Item
+		for _, it := range ans.Items {
+			if it.Kind == KindResult {
+				out = append(out, it)
+			}
+		}
+		return out
+	}
+	for who, want := range map[string]int{"alice": 1, "carol": 1, "dave": 0} {
+		got := items(who)
+		if len(got) != want {
+			t.Fatalf("the found results of %s = %+v, want %d", who, got, want)
+		}
+		if want == 1 && (got[0].Run != found || got[0].Text != "Drift check: it found something." || got[0].Duty != "drift") {
+			t.Fatalf("the item of %s = %+v, not of %s", who, got[0], nothing)
+		}
+	}
+	if err := a.React(as("alice"), found, fw.ReactionData{Reaction: fw.ReactionUp}); err != nil {
+		t.Fatal(err)
+	}
+	if got := items("carol"); len(got) != 0 {
+		t.Fatalf("the found results after Looks right = %+v", got)
+	}
+}

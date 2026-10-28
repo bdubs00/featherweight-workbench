@@ -672,8 +672,8 @@ func (b *board) ownsDuty(subject string) bool {
 	return ok && b.in.Me != "" && d.Owner == b.in.Me
 }
 
-// notifies reports whether a duty tells the caller of its failures or its
-// questions.
+// notifies reports whether a duty tells the caller of its failures, its
+// questions, or its results.
 func (b *board) notifies(d duties.Duty) bool {
 	if b.in.Me == "" {
 		return false
@@ -684,7 +684,7 @@ func (b *board) notifies(d duties.Duty) bool {
 	if d.Notify == nil {
 		return false
 	}
-	return slices.Contains(d.Notify.Failure, b.in.Me) || slices.Contains(d.Notify.NeedsYou, b.in.Me)
+	return slices.Contains(d.Notify.Failure, b.in.Me) || slices.Contains(d.Notify.NeedsYou, b.in.Me) || slices.Contains(d.Notify.Result, b.in.Me)
 }
 
 // runPart is the stage of one run.
@@ -726,8 +726,13 @@ func (b *board) runPart(r Run) part {
 				p.reason = "A new answer to check. Your note: " + oneLine(n, 120)
 			}
 		case fleet.ToCheck(r.Run, r.Work):
-			// The owner asked to check each result, and nobody did yet.
+			// The owner asked to check each result, or a duty that tells
+			// only of what it finds found something, and nobody checked it
+			// yet.
 			p.stage, p.reason = StageReview, "A result to check."
+			if what, ok := fleet.Found(r.Run); ok {
+				p.reason = "Found: " + oneLine(plainText(what), 200)
+			}
 		case v == VerdictAccepted:
 			p.verdict, p.reason = v, "Accepted."
 		case v == VerdictSentBack:

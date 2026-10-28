@@ -88,7 +88,7 @@ func TestResultNotice(t *testing.T) {
 	f.clock.Set(nine.Add(time.Second))
 	f.pass(t)
 	req := f.queue.last(t)
-	if req.Metadata[MetaReview] != "1" || req.Instructions != FoundInstructions {
+	if req.Metadata[MetaReview] != "1" || req.Metadata[MetaFound] != "1" || req.Instructions != FoundInstructions {
 		t.Fatalf("the request = %+v", req)
 	}
 	f.view.set(req.ID, fw.StateCompleted, 0.02, func(r *fw.Run) { r.Output = "Found: nothing\nEvery host matches its role." })
@@ -120,7 +120,7 @@ func TestResultNotice(t *testing.T) {
 			ar = r
 		}
 	}
-	if ar.ID == "" || ar.Instructions != "" || ar.Metadata[MetaReview] != "" {
+	if ar.ID == "" || ar.Instructions != "" || ar.Metadata[MetaReview] != "" || ar.Metadata[MetaFound] != "" {
 		t.Fatalf("the request of always = %+v", ar)
 	}
 	f.view.set(ar.ID, fw.StateCompleted, 0.01, func(r *fw.Run) { r.Output = "Found: nothing\nNo new ticket." })
