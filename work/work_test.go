@@ -115,7 +115,7 @@ func TestBridgeCards(t *testing.T) {
 
 // The runs of a conversation are one card: a run that continues an
 // earlier one, a branch, and a child run. The newest run speaks for the
-// card, and an answer in a conversation needs no review.
+// card, and an answer that nobody checked is done and unchecked.
 func TestConversation(t *testing.T) {
 	first := run("R1", "helper", fw.StateCompleted, ago(5*time.Hour), ago(5*time.Hour), nil)
 	first.Output = "first answer"
@@ -136,7 +136,7 @@ func TestConversation(t *testing.T) {
 	if c.Stage != StageDone || c.Parts.Total != 4 || !c.Opened.Equal(ago(5*time.Hour)) || c.Kind != KindConversation || c.From.Kind != "person" || c.From.Via != "page" {
 		t.Fatalf("the conversation = %+v", c)
 	}
-	if a := cardOf(t, ans, "run:R5"); a.Stage != StageDone || a.Reason != "Answered." {
+	if a := cardOf(t, ans, "run:R5"); a.Stage != StageDone || a.Verdict != VerdictUnchecked {
 		t.Fatalf("an answered conversation = %+v", a)
 	}
 	// Without the branch, the run that continues it works.
@@ -156,7 +156,7 @@ func TestLostAndWaiting(t *testing.T) {
 	asks.Pending = &fw.Approval{ID: "ap-1", Tool: "git.push", RequestedAt: ago(time.Hour)}
 	q := run("R-Q", "reviewer", fw.StateInputRequired, ago(3*time.Hour), ago(2*time.Hour), nil)
 	q.Pending = &fw.Approval{ID: "ap-2", Schema: json.RawMessage(`{"type":"object"}`), Reason: "Which branch?", RequestedAt: ago(2 * time.Hour)}
-	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: lost, Archived: true}, {Run: asks}, {Run: q}}}
+	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: lost, Lost: true}, {Run: asks}, {Run: q}}}
 	in.Mine = mineAll(in.Runs...)
 	ans := Assemble(in)
 	l := cardOf(t, ans, "run:R-LOST")
@@ -178,7 +178,7 @@ func TestLostAndWaiting(t *testing.T) {
 	if ans.Cards[0].ID != "run:R-Q" || ans.Cards[1].ID != "run:R-ASK" || ans.Cards[2].ID != "run:R-LOST" {
 		t.Fatalf("the order = %s %s %s", ans.Cards[0].ID, ans.Cards[1].ID, ans.Cards[2].ID)
 	}
-	if want := "3 pieces of work are open. 2 need a person, the oldest for 2 hours. 1 stopped, the oldest for 10 days."; ans.Sentence != want {
+	if want := "3 tasks are open. 2 need you, the oldest for 2 hours. 1 stopped, the oldest for 10 days."; ans.Sentence != want {
 		t.Fatalf("the sentence = %q", ans.Sentence)
 	}
 }
@@ -244,14 +244,14 @@ func TestJobAndEvent(t *testing.T) {
 	in := Input{Me: "alice", Now: t0, Runs: runs, Queued: map[string]int{"migrate-42": 6}, All: true}
 	ans := Assemble(in)
 	j := cardOf(t, ans, "job:alice/migrate-42")
-	if j.Kind != KindJob || j.Stage != StageWorking || j.Parts.Waiting != 6 || j.Parts.Stopped != 1 || j.Parts.Review != 2 || j.Parts.Total != 10 || j.From.Via != "queue" {
+	if j.Kind != KindJob || j.Stage != StageWorking || j.Parts.Waiting != 6 || j.Parts.Stopped != 1 || j.Parts.Done != 2 || j.Parts.Total != 10 || j.From.Via != "queue" {
 		t.Fatalf("the job = %+v", j)
 	}
-	if j.Reason != "6 waiting, 1 working, 1 stopped, 2 to review." {
+	if j.Reason != "6 coming up, 1 working, 1 stopped, 2 done." {
 		t.Fatalf("the reason of the job = %q", j.Reason)
 	}
 	e := cardOf(t, ans, "run:E1")
-	if e.Kind != KindEvent || e.Stage != StageReview || e.From != (From{Kind: "app", Name: "tickets", Via: "call"}) || e.Links.Source != "tickets" {
+	if e.Kind != KindEvent || e.Stage != StageDone || e.Verdict != VerdictUnchecked || e.From != (From{Kind: "app", Name: "tickets", Via: "call"}) || e.Links.Source != "tickets" {
 		t.Fatalf("the event = %+v", e)
 	}
 }
@@ -280,5 +280,53 @@ func TestScopeAndWindow(t *testing.T) {
 	}
 	if empty := Assemble(Input{Me: "carol", Now: t0}); empty.Sentence != "No work in the last 7 days." || len(empty.Lanes) != len(Stages) {
 		t.Fatalf("an empty board = %+v", empty)
+	}
+}
+
+// A result goes to review only when its owner asked to check it, and it
+// leaves review on the first reaction. A done card says who checked it:
+// a person, the checks of the definition of done, or nobody. A run whose
+// checks failed stops as not done, and a run at a limit says the limit.
+func TestReviewAndVerdicts(t *testing.T) {
+	mk := func(id string, md map[string]string) *fw.Run {
+		r := run(id, "writer", fw.StateCompleted, ago(3*time.Hour), ago(2*time.Hour), md)
+		r.Output = "The draft."
+		return r
+	}
+	review := map[string]string{"workbench.review": "1"}
+	asked := mk("ASK", review)
+	upped := mk("UP", review)
+	upped.Reactions = map[string]int{fw.ReactionUp: 1}
+	downed := mk("DOWN", nil)
+	downed.Reactions = map[string]int{fw.ReactionDown: 1}
+	receipt := mk("RECEIPT", review)
+	checked := mk("CHECKED", nil)
+	checked.Done = &fw.RunDone{State: fw.DoneChecked}
+	plain := mk("PLAIN", nil)
+	notDone := run("NOTDONE", "writer", fw.StateFailed, ago(time.Hour), ago(time.Hour), nil)
+	notDone.Done = &fw.RunDone{State: fw.DoneFailed, Checks: []fw.DoneResult{{Name: "tests", Tool: "bash"}, {Name: "lint", Tool: "bash", Passed: true}}}
+	limit := run("LIMIT", "writer", fw.StateFailed, ago(time.Hour), ago(time.Hour), nil)
+	limit.Error = "budget exceeded: maxTurns"
+	in := Input{Me: "alice", Now: t0, All: true, Runs: []Run{
+		{Run: asked}, {Run: upped}, {Run: downed}, {Run: receipt, Work: fleet.Work{Verdict: fleet.VerdictAccepted}},
+		{Run: checked}, {Run: plain}, {Run: notDone}, {Run: limit},
+	}}
+	ans := Assemble(in)
+	if c := cardOf(t, ans, "run:ASK"); c.Stage != StageReview || c.Next != NextPerson || c.Reason != "A result to check." || c.Verdict != "" {
+		t.Fatalf("a result to check = %+v", c)
+	}
+	for id, want := range map[string]string{"UP": VerdictAccepted, "DOWN": VerdictSentBack, "RECEIPT": VerdictAccepted, "CHECKED": VerdictChecked, "PLAIN": VerdictUnchecked} {
+		if c := cardOf(t, ans, "run:"+id); c.Stage != StageDone || c.Verdict != want {
+			t.Errorf("the card %s = %s %q, want done %q", id, c.Stage, c.Verdict, want)
+		}
+	}
+	if c := cardOf(t, ans, "run:NOTDONE"); c.Stage != StageStopped || c.Reason != "Not done: the check tests failed." {
+		t.Fatalf("a run that is not done = %+v", c)
+	}
+	if c := cardOf(t, ans, "run:LIMIT"); c.Stage != StageStopped || c.Reason != "Stopped at a limit: maxTurns." {
+		t.Fatalf("a run at a limit = %+v", c)
+	}
+	if !fleet.InReview(asked) || fleet.InReview(upped) || fleet.InReview(plain) {
+		t.Fatal("fleet.InReview")
 	}
 }

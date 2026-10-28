@@ -48,6 +48,14 @@ var Stages = []string{StageWaiting, StageWorking, StageNeedsYou, StageStopped, S
 // item in its counts.
 var weight = map[string]int{StageNeedsYou: 6, StageWorking: 5, StageWaiting: 4, StageStopped: 3, StageReview: 2, StageDone: 1}
 
+// Verdicts of a done card: who or what checked its result.
+const (
+	VerdictAccepted  = "accepted"  // a person gave a thumb up or a heart, or a receipt accepted it
+	VerdictChecked   = "checked"   // the checks of the definition of done of the agent passed
+	VerdictSentBack  = "sent-back" // a person gave a thumb down
+	VerdictUnchecked = "unchecked" // nothing and nobody checked it
+)
+
 // Kinds of a card.
 const (
 	KindConversation = "conversation" // a run of a person, its child runs, and the runs that continue it
@@ -142,6 +150,10 @@ type Card struct {
 	Parts   Parts      `json:"parts"`
 	Links   Links      `json:"links"`
 	CostUSD float64    `json:"costUSD"`
+	// Verdict says who or what checked the result of a done card:
+	// accepted, checked, sent-back, or unchecked. A canceled card has
+	// none.
+	Verdict string `json:"verdict,omitempty"`
 	// Lost is true when no worker holds a part of the card that had not
 	// ended: the pool replaced its worker, so the part cannot go on.
 	Lost bool `json:"lost,omitempty"`
@@ -169,11 +181,13 @@ type Answer struct {
 	Days int `json:"days"`
 }
 
-// Run is a run that the caller can view. Archived is true when only the
-// archive of the front holds it, because the pool replaced its worker.
+// Run is a run that the caller can view, with the facts of its work
+// (fleet.Work). Lost is true for a run that never ended and that no member
+// holds: the pool replaced its worker, so it cannot go on.
 type Run struct {
 	*fw.Run
-	Archived bool
+	Work fleet.Work
+	Lost bool
 }
 
 // Start is one start of a duty that the caller can view.
@@ -266,6 +280,7 @@ type part struct {
 	stage, reason string
 	since         time.Time
 	run, approval string
+	verdict       string
 	lost          bool
 	// quiet is true for a part that counts but does not speak for its
 	// card: a run of a conversation that a newer run continued, and a
@@ -304,7 +319,7 @@ func (b *board) bridge(it bridges.Item) {
 		if it.ClosedAt != nil {
 			at = *it.ClosedAt
 		}
-		d.parts = append(d.parts, part{stage: StageDone, reason: "Closed.", since: at})
+		d.parts = append(d.parts, part{stage: StageDone, reason: "Closed.", since: at, verdict: VerdictUnchecked})
 		for _, m := range it.Members {
 			d.agents[m.Agent] = true
 		}
@@ -411,7 +426,7 @@ func (b *board) start(s Start) {
 			p.reason = "Goes again soon."
 		}
 	case duties.StateCompleted:
-		p.stage, p.reason = StageDone, "Ended."
+		p.stage, p.reason, p.verdict = StageDone, "Ended.", VerdictUnchecked
 	case duties.StateCanceled:
 		p.stage, p.reason = StageDone, "Canceled."
 	case duties.StateLost:
@@ -483,11 +498,6 @@ func (b *board) run(r Run) {
 			// A child run that ended reported to its parent, which
 			// speaks for the conversation.
 			p.quiet = true
-		}
-		if p.stage == StageReview && !p.quiet {
-			// The person who asked in a conversation reads the answer
-			// as it comes, so the answer needs no review of its own.
-			p.stage, p.reason = StageDone, "Answered."
 		}
 	}
 	d.parts = append(d.parts, p)
@@ -636,7 +646,7 @@ func (b *board) notifies(d duties.Duty) bool {
 // runPart is the stage of one run.
 func (b *board) runPart(r Run) part {
 	p := part{run: r.ID, since: r.UpdatedAt}
-	if r.Archived && !r.State.Terminal() {
+	if r.Lost {
 		p.stage, p.lost = StageStopped, true
 		p.reason = "Its worker was replaced before it ended, so it cannot go on."
 		return p
@@ -664,25 +674,33 @@ func (b *board) runPart(r Run) part {
 			p.reason = "Runs " + a.Tool + "."
 		}
 	case fw.StateCompleted:
-		switch {
-		case r.Reactions[fw.ReactionDown] > 0:
-			p.stage, p.reason = StageStopped, "A person marked the result wrong."
-		case r.Reactions[fw.ReactionUp] > 0 || r.Reactions[fw.ReactionHeart] > 0:
-			p.stage, p.reason = StageDone, "Accepted."
-		case r.Outcome != nil && r.Outcome.Verdict == fw.GradeSatisfied:
-			p.stage, p.reason = StageDone, "Met its rubric."
+		p.stage = StageDone
+		switch v := judged(r); {
+		case v == VerdictAccepted:
+			p.verdict, p.reason = v, "Accepted."
+		case v == VerdictSentBack:
+			p.verdict, p.reason = v, "Sent back."
+		case r.Metadata[fleet.MetaReview] == "1":
+			// The owner asked to check each result, and nobody did yet.
+			p.stage, p.reason = StageReview, "A result to check."
+		case r.Done != nil && r.Done.State == fw.DoneChecked:
+			p.verdict, p.reason = VerdictChecked, "Its checks passed."
 		case strings.TrimSpace(r.Output) == "":
-			p.stage, p.reason = StageDone, "Ended with nothing to read."
-		case r.Outcome != nil:
-			p.stage, p.reason = StageReview, "A result that did not meet its rubric."
+			p.verdict, p.reason = VerdictUnchecked, "Ended with nothing to read."
 		default:
-			p.stage, p.reason = StageReview, "A result to read."
+			p.verdict, p.reason = VerdictUnchecked, "Ended. Nobody checked the result."
 		}
 	case fw.StateFailed:
 		p.stage = StageStopped
-		p.reason = "Failed."
-		if e := oneLine(r.Error, 200); e != "" {
-			p.reason = "Failed: " + e
+		switch {
+		case r.Done != nil && r.Done.State == fw.DoneFailed:
+			p.reason = "Not done: " + notDone(r.Done)
+		case strings.HasPrefix(r.Error, "budget exceeded"):
+			p.reason = "Stopped at a limit: " + oneLine(strings.TrimPrefix(strings.TrimPrefix(r.Error, "budget exceeded"), ": "), 160) + "."
+		case strings.TrimSpace(r.Error) != "":
+			p.reason = "Failed: " + oneLine(r.Error, 200)
+		default:
+			p.reason = "Failed."
 		}
 	case fw.StateCanceled:
 		p.stage, p.reason = StageDone, "Canceled."
@@ -690,6 +708,40 @@ func (b *board) runPart(r Run) part {
 		p.stage, p.reason = StageWorking, "Works."
 	}
 	return p
+}
+
+// judged is the verdict of a person, or of a receipt, on the result of a
+// run: the first verdict of its facts, else its reactions. A thumb down
+// sends the result back, and a thumb up or a heart accepts it.
+func judged(r Run) string {
+	switch r.Work.Verdict {
+	case fleet.VerdictAccepted:
+		return VerdictAccepted
+	case fleet.VerdictRejected:
+		return VerdictSentBack
+	}
+	switch {
+	case r.Reactions[fw.ReactionDown] > 0:
+		return VerdictSentBack
+	case r.Reactions[fw.ReactionUp] > 0 || r.Reactions[fw.ReactionHeart] > 0:
+		return VerdictAccepted
+	}
+	return ""
+}
+
+// notDone words a definition of done that failed: the checks that failed,
+// when the run object holds them, else that its checks did not pass.
+func notDone(d *fw.RunDone) string {
+	var failed []string
+	for _, c := range d.Checks {
+		if !c.Passed {
+			failed = append(failed, cmp.Or(c.Name, c.Tool))
+		}
+	}
+	if len(failed) == 0 {
+		return "its checks did not pass."
+	}
+	return "the check " + strings.Join(failed, ", ") + " failed."
 }
 
 // pendingWords says what a run that waits for a person asks.
@@ -816,6 +868,7 @@ func (b *board) settle(d *draft) {
 	if d.Stage == StageDone {
 		at := d.Since
 		d.Ended = &at
+		d.Verdict = top.verdict
 	}
 	d.Next = b.next(d)
 	d.Agents = make([]string, 0, len(d.agents))
@@ -856,13 +909,13 @@ func (b *board) next(d *draft) string {
 }
 
 // partWords counts the parts of a job in words, such as "3 working, 1
-// stopped, 6 to review".
+// stopped, 6 done".
 func partWords(p Parts) string {
 	var out []string
 	for _, x := range []struct {
 		n    int
 		word string
-	}{{p.NeedsYou, "need you"}, {p.Waiting, "waiting"}, {p.Working, "working"}, {p.Stopped, "stopped"}, {p.Review, "to review"}, {p.Done, "done"}} {
+	}{{p.NeedsYou, "need you"}, {p.Waiting, "coming up"}, {p.Working, "working"}, {p.Stopped, "stopped"}, {p.Review, "to check"}, {p.Done, "done"}} {
 		if x.n > 0 {
 			out = append(out, fmt.Sprintf("%d %s", x.n, x.word))
 		}
@@ -872,11 +925,11 @@ func partWords(p Parts) string {
 
 // laneWords names a stage in the sentence.
 var laneWords = map[string][2]string{
-	StageWaiting:  {"waits for a worker", "wait for a worker"},
+	StageWaiting:  {"is coming up", "are coming up"},
 	StageWorking:  {"is in work", "are in work"},
-	StageNeedsYou: {"needs a person", "need a person"},
+	StageNeedsYou: {"needs you", "need you"},
 	StageStopped:  {"stopped", "stopped"},
-	StageReview:   {"has a result to read", "have a result to read"},
+	StageReview:   {"is to check", "are to check"},
 	StageDone:     {"is done", "are done"},
 }
 
@@ -892,7 +945,7 @@ func sentence(ans Answer, now time.Time) string {
 	if len(ans.Cards) == 0 {
 		return "No work in the last " + plural(ans.Days, "day", "days") + "."
 	}
-	parts := []string{plural(open, "piece of work is open", "pieces of work are open") + "."}
+	parts := []string{plural(open, "task is open", "tasks are open") + "."}
 	for _, l := range ans.Lanes {
 		if l.Count == 0 || l.Stage == StageDone {
 			continue

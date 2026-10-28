@@ -72,7 +72,7 @@ func TestSnapshot(t *testing.T) {
 	in := Input{Me: who.Principal.Subject, Now: now, Mine: map[string]bool{}}
 	for i := range runs.Runs {
 		r := &runs.Runs[i]
-		in.Runs = append(in.Runs, Run{Run: &r.Run, Archived: r.Archived})
+		in.Runs = append(in.Runs, Run{Run: &r.Run, Lost: r.Archived && !r.State.Terminal()})
 		if r.Principal == in.Me {
 			in.Mine[r.ID] = true
 		}

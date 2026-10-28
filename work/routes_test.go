@@ -118,19 +118,32 @@ func TestRouteAndTool(t *testing.T) {
 	waitFor(t, a, r1.ID, fw.StateInputRequired)
 	waitFor(t, a, r2.ID, fw.StateCompleted)
 
-	ans, err := For(as("alice"), a, time.Now(), Query{})
+	now := time.Now()
+	ans, err := For(as("alice"), a, now, Query{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ans.Cards) != 2 {
 		t.Fatalf("the cards = %+v", ans.Cards)
 	}
+	// The board of a caller stays for CacheFor: a new run shows after it.
+	r3, err := a.Start(as("alice"), "", fw.WithRequest(fw.RunRequest{Agent: "triage", Input: "What is next?"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, a, r3.ID, fw.StateCompleted)
+	if again, err := For(as("alice"), a, now.Add(time.Second), Query{}); err != nil || len(again.Cards) != 2 {
+		t.Fatalf("the board within the cache = %d cards, %v", len(again.Cards), err)
+	}
+	if later, err := For(as("alice"), a, now.Add(CacheFor), Query{}); err != nil || len(later.Cards) != 3 {
+		t.Fatalf("the board after the cache = %d cards, %v", len(later.Cards), err)
+	}
 	ask, done := ans.Cards[0], ans.Cards[1]
 	pending, _ := a.Get(context.Background(), r1.ID)
 	if ask.ID != "run:"+r1.ID || ask.Stage != StageNeedsYou || ask.Next != NextYou || pending.Pending == nil || ask.Links.Approval != pending.Pending.ID || ask.Reason != "Asks to run deploy." {
 		t.Fatalf("the card that needs alice = %+v", ask)
 	}
-	if done.ID != "run:"+r2.ID || done.Stage != StageDone || done.Reason != "Answered." || done.Ended == nil {
+	if done.ID != "run:"+r2.ID || done.Stage != StageDone || done.Verdict != VerdictUnchecked || done.Ended == nil {
 		t.Fatalf("the answered card = %+v", done)
 	}
 
@@ -148,7 +161,7 @@ func TestRouteAndTool(t *testing.T) {
 		return resp.StatusCode, out
 	}
 	code, routed := get("alice", "?days=3")
-	if code != http.StatusOK || len(routed.Cards) != 2 || routed.Cards[0].Links.Approval != ask.Links.Approval || routed.Days != 3 || !strings.HasSuffix(routed.Sentence, "1 done in the last 3 days.") {
+	if code != http.StatusOK || len(routed.Cards) != 3 || routed.Cards[0].Links.Approval != ask.Links.Approval || routed.Days != 3 || !strings.HasSuffix(routed.Sentence, "2 done in the last 3 days.") {
 		t.Fatalf("GET /v1/work = %d %+v", code, routed)
 	}
 	if code, other := get("bob", ""); code != http.StatusOK || len(other.Cards) != 0 {
@@ -169,12 +182,12 @@ func TestRouteAndTool(t *testing.T) {
 		t.Fatalf("the tool = %+v, %v", res, err)
 	}
 	txt := res.Content[0].(*sdk.TextContent).Text
-	if !strings.HasPrefix(txt, "1 piece of work is open. 1 needs a person") || !strings.Contains(txt, "\n\nNeeds a person (1):\n- deploy the site, a conversation from alice: Asks to run deploy.") || !strings.Contains(txt, "Approval "+ask.Links.Approval+".") {
+	if !strings.HasPrefix(txt, "1 task is open. 1 needs you") || !strings.Contains(txt, "\n\nNeeds you (1):\n- deploy the site, a conversation from alice: Asks to run deploy.") || !strings.Contains(txt, "Approval "+ask.Links.Approval+".") {
 		t.Fatalf("the text of the tool = %s", txt)
 	}
 	b, _ := json.Marshal(res.StructuredContent)
 	var tooled Answer
-	if err := json.Unmarshal(b, &tooled); err != nil || len(tooled.Cards) != 2 || tooled.Cards[0].ID != ask.ID || tooled.Days != 3 {
+	if err := json.Unmarshal(b, &tooled); err != nil || len(tooled.Cards) != 3 || tooled.Cards[0].ID != ask.ID || tooled.Days != 3 {
 		t.Fatalf("the structured content of the tool = %s, %v", b, err)
 	}
 	bad, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: ToolWork, Arguments: map[string]any{"days": 120}})

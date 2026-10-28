@@ -191,6 +191,14 @@ type WorkRun struct {
 // workers come from the view and carry no facts. Child runs and the runs
 // that the lists leave out are in it; the caller picks.
 func WorkSince(ctx context.Context, a *fw.Agent, since time.Time) ([]WorkRun, error) {
+	return WorkWhere(ctx, a, func(r *fw.Run) bool { return !r.CreatedAt.Before(since) })
+}
+
+// WorkWhere is WorkSince for the runs that keep picks, such as the runs
+// that did not end, however old, beside the runs of a window. The board of
+// the work (package work) and the value of the work (package value) read
+// the archive through it, one read for each answer.
+func WorkWhere(ctx context.Context, a *fw.Agent, keep func(*fw.Run) bool) ([]WorkRun, error) {
 	local, err := a.List(ctx)
 	if err != nil {
 		return nil, err
@@ -198,7 +206,7 @@ func WorkSince(ctx context.Context, a *fw.Agent, since time.Time) ([]WorkRun, er
 	var out []WorkRun
 	seen := map[string]bool{}
 	for _, r := range local {
-		if r.CreatedAt.Before(since) {
+		if !keep(r) {
 			continue
 		}
 		seen[r.ID] = true
@@ -212,7 +220,7 @@ func WorkSince(ctx context.Context, a *fw.Agent, since time.Time) ([]WorkRun, er
 		sums := arch.summaries(ctx)
 		var runs []*fw.Run
 		for _, s := range sums {
-			if run := s.listed(); run != nil && !seen[run.ID] && !run.CreatedAt.Before(since) {
+			if run := s.listed(); run != nil && !seen[run.ID] && keep(run) {
 				runs = append(runs, run)
 			}
 		}
@@ -232,7 +240,7 @@ func WorkSince(ctx context.Context, a *fw.Agent, since time.Time) ([]WorkRun, er
 		return nil, err
 	}
 	for _, r := range remote {
-		if !seen[r.ID] && !r.CreatedAt.Before(since) {
+		if !seen[r.ID] && keep(r) {
 			out = append(out, WorkRun{Run: r})
 		}
 	}

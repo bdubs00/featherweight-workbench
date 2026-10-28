@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
@@ -46,11 +47,17 @@ type Query struct {
 	All  bool `json:"all,omitempty"`
 }
 
+// CacheFor is how long For keeps the board of a caller for the same query.
+// A page reads the board every 30 seconds and after each event of its
+// stream, so many reads come close together.
+var CacheFor = 10 * time.Second
+
 // For returns the board of the caller in ctx at the time now. Each record
 // comes with the rule of its own route: the runs as the fleet lists them
-// (dashboard.Runs and fleet.ArchivedRuns), the bridges as GET /v1/bridges
-// lists them, and the duties whose agent the caller can view, as GET
-// /v1/duties lists them.
+// (dashboard.Runs, and fleet.WorkWhere for the archive with the facts of
+// the work), the bridges as GET /v1/bridges lists them, and the duties
+// whose agent the caller can view, as GET /v1/duties lists them. The
+// board of one caller and one query stays for CacheFor.
 func For(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, error) {
 	if q.Days == 0 {
 		q.Days = DefaultDays
@@ -58,6 +65,21 @@ func For(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, erro
 	if q.Days < 1 || q.Days > MaxDays {
 		return Answer{}, fmt.Errorf("%w: days is %d, not 1 to %d", fw.ErrInvalidRequest, q.Days, MaxDays)
 	}
+	c := cacheOf(a)
+	key := cacheKey(ctx, q)
+	if ans, ok := c.get(key, now); ok {
+		return ans, nil
+	}
+	ans, err := build(ctx, a, now, q)
+	if err != nil {
+		return Answer{}, err
+	}
+	c.put(key, ans, now)
+	return ans, nil
+}
+
+// build gathers the records of the board and assembles it.
+func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, error) {
 	in := Input{Now: now, Window: time.Duration(q.Days) * 24 * time.Hour, All: q.All, Mine: map[string]bool{}, Queued: map[string]int{}}
 	if p := fw.PrincipalFrom(ctx); p != nil {
 		in.Me = p.Subject
@@ -67,19 +89,35 @@ func For(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, erro
 		return Answer{}, err
 	}
 	titles.Want(a, live...)
-	old, err := fleet.ArchivedRuns(ctx, a, "", "")
+	// One read of the archive gives the runs that no member holds and the
+	// facts of the work of every run: the runs that did not end, however
+	// old, and the runs that changed in the window.
+	cut := now.Add(-in.Window)
+	facts, err := fleet.WorkWhere(ctx, a, func(r *fw.Run) bool { return !r.State.Terminal() || !r.UpdatedAt.Before(cut) })
 	if err != nil {
 		return Answer{}, err
 	}
-	old = fleet.ListedOnly(old)
-	all := make([]*fw.Run, 0, len(live)+len(old))
-	for _, r := range live {
-		in.Runs = append(in.Runs, Run{Run: r})
-		all = append(all, r)
+	byID := map[string]int{}
+	for _, w := range facts {
+		if w.Run == nil || !fleet.Listed(w.Run) {
+			continue
+		}
+		byID[w.Run.ID] = len(in.Runs)
+		in.Runs = append(in.Runs, Run{Run: w.Run, Work: w.Work, Lost: w.Lost})
 	}
-	for _, r := range old {
-		in.Runs = append(in.Runs, Run{Run: r, Archived: true})
-		all = append(all, r)
+	for _, r := range live {
+		// The view holds the run as it is now, with its activity; the
+		// archive adds the facts.
+		if i, ok := byID[r.ID]; ok {
+			in.Runs[i].Run, in.Runs[i].Lost = r, false
+			continue
+		}
+		byID[r.ID] = len(in.Runs)
+		in.Runs = append(in.Runs, Run{Run: r})
+	}
+	all := make([]*fw.Run, 0, len(in.Runs))
+	for _, r := range in.Runs {
+		all = append(all, r.Run)
 	}
 	near, err := teams.By(ctx, a.Config(), all, teams.ByTeam)
 	if err != nil {
@@ -135,7 +173,7 @@ func jobBatches(in Input) []string {
 	for _, r := range in.Runs {
 		md := r.Metadata
 		batch := md[fw.MetaBatch]
-		if batch == "" || r.Parent != "" || r.Archived || !in.Mine[r.ID] || strings.HasPrefix(batch, bridges.BatchPrefix) || md[duties.MetaDuty] != "" || md[sources.MetaSource] != "" {
+		if batch == "" || r.Parent != "" || r.Lost || !in.Mine[r.ID] || strings.HasPrefix(batch, bridges.BatchPrefix) || md[duties.MetaDuty] != "" || md[sources.MetaSource] != "" {
 			continue
 		}
 		if !r.State.Terminal() && !open[batch] && len(out) < maxJobs {
@@ -208,11 +246,11 @@ func tools(srv *mcp.Server) []mcp.Tool {
 
 // stageWords names a stage for a person.
 var stageWords = map[string]string{
-	StageWaiting:  "Waiting for a worker",
+	StageWaiting:  "Coming up",
 	StageWorking:  "Working",
-	StageNeedsYou: "Needs a person",
+	StageNeedsYou: "Needs you",
 	StageStopped:  "Stopped",
-	StageReview:   "To review",
+	StageReview:   "To check",
 	StageDone:     "Done",
 }
 
@@ -262,4 +300,63 @@ func Text(ans Answer, now time.Time) string {
 		}
 	}
 	return b.String()
+}
+
+// cache keeps the boards of the callers of one process for CacheFor.
+type cache struct {
+	mu   sync.Mutex
+	list map[string]cached
+}
+
+type cached struct {
+	ans Answer
+	at  time.Time
+}
+
+// maxCached bounds the boards that a process keeps.
+const maxCached = 256
+
+var caches sync.Map // *fw.Agent to *cache
+
+func cacheOf(a *fw.Agent) *cache {
+	c, _ := caches.LoadOrStore(a, &cache{list: map[string]cached{}})
+	return c.(*cache)
+}
+
+// cacheKey names the board of the caller in ctx for a query.
+func cacheKey(ctx context.Context, q Query) string {
+	who := ""
+	if p := fw.PrincipalFrom(ctx); p != nil {
+		who = p.Kind + "\x00" + p.Subject
+	}
+	return fmt.Sprintf("%s\x00%d\x00%t", who, q.Days, q.All)
+}
+
+func (c *cache) get(key string, now time.Time) (Answer, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	x, ok := c.list[key]
+	if !ok || CacheFor <= 0 || now.Sub(x.at) >= CacheFor || now.Before(x.at) {
+		return Answer{}, false
+	}
+	return x.ans, true
+}
+
+func (c *cache) put(key string, ans Answer, now time.Time) {
+	if CacheFor <= 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.list) >= maxCached {
+		for k, x := range c.list {
+			if now.Sub(x.at) >= CacheFor {
+				delete(c.list, k)
+			}
+		}
+		if len(c.list) >= maxCached {
+			clear(c.list)
+		}
+	}
+	c.list[key] = cached{ans: ans, at: now}
 }
