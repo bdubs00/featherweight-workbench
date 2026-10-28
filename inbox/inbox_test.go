@@ -13,6 +13,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/duties"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
@@ -487,5 +488,23 @@ func TestInboxFound(t *testing.T) {
 	}
 	if got := items("carol"); len(got) != 0 {
 		t.Fatalf("the found results after Looks right = %+v", got)
+	}
+}
+
+// A question of a seat whose run no worker holds, gone in the channel or
+// lost in the archive, is no item, and an approval that an item of its
+// run holds already is no second item.
+func TestSeatItems(t *testing.T) {
+	waiting := []bridges.Waiting{
+		{Bridge: "b1", Title: "Exporter", Handle: "writer", Run: "r1", Question: 4, Text: "Which port?"},
+		{Bridge: "b1", Title: "Exporter", Handle: "gone", Run: "r2", Question: 5, Text: "Which host?", Gone: true},
+		{Bridge: "b1", Title: "Exporter", Handle: "lost", Run: "r3", Question: 6, Text: "Which role?"},
+		{Bridge: "b1", Title: "Exporter", Handle: "asks", Run: "r4", Approval: "ap4"},
+		{Bridge: "b1", Title: "Exporter", Handle: "twice", Run: "r5", Approval: "ap5"},
+	}
+	seen := map[string]bool{"r5": true}
+	got := seatItems(waiting, seen, map[string]bool{"r3": true})
+	if len(got) != 2 || got[0].Kind != KindQuestion || got[0].Text != "writer asks in Exporter: Which port?" || got[1].Kind != KindApproval || got[1].Approval != "ap4" || !seen["r4"] {
+		t.Fatalf("the items of the seats = %+v", got)
 	}
 }

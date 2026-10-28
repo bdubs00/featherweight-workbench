@@ -364,6 +364,19 @@ func (b *board) bridge(it bridges.Item) {
 				p.since = r.UpdatedAt
 			}
 		}
+		lost := m.Gone
+		if r, ok := b.byID[p.run]; ok && r.Lost {
+			lost = true
+		}
+		switch {
+		case m.Presence == bridges.PresenceNeedsYou && lost:
+			// The seat asked, and then its worker went: nobody can move
+			// the seat by an answer, so it stopped (walk finding L20).
+			p.stage, p.lost = StageStopped, true
+			p.reason = m.Handle + " lost its worker while its question waited, so it cannot go on."
+			d.parts = append(d.parts, p)
+			continue
+		}
 		switch m.Presence {
 		case bridges.PresenceNeedsYou:
 			p.stage = StageNeedsYou

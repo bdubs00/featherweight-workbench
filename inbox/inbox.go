@@ -115,21 +115,35 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 			seen[r.ID] = true
 		}
 	}
+	var waiting []bridges.Waiting
 	if st := bridges.Of(a); st != nil {
-		waiting, err := st.Waiting(ctx)
-		if err != nil {
+		if waiting, err = st.Waiting(ctx); err != nil {
 			return Answer{}, err
 		}
-		for _, w := range waiting {
-			if w.Question == 0 && (w.Run == "" || seen[w.Run]) {
-				continue
-			}
-			items = append(items, seatItem(w))
-			if w.Run != "" && w.Question == 0 {
-				seen[w.Run] = true
-			}
+	}
+	// The facts of the runs tell a new answer after Needs work, which waits
+	// for a check again, and a run of a seat that no worker holds, whose
+	// question nobody can answer.
+	asked := map[string]bool{}
+	for _, w := range waiting {
+		if w.Run != "" {
+			asked[w.Run] = true
 		}
 	}
+	facts := map[string]fleet.Work{}
+	lost := map[string]bool{}
+	since := now.Add(-ResultsFor)
+	recent, err := fleet.WorkWhere(ctx, a, func(r *fw.Run) bool { return !r.CreatedAt.Before(since) || asked[r.ID] })
+	if err != nil {
+		return Answer{}, err
+	}
+	for _, w := range recent {
+		if w.Run != nil {
+			facts[w.Run.ID] = w.Work
+			lost[w.Run.ID] = w.Lost
+		}
+	}
+	items = append(items, seatItems(waiting, seen, lost)...)
 	items = append(items, mine...)
 	// The results that wait for a check: a run of the caller or of the
 	// teams of the caller, or a run of a duty whose questions or results go
@@ -144,18 +158,6 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 	near := map[string]bool{}
 	for _, r := range team {
 		near[r.ID] = true
-	}
-	// The facts of the runs tell a new answer after Needs work, which waits
-	// for a check again.
-	facts := map[string]fleet.Work{}
-	recent, err := fleet.WorkSince(ctx, a, now.Add(-ResultsFor))
-	if err != nil {
-		return Answer{}, err
-	}
-	for _, w := range recent {
-		if w.Run != nil {
-			facts[w.Run.ID] = w.Work
-		}
 	}
 	for _, r := range runs {
 		if r.Parent != "" || !fleet.ToCheck(r, facts[r.ID]) || now.Sub(r.UpdatedAt) > ResultsFor {
@@ -216,6 +218,29 @@ func runItem(r *fw.Run) Item {
 		}
 	}
 	return it
+}
+
+// seatItems are the items of the seats of the bridges that need a person.
+// A seat whose run waits for an approval that an item of the run holds
+// already is no second item. A seat whose newest run no worker holds, gone
+// in the channel or lost in the archive, is no item: nobody can move it
+// by an answer, and the board shows it as stopped and lost. seen gets the
+// runs of the items.
+func seatItems(waiting []bridges.Waiting, seen, lost map[string]bool) []Item {
+	var out []Item
+	for _, w := range waiting {
+		if w.Question == 0 && (w.Run == "" || seen[w.Run]) {
+			continue
+		}
+		if w.Gone || lost[w.Run] {
+			continue
+		}
+		out = append(out, seatItem(w))
+		if w.Run != "" && w.Question == 0 {
+			seen[w.Run] = true
+		}
+	}
+	return out
 }
 
 // seatItem is a seat of a bridge that needs a person.

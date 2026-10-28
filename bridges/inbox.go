@@ -13,8 +13,10 @@ import (
 // Waiting is a seat of an open bridge that needs a person: the bridge and
 // its title, the seat, its agent, and its newest run. Question is the seq
 // of the question of the seat, or 0 when its run waits for an approval
-// instead, with the id of the approval in Approval. Text is the text of the question, and At when it came, or when
-// the run began to wait.
+// instead, with the id of the approval in Approval. Text is the text of
+// the question, and At when it came, or when the run began to wait. Gone
+// is true when no worker of the fleet holds the newest run of the seat
+// (Member.Gone), so nobody can move it by an answer.
 type Waiting struct {
 	Bridge   string    `json:"bridge"`
 	Title    string    `json:"title"`
@@ -25,6 +27,7 @@ type Waiting struct {
 	Question uint64    `json:"question,omitempty"`
 	Text     string    `json:"text,omitempty"`
 	At       time.Time `json:"at"`
+	Gone     bool      `json:"gone,omitempty"`
 }
 
 // Waiting lists the seats of the open bridges that the caller in ctx can
@@ -56,7 +59,7 @@ func (s *Store) Waiting(ctx context.Context) ([]Waiting, error) {
 			if m.Presence != PresenceNeedsYou {
 				continue
 			}
-			w := Waiting{Bridge: rec.ID, Title: rec.Title, Handle: m.Handle, Agent: m.Agent, Run: m.newest(), Question: m.Question}
+			w := Waiting{Bridge: rec.ID, Title: rec.Title, Handle: m.Handle, Agent: m.Agent, Run: m.newest(), Question: m.Question, Gone: m.Gone}
 			if m.Question > 0 {
 				if msg, _, err := s.b.entry(fctx, rec.ID, m.Question); err == nil {
 					w.Text, w.At = msg.Text, msg.At

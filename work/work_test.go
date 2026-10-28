@@ -497,7 +497,7 @@ func TestFromDisplay(t *testing.T) {
 	stranger := run("R-X", "helper", fw.StateCompleted, ago(time.Hour), ago(time.Hour), nil)
 	stranger.Principal = "0b6e1f7c-4d1a-4a8e-9a63-2f0d61c5a9e1"
 	in := Input{Me: "alice", All: true, Now: t0, Runs: []Run{{Run: mine}, {Run: known}, {Run: stranger}},
-		Names: map[string]string{erin: "erin@example.com"},
+		Names:   map[string]string{erin: "erin@example.com"},
 		Bridges: []bridges.Item{{Bridge: bridges.Bridge{ID: "B1", Title: "Miners", Operator: erin, OperatorName: "Erin Example", State: bridges.StateClosed, CreatedAt: ago(time.Hour)}}}}
 	ans := Assemble(in)
 	for id, want := range map[string]string{"run:R-A": "alice", "run:R-E": "erin@example.com", "run:R-X": "", "bridge:B1": "Erin Example"} {
@@ -508,5 +508,36 @@ func TestFromDisplay(t *testing.T) {
 	raw, _ := json.Marshal(cardOf(t, ans, "run:R-X").From)
 	if strings.Contains(string(raw), "display") {
 		t.Fatalf("a from without a name = %s", raw)
+	}
+}
+
+// A question of a seat whose run no worker holds is no move of a person:
+// the seat that the channel called gone and the seat whose run the
+// archive holds as lost stop the card, which is lost.
+func TestLostQuestion(t *testing.T) {
+	lostRun := run("R-L", "writer", fw.StateInputRequired, ago(4*24*time.Hour), ago(4*24*time.Hour), map[string]string{fw.MetaBatch: "bridge:B2"})
+	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: lostRun, Lost: true}},
+		Bridges: []bridges.Item{
+			{Bridge: bridges.Bridge{ID: "B1", Title: "node_exporter, second try", Operator: "alice", State: bridges.StateOpen, CreatedAt: ago(4 * 24 * time.Hour), Members: []bridges.Member{
+				{Handle: "ops", Agent: "ops", Runs: []string{"R-GONE"}, Presence: bridges.PresenceNeedsYou, Question: 9, Gone: true},
+				{Handle: "rev", Agent: "reviewer", Presence: bridges.PresenceIdle},
+			}}},
+			{Bridge: bridges.Bridge{ID: "B2", Title: "Roles", Operator: "alice", State: bridges.StateOpen, CreatedAt: ago(4 * 24 * time.Hour), Members: []bridges.Member{
+				{Handle: "writer", Agent: "writer", Runs: []string{"R-L"}, Presence: bridges.PresenceNeedsYou},
+			}}},
+		},
+		Waiting: []bridges.Waiting{{Bridge: "B1", Handle: "ops", Question: 9, Text: "Which port?", At: ago(4 * 24 * time.Hour), Gone: true}},
+	}
+	in.Mine = mineAll(in.Runs...)
+	ans := Assemble(in)
+	b1 := cardOf(t, ans, "bridge:B1")
+	if b1.Stage != StageStopped || !b1.Lost || b1.Reason != "ops lost its worker while its question waited, so it cannot go on." || b1.Parts.NeedsYou != 0 {
+		t.Fatalf("a bridge whose seat asked and went = %+v", b1)
+	}
+	if b2 := cardOf(t, ans, "bridge:B2"); b2.Stage != StageStopped || !b2.Lost || b2.Links.Approval != "" {
+		t.Fatalf("a bridge whose seat run is lost = %+v", b2)
+	}
+	if ans.Lanes[2].Count != 0 {
+		t.Fatalf("the lane needs you = %+v", ans.Lanes[2])
 	}
 }

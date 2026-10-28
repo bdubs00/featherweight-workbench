@@ -71,3 +71,21 @@ func TestCheck(t *testing.T) {
 		t.Fatalf("PATCH with a verdict = %d %s", resp.StatusCode, body)
 	}
 }
+
+// A seat that asked a question and whose run the channel then called gone
+// still waits, and Waiting says that it is gone, so the inbox leaves it
+// out.
+func TestWaitingGone(t *testing.T) {
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	rec := &record{Bridge: Bridge{ID: "lost-q", Title: "Exporter", Operator: "alice", State: StateOpen, Placement: PlacementQueue, Members: []Member{
+		{Handle: "ops", Agent: "migrator", Task: "Install", Runs: []string{"r-old"}},
+	}}, Seats: map[string]*seatMark{"ops": {Gone: "r-old", Ask: 3}}, Marks: map[string]*runMark{"r-old": {Seat: "ops", Done: 2}}}
+	if err := s.b.create(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+	waits, err := s.Waiting(fw.WithPrincipal(context.Background(), callers["alice"]))
+	if err != nil || len(waits) != 1 || !waits[0].Gone || waits[0].Question != 3 {
+		t.Fatalf("Waiting = %+v, %v", waits, err)
+	}
+}
