@@ -87,6 +87,8 @@ func (rt *routes) failStore(w http.ResponseWriter, r *http.Request, err error) {
 		native.WriteProblem(w, r, http.StatusRequestEntityTooLarge, Reason(err))
 	case errors.Is(err, ErrInvalid):
 		native.WriteProblem(w, r, http.StatusBadRequest, Reason(err))
+	case errors.Is(err, ErrRefused):
+		native.WriteProblem(w, r, http.StatusForbidden, Reason(err))
 	default:
 		rt.k.Fail(w, r, err)
 	}
@@ -260,6 +262,10 @@ func (rt *routes) put(w http.ResponseWriter, r *http.Request) {
 		rt.failStore(w, r, err)
 		return
 	}
+	if err := mayWrite(r.Context(), p); err != nil {
+		rt.failStore(w, r, err)
+		return
+	}
 	ifHash, ok := condition(w, r)
 	if !ok {
 		return
@@ -377,6 +383,10 @@ func (rt *routes) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := r.PathValue("path")
+	if err := mayWrite(r.Context(), p); err != nil {
+		rt.failStore(w, r, err)
+		return
+	}
 	ifHash, ok := condition(w, r)
 	if !ok {
 		return
