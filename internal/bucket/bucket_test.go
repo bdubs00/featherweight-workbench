@@ -256,6 +256,19 @@ func TestKeysUnder(t *testing.T) {
 			if keys, err := KeysUnder(ctx, b, "a"); err != nil || !slices.Equal(keys, []string{"a.1", "a.2"}) {
 				t.Fatalf("KeysUnder = %v, %v", keys, err)
 			}
+			// EntriesUnder gives the revisions too, and takes a prefix of
+			// several tokens.
+			if _, err := b.Create(ctx, "a.x.1", []byte("y")); err != nil {
+				t.Fatal(err)
+			}
+			list, err := EntriesUnder(ctx, b, "a.x")
+			if err != nil || len(list) != 1 || list[0].Key != "a.x.1" || list[0].Revision == 0 {
+				t.Fatalf("EntriesUnder = %+v, %v", list, err)
+			}
+			got, err := b.Get(ctx, "a.x.1")
+			if err != nil || got.Revision != list[0].Revision {
+				t.Fatalf("the revision of EntriesUnder = %d, of Get = %+v, %v", list[0].Revision, got, err)
+			}
 		})
 	}
 }

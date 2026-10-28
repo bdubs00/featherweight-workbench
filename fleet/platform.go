@@ -63,13 +63,16 @@ const fillParallel = 8
 // fw.run.suspended carry, so fw.model.responded, which holds the content
 // of the model, stays out. fw.tool.requested and fw.tool.responded carry
 // the input and the output of each tool call for the activity of the run
-// (watch.go), each string cut to EgressMaxBytes. A worker sets
-// bus.egressTypes to this list.
+// (watch.go), each string cut to EgressMaxBytes. fw.memory.used names the
+// notes that a run read, without their text, so Know-how counts the uses
+// of each note (package knowhow). A worker sets bus.egressTypes to this
+// list.
 var EgressTypes = []string{
 	fw.EvRunQueued, fw.EvRunStarted, fw.EvRunResumed, fw.EvRunSuspended, fw.EvRunFinished,
 	fw.EvApprovalRequested, fw.EvApprovalDecided, fw.EvRunAnnotated, fw.EvTurnStarted, fw.EvMessageReceived,
 	fw.EvRunChild, fw.EvOutcomeEvaluated,
 	fw.EvToolRequested, fw.EvToolResponded, fw.EvTurnFinished, fw.EvRunReacted,
+	fw.EvMemoryUsed,
 }
 
 // EgressMaxBytes is bus.egressMaxBytes of a worker of a pool, unless the
