@@ -421,9 +421,17 @@ func MakePlan(in PlanInput) Plan {
 
 // bestAgent picks the agent whose name and description share the most
 // words with the words of the person, or "" when none shares one. A word
-// of the name counts three times. A tie goes to the name that comes first.
+// of the name counts three times. The action of the person, the first word
+// that is no stop word, counts four times more when it is the action of
+// the agent: the first word of its description, or its name. So "Draft an
+// email" picks the agent that writes, not the agent that reviews drafts. A
+// tie goes to the name that comes first.
 func bestAgent(w string, agents []Candidate, chat string) string {
 	want := stems(w)
+	var act string
+	if a := actionsOf(w); len(a) > 0 {
+		act = a[0]
+	}
 	best, bestScore := "", 0
 	list := slices.Clone(agents)
 	sort.Slice(list, func(i, j int) bool { return list[i].Agent < list[j].Agent })
@@ -434,6 +442,9 @@ func bestAgent(w string, agents []Candidate, chat string) string {
 		name := stems(strings.NewReplacer("-", " ", "_", " ").Replace(c.Agent) + " " + c.Name)
 		desc := stems(c.Description)
 		score := 0
+		if act != "" && (slices.Contains(actionsOf(c.Description), act) || name[act]) {
+			score += 4
+		}
 		for s := range want {
 			switch {
 			case name[s]:
@@ -470,6 +481,49 @@ func reviewerOf(agents []Candidate, agent, chat string) string {
 	return ""
 }
 
+// sameAction folds the verbs that name one action into one stem.
+var sameAction = map[string]string{
+	"draft": "write", "compose": "write", "author": "write", "writer": "write",
+	"summarize": "sum", "summarise": "sum", "recap": "sum",
+	"proofread": "review", "reviewer": "review",
+}
+
+// actionsOf are the actions of a text: the stem of its first word that is
+// no stop word and no word of a schedule, and the word after an "and" that
+// follows it, as in "Finds and sums up", with the verbs of sameAction
+// folded.
+func actionsOf(text string) []string {
+	var out []string
+	fields := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) })
+	for i, f := range fields {
+		if len(f) < 3 || stopWords[f] || scheduleWords[f] {
+			continue
+		}
+		out = append(out, actionStem(f))
+		if i+2 < len(fields) && fields[i+1] == "and" {
+			out = append(out, actionStem(fields[i+2]))
+		}
+		break
+	}
+	return out
+}
+
+func actionStem(f string) string {
+	if v, ok := sameAction[f]; ok {
+		return v
+	}
+	s := stem(f)
+	if v, ok := sameAction[s]; ok {
+		return v
+	}
+	return s
+}
+
+// scheduleWords open words that name a schedule, not an action.
+var scheduleWords = map[string]bool{"nightly": true, "daily": true, "weekly": true, "monthly": true, "hourly": true,
+	"monday": true, "tuesday": true, "wednesday": true, "thursday": true, "friday": true, "saturday": true, "sunday": true,
+	"weekday": true, "weekdays": true, "tonight": true, "today": true, "tomorrow": true, "now": true, "once": true}
+
 // stems are the words of a text in lower case, without stop words and
 // without the ends s, es, ing, and ed of a long word.
 func stems(text string) map[string]bool {
@@ -484,15 +538,32 @@ func stems(text string) map[string]bool {
 }
 
 func stem(s string) string {
-	for _, end := range []string{"ing", "ies", "es", "ed", "s"} {
-		if len(s) > len(end)+3 && strings.HasSuffix(s, end) {
-			if end == "ies" {
-				return strings.TrimSuffix(s, end) + "y"
-			}
-			return strings.TrimSuffix(s, end)
-		}
+	switch {
+	case len(s) > 6 && strings.HasSuffix(s, "ies"):
+		return strings.TrimSuffix(s, "ies") + "y"
+	case len(s) > 6 && strings.HasSuffix(s, "ing"):
+		return strings.TrimSuffix(s, "ing")
+	case len(s) > 5 && strings.HasSuffix(s, "ed"):
+		return strings.TrimSuffix(s, "ed")
+	case len(s) > 5 && strings.HasSuffix(s, "es") && sibilant(strings.TrimSuffix(s, "es")):
+		// passes, boxes, matches: the e belongs to the end, so writes
+		// stays write.
+		return strings.TrimSuffix(s, "es")
+	case len(s) > 3 && strings.HasSuffix(s, "s") && !strings.HasSuffix(s, "ss"):
+		return strings.TrimSuffix(s, "s")
 	}
 	return s
+}
+
+// sibilant reports whether a word ends in a sound that takes es for its
+// plural: s, x, z, ch, or sh.
+func sibilant(s string) bool {
+	for _, end := range []string{"s", "x", "z", "ch", "sh"} {
+		if strings.HasSuffix(s, end) {
+			return true
+		}
+	}
+	return false
 }
 
 // whenOf finds a schedule in the words with the grammar of the duties, or
@@ -722,7 +793,7 @@ func titleWords(words, said string) string {
 	}
 	t = strings.Join(strings.Fields(t), " ")
 	t = strings.TrimLeft(t, " ,.;:-")
-	if i := strings.IndexAny(t, ".;"); i >= 0 {
+	if i := sentenceEnd(t); i >= 0 {
 		t = t[:i]
 	}
 	for _, cut := range []string{", and then", ", then", ", tell", ", and tell", ", show"} {
@@ -741,6 +812,24 @@ func titleWords(words, said string) string {
 		return "A task"
 	}
 	return strings.ToUpper(t[:1]) + t[1:]
+}
+
+// sentenceEnd finds the end of the first sentence of t: a semicolon, or a
+// period, a question mark, or an exclamation mark at the end or before a
+// space. A period inside a word, as in "3.0" or "example.com", ends nothing.
+// It returns -1 for one sentence.
+func sentenceEnd(t string) int {
+	for i := 0; i < len(t); i++ {
+		switch t[i] {
+		case ';':
+			return i
+		case '.', '?', '!':
+			if i+1 == len(t) || t[i+1] == ' ' {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // slugOf makes the name of a duty from words: a-z, 0-9, and hyphens, at
