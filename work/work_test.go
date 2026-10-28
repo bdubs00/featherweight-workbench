@@ -484,3 +484,29 @@ func TestFoundCard(t *testing.T) {
 		t.Fatalf("a start that found nothing = %+v", n)
 	}
 }
+
+// A card names the person who asked by a name that people read beside
+// the subject: the name that a bridge keeps, the name that the front knows
+// for the subject, or the subject when it is no id. A subject that the
+// issuer made as an id, with no name known, has no display.
+func TestFromDisplay(t *testing.T) {
+	const erin = "fd1e8a14-ac12-5a00-b4d6-bb6e50d15c10"
+	mine := run("R-A", "helper", fw.StateCompleted, ago(time.Hour), ago(time.Hour), nil)
+	known := run("R-E", "helper", fw.StateCompleted, ago(time.Hour), ago(time.Hour), nil)
+	known.Principal = erin
+	stranger := run("R-X", "helper", fw.StateCompleted, ago(time.Hour), ago(time.Hour), nil)
+	stranger.Principal = "0b6e1f7c-4d1a-4a8e-9a63-2f0d61c5a9e1"
+	in := Input{Me: "alice", All: true, Now: t0, Runs: []Run{{Run: mine}, {Run: known}, {Run: stranger}},
+		Names: map[string]string{erin: "erin@example.com"},
+		Bridges: []bridges.Item{{Bridge: bridges.Bridge{ID: "B1", Title: "Miners", Operator: erin, OperatorName: "Erin Example", State: bridges.StateClosed, CreatedAt: ago(time.Hour)}}}}
+	ans := Assemble(in)
+	for id, want := range map[string]string{"run:R-A": "alice", "run:R-E": "erin@example.com", "run:R-X": "", "bridge:B1": "Erin Example"} {
+		if c := cardOf(t, ans, id); c.From.Display != want || c.From.Kind != "person" {
+			t.Errorf("the from of %s = %+v, want the display %q", id, c.From, want)
+		}
+	}
+	raw, _ := json.Marshal(cardOf(t, ans, "run:R-X").From)
+	if strings.Contains(string(raw), "display") {
+		t.Fatalf("a from without a name = %s", raw)
+	}
+}

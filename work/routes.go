@@ -5,6 +5,7 @@ package work
 // native surface and the MCP tool work, which call the same Go function.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -112,9 +113,16 @@ func mergeRuns(facts []fleet.WorkRun, live []*fw.Run) []Run {
 
 // build gathers the records of the board and assembles it.
 func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, error) {
-	in := Input{Now: now, Window: time.Duration(q.Days) * 24 * time.Hour, All: q.All, Mine: map[string]bool{}, Queued: map[string]int{}}
+	in := Input{Now: now, Window: time.Duration(q.Days) * 24 * time.Hour, All: q.All, Mine: map[string]bool{}, Queued: map[string]int{}, Names: map[string]string{}}
+	st := bridges.Of(a)
 	if p := fw.PrincipalFrom(ctx); p != nil {
 		in.Me = p.Subject
+		if n := personName(p.Name); n != "" && p.Subject != "" {
+			in.Names[p.Subject] = n
+		}
+		if st != nil {
+			st.Learn(p)
+		}
 	}
 	letGo, err := Of(a).All(ctx)
 	if err != nil {
@@ -146,12 +154,24 @@ func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, er
 	for _, r := range near {
 		in.Mine[r.ID] = true
 	}
-	if st := bridges.Of(a); st != nil {
+	if st != nil {
 		if in.Bridges, err = st.List(ctx, true); err != nil {
 			return Answer{}, err
 		}
 		if in.Waiting, err = st.Waiting(ctx); err != nil {
 			return Answer{}, err
+		}
+		// The names of the people that the bridges learned, for the
+		// subjects of the runs and of the bridges.
+		for _, r := range in.Runs {
+			if _, ok := in.Names[r.Principal]; !ok && r.Principal != "" {
+				in.Names[r.Principal] = st.KnownName(r.Principal, "")
+			}
+		}
+		for _, it := range in.Bridges {
+			if _, ok := in.Names[it.Operator]; !ok && it.Operator != "" {
+				in.Names[it.Operator] = st.KnownName(it.Operator, it.OperatorName)
+			}
 		}
 	}
 	if svc := duties.Of(a); svc != nil {
@@ -502,8 +522,8 @@ func Text(ans Answer, now time.Time) string {
 				continue
 			}
 			fmt.Fprintf(&b, "\n- %s, %s", c.Title, kindWords[c.Kind])
-			if c.From.Name != "" {
-				fmt.Fprintf(&b, " from %s", c.From.Name)
+			if who := cmp.Or(c.From.Display, c.From.Name); who != "" {
+				fmt.Fprintf(&b, " from %s", who)
 			}
 			if c.Reason != "" {
 				b.WriteString(": " + c.Reason)

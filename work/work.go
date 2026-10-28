@@ -77,11 +77,15 @@ const (
 
 // From says who asked for the work: Kind is person, duty, app, manager,
 // or agent; Name names it; Via says how the request came: page, mcp,
-// queue, bridge, schedule, event, call, or now.
+// queue, bridge, schedule, event, call, or now. Display is a name of a
+// person that people read, beside the subject, such as the email for a
+// subject that the issuer made as an id. It is empty when the front knows
+// no such name.
 type From struct {
-	Kind string `json:"kind"`
-	Name string `json:"name,omitempty"`
-	Via  string `json:"via,omitempty"`
+	Kind    string `json:"kind"`
+	Name    string `json:"name,omitempty"`
+	Display string `json:"display,omitempty"`
+	Via     string `json:"via,omitempty"`
 }
 
 // Parts counts the parts of a card by stage: the seats of a bridge, or the
@@ -218,7 +222,10 @@ type Input struct {
 	Queued map[string]int
 	// LetGo holds the let-go of the cards that people let go, by the id of
 	// the card (letgo.go).
-	LetGo  map[string]LetGo
+	LetGo map[string]LetGo
+	// Names holds a name of a person that people read, by subject, for
+	// the subjects that the records name alone (From.Display).
+	Names  map[string]string
 	Now    time.Time
 	Window time.Duration
 }
@@ -658,7 +665,23 @@ func (b *board) fromSubject(subject, name, via string) From {
 	case strings.HasPrefix(subject, "source:"):
 		return From{Kind: "app", Name: strings.TrimPrefix(subject, "source:"), Via: via}
 	}
-	return From{Kind: "person", Name: cmp.Or(name, subject), Via: via}
+	return From{Kind: "person", Name: cmp.Or(name, subject), Display: b.display(subject, name), Via: via}
+}
+
+// display is a name of a person that people read: the name that the
+// record keeps, else the name that the front knows for the subject, else
+// the subject when it is no id that the issuer made, else "".
+func (b *board) display(subject, name string) string {
+	if n := personName(name); n != "" {
+		return n
+	}
+	if n := personName(b.in.Names[subject]); n != "" {
+		return n
+	}
+	if subject != "" && !opaqueID(subject) {
+		return subject
+	}
+	return ""
 }
 
 // ownsDuty reports whether the caller owns the duty of a principal
