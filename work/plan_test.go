@@ -184,3 +184,35 @@ func TestPlanCostBelowACent(t *testing.T) {
 		}
 	}
 }
+
+// The action of the person picks the agent over a shared word: "Draft an
+// email" goes to the agent that writes, though the reviewer reviews drafts.
+// A title keeps a period inside a word, such as the 3.0 of a version.
+func TestPlanActionAndTitle(t *testing.T) {
+	quill := func(in *PlanInput) {
+		in.Agents = []Candidate{
+			{Agent: "ops", Name: "Ops", Description: "Compares the hosts with the baseline and reports drift.", Member: "q/ops-0"},
+			{Agent: "researcher", Name: "Researcher", Description: "Finds and sums up facts from the shared notes and the wiki.", Member: "q/researcher-0"},
+			{Agent: "reviewer", Name: "Reviewer", Description: "Reviews drafts and flags claims without a source.", Member: "q/reviewer-0"},
+			{Agent: "writer", Name: "Writer", Description: "Writes marketing copy for the launch.", Member: "q/writer-0"},
+		}
+	}
+	for words, want := range map[string]string{
+		"Draft a short thank-you email to our beta users":  "writer",
+		"Write a short thank-you email to our beta users":  "writer",
+		"Review the draft of the launch email":             "reviewer",
+		"Summarize the competitor notes":                   "researcher",
+		"Every night, compare the hosts with the baseline": "ops",
+	} {
+		if p := planOf(t, words, quill); len(p.Who) == 0 || p.Who[0].Agent != want {
+			t.Errorf("%q picks %+v, want %s", words, p.Who, want)
+		}
+	}
+	p := planOf(t, "Write an invite to the 3.0 webinar. Keep it short.", quill)
+	if p.Title != "Write an invite to the 3.0 webinar" {
+		t.Fatalf("the title = %q", p.Title)
+	}
+	if sentenceEnd("See example.com/docs") != -1 || sentenceEnd("Done. Next") != 4 || sentenceEnd("Why? Because") != 3 {
+		t.Fatal("sentenceEnd")
+	}
+}
