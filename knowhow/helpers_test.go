@@ -191,6 +191,7 @@ func newFront(t *testing.T, mut func(*KnowhowConfig)) *front {
 	cfg.Home = t.TempDir()
 	cfg.Access.Default = "closed"
 	cfg.Time.Zone = "UTC"
+	cfg.Deciders = map[string]fw.DeciderConfig{"clef": {BaseURL: "http://127.0.0.1:9", Model: "clef"}}
 	cfg.Agents = map[string]fw.AgentProfile{
 		"triage":  {Access: &fw.Access{Owners: []string{"alice", "spiffe://lab/robot"}, Operators: []string{"bob"}, Viewers: []string{"carol"}}},
 		"private": {Access: &fw.Access{Owners: []string{"dave"}}},
