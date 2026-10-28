@@ -59,6 +59,7 @@ const (
 	MetaDuty    = "workbench.duty"        // the name of the duty
 	MetaSlot    = "workbench.dutySlot"    // the time of the start, RFC 3339 in UTC
 	MetaAttempt = "workbench.dutyAttempt" // the attempt, from 2, for a retry of the duty
+	MetaReview  = "workbench.review"      // 1 when the owner checks each result (Duty.Review)
 )
 
 // BatchOf returns the batch of the runs of a duty, duty:<name>.
@@ -347,6 +348,7 @@ const (
 	NoticePaused   = "paused"    // the duty paused itself
 	NoticeCap      = "cap"       // the duty reached its daily cap
 	NoticeNeedsYou = "needs-you" // a run of the duty waits for a person
+	NoticeResult   = "result"    // a start completed, for the people of notify.result
 )
 
 // hooks holds what the later packages register.
@@ -514,6 +516,8 @@ func (s *Service) endWithoutRun(ctx context.Context, st *stored, date string, e 
 	}
 	if wrote {
 		changed(st.Duty.Name)
+		e.State, e.Reason, e.Run = StateCompleted, note, ""
+		s.resultNotice(ctx, st, e, note)
 	}
 }
 
@@ -524,8 +528,11 @@ func (s *Service) notify(ctx context.Context, st *stored, n Notice) {
 	var list []string
 	if d.Notify != nil {
 		list = d.Notify.Failure
-		if n.Kind == NoticeNeedsYou {
+		switch n.Kind {
+		case NoticeNeedsYou:
 			list = d.Notify.NeedsYou
+		case NoticeResult:
+			list = d.Notify.Result
 		}
 	}
 	for _, who := range list {

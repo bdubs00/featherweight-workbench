@@ -83,6 +83,11 @@ func wants(send Send, kind string) bool {
 		return send.Questions
 	case duties.NoticeFailed, duties.NoticePaused, duties.NoticeCap:
 		return send.Failures
+	case duties.NoticeResult:
+		// A person asked for the results of the duty by name, so a
+		// channel that sends live notices sends them; a channel of the
+		// digest alone does not.
+		return send.Questions || send.Failures
 	case EventDigest:
 		return send.Digest
 	case EventTest:
@@ -106,6 +111,8 @@ func words(n duties.Notice) (title, text string, priority int) {
 		return "Duty " + n.Duty + " paused itself", text, 4
 	case duties.NoticeCap:
 		return "Duty " + n.Duty + " reached a daily cap", text, 3
+	case duties.NoticeResult:
+		return "Duty " + n.Duty + ": a result", text, 3
 	}
 	return "Duty " + n.Duty, text, 3
 }

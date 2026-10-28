@@ -3220,7 +3220,8 @@ The page and the MCP tools write the same record. The contract of the build, `re
 | `limits.catchUp` | A span from `0` to `24h`. A missed time younger than this span runs once. The default is `1h`. |
 | `limits.retries` | 0 to 3. A failed run goes again this many times. The default is 1. |
 | `whileAway` | Who decides a question of a run while nobody watches. The default is `{"decider": "manager", "timeout": "2h", "then": "deny"}`. The front keeps it, and a later part of the build applies it. |
-| `notify` | Who hears of a failed run and of a question: `owner`, the subject of a person, or `channel:<name>`, a shared channel of the operator that the notification reaches without a person (section 23.1). The default names the owner for both. |
+| `notify` | Who hears of a failed run (`failure`), of a question (`needsYou`), and of a result (`result`): `owner`, the subject of a person, or `channel:<name>`, a shared channel of the operator that the notification reaches without a person (section 23.1). The default names the owner for a failure and a question, and nobody for a result. `resultWhen` is `always` or `found`, and a list of `result` without it takes `always` (section 22.12). |
+| `review` | True asks the owner to check each result. Each start carries the metadata `workbench.review` with `1`, and the run waits in the review stage of the work until its first reaction. A duty that posts or opens a bridge starts no run of its own, so `review` is a problem there. |
 | `runAs` | `duty`, the principal `duty:<name>` of the kind `workload`, or `owner`. Only the owner sets `owner`. When another person changes the duty, `runAs` goes back to `duty`. |
 | `paused` | `true` pauses the duty. A write that leaves it out keeps the pause of the duty. |
 
@@ -3448,7 +3449,7 @@ The later parts of the feature plug into the package without an edit of the engi
 | `RegisterAction(name, Action)` | Turns on `do.post`, `do.open`, or `do.manager`. `Action.Start` gets the run request of `ask`, with the placeholders filled. It answers the run that the engine follows, or none. |
 | `RegisterEvents(check)` and `Service.Fire(ctx, name, event)` | Turn on `when.event`. The package that serves the events calls `Fire` for each event of the fleet that a duty waits for. |
 | `RegisterLook("tool", fn)` | Turns on `checkFirst.look.tool`. The function answers the JSON document of the check run of the kernel. |
-| `OnNotice(fn)` | Gets each notice: `failed`, `paused`, `cap`, and `needs-you`. Each notice names the duty, its agent, its owner, the people of `notify`, the run, and the reason. |
+| `OnNotice(fn)` | Gets each notice: `failed`, `paused`, `cap`, `needs-you`, and `result`. Each notice names the duty, its agent, its owner, the people of `notify`, the run, and the reason. |
 | `OnChange(fn)` | Gets the name of a duty after each change that this replica wrote, for the live stream of bossmode. An empty name is a change of the switch. |
 | `Service.Lookup(ctx, name)` and `NameOf(run)` | Read the duty of a run for the front itself, such as its `whileAway` |
 
@@ -3460,6 +3461,23 @@ The later parts of the feature plug into the package without an edit of the engi
 - The call of a webhook takes no credential of the native API. Prefer `hmac`, and limit who reaches `/v1/duties/` with the gateway.
 - The content of an event or of an item of a check becomes the input of a run. Give the agent of a duty only the tools that its work needs, and make the tools that change things ask first.
 - Unattended runs make the open item of the ax API urgent: the ax API and the router take the static token with no other check.
+
+### 22.12 Results
+
+A completed start tells the people of `notify.result` of its result, as the notice `result` (section 23.1). Its text is the start of the answer of the run, at most 300 bytes, or the note of an action without a run, such as a post. `notify.resultWhen` says which starts send it (`duties/result.go`):
+
+- `always`: each completed start
+- `found`: a start that found something
+
+The contract of found:
+
+- A duty with a check first starts a run only when the check found items. So each completed start of such a duty found something, and the notice begins with the count, such as "The check found 3 items."
+- A duty without a check first tells its agent the contract in the instructions of each run (`FoundInstructions`). The answer starts with one line `Found: <a few words>`, or `Found: nothing` when the run found nothing.
+- The front reads the first line of the answer, and also its last line when the view holds the whole answer. The first line counts first, because the view cuts a long answer at its end (section 4.2). The case and the marks of Markdown do not count. `nothing`, `none`, `no`, `0`, `nothing new`, `nothing found`, `no items`, and `n/a` found nothing, and the start sends no notice.
+- An answer without the line sends its result, so a run that broke the contract never hides a result.
+- A duty that posts or opens a bridge, without a check first, has no answer that says what it found, so `found` is a problem there.
+
+The readback names who hears of a result and when, such as "A result goes to the owner when the run says that it found something.", and, with `review`, "The owner checks each result before it counts as done." The dry run and the problems of a write check `notify.result` as the other lists, and a shared channel that the front does not have is a problem of `notify.result`.
 
 ## 23. Attention and decisions
 
@@ -3534,6 +3552,7 @@ A switch sends these notices:
 |---|---|
 | `questions` | `needs-you`, a run of a duty that waits for the person, and `decided`, a decision of the front while the person was away |
 | `failures` | `failed`, a failed run, `paused`, a duty that paused itself, and `cap`, a duty at a daily cap |
+| `questions` or `failures` | `result`, the result of a start for the people of `notify.result`. A person who stands in that list asked for it by name, so a channel that sends live notices sends it, and a channel of the digest alone does not. |
 | `digest` | The daily digest |
 
 Each kind has its fields and its send:
