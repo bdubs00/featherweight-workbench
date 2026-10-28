@@ -90,8 +90,8 @@ func TestTemplatedDutyRunsHeldBack(t *testing.T) {
 }
 
 // A run of a duty gets the output of its previous run in the block last,
-// cut to 2 KB, and no text of an earlier run, of a check, or of an event
-// reaches its message or its instructions.
+// cut to 2 KB, and that output reaches neither its message nor its
+// instructions. A held-back run gets no block last.
 func TestDutyBlockLast(t *testing.T) {
 	f := newFront(t, "", nil)
 	d := daily("report")
@@ -124,5 +124,18 @@ func TestDutyBlockLast(t *testing.T) {
 	}
 	if second.Input != "Write the report of 2026-10-25. The last report is Report of Saturday." {
 		t.Fatalf("the second input = %q", second.Input)
+	}
+
+	// A held-back run gets no block last, and {last.*} stays.
+	f.s.heldBack = 1
+	f.view.set(second.ID, fw.StateCompleted, 0, func(r *fw.Run) { r.Title = "Report of Sunday" })
+	f.s.output = func(context.Context, string) string { return output }
+	f.pass(t)
+	f.clock.Set(nine.AddDate(0, 0, 2).Add(time.Second))
+	f.pass(t)
+	third := f.queue.last(t)
+	if third.Metadata[fw.MetaKnowhow] != fw.KnowhowOff || len(third.Context) != 0 ||
+		third.Input != "Write the report of 2026-10-26. The last report is Report of Sunday." {
+		t.Fatalf("the held-back run = input %q, blocks %+v, metadata %v", third.Input, third.Context, third.Metadata)
 	}
 }
