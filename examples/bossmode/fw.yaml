@@ -73,9 +73,9 @@ workbench:
     atespaces: [default]
     egress: fw.events
     intake: fw.jobs
-  # A rehearsing routine is ready after it would have acted on readyAfter
-  # runs of its version, by its risk, and agreed with the agent on
-  # readyAgreement of them, with no agreed run sent back
+  # A rehearsing routine is ready after it acts beside the agent in
+  # readyAfter runs of its version, by its risk. It must agree with the
+  # agent in readyAgreement of them, and no agreed run can come back
   # (docs/ARCHITECTURE.md section 21.4). A ready routine that only reads
   # goes live by itself, and one that writes waits for a sign-off. These
   # are the defaults.
