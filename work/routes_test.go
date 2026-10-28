@@ -160,8 +160,8 @@ func TestRouteAndTool(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&out)
 		return resp.StatusCode, out
 	}
-	code, routed := get("alice", "?days=3")
-	if code != http.StatusOK || len(routed.Cards) != 3 || routed.Cards[0].Links.Approval != ask.Links.Approval || routed.Days != 3 || !strings.HasSuffix(routed.Sentence, "2 done in the last 3 days.") {
+	code, routed := get("alice", "?days=30")
+	if code != http.StatusOK || len(routed.Cards) != 3 || routed.Cards[0].Links.Approval != ask.Links.Approval || routed.Days != 30 || !strings.HasSuffix(routed.Sentence, "2 done in the last 30 days.") {
 		t.Fatalf("GET /v1/work = %d %+v", code, routed)
 	}
 	if code, other := get("bob", ""); code != http.StatusOK || len(other.Cards) != 0 {
@@ -170,14 +170,14 @@ func TestRouteAndTool(t *testing.T) {
 	if code, other := get("bob", "?all=true"); code != http.StatusOK || len(other.Cards) != 0 {
 		t.Fatalf("every card that bob can view = %d %+v", code, other)
 	}
-	for _, q := range []string{"?days=0x", "?days=91", "?all=maybe"} {
+	for _, q := range []string{"?days=0x", "?days=91", "?days=3", "?all=maybe"} {
 		if code, _ := get("alice", q); code != http.StatusBadRequest {
 			t.Fatalf("GET /v1/work%s = %d, want 400", q, code)
 		}
 	}
 
 	cs := connect(t, a, "alice")
-	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: ToolWork, Arguments: map[string]any{"days": 3}})
+	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: ToolWork, Arguments: map[string]any{"days": 30}})
 	if err != nil || res.IsError {
 		t.Fatalf("the tool = %+v, %v", res, err)
 	}
@@ -187,10 +187,10 @@ func TestRouteAndTool(t *testing.T) {
 	}
 	b, _ := json.Marshal(res.StructuredContent)
 	var tooled Answer
-	if err := json.Unmarshal(b, &tooled); err != nil || len(tooled.Cards) != 3 || tooled.Cards[0].ID != ask.ID || tooled.Days != 3 {
+	if err := json.Unmarshal(b, &tooled); err != nil || len(tooled.Cards) != 3 || tooled.Cards[0].ID != ask.ID || tooled.Days != 30 {
 		t.Fatalf("the structured content of the tool = %s, %v", b, err)
 	}
-	bad, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: ToolWork, Arguments: map[string]any{"days": 120}})
+	bad, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: ToolWork, Arguments: map[string]any{"days": 12}})
 	if err != nil || !bad.IsError {
 		t.Fatalf("a window of 120 days = %+v, %v", bad, err)
 	}

@@ -7,6 +7,7 @@ package work
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/bossmode"
 	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/duties"
@@ -33,14 +35,11 @@ func init() {
 	mcp.RegisterTools(tools)
 }
 
-// MaxDays bounds the window of the board.
-const MaxDays = 90
-
 // maxJobs bounds the jobs whose queues one board reads.
 const maxJobs = 20
 
-// Query is what a caller asks of the board: the window in days, 1 to
-// MaxDays, DefaultDays when 0, and All for every card that the caller can
+// Query is what a caller asks of the board: the window in days, 7, 30, or
+// 90, DefaultDays when 0, and All for every card that the caller can
 // view rather than the cards of the caller and of the teams of the caller.
 type Query struct {
 	Days int  `json:"days,omitempty"`
@@ -62,8 +61,8 @@ func For(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, erro
 	if q.Days == 0 {
 		q.Days = DefaultDays
 	}
-	if q.Days < 1 || q.Days > MaxDays {
-		return Answer{}, fmt.Errorf("%w: days is %d, not 1 to %d", fw.ErrInvalidRequest, q.Days, MaxDays)
+	if q.Days != 7 && q.Days != 30 && q.Days != 90 {
+		return Answer{}, fmt.Errorf("%w: days is %d, not 7, 30, or 90", fw.ErrInvalidRequest, q.Days)
 	}
 	c := cacheOf(a)
 	key := cacheKey(ctx, q)
@@ -184,54 +183,113 @@ func jobBatches(in Input) []string {
 	return out
 }
 
-// mount serves GET /v1/work.
+// mount serves GET /v1/work, POST /v1/work/plan, and POST /v1/work/review.
 func mount(k *native.Kit) error {
 	a := k.Agent()
+	bossmode.OfferWork()
 	k.Handle("GET /v1/work", func(w http.ResponseWriter, r *http.Request) {
 		q := Query{}
 		if s := r.URL.Query().Get("days"); s != "" {
 			n, err := strconv.Atoi(s)
 			if err != nil {
-				native.WriteProblem(w, r, http.StatusBadRequest, "days is not a number of days")
+				native.WriteProblem(w, r, http.StatusBadRequest, "days is 7, 30, or 90")
 				return
 			}
 			q.Days = n
 		}
 		switch r.URL.Query().Get("all") {
-		case "", "false":
-		case "true":
+		case "", "0", "false":
+		case "1", "true":
 			q.All = true
 		default:
-			native.WriteProblem(w, r, http.StatusBadRequest, "all is true or false")
+			native.WriteProblem(w, r, http.StatusBadRequest, "all is 0 or 1")
 			return
 		}
 		ctx, _, _ := manager.OnBehalf(r.Context())
 		ans, err := For(ctx, a, time.Now(), q)
 		if err != nil {
-			k.Fail(w, r, err)
+			fail(w, r, k, err)
 			return
 		}
+		native.WriteJSON(w, http.StatusOK, ans)
+	})
+	k.Handle("POST /v1/work/plan", func(w http.ResponseWriter, r *http.Request) {
+		var req PlanRequest
+		if !k.Decode(w, r, &req) {
+			return
+		}
+		ctx, _, _ := manager.OnBehalf(r.Context())
+		p, err := PlanFor(ctx, a, time.Now(), r.Header.Get(duties.HeaderTimeZone), req)
+		if err != nil {
+			fail(w, r, k, err)
+			return
+		}
+		native.WriteJSON(w, http.StatusOK, p)
+	})
+	k.Handle("POST /v1/work/review", func(w http.ResponseWriter, r *http.Request) {
+		var req ReviewRequest
+		if !k.Decode(w, r, &req) {
+			return
+		}
+		ctx, _, acting := manager.OnBehalf(r.Context())
+		if acting {
+			fail(w, r, k, ErrNotPerson)
+			return
+		}
+		ans, err := Review(ctx, a, req)
+		if err != nil {
+			fail(w, r, k, err)
+			return
+		}
+		cacheOf(a).clear()
 		native.WriteJSON(w, http.StatusOK, ans)
 	})
 	return nil
 }
 
-// ToolWork is the name of the tool.
-const ToolWork = "work"
+// fail answers an error of the package with its problem document: a
+// request that does not read is 400, a check by a run of an agent is 403,
+// a member that refused is its status, and the rest as the kernel answers
+// it.
+func fail(w http.ResponseWriter, r *http.Request, k *native.Kit, err error) {
+	var me *fleet.MemberError
+	switch {
+	case errors.Is(err, fw.ErrInvalidRequest):
+		native.WriteProblem(w, r, http.StatusBadRequest, strings.ReplaceAll(err.Error(), fw.ErrInvalidRequest.Error()+": ", ""))
+	case errors.Is(err, ErrNotPerson):
+		native.WriteProblem(w, r, http.StatusForbidden, ErrNotPerson.Error())
+	case errors.As(err, &me) && me.Status >= 400 && me.Status < 500:
+		native.WriteProblem(w, r, me.Status, me.Detail)
+	default:
+		k.Fail(w, r, err)
+	}
+}
+
+// Names of the tools.
+const (
+	ToolWork   = "work"
+	ToolPlan   = "work_plan"
+	ToolReview = "work_review"
+)
 
 func ptr[T any](v T) *T { return &v }
 
-// tools builds the tool work for one MCP server.
+// tools builds the tools work, work_plan, and work_review for one MCP
+// server.
 func tools(srv *mcp.Server) []mcp.Tool {
 	a := srv.Agent()
+	type planIn struct {
+		PlanRequest
+		TimeZone string `json:"timeZone,omitempty"`
+	}
 	return []mcp.Tool{mcp.NewTool(&sdk.Tool{
 		Name:  ToolWork,
 		Title: "Where the work stands",
-		Description: "Show the board of the work of the person: one card per piece of work, from the request to its end. A piece of work is a bridge, a start of a duty, a job of many items, an event of a source, or a conversation with an agent. " +
-			"Each card has a stage (waiting for a worker, working, needs-you, stopped, review, done), the reason in words, since when, who moves it next (worker, agent, you, person, manager), who asked for it, and its links: the run to open, the approval to decide with approve, the bridge, the duty, and the batch. " +
-			"The lanes count the cards of each stage and name the oldest wait. A card that did not end stays on the board however old it is, so work that stopped never drops out of sight. " +
-			"days is the window for the cards that ended, 1 to 90, 7 by default. all true shows every card that the person can view, not only the cards of the person and of the teams of the person.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"days":{"type":"integer","minimum":1,"maximum":90},"all":{"type":"boolean"}}}`),
+		Description: "Show the board of the work of the person: one card per task, from the request to its end. A task is a bridge, a start of a duty, a job of many items, an event of a source, or a conversation with an agent. " +
+			"Each card has a stage (waiting: coming up, working, needs-you, stopped, review: a result to check, done), the reason in words, since when, who moves it next (worker, agent, you, person, manager), who asked for it, and its links: the run to open, the approval to decide with approve, the bridge, the duty, and the batch. " +
+			"A done card has a verdict: accepted, checked, sent-back, or unchecked. A card that did not end stays on the board however old it is, so work that stopped never drops out of sight; lost means that the worker of the task was replaced. " +
+			"days is the window for the cards that ended: 7, 30, or 90, 7 by default. all true shows every card that the person can view, not only the cards of the person and of the teams of the person.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"days":{"type":"integer","enum":[7,30,90]},"all":{"type":"boolean"}}}`),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, q Query) (*sdk.CallToolResult, any, error) {
 		ctx, _, _ = manager.OnBehalf(ctx)
@@ -241,7 +299,90 @@ func tools(srv *mcp.Server) []mcp.Tool {
 			return mcp.ErrorResult(mcp.Explain(err)), nil, nil
 		}
 		return mcp.Result(Text(ans, now), ans), nil, nil
+	}), mcp.NewTool(&sdk.Tool{
+		Name:  ToolPlan,
+		Title: "Read a task back before it starts",
+		Description: "Read back what the person needs done, in their words, before anything starts. It starts and saves nothing, and it calls no model. " +
+			"The answer says the kind (once, repeat, or team), who does it, when (the schedule in words and the next three times), what runs of the agent cost (never a limit), when it asks the person, when it stays quiet, where the result lands, what no agent here can do (gaps), and problems that stop a start. " +
+			"start holds the record to send: duty to PUT /v1/duties/{name} (duty_put), bridge to POST /v1/bridges (bridge_open), or run to POST /v1/runs?member= (run). The person sets the most it can cost before the start: limits.budget.maxCostUSD, caps.maxCostUSD, or budget.maxCostUSD. " +
+			"agent picks the agent, and tell picks when the person hears of a task that repeats: each, found, or failures. timeZone is an IANA name, UTC by default.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"words":{"type":"string","maxLength":4000},"agent":{"type":"string"},"tell":{"type":"string","enum":["each","found","failures"]},"timeZone":{"type":"string"}},"required":["words"]}`),
+		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in planIn) (*sdk.CallToolResult, any, error) {
+		ctx, _, _ = manager.OnBehalf(ctx)
+		p, err := PlanFor(ctx, a, time.Now(), in.TimeZone, in.PlanRequest)
+		if err != nil {
+			return mcp.ErrorResult(mcp.Explain(err)), nil, nil
+		}
+		return mcp.Result(PlanText(p), p), nil, nil
+	}), mcp.NewTool(&sdk.Tool{
+		Name:  ToolReview,
+		Title: "Check a result",
+		Description: "Check the result of a run for the person. verdict right is Looks right: a thumb up on the run. verdict work is Needs work: a thumb down with the note, and the note goes to the agent as a follow-up message, so the run works again. " +
+			"Only a person checks a result: a run of an agent cannot. The person needs the operator role on the run.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"run":{"type":"string"},"verdict":{"type":"string","enum":["right","work"]},"note":{"type":"string","maxLength":4000}},"required":["run","verdict"]}`),
+		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, IdempotentHint: false, OpenWorldHint: ptr(false)},
+	}, func(ctx context.Context, req *sdk.CallToolRequest, in ReviewRequest) (*sdk.CallToolResult, any, error) {
+		ctx, _, acting := manager.OnBehalf(ctx)
+		if acting {
+			return mcp.ErrorResult("Forbidden: " + ErrNotPerson.Error() + "; a run of an agent cannot."), nil, nil
+		}
+		ans, err := Review(withCredential(ctx, req), a, in)
+		if err != nil {
+			return mcp.ErrorResult(mcp.Explain(err)), nil, nil
+		}
+		cacheOf(a).clear()
+		text := "Looks right: the run " + ans.Run + " has a thumb up."
+		if ans.Reaction == fw.ReactionDown {
+			text = "Needs work: the run " + ans.Run + " has a thumb down, and the note went to the agent."
+		}
+		return mcp.Result(text, ans), nil, nil
 	})}
+}
+
+// withCredential adds the bearer credential of an MCP request to ctx, so a
+// caller that is no person, such as the static token, reaches the member
+// that holds a run with its own credential.
+func withCredential(ctx context.Context, req *sdk.CallToolRequest) context.Context {
+	if fw.CredentialFrom(ctx) != "" || req == nil {
+		return ctx
+	}
+	ex := req.GetExtra()
+	if ex == nil || ex.Header == nil {
+		return ctx
+	}
+	h := strings.TrimSpace(ex.Header.Get("Authorization"))
+	if scheme, tok, ok := strings.Cut(h, " "); !ok || !strings.EqualFold(scheme, "bearer") || strings.TrimSpace(tok) == "" {
+		return ctx
+	}
+	return fw.WithCredential(ctx, h)
+}
+
+// PlanText words a plan for a host that shows only text.
+func PlanText(p Plan) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s (%s).", p.Title, p.Kind)
+	for _, w := range p.Who {
+		fmt.Fprintf(&b, "\nWho: %s %s.", w.Name, w.Does)
+	}
+	fmt.Fprintf(&b, "\nWhen: %s", p.When.Readback)
+	if p.Cost.Basis != "" {
+		b.WriteString("\nWhat it can cost: " + p.Cost.Basis + " Set the most it can spend before the start.")
+	}
+	if len(p.Asks) > 0 {
+		b.WriteString("\nIt asks you: " + strings.Join(p.Asks, "; ") + ".")
+	}
+	if len(p.Quiet) > 0 {
+		b.WriteString("\nIt stays quiet: " + strings.Join(p.Quiet, "; ") + ".")
+	}
+	b.WriteString("\nThe result: " + p.Result + ".")
+	for _, g := range p.Gaps {
+		b.WriteString("\nIt cannot: " + g)
+	}
+	for _, x := range p.Problems {
+		b.WriteString("\nProblem: " + x)
+	}
+	return b.String()
 }
 
 // stageWords names a stage for a person.
@@ -340,6 +481,13 @@ func (c *cache) get(key string, now time.Time) (Answer, bool) {
 		return Answer{}, false
 	}
 	return x.ans, true
+}
+
+// clear forgets every board, after a change that a person made here.
+func (c *cache) clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	clear(c.list)
 }
 
 func (c *cache) put(key string, ans Answer, now time.Time) {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
@@ -62,6 +63,41 @@ type Settings struct {
 	Chat       *QuickChat `json:"chat"`
 	Routines   bool       `json:"routines"`
 	Packages   bool       `json:"packages"`
+	// Work is true when the front serves the board of the work, the plan
+	// of a task, and the value of the work (GET /v1/work, POST
+	// /v1/work/plan, GET /v1/value). The page then shows the places Work
+	// and Results.
+	Work bool `json:"work,omitempty"`
+}
+
+// workOn is true once the package work offers its routes (OfferWork).
+var workOn atomic.Bool
+
+// OfferWork tells the settings that this process serves the board of the
+// work. The package work calls it when it registers its routes.
+func OfferWork() { workOn.Store(true) }
+
+// MemberFor names the fleet member that a page starts a run of the agent
+// on, as the settings pick the member of the manager: a Task of the pool
+// whose agent is the profile, the first that runs, else the first; else
+// the first member, by name, that serves the profile. It answers "" when
+// the fleet is off or no member that the caller sees serves the agent.
+func MemberFor(ctx context.Context, a *fw.Agent, agent string) (string, error) {
+	v := fleet.Of(a)
+	if v == nil {
+		return "", nil
+	}
+	return managerMember(ctx, v, agent)
+}
+
+// QuickChatOf names the quick chat of the configuration for the caller in
+// ctx, or nil when the configuration names none.
+func QuickChatOf(ctx context.Context, a *fw.Agent) (*QuickChat, error) {
+	c, err := Load(a.Config())
+	if err != nil || c.Chat.Agent == "" {
+		return nil, err
+	}
+	return chatOf(ctx, a, c.Chat)
 }
 
 // ChatView is the value of the metadata key fw.view (dashboard.ViewKey)
@@ -110,7 +146,7 @@ func settingsRoute(k *native.Kit, c Config) http.HandlerFunc {
 			k.Fail(w, r, err)
 			return
 		}
-		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers, Theme: pageTheme(a, c.Theme), Templates: []Template{}, Routines: routines.Of(a) != nil, Packages: fleet.PackagesOn(a)}
+		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers, Theme: pageTheme(a, c.Theme), Templates: []Template{}, Routines: routines.Of(a) != nil, Packages: fleet.PackagesOn(a), Work: workOn.Load()}
 		for _, t := range fleet.TemplatesOf(a) {
 			out.Templates = append(out.Templates, Template{Name: t.Name, Default: t.Default})
 		}
