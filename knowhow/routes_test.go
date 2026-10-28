@@ -43,13 +43,10 @@ func TestRoutesWorkerPush(t *testing.T) {
 	resp, body = send(t, "GET", fr.url+"/v1/knowhow/notes?agent=triage&scope=principal&principal=duty:nightly", "fleet", "")
 	mustStatus(t, resp, body, http.StatusOK)
 	var list struct {
-		Notes []struct {
-			Note
-			SourcesCount int `json:"sourcesCount"`
-		} `json:"notes"`
+		Notes []ListItem `json:"notes"`
 	}
 	decodeJSON(t, body, &list)
-	if len(list.Notes) != 1 || list.Notes[0].Hash != Hash("two") || list.Notes[0].Text != "" || list.Notes[0].SourcesCount != 0 {
+	if len(list.Notes) != 1 || list.Notes[0].Hash != Hash("two") || strings.Contains(body, `"text"`) || list.Notes[0].Sources != 0 {
 		t.Fatalf("list = %s", body)
 	}
 	resp, body = send(t, "GET", base, "fleet", "")
@@ -95,7 +92,7 @@ func TestRoutesPeople(t *testing.T) {
 		resp, body := send(t, "GET", fr.url+"/v1/knowhow/notes?agent=triage", who, "")
 		mustStatus(t, resp, body, http.StatusOK)
 		var list struct {
-			Notes []Note `json:"notes"`
+			Notes []ListItem `json:"notes"`
 		}
 		decodeJSON(t, body, &list)
 		var out []string
@@ -262,8 +259,20 @@ func TestRoutesRuns(t *testing.T) {
 	mustStatus(t, resp, body, http.StatusNotFound)
 	resp, body = send(t, "GET", fr.url+"/v1/knowhow/runs?agent=triage&principal=duty:nightly", "alice", "")
 	mustStatus(t, resp, body, http.StatusOK)
-	resp, body = send(t, "GET", fr.url+"/v1/knowhow/runs?agent=triage", "fleet", "")
-	mustStatus(t, resp, body, http.StatusBadRequest)
+	// An empty principal names the runs without a principal: the kernel
+	// asks so for the scope agent. A viewer reads none of them.
+	fr.arch.put(record("01KNOPRINCIPAL0000000000000", day0).queued("triage", "labels by the process", "", nil).finished("x", 0).out, day0)
+	resp, body = send(t, "GET", fr.url+"/v1/knowhow/runs?agent=triage&principal=&q=labels", "fleet", "")
+	decodeJSON(t, body, &out)
+	if resp.StatusCode != http.StatusOK || len(out.Runs) != 1 || out.Runs[0].ID != "01KNOPRINCIPAL0000000000000" {
+		t.Fatalf("the runs without a principal = %d %s", resp.StatusCode, body)
+	}
+	resp, body = send(t, "GET", fr.url+"/v1/knowhow/runs?agent=triage&principal=", "carol", "")
+	mustStatus(t, resp, body, http.StatusNotFound)
+	resp, body = send(t, "GET", fr.url+"/v1/knowhow/runs?agent=triage&principal=nobody", "fleet", "")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"runs":[]`) {
+		t.Fatalf("no run = %d %s", resp.StatusCode, body)
+	}
 }
 
 // The summary gives the four numbers, split into normal and held-back
@@ -333,4 +342,102 @@ func TestSummary(t *testing.T) {
 	mustStatus(t, resp, body, http.StatusBadRequest)
 	resp, body = send(t, "GET", fr.url+"/v1/knowhow/summary?agent=private", "carol", "")
 	mustStatus(t, resp, body, http.StatusNotFound)
+}
+
+// The shapes that the client of the kernel reads (docs/KNOWHOW.md section
+// 5.3 of the kernel): the list with sources as a count and at in RFC 3339,
+// one note with its sources, absent over a note that the front keeps, a
+// put-away note that counts as absent with the old text kept for an undo,
+// a write with no sources that drops the older sources, a removal of a
+// note that the front does not have, and the scope agent without a
+// principal.
+func TestKernelWireShapes(t *testing.T) {
+	fr := newFront(t, nil)
+	base := fr.url + "/v1/knowhow/notes/triage/agent/a.md"
+	resp, body := send(t, "PUT", base, "fleet", `{"text": "one", "ifHash": "absent", "by": "agent", "sources": [{"ref": "page:p.md", "version": "v1"}]}`)
+	mustStatus(t, resp, body, http.StatusCreated)
+	resp, body = send(t, "PUT", base, "fleet", `{"text": "again", "ifHash": "absent", "by": "agent"}`)
+	mustStatus(t, resp, body, http.StatusPreconditionFailed)
+
+	resp, body = send(t, "GET", fr.url+"/v1/knowhow/notes?agent=triage&scope=agent", "fleet", "")
+	mustStatus(t, resp, body, http.StatusOK)
+	var raw struct {
+		Notes []map[string]any `json:"notes"`
+	}
+	decodeJSON(t, body, &raw)
+	if len(raw.Notes) != 1 {
+		t.Fatalf("list = %s", body)
+	}
+	item := raw.Notes[0]
+	for _, key := range []string{"name", "hash", "state", "description", "by", "at", "uses", "sources"} {
+		if _, ok := item[key]; !ok {
+			t.Errorf("a list item has no %s: %s", key, body)
+		}
+	}
+	if item["sources"] != float64(1) || item["name"] != "a.md" {
+		t.Fatalf("list item = %v", item)
+	}
+	if _, err := time.Parse(time.RFC3339, item["at"].(string)); err != nil {
+		t.Fatalf("at = %v", item["at"])
+	}
+
+	resp, body = send(t, "GET", base, "fleet", "")
+	mustStatus(t, resp, body, http.StatusOK)
+	var one struct {
+		Name    string   `json:"name"`
+		Text    string   `json:"text"`
+		Hash    string   `json:"hash"`
+		State   string   `json:"state"`
+		Sources []Source `json:"sources"`
+	}
+	decodeJSON(t, body, &one)
+	if one.Name != "a.md" || one.Text != "one" || one.Hash != Hash("one") || one.State != StateChecked || len(one.Sources) != 1 || one.Sources[0].Version != "v1" {
+		t.Fatalf("one note = %s", body)
+	}
+
+	// A write with sources [] drops the sources of the older text.
+	resp, body = send(t, "PUT", base, "fleet", `{"text": "two", "ifHash": "`+Hash("one")+`", "by": "agent", "sources": []}`)
+	mustStatus(t, resp, body, http.StatusOK)
+	if n := fr.note(t, Scope{Kind: ScopeAgent}, "a.md"); len(n.Sources) != 0 || n.State != StateUnchecked {
+		t.Fatalf("the sources of the older text stayed: %+v", n)
+	}
+
+	// DELETE: 412 for another hash, 2xx with the hash, 404 for a note that
+	// the front does not have.
+	resp, body = send(t, "DELETE", base+"?ifHash="+Hash("other"), "fleet", "")
+	mustStatus(t, resp, body, http.StatusPreconditionFailed)
+	resp, body = send(t, "DELETE", base+"?ifHash="+Hash("two"), "fleet", "")
+	if resp.StatusCode/100 != 2 {
+		t.Fatalf("DELETE = %d %s", resp.StatusCode, body)
+	}
+	resp, body = send(t, "DELETE", fr.url+"/v1/knowhow/notes/triage/agent/never.md?ifHash="+Hash("x"), "fleet", "")
+	mustStatus(t, resp, body, http.StatusNotFound)
+	resp, body = send(t, "GET", base, "fleet", "")
+	if resp.StatusCode != http.StatusNotFound && !strings.Contains(body, `"state":"put-away"`) {
+		t.Fatalf("a put-away note = %d %s", resp.StatusCode, body)
+	}
+
+	// A put-away note counts as absent: the new text takes its place, and
+	// an undo of that write brings the put-away text back.
+	resp, body = send(t, "PUT", base, "fleet", `{"text": "three", "ifHash": "absent", "by": "agent", "sources": []}`)
+	mustStatus(t, resp, body, http.StatusCreated)
+	j := fr.journal(t)
+	if j[0].What != WhatLearned || j[0].Undo == nil || j[0].Undo.Revision == 0 {
+		t.Fatalf("the journal of a write over a put-away note = %+v", j[0])
+	}
+	if _, err := fr.s.TakeBack(context.Background(), j[0].ID, "person:alice", true); err != nil {
+		t.Fatal(err)
+	}
+	if n := fr.note(t, Scope{Kind: ScopeAgent}, "a.md"); n.Text != "two" || n.State != StatePutAway {
+		t.Fatalf("the undo = %+v", n)
+	}
+	// The scope agent takes no principal, and the shared scope stays in
+	// the kernel.
+	resp, body = send(t, "PUT", base+"?principal=bob", "fleet", `{"text": "x"}`)
+	mustStatus(t, resp, body, http.StatusBadRequest)
+	resp, body = send(t, "GET", fr.url+"/v1/knowhow/notes?agent=triage&scope=shared", "fleet", "")
+	mustStatus(t, resp, body, http.StatusBadRequest)
+	// The native API of a worker names a person without a subject.
+	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/agent/p.md", "fleet", `{"text": "x", "ifHash": "absent", "by": "person"}`)
+	mustStatus(t, resp, body, http.StatusCreated)
 }

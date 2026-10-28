@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
@@ -176,15 +177,36 @@ func (rt *routes) list(w http.ResponseWriter, r *http.Request, s *Service) {
 		rt.fail(w, r, err)
 		return
 	}
-	type item struct {
-		Note
-		SourcesCount int `json:"sourcesCount"`
-	}
-	out := make([]item, 0, len(notes))
+	out := make([]ListItem, 0, len(notes))
 	for _, n := range notes {
-		out = append(out, item{Note: n, SourcesCount: len(n.Sources)})
+		out = append(out, listItem(n))
 	}
 	native.WriteJSON(w, http.StatusOK, map[string]any{"agent": agent, "notes": out})
+}
+
+// ListItem is one note of the list: the record without its text, with
+// sources as a count, as the kernel and the page read it.
+type ListItem struct {
+	Agent       string     `json:"agent"`
+	Scope       Scope      `json:"scope"`
+	Name        string     `json:"name"`
+	Hash        string     `json:"hash"`
+	State       string     `json:"state"`
+	Description string     `json:"description"`
+	By          string     `json:"by"`
+	Run         string     `json:"run,omitempty"`
+	At          time.Time  `json:"at"`
+	Uses        int        `json:"uses"`
+	LastUsed    *time.Time `json:"lastUsed,omitempty"`
+	Sources     int        `json:"sources"`
+	OutOfDate   *OutOfDate `json:"outOfDate,omitempty"`
+	Origin      string     `json:"origin,omitempty"`
+	Revision    uint64     `json:"revision"`
+}
+
+func listItem(n Note) ListItem {
+	return ListItem{Agent: n.Agent, Scope: n.Scope, Name: n.Name, Hash: n.Hash, State: n.State, Description: n.Description, By: n.By, Run: n.Run,
+		At: n.At, Uses: n.Uses, LastUsed: n.LastUsed, Sources: len(n.Sources), OutOfDate: n.OutOfDate, Origin: n.Origin, Revision: n.Revision}
 }
 
 // noteParams reads the agent, the scope, and the name of a note route,
@@ -303,6 +325,9 @@ func writer(c caller, by, run string) (string, string, error) {
 	switch {
 	case by == "", by == ByAgent:
 		by = ByAgent
+	case by == "person":
+		// The native API of a worker without a subject of the caller.
+		by = PersonPrefix + "unknown"
 	case strings.HasPrefix(by, PersonPrefix) && len(by) > len(PersonPrefix) && len(by) <= MaxPrincipal && oneLine(by):
 	default:
 		return "", "", errors.Join(ErrInvalid, errors.New("by is agent or person:<subject>"))

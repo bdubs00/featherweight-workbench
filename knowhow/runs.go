@@ -42,7 +42,8 @@ func words(q string) []string {
 }
 
 // Runs searches the archive for the runs of the agent whose principal is
-// exactly principal, newest first, at most limit. A query keeps the runs
+// exactly principal, newest first, at most limit. An empty principal
+// names the runs without a principal. A query keeps the runs
 // whose title, input, or output hold every word of q.
 func (s *Service) Runs(ctx context.Context, agent, principal, q string, limit int) ([]RunHit, error) {
 	if err := CheckAgent(agent); err != nil {
@@ -52,10 +53,10 @@ func (s *Service) Runs(ctx context.Context, agent, principal, q string, limit in
 		limit = runsDefault
 	}
 	want := words(q)
-	var list []RunHit
+	list := []RunHit{}
 	for _, e := range s.archive(ctx) {
 		r := e.Run
-		if r.Agent != agent || r.Principal == "" || r.Principal != principal {
+		if r.Agent != agent || r.Principal != principal {
 			continue
 		}
 		if len(want) > 0 {
@@ -91,8 +92,10 @@ func (s *Service) Runs(ctx context.Context, agent, principal, q string, limit in
 }
 
 // runs answers GET /v1/knowhow/runs?agent=&principal=&q=&limit=. A worker
-// names any principal; a person reads the runs of their own principal,
-// and an operator of the agent also the runs of its workload principals.
+// names any principal, or an empty one for the runs without a principal.
+// A person reads the runs of their own principal, and an operator of the
+// agent also the runs of its workload principals and those without a
+// principal.
 func (rt *routes) runs(w http.ResponseWriter, r *http.Request, s *Service) {
 	ctx := onBehalf(r)
 	agent, ok := agentParam(w, r)
@@ -109,15 +112,22 @@ func (rt *routes) runs(w http.ResponseWriter, r *http.Request, s *Service) {
 		rt.fail(w, r, err)
 		return
 	}
+	// An empty principal asks for the runs without a principal, as the
+	// kernel asks for the scope agent. A person who leaves the key out
+	// means their own runs.
 	principal := strings.TrimSpace(q.Get("principal"))
-	if principal == "" && !rg.c.trusted {
+	if _, named := q["principal"]; !named && !rg.c.trusted {
 		principal = rg.c.subject
 	}
-	if principal == "" {
-		native.WriteProblem(w, r, http.StatusBadRequest, "name the principal of the runs with ?principal=")
+	if len(principal) > MaxPrincipal || !oneLine(principal) {
+		native.WriteProblem(w, r, http.StatusBadRequest, "principal is one line of at most 256 bytes")
 		return
 	}
-	if !rg.read(Scope{Kind: ScopePrincipal, Principal: principal}) {
+	switch {
+	case principal == "" && !rg.run:
+		rt.fail(w, r, ErrHidden)
+		return
+	case principal != "" && !rg.read(Scope{Kind: ScopePrincipal, Principal: principal}):
 		rt.fail(w, r, ErrHidden)
 		return
 	}

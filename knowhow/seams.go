@@ -18,7 +18,8 @@ import (
 )
 
 // PageWritten marks out of date every note that names the page at path
-// with another version than hash (pages.OnWrite).
+// with another version than hash (pages.OnWrite). An empty hash is a
+// removal of the page.
 func PageWritten(ctx context.Context, path, hash string) {
 	for _, s := range all() {
 		s.PageWritten(ctx, path, hash)
@@ -26,7 +27,9 @@ func PageWritten(ctx context.Context, path, hash string) {
 }
 
 // ItemChanged marks out of date every note that names the item key of the
-// source with another version (sources.OnItem and duties.OnItem).
+// source with another version (sources.OnItem and duties.OnItem), such as
+// the key lab/helpdesk/issue/42 of the source gitea, which a note names
+// as item:gitea/lab/helpdesk/issue/42.
 func ItemChanged(ctx context.Context, source, key, version string) {
 	for _, s := range all() {
 		s.ItemChanged(ctx, source, key, version)
@@ -34,6 +37,7 @@ func ItemChanged(ctx context.Context, source, key, version string) {
 }
 
 // RoutineMoved writes a move of a routine to the journal (routines.OnMove).
+// from is empty for a new routine.
 func RoutineMoved(ctx context.Context, agent, name, from, to, by, note string) {
 	for _, s := range all() {
 		s.RoutineMoved(ctx, agent, name, from, to, by, note)
@@ -61,7 +65,11 @@ func (s *Service) PageWritten(ctx context.Context, path, hash string) {
 	if path == "" {
 		return
 	}
-	s.outOfDate(ctx, "page:"+path, strings.ToLower(strings.TrimSpace(hash)), fmt.Sprintf("The page %s changed after the note was written.", path))
+	why := fmt.Sprintf("The page %s changed after the note was written.", path)
+	if strings.TrimSpace(hash) == "" {
+		why = fmt.Sprintf("The page %s was removed after the note was written.", path)
+	}
+	s.outOfDate(ctx, "page:"+path, strings.ToLower(strings.TrimSpace(hash)), why)
 }
 
 // ItemChanged marks out of date every note of this service that names the

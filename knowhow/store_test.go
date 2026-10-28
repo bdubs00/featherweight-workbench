@@ -362,3 +362,28 @@ func TestUsesFromTheStream(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// The seams as the other packages call them: a removed page has an empty
+// hash, a Gitea item has a key such as lab/helpdesk/issue/42, and a new
+// routine moves from no standing.
+func TestSeamShapes(t *testing.T) {
+	fr := newFront(t, nil)
+	ctx := context.Background()
+	fr.write(t, duty, "page.md", "The page says so.", Source{Ref: "page:runbook.md", Version: Hash("v1")})
+	fr.write(t, duty, "issue.md", "Issue 42 waits.", Source{Ref: "item:gitea/lab/helpdesk/issue/42", Version: "2026-10-26T10:00:00Z"})
+	PageWritten(ctx, "runbook.md", "")
+	if n := fr.note(t, duty, "page.md"); n.State != StateOutOfDate {
+		t.Fatalf("a removed page left the note %s", n.State)
+	}
+	if j := fr.journal(t); j[0].Why != "The page runbook.md was removed after the note was written." {
+		t.Fatalf("why = %q", j[0].Why)
+	}
+	ItemChanged(ctx, "gitea", "lab/helpdesk/issue/42", "2026-10-27T10:00:00Z")
+	if n := fr.note(t, duty, "issue.md"); n.State != StateOutOfDate {
+		t.Fatalf("the item left the note %s", n.State)
+	}
+	RoutineMoved(ctx, "triage", "ack", "", "proposed", "alice", "")
+	if j := fr.journal(t); j[0].What != WhatProposed || j[0].Undo != nil || j[0].Subject.Routine != "ack" {
+		t.Fatalf("a new routine = %+v", j[0])
+	}
+}
