@@ -54,9 +54,10 @@ func init() {
 }
 
 // Keys of the metadata that a duty gives each run, beside fw.batch and
-// fw.title.
+// fw.title. MetaDuty is the key of the kernel, fw.MetaDuty, so a routine
+// bound to a Duty finds the runs of that Duty.
 const (
-	MetaDuty    = "workbench.duty"        // the name of the duty
+	MetaDuty    = fw.MetaDuty             // the name of the duty
 	MetaSlot    = "workbench.dutySlot"    // the time of the start, RFC 3339 in UTC
 	MetaAttempt = "workbench.dutyAttempt" // the attempt, from 2, for a retry of the duty
 )
