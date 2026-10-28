@@ -268,15 +268,22 @@ func mount(k *native.Kit) error {
 
 // fail answers an error of the package with its problem document: a
 // request that does not read is 400, a check by a run of an agent is 403,
-// a member that refused is its status, and the rest as the kernel answers
+// a bridge or a card that is not there is 404, a closed bridge is 409, a
+// member that refused is its status, and the rest as the kernel answers
 // it.
 func fail(w http.ResponseWriter, r *http.Request, k *native.Kit, err error) {
 	var me *fleet.MemberError
 	switch {
 	case errors.Is(err, fw.ErrInvalidRequest):
-		native.WriteProblem(w, r, http.StatusBadRequest, strings.ReplaceAll(err.Error(), fw.ErrInvalidRequest.Error()+": ", ""))
+		native.WriteProblem(w, r, http.StatusBadRequest, strings.ReplaceAll(bridges.Detail(err), fw.ErrInvalidRequest.Error()+": ", ""))
 	case errors.Is(err, ErrNotPerson):
 		native.WriteProblem(w, r, http.StatusForbidden, ErrNotPerson.Error())
+	case errors.Is(err, bridges.ErrNotFound):
+		native.WriteProblem(w, r, http.StatusNotFound, bridges.Detail(err))
+	case errors.Is(err, bridges.ErrConflict):
+		native.WriteProblem(w, r, http.StatusConflict, bridges.Detail(err))
+	case errors.Is(err, ErrNoBridges):
+		native.WriteProblem(w, r, http.StatusServiceUnavailable, "the bridges are off in this process")
 	case errors.As(err, &me) && me.Status >= 400 && me.Status < 500:
 		native.WriteProblem(w, r, me.Status, me.Detail)
 	default:
@@ -337,9 +344,10 @@ func tools(srv *mcp.Server) []mcp.Tool {
 	}), mcp.NewTool(&sdk.Tool{
 		Name:  ToolReview,
 		Title: "Check a result",
-		Description: "Check the result of a run for the person. verdict right is Looks right: a thumb up on the run. verdict work is Needs work: a thumb down with the note, and the note goes to the agent as a follow-up message, so the run works again. " +
-			"Only a person checks a result: a run of an agent cannot. The person needs the operator role on the run.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"run":{"type":"string"},"verdict":{"type":"string","enum":["right","work"]},"note":{"type":"string","maxLength":4000}},"required":["run","verdict"]}`),
+		Description: "Check the result of a run or of a bridge (a team) for the person: name run or bridge, not both. verdict up (or right) is Looks right: a thumb up on the run, or the bridge closes with the verdict accepted. " +
+			"verdict down (or work) is Needs work and needs a note: a thumb down on the run, and the note goes to the agent as a follow-up message, so the run works again; for a bridge, the note goes in its channel to every seat, and the bridge stays open. " +
+			"Only a person checks a result: a run of an agent cannot. The person needs the operator role on the run, or the right to use the bridge.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"run":{"type":"string"},"bridge":{"type":"string"},"verdict":{"type":"string","enum":["up","down","right","work"]},"note":{"type":"string","maxLength":4000}},"required":["verdict"]}`),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, IdempotentHint: false, OpenWorldHint: ptr(false)},
 	}, func(ctx context.Context, req *sdk.CallToolRequest, in ReviewRequest) (*sdk.CallToolResult, any, error) {
 		ctx, _, acting := manager.OnBehalf(ctx)
@@ -352,7 +360,12 @@ func tools(srv *mcp.Server) []mcp.Tool {
 		}
 		cacheOf(a).clear()
 		text := "Looks right: the run " + ans.Run + " has a thumb up."
-		if ans.Reaction == fw.ReactionDown {
+		switch {
+		case ans.Bridge != "" && ans.Reaction == fw.ReactionDown:
+			text = "Needs work: the note went in the channel of the bridge " + ans.Bridge + " to every seat, and the bridge stays open."
+		case ans.Bridge != "":
+			text = "Looks right: the bridge " + ans.Bridge + " is closed with the verdict accepted."
+		case ans.Reaction == fw.ReactionDown:
 			text = "Needs work: the run " + ans.Run + " has a thumb down, and the note went to the agent."
 		}
 		return mcp.Result(text, ans), nil, nil

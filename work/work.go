@@ -328,7 +328,12 @@ func (b *board) bridge(it bridges.Item) {
 		if it.ClosedAt != nil {
 			at = *it.ClosedAt
 		}
-		d.parts = append(d.parts, part{stage: StageDone, reason: "Closed.", since: at, verdict: VerdictUnchecked})
+		p := part{stage: StageDone, reason: "Closed.", since: at, verdict: VerdictUnchecked}
+		if it.Verdict == bridges.VerdictAccepted {
+			// A person said Looks right, which closed the bridge.
+			p.reason, p.verdict = "Accepted.", VerdictAccepted
+		}
+		d.parts = append(d.parts, p)
 		for _, m := range it.Members {
 			d.agents[m.Agent] = true
 		}
