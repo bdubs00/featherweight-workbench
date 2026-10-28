@@ -608,7 +608,8 @@ func TestRunMetadata(t *testing.T) {
 }
 
 // run with continues starts a new run of an earlier conversation, as POST
-// /v1/runs does: the summary in the instructions, the input as it was,
+// /v1/runs does: the summary in a data block, the note in the
+// instructions, the input as it was,
 // and the metadata workbench.continues. An unknown run is no error of
 // the server.
 func TestRunContinues(t *testing.T) {
@@ -627,8 +628,9 @@ func TestRunContinues(t *testing.T) {
 			_ = e.Decode(&queued)
 		}
 	}
-	want := fleet.ContinueNote + "\n\n" + fleet.SummaryHead + "\nThe person: Which hosts are down?\nYou: Two hosts are down."
-	if r.Input != "And now?" || queued.Instructions != want || r.Metadata[fleet.MetaContinues] != first.ID {
+	// The summary goes in the data block conversation, and the
+	// instructions hold the note alone.
+	if r.Input != "And now?" || queued.Instructions != fleet.ContinueNote || r.Metadata[fleet.MetaContinues] != first.ID {
 		t.Fatalf("the new run = input %q, instructions %q, metadata %v", r.Input, queued.Instructions, r.Metadata)
 	}
 	res = callTool(t, ctx, cs, toolRun, map[string]any{"input": "x", "continues": "01NONE"})

@@ -39,7 +39,7 @@ const (
 	maxGoalBytes  = 16 << 10
 	maxTaskBytes  = 4 << 10
 	// learnedHead bounds the part of agents/<agent>/learned.md that the
-	// instructions of a seat carry.
+	// data block of a seat carries.
 	learnedHead = 4 << 10
 )
 
@@ -346,13 +346,15 @@ func inputOf(m Member, inputs map[string]string) string {
 }
 
 // requestOf is the run request of a seat on the queue of its pool, with
-// the input of the run.
+// the input of the run, and the head of the learned page of its agent as
+// a data block.
 func (s *Store) requestOf(ctx context.Context, rec *record, m Member, input string) fw.RunRequest {
 	seat := rec.seat(m.Handle)
 	title := oneLine(m.Handle+": "+m.Task, maxTitleRunes)
 	req := fw.RunRequest{
 		Input:          input,
 		Instructions:   s.instructionsOf(ctx, rec, m),
+		Context:        s.learnedContext(ctx, m.Agent),
 		Metadata:       map[string]string{fw.MetaBatch: BatchOf(rec.ID), MetaMember: m.Handle, fw.MetaTitle: title},
 		Principal:      rec.Operator,
 		PrincipalKind:  rec.OperatorKind,
@@ -430,12 +432,13 @@ type instructionsData struct {
 	ID, Title, Goal, Operator string
 	Handle, Agent, Task, Peer string
 	Roster                    []rosterLine
-	Learned                   string
 }
 
 // instructionsOf renders the instructions of a seat: the bridge, the
-// goal, the roster with the task of each seat, the rules of the channel
-// and of the wiki, and the head of the page agents/<agent>/learned.md.
+// goal, the roster with the task of each seat, and the rules of the
+// channel and of the wiki. The head of the page agents/<agent>/learned.md
+// is text that earlier runs and people wrote, so it goes in a data block
+// of the run (learnedContext), never in the instructions.
 func (s *Store) instructionsOf(ctx context.Context, rec *record, m Member) string {
 	d := instructionsData{ID: rec.ID, Title: rec.Title, Goal: rec.Goal, Operator: s.operatorName(rec, "The operator"), Handle: m.Handle, Agent: m.Agent, Task: m.Task}
 	if d.Goal == "" {
@@ -453,7 +456,6 @@ func (s *Store) instructionsOf(ctx context.Context, rec *record, m Member) strin
 	if d.Peer == "" {
 		d.Peer = "teammate"
 	}
-	d.Learned = s.learnedOf(ctx, m.Agent)
 	var b bytes.Buffer
 	if err := templates.ExecuteTemplate(&b, "instructions.tmpl", d); err != nil {
 		s.log.Error("bridges: the template of the instructions failed", "error", err)
@@ -484,6 +486,23 @@ func (s *Store) learnedOf(ctx context.Context, agent string) string {
 
 // learnedPath is the page of the hearts of an agent.
 func learnedPath(agent string) string { return "agents/" + agent + "/learned.md" }
+
+// ContextLearned is the source of the data block of a seat that holds the
+// head of the page agents/<agent>/learned.md (docs/KNOWHOW.md section
+// 6.2).
+const ContextLearned = "learned"
+
+// learnedContext returns the data blocks of a run of a seat: the head of
+// the page agents/<agent>/learned.md, after a line that says what it is,
+// or none without the page.
+func (s *Store) learnedContext(ctx context.Context, agent string) []fw.RunContext {
+	text := s.learnedOf(ctx, agent)
+	if text == "" {
+		return nil
+	}
+	head := "People marked these results of earlier work of " + agent + " with a heart. They come from the page " + learnedPath(agent) + " of the wiki.\n\n"
+	return []fw.RunContext{{Source: ContextLearned, Text: head + text}}
+}
 
 // planSeat is one seat in the plan of a spawn bridge.
 type planSeat struct {

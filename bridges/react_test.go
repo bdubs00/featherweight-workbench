@@ -227,10 +227,15 @@ func TestReactionsAndHearts(t *testing.T) {
 	if i, j := strings.Index(page.Text, "The note of"), strings.LastIndex(page.Text, "## "); i < j {
 		t.Fatalf("the newest entry is not first:\n%s", page.Text)
 	}
-	// The next seat of the agent carries the head of the page.
+	// The next seat of the agent carries the head of the page in a data
+	// block, and its instructions do not.
 	rec, _, _ := s.b.get(context.Background(), it.ID)
-	if ins := s.instructionsOf(context.Background(), rec, *rec.member("migrator-1")); !strings.Contains(ins, "Exactly the layout we want.") {
-		t.Fatalf("the instructions lack the heart:\n%s", ins)
+	m := *rec.member("migrator-1")
+	if blocks := s.learnedContext(context.Background(), m.Agent); len(blocks) != 1 || !strings.Contains(blocks[0].Text, "Exactly the layout we want.") {
+		t.Fatalf("the data block lacks the heart: %+v", blocks)
+	}
+	if ins := s.instructionsOf(context.Background(), rec, m); strings.Contains(ins, "Exactly the layout we want.") {
+		t.Fatalf("the heart reached the instructions:\n%s", ins)
 	}
 }
 

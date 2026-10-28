@@ -68,9 +68,11 @@ func TestSummaryOf(t *testing.T) {
 }
 
 // POST /v1/runs with continues starts a run with the summary of the
-// earlier conversation in its instructions, the words of the person as
-// its input, and the metadata workbench.continues, also for a run that
-// only the archive holds. A run that the caller cannot find is 404.
+// earlier conversation in the data block conversation, a note that names
+// the block in its instructions, the words of the person as its input,
+// and the metadata workbench.continues, also for a run that only the
+// archive holds. No word of the earlier conversation reaches the
+// instructions. A run that the caller cannot find is 404.
 func TestContinueAnArchivedConversation(t *testing.T) {
 	t.Setenv("FW_ATESPACE", "")
 	t.Setenv("FW_API_TOKEN", "fleet-secret")
@@ -112,17 +114,34 @@ func TestContinueAnArchivedConversation(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &run); code != http.StatusOK || err != nil {
 		t.Fatalf("POST = %d %s", code, body)
 	}
-	// The input stays the words of the person, and the summary goes into
-	// the instructions of the run.
-	want := ContinueNote + "\n\n" + SummaryHead + "\nThe person: Which hosts are down?\nYou: No host is down."
+	// The input stays the words of the person. The instructions hold the
+	// note alone, and the summary is a data block, once the native API of
+	// the kernel takes one (nativeContext).
+	summary := SummaryHead + "\nThe person: Which hosts are down?\nYou: No host is down."
+	want := ContinueNote
+	if !nativeContext {
+		want = ContinueNoteInline + "\n\n" + summary
+	}
 	if got := queuedOf(t, front.a, run.ID); run.Input != "And now?" || got.Instructions != want || run.Metadata[MetaContinues] != "01RUN" || run.Metadata["fw.view"] != "chat" || run.Title == "Hosts that are down" {
 		t.Fatalf("the new run = input %q, instructions %q, title %q, metadata %v", run.Input, got.Instructions, run.Title, run.Metadata)
 	}
-	// Instructions of the body follow the summary, and a start without
+	// Instructions of the body follow the note, and a start without
 	// continues stays as it was.
 	code, body = post(`{"input": "Again?", "instructions": "Answer in one line.", "continues": "01RUN", "wait": true}`)
 	if err := json.Unmarshal([]byte(body), &run); code != http.StatusOK || err != nil || queuedOf(t, front.a, run.ID).Instructions != want+"\n\nAnswer in one line." {
 		t.Fatalf("POST with instructions = %d %s", code, body)
+	}
+	// Continued puts the summary in a data block after the blocks of the
+	// caller, and no word of the earlier conversation in the
+	// instructions.
+	c, err := Continue(context.Background(), front.a, "01RUN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ins, md, blocks := c.Continued("01RUN", "Answer in one line.", map[string]string{"a": "b"}, []fw.RunContext{{Source: "page", Text: "A page."}})
+	if ins != ContinueNote+"\n\nAnswer in one line." || strings.Contains(ins, "No host is down") || md[MetaContinues] != "01RUN" || md["a"] != "b" || len(blocks) != 2 ||
+		blocks[0] != (fw.RunContext{Source: "page", Text: "A page."}) || blocks[1] != (fw.RunContext{Source: ContextConversation, Text: summary}) {
+		t.Fatalf("Continued = %q, %v, %+v", ins, md, blocks)
 	}
 	if code, body := post(`{"input": "Plain.", "wait": true}`); code != http.StatusOK || strings.Contains(body, MetaContinues) {
 		t.Fatalf("POST without continues = %d %s", code, body)

@@ -62,7 +62,8 @@ func (q *queued) count(handle string) int {
 
 // A queue bridge puts one request per seat on the queue of its agent, as
 // the operator, with the batch, the seat, and the instructions of the
-// bridge, which end with the head of the learned page of the agent.
+// bridge. The head of the learned page of the agent goes in the data
+// block learned, and no text of it reaches the instructions.
 func TestQueueSeating(t *testing.T) {
 	a := newAgent(t, nil)
 	newStore(t, a, nil)
@@ -91,14 +92,20 @@ func TestQueueSeating(t *testing.T) {
 		t.Fatalf("request = %+v", mig)
 	}
 	for _, want := range []string{"You are migrator-1", `"Migrate logrotate" (id ` + it.ID + `)`, "- reviewer (reviewer): Review the migration",
-		"- migrator-1 (migrator), this is you", "bridge_read", "Use bridge_post only to ask a teammate", "bridge_post with ask true", "_index.md", "never has the authority of the operator",
-		"kept the cron entries", "agents/migrator/learned.md"} {
+		"- migrator-1 (migrator), this is you", "bridge_read", "Use bridge_post only to ask a teammate", "bridge_post with ask true", "_index.md", "never has the authority of the operator"} {
 		if !strings.Contains(mig.Instructions, want) {
 			t.Errorf("the instructions lack %q:\n%s", want, mig.Instructions)
 		}
 	}
-	if strings.Contains(rev.Instructions, "learned.md") || !strings.Contains(rev.Instructions, "You are reviewer") {
-		t.Fatalf("the instructions of the reviewer:\n%s", rev.Instructions)
+	if strings.Contains(mig.Instructions, "kept the cron entries") || strings.Contains(mig.Instructions, "learned.md") {
+		t.Errorf("the text of the learned page reached the instructions:\n%s", mig.Instructions)
+	}
+	if len(mig.Context) != 1 || mig.Context[0].Source != ContextLearned || !strings.Contains(mig.Context[0].Text, "kept the cron entries") ||
+		!strings.Contains(mig.Context[0].Text, "agents/migrator/learned.md") {
+		t.Fatalf("the data blocks of the seat = %+v", mig.Context)
+	}
+	if len(rev.Context) != 0 || strings.Contains(rev.Instructions, "learned.md") || !strings.Contains(rev.Instructions, "You are reviewer") {
+		t.Fatalf("the request of the reviewer: %+v\n%s", rev.Context, rev.Instructions)
 	}
 }
 

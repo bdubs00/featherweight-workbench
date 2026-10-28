@@ -284,8 +284,9 @@ func TestFleetRunsCarryTheTitlesOfThePerson(t *testing.T) {
 }
 
 // POST /v1/runs?member= takes continues too: the front reads the earlier
-// run for the person and the member gets the summary in the instructions
-// and the metadata in the body of the start, and the input as it was. A run that the person cannot view is
+// run for the person and the member gets the summary in a data block, the
+// note in the instructions, and the metadata in the body of the start,
+// and the input as it was. A run that the person cannot view is
 // a 404 with the reason.
 func TestStartOnAMemberContinues(t *testing.T) {
 	p := newFleetPair(t)
@@ -301,7 +302,10 @@ func TestStartOnAMemberContinues(t *testing.T) {
 			_ = e.Decode(&queued)
 		}
 	}
-	if want := fleet.ContinueNote + "\n\n" + fleet.SummaryHead + "\nThe person: here\nYou: local"; queued.Instructions != want {
+	// Once the native API of the kernel takes data blocks, the summary
+	// goes in the block conversation and the instructions hold the note
+	// alone. Until then, the summary follows the note.
+	if queued.Instructions != fleet.ContinueNote && queued.Instructions != fleet.ContinueNoteInline+"\n\n"+fleet.SummaryHead+"\nThe person: here\nYou: local" {
 		t.Fatalf("the instructions on the owner = %q", queued.Instructions)
 	}
 	resp, b = do(t, "POST", p.viewURL+"/v1/runs?member=owner", `{"agent":"shared","input":"x","continues":"01NONE"}`, "Authorization", asAlice)
