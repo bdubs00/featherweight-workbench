@@ -199,7 +199,7 @@ func TestValue(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("the tool value = %+v, %v", res, err)
 	}
-	if txt := res.Content[0].(*sdk.TextContent).Text; !strings.HasPrefix(txt, "In the last 7 days, the agents finished 3 pieces of work.") || !strings.Contains(txt, "\n- agent:triage: 3 done") || !strings.Contains(txt, "20 min a piece by alice") {
+	if txt := res.Content[0].(*sdk.TextContent).Text; !strings.HasPrefix(txt, "In the last 7 days, the agents finished 3 tasks.") || !strings.Contains(txt, "\n- agent:triage: 3 done") || !strings.Contains(txt, "20 min a piece by alice") {
 		t.Fatalf("the text of the tool = %s", txt)
 	}
 	res, err = cs.CallTool(context.Background(), &sdk.CallToolParams{Name: ToolEstimate, Arguments: map[string]any{"line": "agent:triage", "minutes": 0}})

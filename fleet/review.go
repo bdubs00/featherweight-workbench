@@ -18,13 +18,43 @@ const MetaReview = "workbench.review"
 
 // InReview reports whether a run waits for a person to check its result:
 // it completed, it carries MetaReview, and no person reacted to it yet. It
-// leaves review on the first reaction, a thumb up, a thumb down, or a
-// heart.
+// reads the counts of the run object alone. ToCheck reads the facts of the
+// run too, and is right after Needs work.
 func InReview(r *fw.Run) bool {
 	if r == nil || r.State != fw.StateCompleted || r.Metadata[MetaReview] != "1" {
 		return false
 	}
 	return r.Reactions[fw.ReactionUp]+r.Reactions[fw.ReactionDown]+r.Reactions[fw.ReactionHeart] == 0
+}
+
+// ToCheck reports whether a run waits for a person to check its newest
+// result. It completed, it carries MetaReview, and no person reacted after
+// its newest end. So the new answer after Needs work waits for a check
+// again. Facts without ends, from before the archive counted them, fall
+// back to InReview and to the verdict of the facts, such as a receipt.
+func ToCheck(r *fw.Run, w Work) bool {
+	if r == nil || r.State != fw.StateCompleted || r.Metadata[MetaReview] != "1" {
+		return false
+	}
+	if w.Ends > 0 {
+		return w.Reviewed < w.Ends
+	}
+	return InReview(r) && w.Verdict == ""
+}
+
+// Again reports whether the result to check is a new answer after a person
+// sent an earlier one back.
+func Again(w Work) bool {
+	return w.Reviewed > 0 && w.Ends > w.Reviewed && w.LastVerdict == VerdictRejected
+}
+
+// SendBackText is the follow-up message of Needs work: the note of the
+// person, and the ask for the whole result again. Without that ask, a model
+// answers with the change alone, and the first answer is lost to the
+// person who checks.
+func SendBackText(note string) string {
+	return "A person checked your result and sent it back with this note:\n\n" + note +
+		"\n\nAnswer again with the whole result, changed as the note says."
 }
 
 // PoolEgress returns the egress hosts of the pool name, the hosts that its

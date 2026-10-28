@@ -46,6 +46,12 @@ const (
 //     when the definition of done of the agent passed, fw.DoneFailed when
 //     its checks ended the run, and empty for a run without one or of an
 //     older kernel. It is no verdict of a person.
+//   - Ends counts the ends of the run that completed, and Reviewed is the
+//     value of Ends at the newest reaction of a person. A follow-up after
+//     Needs work ends the run again, so Ends passes Reviewed, and the run
+//     waits for a check of its new answer (ToCheck). LastVerdict is the
+//     newest verdict of a person, where Verdict keeps the first. Note is
+//     the note of the newest thumb down.
 //   - CanceledBy names the person who canceled the run, when one did.
 //   - Backfilled is true once the backfill of the archive (backfill.go)
 //     read the events of the run again for these facts.
@@ -67,6 +73,10 @@ type Work struct {
 	Done         string    `json:"done,omitempty"`
 	CanceledBy   string    `json:"canceledBy,omitempty"`
 	Backfilled   bool      `json:"backfilled,omitempty"`
+	Ends         int       `json:"ends,omitempty"`
+	Reviewed     int       `json:"reviewed,omitempty"`
+	LastVerdict  string    `json:"lastVerdict,omitempty"`
+	Note         string    `json:"note,omitempty"`
 }
 
 // Apply folds one event of the run into the facts. The events of a run
@@ -88,6 +98,9 @@ func (w *Work) Apply(e fw.Event) {
 		}
 		if d.Outcome == string(fw.StateCanceled) && d.By != "" {
 			w.CanceledBy = d.By
+		}
+		if d.Outcome == string(fw.StateCompleted) {
+			w.Ends++
 		}
 		w.Done = d.Done
 		w.Asked = time.Time{}
@@ -121,24 +134,48 @@ func (w *Work) Apply(e fw.Event) {
 		}
 	case fw.EvRunReacted:
 		var d fw.ReactionData
-		if w.Verdict != "" || e.Decode(&d) != nil || d.Removed {
+		if e.Decode(&d) != nil {
 			return
 		}
+		var v string
 		switch d.Reaction {
 		case fw.ReactionUp, fw.ReactionHeart:
-			w.Verdict = VerdictAccepted
+			v = VerdictAccepted
 		case fw.ReactionDown:
-			w.Verdict = VerdictRejected
-		}
-	case fw.EvRunAnnotated:
-		if w.Verdict != "" {
+			v = VerdictRejected
+		default:
 			return
 		}
+		if d.Removed {
+			// A person takes back the reaction on the newest answer, so
+			// that answer waits for a check again.
+			if w.Reviewed == w.Ends && w.Ends > 0 {
+				w.Reviewed, w.LastVerdict, w.Note = w.Ends-1, "", ""
+			}
+			return
+		}
+		w.Reviewed, w.LastVerdict = w.Ends, v
+		if v == VerdictRejected {
+			w.Note = d.Note
+		}
+		if w.Verdict == "" {
+			w.Verdict = v
+		}
+	case fw.EvRunAnnotated:
+		// A receipt of a system of record checks the newest answer, as a
+		// thumb of a person does.
+		var v string
 		switch Verification(e) {
 		case "accepted", "satisfied":
-			w.Verdict = VerdictAccepted
+			v = VerdictAccepted
 		case "rejected":
-			w.Verdict = VerdictRejected
+			v = VerdictRejected
+		default:
+			return
+		}
+		w.Reviewed, w.LastVerdict = w.Ends, v
+		if w.Verdict == "" {
+			w.Verdict = v
 		}
 	}
 }

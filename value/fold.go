@@ -540,13 +540,13 @@ func sentence(a Answer) string {
 		b.WriteString("the agents finished no work that you can view.")
 		return b.String()
 	}
-	fmt.Fprintf(&b, "the agents finished %s", plural(a.Work.Done, "piece", "pieces")+" of work")
+	fmt.Fprintf(&b, "the agents finished %s", plural(a.Work.Done, "task", "tasks"))
 	if a.Work.Failed+a.Work.Stopped > 0 {
 		fmt.Fprintf(&b, ", and %d failed or stopped", a.Work.Failed+a.Work.Stopped)
 	}
 	b.WriteString(".")
 	if a.Work.Lost > 0 {
-		fmt.Fprintf(&b, " %s lost when a pool replaced the worker.", plural(a.Work.Lost, "piece was", "pieces were"))
+		fmt.Fprintf(&b, " %s lost when a pool replaced the worker.", plural(a.Work.Lost, "task was", "tasks were"))
 	}
 	if a.Work.Done > 0 {
 		fmt.Fprintf(&b, " People accepted %d and sent back %d.", a.Checks.Accepted, a.Checks.SentBack)
@@ -565,7 +565,7 @@ func sentence(a Answer) string {
 	}
 	fmt.Fprintf(&b, " The work cost %s", cost)
 	if a.Work.Done > 0 {
-		fmt.Fprintf(&b, ", %s for each finished piece", Dollars(a.Spend.PerDone))
+		fmt.Fprintf(&b, ", %s for each finished task", Dollars(a.Spend.PerDone))
 	}
 	b.WriteString(".")
 	if a.Spend.Unpriced > 0 {
