@@ -1,7 +1,8 @@
 package knowhow
 
-// This file is the daily pass that proposes routines (docs/KNOWHOW.md
-// section 6.5). For each Duty of each agent, it takes the completed runs
+// This file is the pass that proposes routines (docs/KNOWHOW.md section
+// 6.5). It runs once a day, and an owner starts it at once with the route
+// POST /v1/knowhow/propose. For each Duty of each agent, it takes the completed runs
 // of the archive of the last propose.days days. It needs propose.minRuns
 // runs, propose.minVerified of them verified, and it leaves out every run
 // that a receipt sent back, that its grader failed, that a person gave a
@@ -78,8 +79,13 @@ func RoutineName(duty string) string {
 }
 
 // Propose runs the pass over the archive.
-func (s *Service) Propose(ctx context.Context) (ProposeResult, error) {
-	out := ProposeResult{StaysOut: map[string]string{}}
+func (s *Service) Propose(ctx context.Context) (ProposeResult, error) { return s.ProposeFor(ctx, nil) }
+
+// ProposeFor runs the pass over the runs of the agents that keep takes,
+// or of every agent for a nil keep. The route POST /v1/knowhow/propose
+// runs it at once for the agents of an owner.
+func (s *Service) ProposeFor(ctx context.Context, keep func(agent string) bool) (ProposeResult, error) {
+	out := ProposeResult{Proposed: []string{}, StaysOut: map[string]string{}}
 	st := s.routineStore()
 	if st == nil {
 		return out, nil
@@ -90,7 +96,7 @@ func (s *Service) Propose(ctx context.Context) (ProposeResult, error) {
 		r := e.Run
 		duty := dutyOf(r)
 		if duty == "" || r.State != fw.StateCompleted || r.Depth != 0 || r.CreatedAt.Before(since) || CheckAgent(r.Agent) != nil ||
-			r.Agent == s.cfg.Review.Agent || r.Metadata[MetaReview] != "" {
+			r.Agent == s.cfg.Review.Agent || r.Metadata[MetaReview] != "" || (keep != nil && !keep(r.Agent)) {
 			continue
 		}
 		if groups[r.Agent] == nil {

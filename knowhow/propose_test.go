@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -279,5 +280,55 @@ func TestRoutineMoved(t *testing.T) {
 	}
 	if RoutineName("Nightly Sweep!") != "duty-nightly-sweep" {
 		t.Fatalf("RoutineName = %q", RoutineName("Nightly Sweep!"))
+	}
+}
+
+// An owner starts the pass at once with POST /v1/knowhow/propose, for one
+// agent or for the agents that the owner owns. A viewer and an operator
+// cannot, a person who cannot view the agent learns nothing, and with
+// proposals off the route says so.
+func TestProposeRoute(t *testing.T) {
+	runs := recordRuns(t, tickets(12))
+	runs[0] = withReceipt(runs[0], "accepted")
+	runs[1] = withReceipt(runs[1], "accepted")
+	fr := proposeFront(t, runs)
+	url := fr.url + "/v1/knowhow/propose"
+	for who, want := range map[string]int{"carol": http.StatusForbidden, "bob": http.StatusForbidden, "dave": http.StatusNotFound, "": http.StatusUnauthorized} {
+		resp, body := send(t, http.MethodPost, url+"?agent=triage", who, "")
+		mustStatus(t, resp, body, want)
+	}
+	// dave owns only private, which has no Duty with runs.
+	resp, body := send(t, http.MethodPost, url, "dave", "")
+	mustStatus(t, resp, body, http.StatusOK)
+	var res ProposeResult
+	decodeJSON(t, body, &res)
+	if len(res.Proposed) != 0 || len(res.StaysOut) != 0 {
+		t.Fatalf("the pass of dave = %+v", res)
+	}
+	if _, err := routines.Of(fr.a).Get(context.Background(), "triage", "duty-nightly"); err == nil {
+		t.Fatal("the pass of dave proposed a routine of an agent that dave does not own")
+	}
+	resp, body = send(t, http.MethodPost, url+"?agent=triage", "alice", "")
+	mustStatus(t, resp, body, http.StatusOK)
+	decodeJSON(t, body, &res)
+	if len(res.Proposed) != 1 || res.Proposed[0] != "triage/duty-nightly" {
+		t.Fatalf("the pass of alice = %s", body)
+	}
+	rec, err := routines.Of(fr.a).Get(context.Background(), "triage", "duty-nightly")
+	if err != nil || rec.Standing != routines.Rehearsing {
+		t.Fatalf("the routine = %+v, %v", rec, err)
+	}
+	resp, body = send(t, http.MethodPost, url, "alice", "")
+	mustStatus(t, resp, body, http.StatusOK)
+	if decodeJSON(t, body, &res); len(res.Proposed) != 0 {
+		t.Fatalf("a second pass = %s", body)
+	}
+
+	off := false
+	fr = newFront(t, func(c *KnowhowConfig) { c.Propose.Enabled = &off })
+	resp, body = send(t, http.MethodPost, fr.url+"/v1/knowhow/propose?agent=triage", "alice", "")
+	mustStatus(t, resp, body, http.StatusConflict)
+	if !strings.Contains(body, "Proposals of routines are off") {
+		t.Fatalf("the answer with proposals off = %s", body)
 	}
 }

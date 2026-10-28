@@ -4260,6 +4260,7 @@ Each move writes the journal entry `out-of-date` with the source that changed. A
 | `GET /v1/knowhow/waiting?agent=` | The changes that wait for a person, oldest first |
 | `POST /v1/knowhow/waiting/{id}` | `{"keep": true}` makes the change, and `{"keep": false}` drops it. A target that changed since gives 409. |
 | `GET /v1/knowhow/summary?agent=&days=7` | The four numbers, section 28.10 |
+| `POST /v1/knowhow/propose?agent=` | Runs the pass that proposes routines at once (section 28.9) and answers `{"proposed": ["<agent>/<name>"], "staysOut": {"<agent>/<duty>": "<why>"}}`. With an agent, the caller needs the owner role on it. Without one, the pass reads the agents on which the caller has the owner role. The process and the static token read every agent. With proposals off, or routines off, it answers 409 with the reason. |
 
 A `PUT` answers 201 for a new note and 200 for a change or for the same text. It answers 202 for a change that waits for a person. When `ifHash` does not hold, it answers 412 with the hash in the member `hash` and in `ETag`. A `DELETE` answers 200, or 202 for a change that waits. It answers 404 for a note that the front does not have, and 412 for another hash.
 
@@ -4370,7 +4371,7 @@ The profile `review` of `examples/bossmode/fw.yaml` calls the two tools and name
 
 ### 28.9 Routines from the runs of a Duty
 
-The daily pass proposes routines. For each Duty of each agent, it takes the completed top-level runs of the archive of the last `propose.days` days, the newest 50. It leaves out each run in these cases: a receipt sent it back, its grader failed it, a person gave it a thumbs down, or a routine did it.
+The daily pass proposes routines. An owner does not have to wait for the next day: `POST /v1/knowhow/propose` runs the same pass at once, for one agent or for the agents of the owner (section 28.3). For each Duty of each agent, it takes the completed top-level runs of the archive of the last `propose.days` days, the newest 50. It leaves out each run in these cases: a receipt sent it back, its grader failed it, a person gave it a thumbs down, or a routine did it.
 
 The pass needs `propose.minRuns` runs, 10 by default. It also needs `propose.minVerified` of them verified, 2 by default. A verified run has a receipt of `accepted` or `satisfied`, a grader that passed, a definition of done that passed (`done: checked` on its newest `fw.run.finished`), or a thumbs up. The pass calls `routine.Propose` with the name `duty-<duty>` and the decider `propose.decider`. Then it calls `routine.LeaveOneOut`.
 

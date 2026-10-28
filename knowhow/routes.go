@@ -46,7 +46,61 @@ func mount(k *native.Kit) error {
 	k.Handle("GET /v1/knowhow/waiting", rt.on(rt.waiting))
 	k.Handle("POST /v1/knowhow/waiting/{id}", rt.on(rt.decide))
 	k.Handle("GET /v1/knowhow/summary", rt.on(rt.summary))
+	k.Handle("POST /v1/knowhow/propose", rt.on(rt.propose))
 	return nil
+}
+
+// propose answers POST /v1/knowhow/propose?agent= with the result of the
+// pass that proposes routines from the runs of the Duties, which it runs
+// at once, so an owner does not wait for the pass of the next day
+// (docs/KNOWHOW.md section 6.5). With an agent, the caller needs the owner
+// role on it. Without one, the pass reads the agents on which the caller
+// has the owner role. With proposals off, or routines off, it answers
+// 409 with the reason.
+func (rt *routes) propose(w http.ResponseWriter, r *http.Request, s *Service) {
+	ctx := onBehalf(r)
+	switch {
+	case !s.cfg.Propose.On():
+		native.WriteProblem(w, r, http.StatusConflict, "Proposals of routines are off on this server. An admin turns them on with workbench.knowhow.propose.enabled.")
+		return
+	case s.routineStore() == nil:
+		native.WriteProblem(w, r, http.StatusConflict, "Routines are off on this server, so nothing can be proposed.")
+		return
+	}
+	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
+	owner := func(a string) error {
+		rg, err := s.rightsOn(ctx, a)
+		if err == nil && !rg.edit {
+			err = errors.Join(fw.ErrForbidden, errors.New("a proposal of routines needs the owner role on the agent"))
+		}
+		return err
+	}
+	var keep func(string) bool
+	switch {
+	case agent != "":
+		if err := owner(agent); err != nil {
+			rt.fail(w, r, err)
+			return
+		}
+		keep = func(a string) bool { return a == agent }
+	case !callerOf(ctx).trusted:
+		owned := map[string]bool{}
+		keep = func(a string) bool {
+			ok, seen := owned[a]
+			if !seen {
+				ok = owner(a) == nil
+				owned[a] = ok
+			}
+			return ok
+		}
+	}
+	res, err := s.ProposeFor(ctx, keep)
+	if err != nil {
+		rt.fail(w, r, err)
+		return
+	}
+	s.log.Info("knowhow: the proposals of routines ran on request", "agent", agent, "by", callerOf(ctx).by(), "proposed", len(res.Proposed), "staysOut", len(res.StaysOut))
+	native.WriteJSON(w, http.StatusOK, res)
 }
 
 // on answers a request with h while the process keeps Know-how, and with
