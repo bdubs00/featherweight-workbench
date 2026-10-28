@@ -139,3 +139,20 @@ func TestPlanNoAgent(t *testing.T) {
 		t.Fatalf("an unknown agent = %+v", x)
 	}
 }
+
+// The readback names only the asks of tools that the agent can call, and
+// names the tool of an ask with an argument.
+func TestPlanAsksOfItsTools(t *testing.T) {
+	patterns := []string{"bash: git push*", "ansible.playbook: check=false", "env: command=add", "destructive", "front.*"}
+	got := strings.Join(asksOf(patterns, []string{"bash", "files"}), "|")
+	if got != "Before it runs git push|Before a step that changes or deletes something" {
+		t.Errorf("the asks of an agent with bash and files = %q", got)
+	}
+	got = strings.Join(asksOf(patterns, []string{"bash", "ansible.*", "front.*"}), "|")
+	if got != "Before it runs git push|Before it uses ansible.playbook with check=false|Before a step that changes or deletes something|Before it uses a tool of front" {
+		t.Errorf("the asks of an agent with ansible = %q", got)
+	}
+	if n := len(asksOf(patterns, nil)); n != len(patterns) {
+		t.Errorf("an agent without a list of tools has %d asks, want %d", n, len(patterns))
+	}
+}

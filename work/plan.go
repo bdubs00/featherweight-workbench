@@ -309,7 +309,8 @@ func MakePlan(in PlanInput) Plan {
 
 	// When it asks, and when it stays quiet.
 	for _, who := range p.Who {
-		for _, a := range asksOf(byName[who.Agent].Ask) {
+		c := byName[who.Agent]
+		for _, a := range asksOf(c.Ask, c.Tools) {
 			if !slices.Contains(p.Asks, a) {
 				p.Asks = append(p.Asks, a)
 			}
@@ -559,30 +560,62 @@ func perMonth(s schedule.Schedule) int {
 	return int(math.Round(span * 60 / every.Minutes() * 4.3 * float64(days)))
 }
 
-// asksOf words the patterns of a policy that ask a person.
-func asksOf(patterns []string) []string {
+// asksOf words the patterns of a policy that ask a person. With tools,
+// the tools that the agent can call, it leaves out a pattern of a tool
+// that the agent lacks, so the readback names no ask that cannot happen.
+// A pattern with an argument of a tool other than bash names the tool, as
+// in "Before it uses ansible.playbook with check=false".
+func asksOf(patterns, tools []string) []string {
 	var out []string
 	for _, p := range patterns {
 		p = strings.TrimSpace(p)
+		tool, arg, hasArg := strings.Cut(p, ":")
+		tool = strings.TrimSpace(tool)
 		switch {
 		case p == "":
 		case p == "destructive":
 			out = append(out, "Before a step that changes or deletes something")
 		case p == "*":
 			out = append(out, "Before each step")
-		case strings.Contains(p, ":"):
-			tool, arg, _ := strings.Cut(p, ":")
+		case !mayCall(tools, tool):
+		case hasArg:
 			arg = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(arg), "*"))
-			if arg == "" {
-				out = append(out, "Before it uses "+strings.TrimSpace(tool))
-			} else {
+			switch {
+			case arg == "":
+				out = append(out, "Before it uses "+tool)
+			case tool == "bash":
 				out = append(out, "Before it runs "+arg)
+			default:
+				out = append(out, "Before it uses "+tool+" with "+arg)
 			}
+		case strings.HasSuffix(p, ".*"):
+			out = append(out, "Before it uses a tool of "+strings.TrimSuffix(p, ".*"))
 		default:
 			out = append(out, "Before it uses "+strings.TrimRight(p, "*"))
 		}
 	}
 	return out
+}
+
+// mayCall reports whether an agent with the tools may call the tool of a
+// pattern of its policy. A pattern of a tool can be a glob, such as
+// ansible.*, and so can an entry of the tools. No tools means every tool.
+func mayCall(tools []string, tool string) bool {
+	if len(tools) == 0 {
+		return true
+	}
+	for _, t := range tools {
+		if t == tool || t == "*" {
+			return true
+		}
+		if ok, _ := path.Match(t, tool); ok {
+			return true
+		}
+		if ok, _ := path.Match(tool, t); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // gapsOf says what the agent cannot do for the words: send an email
@@ -783,7 +816,13 @@ func PlanFor(ctx context.Context, a *fw.Agent, now time.Time, zone string, req P
 			continue
 		}
 		seen[name] = true
-		c := Candidate{Agent: name, Name: name, Description: v.Description, Tools: slices.Concat(v.Tools, v.WorkerTools), Costs: costs[name]}
+		// The tools of the profile, or the tools of its workers for a
+		// profile that names none: the tools that its runs can call.
+		tools := v.Tools
+		if len(tools) == 0 {
+			tools = v.WorkerTools
+		}
+		c := Candidate{Agent: name, Name: name, Description: v.Description, Tools: slices.Clone(tools), Costs: costs[name]}
 		if fs != nil {
 			if f, err := fs.Get(ctx, name); err == nil && strings.TrimSpace(f.DisplayName) != "" {
 				c.Name = f.DisplayName
