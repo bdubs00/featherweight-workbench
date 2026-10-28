@@ -268,6 +268,22 @@ func TestJobAndEvent(t *testing.T) {
 	}
 }
 
+// The runs of the after-work review are one card that reads Review of
+// what it learned, and it names Know-how, not a person knowhow:review.
+func TestReviewCard(t *testing.T) {
+	var runs []Run
+	for i, agent := range []string{"writer", "clerk"} {
+		r := run("K"+string(rune('0'+i)), "review", fw.StateCompleted, ago(time.Hour), ago(time.Minute), map[string]string{fw.MetaBatch: "knowhow:review", fw.MetaTitle: "After-work review of " + agent})
+		r.Origin, r.Principal, r.Output = fw.OriginBus, "knowhow:review", "Kept one note."
+		runs = append(runs, Run{Run: r})
+	}
+	ans := Assemble(Input{Me: "alice", Now: t0, Runs: runs, All: true})
+	c := cardOf(t, ans, "job:knowhow:review/knowhow:review")
+	if c.Title != "Review of what it learned" || c.From != (From{Kind: "app", Name: "Know-how", Via: "queue"}) || c.Parts.Total != 2 {
+		t.Fatalf("the card of the review = %+v", c)
+	}
+}
+
 // The board keeps the cards of the caller unless all is asked, keeps a
 // card that did not end however old it is, and drops a card that ended
 // before the window.

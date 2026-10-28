@@ -4137,6 +4137,8 @@ A person thinks in tasks, not in places. The package `work` answers where each t
 
 A card has an id, its kind, a title, its stage, `next`, and a reason in words. `from` says who asked: a person, a duty, an app, or the manager. Its `via` says how: page, mcp, queue, bridge, schedule, event, call, or now. For a person, `from.display` is a name that people read beside the subject in `from.name`. It is the name that a bridge keeps from its open, else the name that the front learned for the subject (`bridges.Store.KnownName`), else the subject when it is no id that the issuer made. A subject such as the UUID of a sign-in of Cloudflare Access with no known name has no `display`. It has the times `opened`, `since`, and `ended`, and its agents. It also has its parts by stage, its links, its cost, `verdict`, and `lost`. The links name the run to open, the approval to decide, the bridge, the duty, the batch, the source, and at most 20 runs.
 
+The title of a job is its batch name. The runs of the after-work review of Know-how (batch `knowhow:review`, section 28.8) are one job with the title "Review of what it learned". Its `from` is the app Know-how, because the principal `knowhow:review` is no person.
+
 ### 26.2 The stages
 
 The backend decides the stage, and the page only shows it. The stage of a card is the stage of its part with the highest weight. The weights, the highest first: needs-you, working, waiting, stopped, review, and done. So a job with one failed item and ten that work reads as working, with the failed item in its parts.
