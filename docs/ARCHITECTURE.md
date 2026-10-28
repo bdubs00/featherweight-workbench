@@ -4154,7 +4154,7 @@ A done card carries its verdict:
 - `checked`: the kernel recorded `done: checked` without `weak`, so the checks of the definition of done of the agent passed and showed the work of the run (`fleet.Checked`). A weak pass is `unchecked`.
 - `sent-back`: a thumb down
 - `unchecked`: nothing and nobody checked it
-- `let-go`: a person let the stopped card go (section 26.5). It is a word of the board only, and Results does not count it.
+- `let-go`: a person let the stopped card go (section 26.5), or it let itself go after seven days. It is a word of the board only, and Results does not count it.
 
 A bridge that a person closed with Looks right is `accepted`, with the reason "Accepted.". Another closed bridge is `unchecked`.
 
@@ -4162,11 +4162,13 @@ A canceled card has none. The first verdict of the facts of the work (section 25
 
 `next` names who moves a card: `worker`, `agent`, `you`, `person`, or `manager`. A start of a duty whose decider while away is the manager names the manager for a plain approval. A card of the caller names `you`, and a card of another person names `person`.
 
-A card leaves the board only through done. A card that did not end stays however old it is, so work that stopped never drops out of sight. A done card stays for the window of the query. A run in review that is older than the window drops out, but an open bridge stays until a person closes it.
+A card leaves the board only through done. A card that waits or works stays however old it is. A card that stopped stays for seven days (`work.StoppedFor`), so work that stopped never drops out of sight unseen. Then it lets itself go: it moves to done with the verdict `let-go` at the end of those seven days, with the one line "It stopped 7 days ago and nobody moved it, so it let itself go.", and it leaves Done with the window. So the stopped runs of a script or of last week do not make the owner their janitor. A done card stays for the window of the query. A run in review that is older than the window drops out, but an open bridge stays until a person closes it.
+
+The cards of a stage come in the order of the wait, the card that waits longest first. To check and Done show the newest card first, so a fresh result never sinks under older results.
 
 A lane names in `oldest` the card that waits longest. A start that comes next waits for no one yet, so it does not count there.
 
-A lost run is a run of the archive that never ended and that no member holds. The pool replaced its worker, so it cannot go on. Its card is stopped with `lost: true`, and its reason says so.
+A lost run is a run of the archive that never ended and that no member holds. The pool replaced its worker, so it cannot go on. Its card is stopped with `lost: true`, and its reason says "The agent that held it is gone.". No reason says worker.
 
 A reason says what happens in plain words. No card says "Works." alone, and none names the seats or the turns of a team. A run that works says "The agent works on it.", or what its tool does now, such as "Works with files." (`work.toolWords`). A run that waits says "Asks before it writes a page of the wiki.", never the name of the tool. A seat says "writer works on its part.", and an open bridge whose seats ended says "The agents finished, and the result waits for a check.". A limit of turns is "its limit of steps". A start of a duty takes the title of the duty, and so does each new run of a duty with a title.
 

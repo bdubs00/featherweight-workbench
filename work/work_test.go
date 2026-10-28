@@ -147,10 +147,10 @@ func TestConversation(t *testing.T) {
 }
 
 // A run whose worker the pool replaced before it ended stops, and the card
-// says that it is lost, however long ago it changed. A run that waits for
-// a person links its approval.
+// says that it is lost and that the agent that held it is gone, never the
+// worker. A run that waits for a person links its approval.
 func TestLostAndWaiting(t *testing.T) {
-	lost := run("R-LOST", "reviewer", fw.StateInputRequired, ago(10*24*time.Hour), ago(10*24*time.Hour), nil)
+	lost := run("R-LOST", "reviewer", fw.StateInputRequired, ago(5*24*time.Hour), ago(5*24*time.Hour), nil)
 	lost.Pending = &fw.Approval{ID: "ap-old", Tool: "bash"}
 	asks := run("R-ASK", "reviewer", fw.StateInputRequired, ago(2*time.Hour), ago(time.Hour), nil)
 	asks.Pending = &fw.Approval{ID: "ap-1", Tool: "git.push", RequestedAt: ago(time.Hour)}
@@ -160,7 +160,7 @@ func TestLostAndWaiting(t *testing.T) {
 	in.Mine = mineAll(in.Runs...)
 	ans := Assemble(in)
 	l := cardOf(t, ans, "run:R-LOST")
-	if l.Stage != StageStopped || !l.Lost || !strings.Contains(l.Reason, "worker was replaced") || l.Links.Approval != "" || l.Next != NextYou {
+	if l.Stage != StageStopped || !l.Lost || l.Reason != "The agent that held it is gone." || l.Links.Approval != "" || l.Next != NextYou {
 		t.Fatalf("the lost run = %+v", l)
 	}
 	a := cardOf(t, ans, "run:R-ASK")
@@ -178,7 +178,7 @@ func TestLostAndWaiting(t *testing.T) {
 	if ans.Cards[0].ID != "run:R-Q" || ans.Cards[1].ID != "run:R-ASK" || ans.Cards[2].ID != "run:R-LOST" {
 		t.Fatalf("the order = %s %s %s", ans.Cards[0].ID, ans.Cards[1].ID, ans.Cards[2].ID)
 	}
-	if want := "3 tasks are open. 2 need you, the oldest for 2 hours. 1 stopped, the oldest for 10 days."; ans.Sentence != want {
+	if want := "3 tasks are open. 2 need you, the oldest for 2 hours. 1 stopped, the oldest for 5 days."; ans.Sentence != want {
 		t.Fatalf("the sentence = %q", ans.Sentence)
 	}
 }
@@ -269,11 +269,11 @@ func TestJobAndEvent(t *testing.T) {
 }
 
 // The board keeps the cards of the caller unless all is asked, keeps a
-// card that did not end however old it is, and drops a card that ended
-// before the window.
+// card that waits for a person however old it is, and drops a card that
+// ended before the window.
 func TestScopeAndWindow(t *testing.T) {
 	mine := run("M1", "helper", fw.StateCompleted, ago(9*24*time.Hour), ago(9*24*time.Hour), nil)
-	stale := run("M2", "helper", fw.StateFailed, ago(30*24*time.Hour), ago(30*24*time.Hour), nil)
+	stale := run("M2", "helper", fw.StateInputRequired, ago(30*24*time.Hour), ago(30*24*time.Hour), nil)
 	theirs := run("T1", "helper", fw.StateRunning, ago(time.Hour), ago(time.Minute), nil)
 	theirs.Principal = "bob"
 	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: mine}, {Run: stale}, {Run: theirs}}, Mine: map[string]bool{"M1": true, "M2": true}}
@@ -466,6 +466,62 @@ func TestLetGoCards(t *testing.T) {
 	}
 }
 
+// A card that stopped a week ago and that nobody moved lets itself go: it
+// is done with the verdict let-go and one line in Done, from the day it
+// let itself go, and it leaves the window a week later. A card that
+// stopped less than a week ago stays stopped. A card that waits for a
+// person never lets itself go. (plan A8)
+func TestStoppedLetsItselfGo(t *testing.T) {
+	week := StoppedFor
+	stale := run("R-STALE", "helper", fw.StateFailed, ago(week+2*24*time.Hour), ago(week+24*time.Hour), nil)
+	fresh := run("R-FRESH", "helper", fw.StateFailed, ago(6*24*time.Hour), ago(6*24*time.Hour), nil)
+	gone := run("R-GONE", "helper", fw.StateFailed, ago(3*week), ago(3*week), nil)
+	waits := run("R-WAITS", "helper", fw.StateInputRequired, ago(3*week), ago(3*week), nil)
+	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: stale}, {Run: fresh}, {Run: gone}, {Run: waits}}}
+	in.Mine = mineAll(in.Runs...)
+	ans := Assemble(in)
+	c := cardOf(t, ans, "run:R-STALE")
+	if c.Stage != StageDone || c.Verdict != VerdictLetGo || c.Next != "" || c.Ended == nil || !c.Ended.Equal(ago(24*time.Hour)) {
+		t.Fatalf("a card stopped for 8 days = %+v", c)
+	}
+	if c.Reason != "It stopped 7 days ago and nobody moved it, so it let itself go." {
+		t.Fatalf("the line in Done = %q", c.Reason)
+	}
+	if f := cardOf(t, ans, "run:R-FRESH"); f.Stage != StageStopped {
+		t.Fatalf("a card stopped for 6 days = %+v", f)
+	}
+	if w := cardOf(t, ans, "run:R-WAITS"); w.Stage != StageNeedsYou {
+		t.Fatalf("a card that waits for a person = %+v", w)
+	}
+	for _, x := range ans.Cards {
+		if x.ID == "run:R-GONE" {
+			t.Fatalf("a card that let itself go two weeks ago shows %+v", x)
+		}
+	}
+	if ans.Lanes[3].Count != 1 || ans.Lanes[5].Count != 1 {
+		t.Fatalf("the lanes = %+v", ans.Lanes)
+	}
+}
+
+// To check shows the newest result first, so a fresh result never sinks
+// under the old results of teams (plan A8). Needs you keeps the longest
+// wait first.
+func TestToCheckNewestFirst(t *testing.T) {
+	review := map[string]string{fleet.MetaReview: "1"}
+	older := run("R-OLD", "writer", fw.StateCompleted, ago(3*24*time.Hour), ago(3*24*time.Hour), review)
+	newer := run("R-NEW", "writer", fw.StateCompleted, ago(time.Hour), ago(time.Minute), review)
+	middle := run("R-MID", "writer", fw.StateCompleted, ago(24*time.Hour), ago(24*time.Hour), review)
+	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: older}, {Run: newer}, {Run: middle}}}
+	in.Mine = mineAll(in.Runs...)
+	var order []string
+	for _, c := range Assemble(in).Cards {
+		order = append(order, c.ID)
+	}
+	if strings.Join(order, " ") != "run:R-NEW run:R-MID run:R-OLD" {
+		t.Fatalf("the order of To check = %v", order)
+	}
+}
+
 // A start of a duty that tells only of what it finds and whose run found
 // something waits in To check with the words of what it found. The card
 // is the move of a person of notify.result. A start that found nothing is
@@ -538,7 +594,7 @@ func TestLostQuestion(t *testing.T) {
 	in.Mine = mineAll(in.Runs...)
 	ans := Assemble(in)
 	b1 := cardOf(t, ans, "bridge:B1")
-	if b1.Stage != StageStopped || !b1.Lost || b1.Reason != "ops lost its worker while its question waited, so it cannot go on." || b1.Parts.NeedsYou != 0 {
+	if b1.Stage != StageStopped || !b1.Lost || b1.Reason != "ops asked a question, but the agent that held it is gone." || b1.Parts.NeedsYou != 0 {
 		t.Fatalf("a bridge whose seat asked and went = %+v", b1)
 	}
 	if b2 := cardOf(t, ans, "bridge:B2"); b2.Stage != StageStopped || !b2.Lost || b2.Links.Approval != "" {

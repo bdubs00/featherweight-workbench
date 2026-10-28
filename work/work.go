@@ -175,8 +175,10 @@ type Lane struct {
 }
 
 // Answer is the board of the caller: the lanes in the order of the flow,
-// the cards in that order with the longest wait first in each stage, and
-// a sentence for a host that shows only text.
+// the cards in that order, and a sentence for a host that shows only
+// text. In each stage the card that waits longest comes first, but To
+// check and Done show the newest card first, so fresh work never sinks
+// under old results.
 type Answer struct {
 	Sentence string `json:"sentence"`
 	Lanes    []Lane `json:"lanes"`
@@ -373,7 +375,7 @@ func (b *board) bridge(it bridges.Item) {
 			// The seat asked, and then its worker went: nobody can move
 			// the seat by an answer, so it stopped (walk finding L20).
 			p.stage, p.lost = StageStopped, true
-			p.reason = m.Handle + " lost its worker while its question waited, so it cannot go on."
+			p.reason = m.Handle + " asked a question, but " + agentGone
 			d.parts = append(d.parts, p)
 			continue
 		}
@@ -393,11 +395,11 @@ func (b *board) bridge(it bridges.Item) {
 		case bridges.PresenceWorking:
 			p.stage, p.reason = StageWorking, m.Handle+" works on its part."
 		case bridges.PresenceWaiting:
-			p.stage, p.reason = StageWaiting, m.Handle+" waits for a worker."
+			p.stage, p.reason = StageWaiting, m.Handle+" waits to start."
 		case bridges.PresenceError:
 			p.stage, p.reason = StageStopped, m.Handle+" stopped with an error."
 			if m.Gone {
-				p.reason, p.lost = m.Handle+" lost its worker before it ended.", true
+				p.reason, p.lost = m.Handle+" stopped: "+agentGone, true
 			}
 		case bridges.PresenceLimit:
 			p.stage, p.reason = StageStopped, m.Handle+" stopped at a limit."
@@ -449,7 +451,7 @@ func (b *board) start(s Start) {
 	case duties.StateStarting, duties.StateQueued:
 		p.stage = StageWaiting
 		if p.reason == "" {
-			p.reason = "Waits for a worker."
+			p.reason = "Waits to start."
 		}
 	case duties.StateWaiting:
 		p.stage = StageWaiting
@@ -478,7 +480,7 @@ func (b *board) start(s Start) {
 	case duties.StateLost:
 		p.stage, p.lost = StageStopped, true
 		if p.reason == "" {
-			p.reason = "No worker reported its run."
+			p.reason = capital(agentGone)
 		}
 	default:
 		// failed, missed, check-failed, and a state of a newer front.
@@ -727,11 +729,11 @@ func (b *board) runPart(r Run) part {
 	p := part{run: r.ID, since: r.UpdatedAt}
 	if r.Lost {
 		p.stage, p.lost = StageStopped, true
-		p.reason = "Its worker was replaced before it ended, so it cannot go on."
+		p.reason = capital(agentGone)
 		return p
 	}
 	if r.Blocked != "" {
-		p.stage, p.reason = StageStopped, "Its worker is blocked: "+oneLine(r.Blocked, 160)
+		p.stage, p.reason = StageStopped, "Its agent cannot work: "+oneLine(r.Blocked, 160)
 		return p
 	}
 	switch r.State {
@@ -745,7 +747,7 @@ func (b *board) runPart(r Run) part {
 			}
 		}
 	case fw.StateQueued:
-		p.stage, p.reason, p.since = StageWaiting, "Waits for a worker.", r.CreatedAt
+		p.stage, p.reason, p.since = StageWaiting, "Waits to start.", r.CreatedAt
 	case fw.StateRunning, fw.StateSuspended:
 		p.stage, p.since = StageWorking, r.CreatedAt
 		p.reason = agentWorks
@@ -799,11 +801,14 @@ func (b *board) runPart(r Run) part {
 	return p
 }
 
-// Reasons of a card in plain words: no card says "Works." alone, and none
-// names the seats or the turns of a team (walk finding L8).
+// Reasons of a card in plain words: no card says "Works." alone, none
+// names the seats or the turns of a team (walk finding L8), and none says
+// worker (plan A11). agentGone ends the reason of a part whose worker the
+// pool replaced before it ended.
 const (
 	agentWorks = "The agent works on it."
 	teamDone   = "The agents finished, and the result waits for a check."
+	agentGone  = "the agent that held it is gone."
 )
 
 // judged is the verdict of a person, or of a receipt, on the result of a
@@ -877,6 +882,7 @@ func (b *board) answer() Answer {
 		}
 		b.settle(d)
 		b.letGo(d)
+		b.letItself(d)
 		if d.Stage == StageDone && d.Since.Before(b.in.Now.Add(-b.in.Window)) {
 			continue
 		}
@@ -904,7 +910,7 @@ func (b *board) answer() Answer {
 		if c := cmp.Compare(rank[x.Stage], rank[y.Stage]); c != 0 {
 			return c
 		}
-		if x.Stage == StageDone {
+		if x.Stage == StageDone || x.Stage == StageReview {
 			return y.Since.Compare(x.Since)
 		}
 		return x.Since.Compare(y.Since)
@@ -943,7 +949,7 @@ func (b *board) settle(d *draft) {
 			d.Parts.Waiting += n
 			d.Parts.Total += n
 			if weight[StageWaiting] > weight[top.stage] {
-				top = part{stage: StageWaiting, reason: plural(n, "item waits", "items wait") + " for a worker.", since: d.Opened}
+				top = part{stage: StageWaiting, reason: plural(n, "item waits", "items wait") + " to start.", since: d.Opened}
 			}
 		}
 	}

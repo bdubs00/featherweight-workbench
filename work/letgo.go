@@ -210,6 +210,24 @@ func (b *board) letGo(d *draft) {
 	d.Reason = "Let go by " + letGoName(l, b.in.Me) + "."
 }
 
+// StoppedFor is how long a card stays stopped before it lets itself go: a
+// stopped card that nobody moved for this long moves to done, with the
+// verdict let-go and one line that says why. So the stopped work of a
+// script or of last week does not make the owner its janitor (plan A8).
+const StoppedFor = 7 * 24 * time.Hour
+
+// letItself moves a card that stopped StoppedFor ago or earlier to done,
+// with the verdict let-go, at the time that it let itself go. A card that a
+// person let go keeps that let-go.
+func (b *board) letItself(d *draft) {
+	if d.Stage != StageStopped || d.Since.IsZero() || b.in.Now.Sub(d.Since) < StoppedFor {
+		return
+	}
+	at := d.Since.Add(StoppedFor)
+	d.Stage, d.Since, d.Ended, d.Verdict, d.Next = StageDone, at, &at, VerdictLetGo, ""
+	d.Reason = "It stopped " + Span(StoppedFor) + " ago and nobody moved it, so it let itself go."
+}
+
 // letGoName names the person of a let-go for the caller me: you for the
 // caller, else the name of the person, else a person.
 func letGoName(l LetGo, me string) string {
