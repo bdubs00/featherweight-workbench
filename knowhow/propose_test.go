@@ -184,6 +184,51 @@ func TestProposeNeedsVerifiedRuns(t *testing.T) {
 	}
 }
 
+// withDone sets the definition of done on the newest end of a run: a pass,
+// weak or not.
+func withDone(events []fw.Event, weak bool) []fw.Event {
+	out := slices.Clone(events)
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i].Type != fw.EvRunFinished {
+			continue
+		}
+		var d fw.RunFinishedData
+		if err := out[i].Decode(&d); err != nil {
+			panic(err)
+		}
+		d.Done, d.DoneWeak, d.Stop = fw.DoneChecked, weak, fw.RunStopChecked
+		if weak {
+			d.Stop = fw.RunStopAnswered
+		}
+		raw, err := json.Marshal(d)
+		if err != nil {
+			panic(err)
+		}
+		out[i].Data = raw
+		break
+	}
+	return out
+}
+
+// A weak pass of done verifies nothing, so it does not count toward
+// minVerified. Two checked runs that are not weak do.
+func TestProposeWeakPassVerifiesNothing(t *testing.T) {
+	runs := recordRuns(t, tickets(12))
+	runs[0] = withDone(runs[0], true)
+	runs[1] = withDone(runs[1], true)
+	fr := proposeFront(t, runs)
+	ctx := context.Background()
+	if res, err := fr.s.Propose(ctx); err != nil || len(res.Proposed) != 0 {
+		t.Fatalf("two weak passes = %+v, %v", res, err)
+	}
+	runs[0] = withDone(runs[0], false)
+	runs[1] = withDone(runs[1], false)
+	fr = proposeFront(t, runs)
+	if res, err := fr.s.Propose(ctx); err != nil || len(res.Proposed) != 1 {
+		t.Fatalf("two checked runs = %+v, %v", res, err)
+	}
+}
+
 // A proposal with a value that no run explains stays out, and the journal
 // says why once.
 func TestProposeStaysOut(t *testing.T) {

@@ -4320,7 +4320,7 @@ A pass at each minute reads the finished runs of the archive behind a durable cu
 |---|---|
 | `gotcha` | A tool call that failed, and a later call of the same tool in the same run that passed with another input. Two runs with the same failure make one candidate. The numbers of the error do not count. |
 | `place` | The same read call, tool and canonical input, in two runs or more of one principal, with the same result. The entry `places.<agent>.<principal>` keeps at most 500 read calls with their last three runs. |
-| `outcome` | A run with a receipt, a verdict of its grader, a definition of done that passed (section 25.1), or a thumbs up or down. The runs of one Duty that went well make one candidate, and those that went badly make another. |
+| `outcome` | A run with a receipt, a verdict of its grader, a definition of done that passed without a weak pass (section 25.1, `fw.CheckedDone`), or a thumbs up or down. The runs of one Duty that went well make one candidate, and those that went badly make another. |
 | `recheck` | A note of a principal that went out of date, with the sources of the note at the new version |
 
 A candidate is the entry `cand.<agent>.<id>`. Its id is a hash of its kind, its scope, and what it found, then a dash and the agent in base64url. A candidate belongs to the scope of the principal of its runs. It holds at most eight runs with their evidence, and it gets the source `run:<id>` of each run. It drops 14 days after the pass found it.
@@ -4372,7 +4372,7 @@ The profile `review` of `examples/bossmode/fw.yaml` calls the two tools and name
 
 The daily pass proposes routines. For each Duty of each agent, it takes the completed top-level runs of the archive of the last `propose.days` days, the newest 50. It leaves out each run in these cases: a receipt sent it back, its grader failed it, a person gave it a thumbs down, or a routine did it.
 
-The pass needs `propose.minRuns` runs, 10 by default. It also needs `propose.minVerified` of them verified, 2 by default. A verified run has a receipt of `accepted` or `satisfied`, a grader that passed, a definition of done that passed (`done: checked` on its newest `fw.run.finished`), or a thumbs up. The pass calls `routine.Propose` with the name `duty-<duty>` and the decider `propose.decider`. Then it calls `routine.LeaveOneOut`.
+The pass needs `propose.minRuns` runs, 10 by default. It also needs `propose.minVerified` of them verified, 2 by default. A verified run has a receipt of `accepted` or `satisfied`, a grader that passed, a definition of done that passed, or a thumbs up. A definition of done passed when its newest `fw.run.finished` has `done: checked` and no `doneWeak` (`fw.CheckedDone`). A weak pass, such as a check that only reads a file that was there before the run, verifies nothing and counts toward no `minVerified`. The pass calls `routine.Propose` with the name `duty-<duty>` and the decider `propose.decider`. Then it calls `routine.LeaveOneOut`.
 
 Some proposals stay out:
 

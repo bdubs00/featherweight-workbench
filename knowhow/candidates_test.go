@@ -180,6 +180,22 @@ func TestDoneChecked(t *testing.T) {
 	if f := factsFrom(entryOf(rec.out), rec.out); f.Checked || f.verified() {
 		t.Fatalf("a run whose newest checks failed = %+v", f)
 	}
+	// A weak pass, such as a check that only reads a file that was there
+	// before the run, verifies nothing, from the event and from the run.
+	weak := record("r2", day0).queued("triage", "x", "duty:nightly", nil).started("").
+		add(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "fixed", Done: fw.DoneChecked, DoneWeak: true, Stop: fw.RunStopAnswered})
+	f = factsFrom(entryOf(weak.out), weak.out)
+	if f.Checked || f.verified() {
+		t.Fatalf("a run whose checks passed weakly = %+v", f)
+	}
+	if polarity, _ := outcomeOf(f); polarity != "" {
+		t.Fatalf("a weak pass is an outcome that went %s", polarity)
+	}
+	e := entryOf(weak.out[:len(weak.out)-1])
+	e.Run.Done = &fw.RunDone{State: fw.DoneChecked, Weak: true}
+	if f := factsFrom(e, weak.out[:len(weak.out)-1]); f.Checked {
+		t.Fatalf("a run object with a weak pass = %+v", f)
+	}
 }
 
 // entryOf makes an entry of the archive from events.
