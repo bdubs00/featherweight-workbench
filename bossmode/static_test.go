@@ -303,3 +303,16 @@ func TestSettingsWithoutManager(t *testing.T) {
 		t.Errorf("settings: %d %q", resp.StatusCode, body)
 	}
 }
+
+// A front whose binary serves the board of the work says work: true, so
+// the page shows the places Work and Results. A front without it leaves
+// the key out, and the page is the page of main.
+func TestSettingsWithWork(t *testing.T) {
+	t.Cleanup(func() { workOn.Store(false) })
+	fr := newFront(t, nil)
+	OfferWork()
+	resp, body := get(t, fr.url+"/v1/bossmode", "ada")
+	if resp.StatusCode != http.StatusOK || !strings.HasSuffix(body, `"routines":false,"packages":false,"work":true}`+"\n") {
+		t.Errorf("settings: %d %q", resp.StatusCode, body)
+	}
+}
