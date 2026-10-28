@@ -19,7 +19,9 @@ func TestNormalizeDefaults(t *testing.T) {
 	if d.Limits.Overlap != OverlapSkip || d.Limits.CatchUp != "1h" || *d.Limits.Retries != 1 {
 		t.Fatalf("the limits = %+v", d.Limits)
 	}
-	if *d.WhileAway != (WhileAway{Decider: "manager", Timeout: "2h", Then: "deny"}) {
+	// Nobody decides while the owner is away, unless the owner picks the
+	// manager: one default for a duty of the door and of New duty.
+	if *d.WhileAway != (WhileAway{Decider: "nobody", Timeout: "2h", Then: "deny"}) {
 		t.Fatalf("whileAway = %+v", d.WhileAway)
 	}
 	if d.Notify.Failure[0] != "owner" || d.Notify.NeedsYou[0] != "owner" || d.RunAs != RunAsDuty {
@@ -175,5 +177,23 @@ func TestOfferedNamesWhatIsRegistered(t *testing.T) {
 	}
 	if !slices.IsSorted(events) || !slices.IsSorted(actions) || !slices.IsSorted(looks) {
 		t.Fatalf("Offered() = %v, %v, %v; want sorted lists", events, actions, looks)
+	}
+}
+
+// The readback says who decides while the owner is away, and the defaults
+// read as nobody, after 2 hours, then no.
+func TestAwayWords(t *testing.T) {
+	for _, c := range []struct {
+		w    *WhileAway
+		want string
+	}{
+		{nil, "Nobody decides a question for you. After 2 hours without an answer, the answer is no."},
+		{&WhileAway{}, "Nobody decides a question for you. After 2 hours without an answer, the answer is no."},
+		{&WhileAway{Decider: "manager", Timeout: "30m", Then: "cancel"}, "The manager decides a question for you. After 30 minutes without an answer, the run stops."},
+		{&WhileAway{Decider: "nobody", Timeout: "24h", Then: "deny"}, "Nobody decides a question for you. After 24 hours without an answer, the answer is no."},
+	} {
+		if got := AwayWords(c.w); got != c.want {
+			t.Errorf("AwayWords(%+v) = %q, want %q", c.w, got, c.want)
+		}
 	}
 }

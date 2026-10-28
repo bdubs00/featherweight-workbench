@@ -288,12 +288,21 @@ const (
 
 // WhileAway says who decides the questions of a run of the duty while
 // nobody watches, after how long, and what happens then. The front
-// applies it (a later package); the record keeps it.
+// applies it (package away); the record keeps it.
 type WhileAway struct {
 	Decider string `json:"decider"`
 	Timeout string `json:"timeout"`
 	Then    string `json:"then"`
 }
+
+// Deciders of whileAway. Nobody is the default of every duty, from the
+// door and from New duty alike: the question waits for a person, and after
+// the timeout the answer is no. The manager decides only when the owner
+// picks it (plan A9).
+const (
+	DeciderNobody  = "nobody"
+	DeciderManager = "manager"
+)
 
 // Notify names who hears of a failed run, of a question of a run, and of
 // a result: "owner", the subject of a person, or channel:<name> for a
@@ -339,7 +348,7 @@ const (
 	MaxCatchUp      = 24 * time.Hour
 	DefaultRetries  = 1
 	MaxRetries      = 3
-	DefaultDecider  = "manager"
+	DefaultDecider  = DeciderNobody
 	DefaultAwayFor  = 2 * time.Hour
 	DefaultThen     = "deny"
 	MinAwayFor      = time.Minute
@@ -655,7 +664,7 @@ func (d *Duty) problems() []string {
 		add("limits.retries", "%d is out of range. Pick 0 to %d.", *r, MaxRetries)
 	}
 	if w := d.WhileAway; w != nil {
-		if w.Decider != "manager" && w.Decider != "nobody" {
+		if w.Decider != DeciderManager && w.Decider != DeciderNobody {
 			add("whileAway.decider", "%q is not a decider. Pick manager or nobody.", w.Decider)
 		}
 		if v, err := readDur(w.Timeout); err != nil || v < MinAwayFor || v > MaxAwayFor {

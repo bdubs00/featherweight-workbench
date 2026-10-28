@@ -21,7 +21,7 @@ import (
 func TestManagerDecides(t *testing.T) {
 	b := bucket.NewMem(awayBucket)
 	f := newFront(t, b, newFleet(), &clock{t: t0})
-	run := f.duty(t, "report", nil)
+	run := f.duty(t, "report", byManager)
 	f.asks(run, "report", "A1", "git.push", "rule: ask git.*", nil)
 	f.pass(t)
 	_, _, _, asked := f.fleet.lists()
@@ -68,7 +68,7 @@ func TestManagerDecides(t *testing.T) {
 func TestManagerDenies(t *testing.T) {
 	b := bucket.NewMem(awayBucket)
 	f := newFront(t, b, newFleet(), &clock{t: t0})
-	run := f.duty(t, "report", nil)
+	run := f.duty(t, "report", byManager)
 	f.asks(run, "report", "A1", "git.push", "rule: ask git.*", nil)
 	f.pass(t)
 	_, _, _, asked := f.fleet.lists()
@@ -151,7 +151,7 @@ func TestTimeoutCancels(t *testing.T) {
 func TestRoutesToThePerson(t *testing.T) {
 	b := bucket.NewMem(awayBucket)
 	f := newFront(t, b, newFleet(), &clock{t: t0})
-	run := f.duty(t, "report", nil)
+	run := f.duty(t, "report", byManager)
 	f.asks(run, "report", "A1", "files.delete", "rule: ask destructive", nil)
 	f.pass(t)
 	if w := entryOf(t, b, run, "A1"); w.Route != RoutePerson || !strings.Contains(w.Why, "marks the tool files.delete destructive") {
@@ -171,12 +171,29 @@ func TestRoutesToThePerson(t *testing.T) {
 	}
 }
 
+// A duty that names no decider asks the person while its owner is away:
+// nobody is the default of every duty (plan A9), so the manager gets no
+// question.
+func TestNobodyDecidesByDefault(t *testing.T) {
+	b := bucket.NewMem(awayBucket)
+	f := newFront(t, b, newFleet(), &clock{t: t0})
+	run := f.duty(t, "report", nil)
+	f.asks(run, "report", "A1", "git.push", "rule: ask git.*", nil)
+	f.pass(t)
+	if w := entryOf(t, b, run, "A1"); w.Route != RoutePerson || w.Why != "The duty says that nobody decides while you are away." || w.Timeout != "2h" {
+		t.Fatalf("the entry = %+v", w)
+	}
+	if _, _, _, asked := f.fleet.lists(); len(asked) != 0 {
+		t.Fatalf("the manager got %d questions", len(asked))
+	}
+}
+
 // An answer of the manager that does not read as a verdict, and a queue
 // that does not take the question, send the approval to the person.
 func TestBadVerdictGoesToThePerson(t *testing.T) {
 	b := bucket.NewMem(awayBucket)
 	f := newFront(t, b, newFleet(), &clock{t: t0})
-	run := f.duty(t, "report", nil)
+	run := f.duty(t, "report", byManager)
 	f.asks(run, "report", "A1", "git.push", "rule: ask git.*", nil)
 	f.pass(t)
 	_, _, _, asked := f.fleet.lists()
@@ -190,7 +207,7 @@ func TestBadVerdictGoesToThePerson(t *testing.T) {
 	}
 	g := newFront(t, bucket.NewMem(awayBucket), newFleet(), &clock{t: t0})
 	g.fleet.failQ = errors.New("no pool runs the manager")
-	run = g.duty(t, "other", nil)
+	run = g.duty(t, "other", byManager)
 	g.asks(run, "other", "A1", "git.push", "rule: ask git.*", nil)
 	g.pass(t)
 	if w := entryOf(t, g.s.b, run, "A1"); w.Route != RoutePerson || w.Manager != "" || !strings.Contains(w.Why, "did not go out: no pool runs the manager") {
@@ -204,7 +221,7 @@ func TestPersonDecidesFirst(t *testing.T) {
 	b := bucket.NewMem(awayBucket)
 	c := &clock{t: t0}
 	f := newFront(t, b, newFleet(), c)
-	run := f.duty(t, "report", nil)
+	run := f.duty(t, "report", byManager)
 	f.asks(run, "report", "A1", "git.push", "rule: ask git.*", nil)
 	f.pass(t)
 	_, _, _, asked := f.fleet.lists()

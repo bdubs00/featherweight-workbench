@@ -380,7 +380,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 		Name:  ToolPlan,
 		Title: "Read a task back before it starts",
 		Description: "Read back what the person needs done, in their words, before anything starts. It starts and saves nothing, and it calls no model. " +
-			"The answer says the kind (once, repeat, or team), who does it, when (the schedule in words and the next three times), what runs of the agent cost (never a limit), when it asks the person, when it stays quiet, where the result lands, what no agent here can do (gaps), and problems that stop a start. " +
+			"The answer says the kind (once, repeat, or team), who does it, when (the schedule in words and the next three times), what runs of the agent cost (never a limit), when it asks the person, when it stays quiet, who decides a question of a task that repeats while the person is away (away), where the result lands, what no agent here can do (gaps), and problems that stop a start. " +
 			"start holds the record to send: duty to PUT /v1/duties/{name} (duty_put), bridge to POST /v1/bridges (bridge_open), or run to POST /v1/runs?member= (run). The person sets the most it can cost before the start: limits.budget.maxCostUSD, caps.maxCostUSD, or budget.maxCostUSD. " +
 			"agent picks the agent, and tell picks when the person hears of a task that repeats: each, found, or failures. timeZone is an IANA name, UTC by default.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"words":{"type":"string","maxLength":4000},"agent":{"type":"string"},"tell":{"type":"string","enum":["each","found","failures"]},"timeZone":{"type":"string"}},"required":["words"]}`),
@@ -474,6 +474,9 @@ func PlanText(p Plan) string {
 	}
 	if len(p.Quiet) > 0 {
 		b.WriteString("\nIt stays quiet: " + strings.Join(p.Quiet, "; ") + ".")
+	}
+	if p.Away != "" {
+		b.WriteString("\nWhile you are away: " + p.Away)
 	}
 	b.WriteString("\nThe result: " + p.Result + ".")
 	for _, g := range p.Gaps {

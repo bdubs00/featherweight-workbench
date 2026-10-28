@@ -8,6 +8,7 @@ package duties
 // comes from the record alone.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -349,6 +350,36 @@ func eventWords(e *Event) string {
 		return s + " longer than " + spanWords(after) + "."
 	}
 	return s + ". The duty starts " + spanWords(after) + " later."
+}
+
+// AwayFor is the timeout of whileAway of a duty that names none, as the
+// record writes it, such as 2h.
+func AwayFor() string { return durText(DefaultAwayFor) }
+
+// AwayWords reads back who decides a question of a run of a duty while its
+// owner is away, and what happens after the wait, as the row "While you are
+// away" of a readback says it. A nil whileAway, or a field left empty,
+// reads as the default.
+func AwayWords(w *WhileAway) string {
+	a := WhileAway{Decider: DefaultDecider, Timeout: AwayFor(), Then: DefaultThen}
+	if w != nil {
+		a.Decider = cmp.Or(strings.TrimSpace(w.Decider), a.Decider)
+		a.Timeout = cmp.Or(strings.TrimSpace(w.Timeout), a.Timeout)
+		a.Then = cmp.Or(strings.TrimSpace(w.Then), a.Then)
+	}
+	who := "Nobody decides a question for you."
+	if a.Decider == DeciderManager {
+		who = "The manager decides a question for you."
+	}
+	then := "the answer is no"
+	if a.Then == "cancel" {
+		then = "the run stops"
+	}
+	span := a.Timeout
+	if d, err := readDur(a.Timeout); err == nil && d > 0 {
+		span = spanWords(d)
+	}
+	return who + " After " + span + " without an answer, " + then + "."
 }
 
 // spanWords says a span in words: "1 hour", "30 minutes", "1 hour and 30

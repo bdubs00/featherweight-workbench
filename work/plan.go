@@ -65,7 +65,9 @@ type PlanRequest struct {
 // Others the agents that the person can pick instead. When says the
 // schedule in words. Cost says what runs of the agent cost, never a
 // limit. Asks lists when the task waits for the person, and Quiet when it
-// stays quiet. Gaps say what no agent here can do. Problems stop a start.
+// stays quiet. Away says, for a task that repeats, who decides a question
+// while the person is away, the row "While you are away" of the readback.
+// Gaps say what no agent here can do. Problems stop a start.
 // Start holds the record that Start sends: one of duty, bridge, or run.
 // Open is the place of the page that shows the task after the start. Same
 // names a duty of the person that does the same work already, or is nil.
@@ -80,6 +82,7 @@ type Plan struct {
 	Asks     []string    `json:"asks"`
 	Quiet    []string    `json:"quiet"`
 	Tell     string      `json:"tell"`
+	Away     string      `json:"away,omitempty"`
 	Result   string      `json:"result"`
 	Gaps     []string    `json:"gaps"`
 	Problems []string    `json:"problems"`
@@ -403,6 +406,11 @@ func MakePlan(in PlanInput) Plan {
 		if p.Tell == TellFound {
 			resultWhen = TellFound
 		}
+		// The default of every duty while the person is away: nobody
+		// decides, and after the wait the answer is no. New duty starts
+		// from the same default (plan A9).
+		away := duties.WhileAway{Decider: duties.DefaultDecider, Timeout: duties.AwayFor(), Then: duties.DefaultThen}
+		p.Away = duties.AwayWords(&away)
 		duty := map[string]any{
 			"name":      name,
 			"title":     p.Title,
@@ -410,7 +418,7 @@ func MakePlan(in PlanInput) Plan {
 			"when":      map[string]any{"schedule": *when},
 			"do":        map[string]any{"ask": map[string]any{"message": words + doorSuffix + base + "/{date}.md. When you find nothing, say so in one line."}},
 			"limits":    map[string]any{"budget": map[string]any{}, "overlap": "skip", "catchUp": "6h"},
-			"whileAway": map[string]any{"decider": "nobody", "timeout": "24h", "then": "deny"},
+			"whileAway": map[string]any{"decider": away.Decider, "timeout": away.Timeout, "then": away.Then},
 			"notify":    map[string]any{"failure": []string{"owner"}, "needsYou": []string{"owner"}, "result": result, "resultWhen": resultWhen},
 		}
 		if signoff {
