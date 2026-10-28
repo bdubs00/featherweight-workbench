@@ -22,6 +22,7 @@ The workbench changes no kernel code. It plugs in through the extension points o
 - The packages `pages`, `faces`, `bridges`, and `routines` use `fw.RegisterService` and `native.Extend`, and `mcp.RegisterTools` of the MCP server of the workbench (section 3.1): the service keeps the store, the routes serve it to people, and the tools offer it to MCP clients and agents (sections 15, 16, 18, and 21). The service of `bridges` also watches the view of the fleet and fans the messages of a channel out to the runs of its members. The package `routines` gives the fleet the routines of the agents (`fleet.Routines`) and reads the events of the routines from the egress stream that the fleet reads (`fleet.Tap`).
 - The package `bossmode` uses `fw.RegisterService`, `native.Extend`, `metrics.RegisterCollector`, and `cli.RegisterDoctorCheck`: its service keeps the stream of the page, its routes serve the page, its settings, and the stream, and its doctor line names the page, the manager, the quick chat, the streams, and the stores of the wiki, the faces, and the bridges (section 17).
 - The package `workers` uses `native.Extend` and `mcp.RegisterTools` for the routes and the tools of the worker templates and the runtime pools (section 14.10). It does the same for the packages of a pool (section 14.11). The package `skills` registers nothing: the package `bossmode` serves the routes and the tools of the skills, and the package `bridges` takes a slash command in a channel (section 20).
+- The package `knowhow` uses `fw.RegisterService`, `native.Extend`, and `mcp.RegisterTools`. It reads the event `fw.memory.used` from the egress stream that the fleet reads (`fleet.Tap`). Its service keeps the notes, the journal, and the candidates, and runs the daily passes and the schedule of the after-work review. Its routes serve them to the kernel of a worker and to people, and its two tools serve the review (section 25).
 - The package `manager` holds what makes an agent of the fleet a manager (section 19). `cmd/fw-workbench` wraps the authorization plug of every agent with `manager.Guard` through `fw.WithAuthzFrom`. It also adds the line `manager` to `fw doctor` with `cli.RegisterDoctorCheck`. Each tool of the MCP server that reads or acts calls `manager.OnBehalf` at its start.
 - The packages of bossmode meet at five seams in the workbench, and none of them is a hook of the kernel:
   - The service of `bridges` gives its store to `manager.SetBridges` when it starts and takes it back with `manager.ClearBridges` when it stops. So a manager run on a run of a bridge gets what the record of that bridge delegates (section 19.4).
@@ -103,6 +104,9 @@ notify/                 the notifications of the duties, per person and per chan
                         to ntfy, Slack, Discord, Teams, a webhook, a mail, or an agent
                         (section 23.1)
 inbox/                  what needs the caller now: GET /v1/inbox and the tool inbox (section 23.3)
+knowhow/                Know-how: the notes with their sources, the journal with undo, the switch and
+                        the waiting list, the uses and the resting, the candidates and the tools of the
+                        after-work review, the proposals of routines, and the summary (section 25)
 internal/bucket/        the key-value bucket under the stores of the front: a bucket of the
                         NATS server of the bus, or the memory of the process
 internal/hostguard/     the rule of a glob of a host and the dialer that refuses a private
@@ -3947,6 +3951,9 @@ The test `TestParity` of `cmd/fw-workbench` reads the source of the workbench wi
 | `DELETE /v1/pages/{path...}` | No tool yet. An agent keeps the wiki with `pages_write`. |
 | `DELETE /v1/faces/{agent}`, `PATCH /v1/faces/{agent}` | No tool yet. A person changes these on the page. |
 | `DELETE /v1/bossmode/skills/{name}` | No tool yet. An admin removes an imported skill on the page. |
+| `PUT` and `DELETE /v1/knowhow/notes/{agent}/{scope}/{name...}` | The kernel of a worker keeps the notes of its memory tool here with the static token. A person changes a note on the page. |
+| `POST /v1/knowhow/journal/{id}/undo`, `PUT /v1/knowhow/settings/{agent}` | No tool yet. A person takes a change back and turns the switch on or off on the page. |
+| `POST /v1/knowhow/waiting/{id}` | A person decides a change that waits for them on the page. The switch keeps agents out of that decision. |
 
 ### 24.6 The runs that the lists leave out
 
@@ -3965,3 +3972,249 @@ A record of a member in the view keeps the newest 50 finished runs that the list
 ### 24.7 Problems with the path of their field
 
 Each problem of a duty, of an action, and of a playbook starts with the dotted path of its field and a colon, such as `when.schedule.times: ...`, `do.post.bridge: ...`, `checkFirst.where[0].field: ...`, or `seats[1].task: ...`. The page shows the text after the colon beside the field. A problem of the whole duty has no path. The words of `when.say` that do not read are a problem of `when.say`, and the time zone of the caller that is not an IANA name is a problem of `when.schedule.timeZone`.
+
+## 25. Know-how
+
+Know-how is what an agent learns on the job. The contract is `docs/KNOWHOW.md` of the kernel. This section says what the workbench builds of it. The package `knowhow` holds these parts:
+
+- the notes with their sources
+- the journal "What it learned", with undo
+- the switch "Ask me before it keeps what it learns", and the changes that wait for a person
+- the daily pass that rests and puts away the notes that no run used
+- the candidates of the after-work review, its two MCP tools, and its schedule
+- the daily proposals of routines
+- the four numbers of an agent
+
+The package is a service of the kernel (`fw.RegisterService`). On a NATS bus, it keeps everything in the key-value bucket `<stream>_KNOWHOW`, with 16 values of each key. On the bus `mem`, it keeps everything in the memory of the process. On another bus, it logs once that Know-how is off, and each route answers 404 with the reason. With NATS accounts, allow the front `$KV.<stream>_KNOWHOW.>`. The package reads the archive of the runs (section 4.18) and never a ledger of a worker. No part of the package calls a model.
+
+### 25.1 The notes
+
+A note is one entry under `note.<agent>.<scope>.<name>`. The agent and the name are in base64url. The scope is `agent._` for the notes of the agent. For the notes of one principal, it is `principal.<hash>`. The hash is the first 16 bytes of the SHA-256 of the subject in hex, as the kernel names the directory of a principal.
+
+The record holds `agent`, `scope`, `name`, `text`, and `hash`. It also holds `description`, `by`, `run`, and `at`, and then `sources`, `state`, `outOfDate`, and `origin`. `scope` holds `kind` and `principal`. A read adds `uses`, `lastUsed`, and `revision`.
+
+- `state` is `checked`, `unchecked`, `out-of-date`, `resting`, `put-away`, or `waiting`. A note with a source `page:` or `item:` that has a version is checked. Any other note is unchecked.
+- `by` is `agent` for the memory tool of a run, `review` for the after-work review, `knowhow` for a pass of the package, or `person:<subject>`. A note that a person wrote never changes by automation. The agent, the review, and the passes leave it as it is, and it never rests.
+- A put-away note keeps its record and its history, so an undo brings it back. The delete of the kernel puts a note away.
+- The uses of a note live in an entry of their own, `uses.<agent>.<scope>.<name>`. So a use never pushes a text out of the history of the note.
+
+Every write reads the entry and writes at the revision that it read, as the other stores of the front do. A write names the hash that the writer read in `ifHash`. The value is a hash, `absent` for a new note, `*` for a note that exists, or nothing. A put-away note counts as absent. A condition that does not hold is a conflict, and the error carries the hash of the note as it is. A write takes the sources of its body and keeps none of the older text.
+
+### 25.2 Out of date
+
+`PageWritten(ctx, path, hash)` marks out of date every note that names `page:<path>` with another version than the hash. An empty hash is a removal of the page. `ItemChanged(ctx, source, key, version)` does the same for `item:<source>/<key>`. A source `run:<id>` never goes out of date. A note that a person wrote stays as it is.
+
+Each move writes the journal entry `out-of-date` with the source that changed. A note of a principal also gets a candidate `recheck` for the after-work review (section 25.7). A note of the agent changes only by a person, so it gets no candidate.
+
+### 25.3 The routes
+
+| Method and path | Purpose |
+|---|---|
+| `GET /v1/knowhow/notes?agent=&scope=&principal=` | The notes that the caller can read, without text. `sources` is a count. `?putAway=true` adds the notes that were put away. |
+| `GET /v1/knowhow/notes/{agent}/{scope}/{name...}?principal=` | One note with its text and its sources, and its hash in `ETag` |
+| `PUT /v1/knowhow/notes/{agent}/{scope}/{name...}?principal=` | The body is `{"text", "ifHash", "sources", "by", "run"}`. See below. |
+| `DELETE /v1/knowhow/notes/{agent}/{scope}/{name...}?principal=&ifHash=` | Puts the note away. See below. |
+| `GET /v1/knowhow/runs?agent=&principal=&q=&limit=` | The runs of the archive of the agent whose principal is exactly `principal`. See below. |
+| `GET /v1/knowhow/journal?agent=&limit=&before=` | The entries that the caller can read, newest first, 50 by default and 500 at most |
+| `POST /v1/knowhow/journal/{id}/undo` | Takes back one entry. A later change of the same note or routine gives 409. |
+| `GET` and `PUT /v1/knowhow/settings/{agent}` | `{"askFirst": false}`, and `review`, which says whether the after-work review runs |
+| `GET /v1/knowhow/waiting?agent=` | The changes that wait for a person, oldest first |
+| `POST /v1/knowhow/waiting/{id}` | `{"keep": true}` makes the change, and `{"keep": false}` drops it. A target that changed since gives 409. |
+| `GET /v1/knowhow/summary?agent=&days=7` | The four numbers, section 25.10 |
+
+A `PUT` answers 201 for a new note and 200 for a change or for the same text. It answers 202 for a change that waits for a person. When `ifHash` does not hold, it answers 412 with the hash in the member `hash` and in `ETag`. A `DELETE` answers 200, or 202 for a change that waits. It answers 404 for a note that the front does not have, and 412 for another hash.
+
+The search of runs gives the newest runs first, 20 by default and 50 at most. An empty `principal` names the runs without a principal, as the kernel asks for the scope `agent`. `q` keeps the runs whose title, input, or output holds every word. Each run has `id`, `title`, `input`, `output`, `at`, and `outcome`, and each text is cut to 2 KB.
+
+Who reads and who changes:
+
+- The process itself and the static token of the fleet read and change every note. A worker names the writer in `by`, which is `agent`, `person`, or `person:<subject>`, and the run in `run`. Any other `by` gives 400.
+- A person needs the right to view the agent (`agent.view`). A caller who cannot view the agent or the scope gets 404.
+- A person reads the notes of the agent and the notes of their own principal. An operator of the agent (`agent.run`) also reads the notes of its workload principals, such as `duty:<name>`. The front takes a principal that starts with `duty:`, `spiffe://`, `knowhow:`, or `workload:` as a workload. No person reads the notes of another person.
+- A change of the notes of the agent or of a workload principal needs the owner role (`agent.edit`). A person changes their own notes with the operator role, because the runs of that person write those notes anyway. A person always writes as `person:<subject>`, without a run.
+- A person who leaves out `principal` searches their own runs. The runs of a workload and the runs without a principal need the operator role.
+- A route acts for the person of a manager run, as the other routes of the front do (`manager.OnBehalf`).
+- The switch needs the owner role. An undo or a decision on a waiting change needs the right to change its note. For a routine, it needs the owner role.
+
+The stream of bossmode carries the event `{"kind": "knowhow", "agent": "…"}`. It goes out after each change of the notes, the journal, the switch, or the waiting list of an agent. Every caller who can view the agent gets it, at most once per agent in two seconds (`bossmode.KnowhowEvery`). The settings of bossmode carry `knowhow: true` while the process keeps Know-how. So the page shows the place Know-how only then.
+
+### 25.4 The journal and undo
+
+Each change is one entry under `journal.<agent>.<id>`. The id has the form of `fw.NewID` with the clock of the front. So the keys of an agent sort by time, also within one millisecond. The public id of an entry is `<id>-<agent in base64url>`, so the route of an undo finds the entry without the agent.
+
+An entry holds `id`, `at`, `agent`, `what`, `subject`, and `why`. It also holds `runs`, `by`, `undo`, `corrects`, and `undoneBy`.
+
+- `what` is a word of the contract: `learned`, `updated`, `out-of-date`, `resting`, `put-away`, `proposed`, `rehearsing`, `live`, `stepped-back`, `retired`, or `undone`. This build adds two words. `paused` is a move of a routine to paused. `stays-out` is a proposal of a routine that did not hold, with the reason in `why`.
+- `subject` names a note with its scope, or a routine.
+- Code writes `why` from a fixed set of sentences. The review writes it for `learned` and `updated`.
+- `corrects` is true for a change that replaced or put away a note that was out of date. The summary counts these entries.
+
+An undo of a note puts back the revision before the change, which `undo.revision` names, as a new revision. An undo of a change that made a note puts the note away. The note must still be at the revision that the change wrote (`undo.after`). Otherwise the undo gives 409.
+
+An undo of a routine makes the opposite move. The routine must still have the standing and the version of the move, and `docs/ROUTINES.md` must allow the opposite move. Each undo writes the entry `undone`, which an undo takes back too. The entry that it took back names it in `undoneBy`.
+
+The journal keeps 90 days or 5,000 entries per agent, whichever is less. The daily pass prunes it, and so does each 64th entry of an agent in a process.
+
+### 25.5 Ask first
+
+With the switch on, a change of the agent, of the review, or of a pass waits for a person. A change of a person never waits.
+
+- A new note goes to the store in the state `waiting`. So the kernel keeps its copy and leaves it out of the block at the start of a run. Keep gives the note its state. Not now puts it away.
+- A change or a put-away of a note that exists waits beside it, and the note stays as it is. The change pins the hash of the note.
+- A proposal of a routine stays `proposed`, and its move to `rehearsing` waits, pinned to the version of the routine.
+
+A keep of a target that changed since gives 409. The change stays on the list until a person drops it. The list keeps at most 200 changes per agent, and the daily pass drops a change older than 30 days.
+
+### 25.6 Uses, resting, and put away
+
+The kernel records `fw.memory.used` for three reads: the block at the start of a run, a view of the memory tool, and a hit of recall. The fleet sends the event on the egress stream (`fleet.EgressTypes`). The package reads it through `fleet.Tap`, beside the projection of the routines, with no second subscription. `fleet.RunEvent` carries the principal of the run.
+
+The entry of the uses keeps the ids of the last 32 events that it counted. So a second delivery and a second replica count an event once. Sometimes the view does not know the run of an event yet. Then the package asks the view again. Next, it looks for the only note of that name with the hash of the event. As a last step, it counts the event again after two seconds. A use moves a resting note back to its state.
+
+One replica runs the daily passes each day: it claims the day in the entry `mark.daily`. A note that no run used for `restDays`, 14 by default, rests. After `putAwayDays`, 30 by default, it is put away. A note without a use counts from the time it was written. Both moves write the journal. A note that a person wrote and a note that waits never move.
+
+### 25.7 The candidates
+
+A pass at each minute reads the finished runs of the archive behind a durable cursor, the entry `mark.candidates`. The cursor holds the newest change of the archive that the pass read, and the runs of that time. A run whose summary changed later is read again, such as a run with a receipt after its end. A run that changed within the last two minutes waits for the next pass. One pass reads at most 200 runs. A run without a principal and a run of the review give no candidate.
+
+| Kind | What the code finds |
+|---|---|
+| `gotcha` | A tool call that failed, and a later call of the same tool in the same run that passed with another input. Two runs with the same failure make one candidate. The numbers of the error do not count. |
+| `place` | The same read call, tool and canonical input, in two runs or more of one principal, with the same result. The entry `places.<agent>.<principal>` keeps at most 500 read calls with their last three runs. |
+| `outcome` | A run with a receipt, a verdict of its grader, or a thumbs up or down. The runs of one Duty that went well make one candidate, and those that went badly make another. |
+| `recheck` | A note of a principal that went out of date, with the sources of the note at the new version |
+
+A candidate is the entry `cand.<agent>.<id>`. Its id is a hash of its kind, its scope, and what it found, then a dash and the agent in base64url. A candidate belongs to the scope of the principal of its runs. It holds at most eight runs with their evidence, and it gets the source `run:<id>` of each run. It drops 14 days after the pass found it.
+
+The origin of a candidate is `untrusted` in each of these cases:
+
+- Its text came from a block `found`, `event`, or `source` of the run.
+- Its text came from a message of another principal.
+- Its text came from an MCP tool or a peer. The field `source` of such a call is not `builtin`.
+- Its text came from a built-in tool that reads the open world: `bash`, `http`, `fetch`, `web_fetch`, or `web_search`.
+
+The stream carries no annotation of a tool. So these names and the source decide. The words of the name or the method of a call say whether it reads: read, get, list, search, find, view, query, show, fetch, or lookup.
+
+The trigger of a run is a hash of its input and of its blocks `found`, `event`, and `source`. An untrusted candidate stays `gathering` until two of its runs have different triggers. Then it is `open`. A trusted candidate is open at once.
+
+### 25.8 The after-work review
+
+The review is a run of the profile that `workbench.knowhow.review.agent` names. Without it, no review runs. The schedule then starts no run and writes nothing, and the settings say "The after-work review is off: no agent is set." Nothing picks a model or a price. The profile names its own, and the kernel refuses a run without a model.
+
+At each slot of `review.every`, 24 hours by default, one replica claims the slot in the entry `mark.review`. It then puts one run of the profile on its queue for each agent with open candidates, at most 10. While the slot waits for its first candidate, a replica reads the candidates at most every ten minutes. The run has the principal `knowhow:review` of the kind workload and the metadata `workbench.knowhow.review` with the agent. Its input starts with "Review the finished work of the agent".
+
+The MCP server offers two tools. They answer only a run of the review profile, as `mcp.CallRun` names it with the static token.
+
+- `knowhow_candidates {agent, limit}` lists the open candidates of the agent, oldest first, 10 by default and 50 at most. Each candidate comes with its evidence and the notes of its scope. The text marks each evidence as data.
+- `knowhow_keep {candidate, op, name, text, why}` decides one candidate. `op` is `add`, `supersede`, or `skip`.
+
+The front checks each keep:
+
+- The text holds at most 600 characters.
+- No line starts with `always`, `never`, `do not`, `don't`, `you must`, or `make sure`. The error gives the reason and an example of a fact.
+- `why` is one line.
+- The note gets the sources of the candidate and no other. It goes to the scope of the runs of the candidate, with `by` review and the run of the review.
+- An untrusted candidate that waits for a second trigger is refused.
+- `add` needs a name that no note has. `supersede` needs a note that exists and that no person wrote. A recheck supersedes its own note.
+- The journal keeps the old revision for an undo. With the switch on, the change waits.
+
+A decided candidate stays decided until it drops.
+
+The profile `review` of `examples/bossmode/fw.yaml` calls the two tools and names no model. Its instructions carry the list of what never becomes a note:
+
+- a failure that came from the environment and not from the task
+- a claim that a tool does not work
+- a passing error
+- a one-off story
+- a failure without its fix
+- anything that a source already says
+
+### 25.9 Routines from the runs of a Duty
+
+The daily pass proposes routines. For each Duty of each agent, it takes the completed top-level runs of the archive of the last `propose.days` days, the newest 50. It leaves out each run in these cases: a receipt sent it back, its grader failed it, a person gave it a thumbs down, or a routine did it.
+
+The pass needs `propose.minRuns` runs, 10 by default. It also needs `propose.minVerified` of them verified, 2 by default. A verified run has a receipt of `accepted` or `satisfied`, a grader that passed, or a thumbs up. The pass calls `routine.Propose` with the name `duty-<duty>` and the decider `propose.decider`. Then it calls `routine.LeaveOneOut`.
+
+Some proposals stay out:
+
+- a proposal with a free hole or a problem
+- a proposal with questions and no decider
+- a proposal that did not hold on a run that it did not see
+
+The journal says why with `stays-out`, once per reason of a Duty. A good proposal goes to the store of the routines as `proposed`, with its source. It is bound to its Duty (`duty`). Unless the switch is on, it moves to `rehearsing` at once. The journal records `proposed` with the verified runs, and `rehearsing`. A Duty whose routine exists in any standing gets no new proposal.
+
+The package writes the journal for its own moves of a routine. So `RoutineMoved` writes nothing for such a move. A value of the context marks it.
+
+### 25.10 The summary
+
+`GET /v1/knowhow/summary?agent=&days=7` reads the finished runs of the archive of the agent that started in the last `days` days, 30 at most. The caller needs the right to view the agent.
+
+| Field | Meaning |
+|---|---|
+| `costPerJob` | The mean cost of the runs, with `previousUsd` of the window before and `trend`: `down`, `up`, or `flat` within 5% |
+| `doneByRoutines` | The share of the normal runs that a routine did (`fw.routine.applied` with `ok`) |
+| `notesCorrected` | The journal entries of the window with `corrects` that no undo took back |
+| `normal`, `heldBack` | For each kind of run: `runs`, `doneWell`, `byRoutine`, and `costPerJobUsd`. A held-back run has `fw.knowhow: off`. |
+| `compare` | The line "with and without what it learned" |
+
+A run is done well under these conditions: it completed, no receipt sent it back, its grader did not fail it, and no person gave it a thumbs down. The comparison takes the normal runs of the Duties that had a held-back run, so both sides did the same work.
+
+With fewer than 20 held-back runs, `compare` holds no share, and its line is this one:
+
+> Not enough held-back runs yet.
+
+With 20 or more, it holds the shares and a line such as this one:
+
+> Held back 1 in 20 runs. Done well: 82% without what it learned, 91% with it.
+
+The package keeps the facts of each run in memory at the revision of its summary in the archive. So it reads the events of a run again only after the run changed.
+
+### 25.11 Configuration
+
+The block `knowhow` under the key `workbench` of `fw.yaml` configures the package (`knowhow.KnowhowConfig`). Each variable wins over the file. A value outside its bound stops the start, and the error names the key.
+
+| Key | Variable | Meaning | Default |
+|---|---|---|---|
+| `workbench.knowhow.review.agent` | `FW_WORKBENCH_KNOWHOW_REVIEW_AGENT` | The profile of the after-work review | none: no review |
+| `workbench.knowhow.review.every` | `FW_WORKBENCH_KNOWHOW_REVIEW_EVERY` | The time between two slots of the review, 1h to 720h | `24h` |
+| `workbench.knowhow.propose.enabled` | `FW_WORKBENCH_KNOWHOW_PROPOSE_ENABLED` | The daily proposals of routines, on or off | on |
+| `workbench.knowhow.propose.days` | | The days of runs that a proposal reads, 1 to 365 | `30` |
+| `workbench.knowhow.propose.minRuns` | | The fewest completed runs of a Duty, 3 to 1000 | `10` |
+| `workbench.knowhow.propose.minVerified` | | The fewest verified runs among them | `2` |
+| `workbench.knowhow.propose.decider` | `FW_WORKBENCH_KNOWHOW_PROPOSE_DECIDER` | The decider of the questions of a proposal, a key of the deciders of the workers | none |
+| `workbench.knowhow.aging.restDays` | `FW_WORKBENCH_KNOWHOW_AGING_REST_DAYS` | The days without a use before a note rests | `14` |
+| `workbench.knowhow.aging.putAwayDays` | `FW_WORKBENCH_KNOWHOW_AGING_PUT_AWAY_DAYS` | The days without a use before a note is put away, more than `restDays` | `30` |
+
+`knowhow.Status(cfg)` gives a part of the line `bossmode` of `fw-workbench doctor`. It says where Know-how lives and whether the review runs.
+
+### 25.12 The seams
+
+The other packages call four functions. Each has the signature of its hook, so the wiring is one assignment, such as `pages.OnWrite = knowhow.PageWritten`. Each function acts on the Know-how of every agent of the process. A method of the same name on `*knowhow.Service` acts on one.
+
+```go
+func PageWritten(ctx context.Context, path, hash string)
+func ItemChanged(ctx context.Context, source, key, version string)
+func RoutineMoved(ctx context.Context, agent, name, from, to, by, note string)
+func AskFirst(ctx context.Context, agent string) bool
+```
+
+- `RoutineMoved` writes the journal: `proposed`, `rehearsing`, `live`, `paused`, or `retired`. A move from `live` to `rehearsing` is `stepped-back`. The note of the move is the sentence of the entry, and a run id in the note goes to `runs`. For a new routine, `from` is empty.
+- `AskFirst` is true while the switch of the agent is on. A switch that does not read counts as on.
+- `knowhow.OnChange(func(agent string))` gives the package `bossmode` each change. Bossmode sends it as the event `knowhow`.
+
+The package needs four small seams outside it:
+
+- `fleet.ArchiveAll` and `fleet.ArchiveEvents` read every run of the archive for a pass of the front, with no decision for a caller.
+- `fleet.RunEvent` has the field `Principal`.
+- `fleet.EgressTypes` holds `fw.memory.used`.
+- `bucket.EntriesUnder` lists the keys under a prefix of several tokens with their revisions. So the package reads only the entries that changed.
+
+### 25.13 Security and bounds
+
+- The notes of one principal never move to another scope. The review writes only to the scope of the principal of the runs of its candidate, and never a note of the agent. A note of the agent comes only from a person with the owner role, or from the memory tool of a run with that scope.
+- The model of the review chooses among the candidates that code found. It cannot add a source, choose a scope, or keep an order.
+- The text of a note, of a candidate, and of a run is data. The tools and the input of the review say so.
+- No text of a note enters a log line. A write logs the agent, the scope kind, the name, the writer, and the hash.
+- No key of a note holds the subject of a principal. The key holds its hash.
+- A note holds at most 128 KiB, as a note of the kernel does, and it has at most 32 sources.
+- The bucket keeps a removed journal entry as a delete marker, as NATS does.
