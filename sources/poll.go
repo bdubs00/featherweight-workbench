@@ -176,6 +176,7 @@ func (s *Sources) pollOnce(ctx context.Context, src *source) error {
 		src.count.failed(err.Error(), s.now())
 		return err
 	}
+	itemsOf(ctx, events)
 	items := make([]rendered, 0, len(events))
 	for i, e := range events {
 		it, err := src.render(i+1, e)

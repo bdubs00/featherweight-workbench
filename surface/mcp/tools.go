@@ -239,6 +239,10 @@ type runArgs struct {
 	Files        []fileArg         `json:"files,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
 	Continues    string            `json:"continues,omitempty"`
+
+	// blocks are the data blocks of the run that the server adds, such as
+	// the summary of an earlier conversation. No caller sets them.
+	blocks []fw.RunContext
 }
 
 // fileArg is one attachment of a run or a message. JSON holds Data in
@@ -503,7 +507,7 @@ func (s *server) run(ctx context.Context, req *sdk.CallToolRequest, in runArgs) 
 			}
 			return failResult(err), nil, nil
 		}
-		in.Instructions, in.Metadata = c.Continued(id, in.Instructions, in.Metadata)
+		in.Instructions, in.Metadata, in.blocks = c.Continued(id, in.Instructions, in.Metadata, in.blocks)
 	}
 	md, err := runMetadata(in)
 	if err != nil {
@@ -551,6 +555,9 @@ func (s *server) run(ctx context.Context, req *sdk.CallToolRequest, in runArgs) 
 	}
 	if in.Instructions != "" {
 		opts = append(opts, fw.WithInstructions(in.Instructions))
+	}
+	for _, b := range in.blocks {
+		opts = append(opts, fw.WithRunContext(b.Source, b.Text))
 	}
 	if in.Outcome != nil {
 		opts = append(opts, fw.WithOutcome(*in.Outcome))

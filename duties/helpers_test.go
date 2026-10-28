@@ -430,3 +430,14 @@ func mustJSON(t *testing.T, v any) string {
 }
 
 var errDown = errors.New("the bus is down")
+
+// blockOf returns the text of the data block of the source in a request,
+// or "".
+func blockOf(req fw.RunRequest, source string) string {
+	for _, b := range req.Context {
+		if b.Source == source {
+			return b.Text
+		}
+	}
+	return ""
+}

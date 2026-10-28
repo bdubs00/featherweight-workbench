@@ -96,12 +96,15 @@ func (s *Service) serveCall(w http.ResponseWriter, r *http.Request) {
 			native.WriteJSON(w, http.StatusOK, map[string]string{"skipped": why})
 			return
 		}
-		got := sources.ServeEvents(w, r.WithContext(ctx), s.a, st.sourceOf(), body)
+		got := sources.ServeEvents(w, r.WithContext(ctx), s.a, st.sourceOf(s.heldBack), body)
 		if len(got.Runs) > 0 {
 			s.recordDelivery(ctx, st, StartCall, got)
 		}
 		s.log.Info("duties: a call delivered the events of a duty", "duty", name, "runs", len(got.Runs), "duplicates", got.Duplicates)
 		return
+	}
+	if events, err := sources.Events(body, ""); err == nil {
+		itemsOf(ctx, events)
 	}
 	key, window := "body:"+string(body), CallBodyWindow
 	if hook.Key != "" {

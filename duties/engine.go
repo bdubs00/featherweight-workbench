@@ -27,6 +27,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/duties/schedule"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/internal/heldback"
 )
 
 // Times of the engine.
@@ -620,6 +621,7 @@ func (s *Service) carry(ctx context.Context, st *stored, date string, e entry) O
 			return Outcome{Failed: reason}
 		}
 		s.checkPassed(ctx, d.Name)
+		itemsOf(ctx, res.Items)
 		if !res.Wakes {
 			_, wrote, err := s.st.setEntry(ctx, d.Name, date, e.ID, []string{StateStarting}, func(x *entry) bool {
 				x.State, x.Found, x.Reason = StateQuiet, len(res.Matched), res.Why
@@ -653,7 +655,16 @@ func (s *Service) carry(ctx context.Context, st *stored, date string, e entry) O
 // engine follows by its run.
 func (s *Service) act(ctx context.Context, st *stored, date string, e entry) Outcome {
 	d := &st.Duty
-	req := s.request(st, e, s.lastRun(ctx, d.Name, e.Slot))
+	last := s.lastRun(ctx, d.Name, e.Slot)
+	req := s.request(st, e, last)
+	if last != nil && last.Run != "" && req.Metadata[fw.MetaKnowhow] != fw.KnowhowOff {
+		// The output of the previous run, which an earlier run wrote,
+		// goes in a data block. A held-back run gets nothing that
+		// Know-how added, so it gets no such block.
+		if out := strings.TrimSpace(s.output(ctx, last.Run)); out != "" {
+			req.Context = append(req.Context, fw.RunContext{Source: ContextLast, Text: cut(out, MaxLastBytes)})
+		}
+	}
 	_, wrote, err := s.st.setEntry(ctx, d.Name, date, e.ID, []string{StateStarting}, func(x *entry) bool {
 		x.Run, x.Title = req.ID, req.Metadata[fw.MetaTitle]
 		x.Found, x.Woke, x.FoundText = e.Found, e.Woke, e.FoundText
@@ -734,7 +745,7 @@ func reasonOf(err error) string {
 func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 	d := &st.Duty
 	slot := e.Slot.UTC().Format(time.RFC3339Nano)
-	input := fill(d.Do.Message(), placeholders(d, e, last))
+	input := tidy(fill(d.Do.Message(), placeholders(d, e, last)))
 	md := map[string]string{MetaDuty: d.Name, MetaSlot: slot, fw.MetaBatch: BatchOf(d.Name)}
 	// A run of a duty with a title takes the title of the duty, so its
 	// card reads as the duty, not as the first words of its message.
@@ -776,7 +787,7 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 	if b := d.Limits.Budget; b != nil {
 		budget = &fw.Budget{MaxCostUSD: b.MaxCostUSD, MaxTurns: b.MaxTurns, MaxTokens: b.MaxTokens, MaxToolCalls: b.MaxToolCalls}
 	}
-	return fw.RunRequest{
+	req := fw.RunRequest{
 		ID:             fw.NewID(),
 		Agent:          d.Agent,
 		Input:          input,
@@ -787,10 +798,34 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 		PrincipalKind:  kind,
 		IdempotencyKey: key,
 	}
+	// A share of the runs gets none of what the agent learned, for the
+	// comparison of Know-how.
+	heldback.Mark(&req, s.heldBack)
+	return req
+}
+
+// outputOf returns the output of a run as the front knows it: from this
+// process, from the view of the fleet, or from the archive, or "". The
+// egress stream cuts it to fleet.EgressMaxBytes. The context carries no
+// principal, so the read sees every run.
+func (s *Service) outputOf(ctx context.Context, id string) string {
+	ctx = fw.WithPrincipal(ctx, nil)
+	if r, err := s.a.Get(ctx, id); err == nil {
+		return r.Output
+	}
+	if v := fleet.Of(s.a); v != nil {
+		if r, err := v.Run(ctx, id); err == nil && r != nil && r.Output != "" {
+			return r.Output
+		}
+	}
+	if r, ok, err := fleet.ArchivedRun(ctx, s.a, id); err == nil && ok {
+		return r.Output
+	}
+	return ""
 }
 
 // lastRun returns the newest start of a duty with a run before the slot,
-// for the placeholders {last.*}, or nil.
+// for the placeholders {last.*} and the block last, or nil.
 func (s *Service) lastRun(ctx context.Context, name string, slot time.Time) *RunEntry {
 	list, err := s.st.history(ctx, name, 50)
 	if err != nil {

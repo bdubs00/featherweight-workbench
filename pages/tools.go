@@ -34,7 +34,7 @@ const (
 	maxListLimit     = 1000
 )
 
-const pathSchema = `{"type":"string","minLength":4,"maxLength":512,"description":"The path of the page, a relative path that ends with .md, such as notes/plan.md or agents/reviewer/learned.md."}`
+const pathSchema = `{"type":"string","minLength":4,"maxLength":512,"description":"The path of the page, a relative path that ends with .md, such as notes/plan.md or agents/reviewer/notes.md. An agent writes only below agents/<its name>/ and outside agents/."}`
 
 // Input schemas of the tools.
 const (
@@ -183,6 +183,8 @@ func storeError(err error) *sdk.CallToolResult {
 		return mcp.ErrorResult("Refused: " + Reason(err) + ".")
 	case errors.Is(err, ErrInvalid):
 		return mcp.ErrorResult("Invalid request: " + Reason(err) + ".")
+	case errors.Is(err, ErrRefused):
+		return mcp.ErrorResult("Refused: " + Reason(err) + ". Nothing is written.")
 	}
 	return mcp.ErrorResult(mcp.Explain(err))
 }
@@ -266,6 +268,9 @@ func (t *toolSet) write(ctx context.Context, _ *sdk.CallToolRequest, in writeArg
 	s, res := t.store(ctx, true)
 	if res != nil {
 		return res, nil, nil
+	}
+	if err := mayWrite(ctx, in.Path); err != nil {
+		return storeError(err), nil, nil
 	}
 	by, run := writer(ctx)
 	page, did, err := s.write(ctx, in.Path, in.Text, by, run, in.Summary, in.IfHash)

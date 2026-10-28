@@ -132,10 +132,21 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 		return nil, err
 	}
 	pctx, cancel := context.WithCancel(context.Background())
+	s.moved = func(ctx context.Context, rec Record) {
+		// A move of Know-how writes the runbook as a move of a person
+		// does, so the page always says the standing of the routine.
+		full, err := s.Get(ctx, rec.Agent, rec.Name())
+		if err == nil {
+			_, err = writeRunbook(ctx, a, full)
+		}
+		if err != nil {
+			log.Warn("routines: the runbook of a routine did not follow its move", "agent", rec.Agent, "routine", rec.Name(), "error", err)
+		}
+	}
 	s.proj = newProjector(s, log)
 	go s.proj.run(pctx)
 	Attach(a, s)
-	log.Info("routines: the routines are on", "store", s.Describe(), "readyAfter", s.cfg.ReadyAfter, "readyAgreement", s.cfg.ReadyAgreement)
+	log.Info("routines: the routines are on", "store", s.Describe(), "readyAfterRead", s.cfg.ReadyAfter.Read, "readyAfterWrite", s.cfg.ReadyAfter.Write, "readyAgreement", s.cfg.ReadyAgreement)
 	return service{a: a, close: closeFn, cancel: cancel}, nil
 }
 
@@ -171,7 +182,7 @@ func Status(cfg *fw.Config) (bool, string) {
 	if !on {
 		return true, "routines: off; the routines live " + where
 	}
-	return true, fmt.Sprintf("routines: the routines live in %s; a rehearsing routine is ready after %d runs that it would have acted on, with %g of them agreed", where, c.ReadyAfter, c.ReadyAgreement)
+	return true, fmt.Sprintf("routines: the routines live in %s; a rehearsing routine is ready after %d runs that it would have acted on when it only reads, and %d when it writes, with %g of them agreed", where, c.ReadyAfter.Read, c.ReadyAfter.Write, c.ReadyAgreement)
 }
 
 // errNotOpen means that the bus keeps the routines and the service of the
@@ -240,6 +251,35 @@ func OnChange(fn func(agent, name string)) {
 	hooks.mu.Lock()
 	defer hooks.mu.Unlock()
 	hooks.change = append(hooks.change, fn)
+}
+
+// OnMove gets every move of a routine that the store wrote: the agent, the
+// name, the standing before the move ("" for a new routine), the standing
+// after it, who moved it (ByKnowhow for a move that Know-how made by
+// itself), and the note of the move. A step back names its run in the
+// note, as "run <id>". The package knowhow sets it at its start and writes
+// the journal from it. Nil calls nothing. The function runs on the
+// goroutine of the move, so it must not block. Each replica calls it for
+// the moves that it writes.
+var OnMove func(ctx context.Context, agent, name, from, to, by, note string)
+
+// AskFirst reports whether the agent holds every change of Know-how for a
+// person (the switch askFirst of docs/KNOWHOW.md section 5.3). A ready
+// routine that only reads then waits for a sign-off instead of going live
+// by itself. The package knowhow sets it at its start. Nil means false.
+var AskFirst func(ctx context.Context, agent string) bool
+
+// emitMove calls OnMove.
+func emitMove(ctx context.Context, agent, name, from, to, by, note string) {
+	if fn := OnMove; fn != nil {
+		fn(ctx, agent, name, from, to, by, note)
+	}
+}
+
+// askFirst calls AskFirst.
+func askFirst(ctx context.Context, agent string) bool {
+	fn := AskFirst
+	return fn != nil && fn(ctx, agent)
 }
 
 // emitChange calls the OnChange hooks.

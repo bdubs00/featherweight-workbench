@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/sources"
 )
 
 // putEvent writes a duty that starts on an event straight into the store,
@@ -96,7 +97,7 @@ func TestFireChain(t *testing.T) {
 		t.Fatalf("FireChain = %+v, %v", out, err)
 	}
 	req := f.queue.last(t)
-	if req.Metadata[MetaChain] != "2" || req.Metadata[MetaDuty] != "watch" || req.Input != `Look at {"run":"R1"}.` {
+	if req.Metadata[MetaChain] != "2" || req.Metadata[MetaDuty] != "watch" || req.Input != "Look at\n"+sources.Frame("the event of the duty watch", `{"run":"R1"}`)+"\n." {
 		t.Fatalf("the request = %+v", req)
 	}
 	f.view.set(req.ID, fw.StateCompleted, 0)

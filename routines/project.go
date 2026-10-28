@@ -9,6 +9,7 @@ package routines
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"slices"
 	"sync"
@@ -279,10 +280,22 @@ func (p *projector) applyGroup(ctx context.Context, g *group) error {
 				}
 			}
 		}
+		if ev.stepBack != nil && rec.Standing == Live {
+			// The ready rule counts the runs after the step back, so the
+			// routine rehearses again before it is ready.
+			ev.stepBackAt(e0(g))
+		}
 		return changed
 	})
 	if err != nil || ev == nil {
 		return err
+	}
+	if sb := ev.stepBack; sb != nil && rec.Standing == Live {
+		note := fmt.Sprintf("It stepped back to rehearsing by itself: %s, run %s", sb.why, sb.run)
+		if _, _, err := p.s.autoMove(ctx, g.agent, g.name, version, Live, Rehearsing, note); err != nil {
+			return err
+		}
+		return nil
 	}
 	ready := rec.Standing == Rehearsing && ev.Ready(p.s.cfg)
 	if ready != rec.Ready {
@@ -291,7 +304,46 @@ func (p *projector) applyGroup(ctx context.Context, g *group) error {
 		}
 	}
 	emitChange(g.agent, g.name)
+	if ready {
+		return p.s.grow(ctx, rec, ev)
+	}
 	return nil
+}
+
+// e0 is the time of the newest event of a group, or now for a group
+// without one.
+func e0(g *group) time.Time {
+	var at time.Time
+	for _, re := range g.events {
+		if re.Event.Time.After(at) {
+			at = re.Event.Time
+		}
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	return at
+}
+
+// grow moves a ready rehearsing routine to live by itself, as Know-how
+// allows (docs/KNOWHOW.md section 6.5): a version that a person signed off
+// and that stepped back goes live again, and a routine that only reads
+// goes live unless the agent asks first. Any other ready routine waits for
+// a person, as ready on the page.
+func (s *Store) grow(ctx context.Context, rec Record, ev *Evidence) error {
+	version := rec.Version()
+	var note string
+	switch {
+	case rec.SteppedBack && rec.SignedOff.holds(version):
+		note = fmt.Sprintf("It is ready again after it stepped back, and %s signed off version %d, so it went live again by itself", rec.SignedOff.By, version)
+	case ev.Risk == fw.RiskRead && !askFirst(ctx, rec.Agent):
+		t, _ := ev.current()
+		note = fmt.Sprintf("It only reads and is ready: it would have acted on %d runs, and %d agreed, so it went live by itself", t.Acted, t.Agreed)
+	default:
+		return nil
+	}
+	_, _, err := s.autoMove(ctx, rec.Agent, rec.Name(), version, Rehearsing, Live, note)
+	return err
 }
 
 // routineOf returns the routine and the version that an event of a

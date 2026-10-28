@@ -312,3 +312,28 @@ func TestArchiveConsumerWithTwoReplicas(t *testing.T) {
 		t.Fatalf("the consumer = %+v, %v", ci, err)
 	}
 }
+
+// A pass of the front reads every run of the archive, also a run that a
+// member still holds, with its events.
+func TestArchiveAllReadsHeldRuns(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "")
+	bus := fw.NewMemBus()
+	front := newMember(t, bus, "front", nil)
+	start := time.Now().Add(-time.Hour).UTC()
+	for _, e := range conversation(t, "01RUN", "ax:team/manager-0", start) {
+		if err := bus.Publish(context.Background(), "fw.events.team.manager."+e.Type, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "the archive keeps the run", func() bool {
+		return front.f.arch().summaries(context.Background())["01RUN"].Events == 6
+	})
+	all, ok := ArchiveAll(context.Background(), front.a)
+	if !ok || len(all) != 1 || all[0].Run.ID != "01RUN" || all[0].Member != "team/manager-0" || all[0].Ended.IsZero() || all[0].Updated.IsZero() {
+		t.Fatalf("ArchiveAll = %+v, %v", all, ok)
+	}
+	events, err := ArchiveEvents(context.Background(), front.a, "01RUN")
+	if err != nil || len(events) != 6 || events[0].Type != fw.EvRunQueued {
+		t.Fatalf("ArchiveEvents = %d, %v", len(events), err)
+	}
+}

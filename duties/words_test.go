@@ -10,6 +10,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/faces"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
+	"github.com/bdubs00/featherweight-workbench/sources"
 )
 
 // A person reads the title of a run, so the title names the event and
@@ -38,8 +39,9 @@ func TestTitleNamesTheEventAndCountsTheItems(t *testing.T) {
 			t.Errorf("title of %q = %q, want %q", c.message, got, c.title)
 		}
 		input := fill(d.Do.Message(), placeholders(d, e, nil))
-		if c.event != "" && !strings.Contains(input, c.event) || c.found != "" && !strings.Contains(input, c.found) {
-			t.Errorf("the message lost the JSON: %q", input)
+		if c.event != "" && !strings.Contains(input, sources.Frame("the event of the duty watch", c.event)) ||
+			c.found != "" && !strings.Contains(input, sources.Frame("the check of the duty watch", c.found)) {
+			t.Errorf("the message lost the JSON or its frame: %q", input)
 		}
 	}
 }

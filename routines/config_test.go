@@ -32,19 +32,31 @@ func withBlock(t *testing.T, cfg *fw.Config, text string) {
 func TestLoadTheSwitch(t *testing.T) {
 	t.Setenv(EnvEnabled, "")
 	t.Setenv(EnvReadyAfter, "")
+	t.Setenv(EnvReadyAfterRead, "")
+	t.Setenv(EnvReadyAfterWrite, "")
 	t.Setenv(EnvReadyAgreement, "")
 	c, err := Load(fw.DefaultConfig())
-	if err != nil || !c.On() || c.ReadyAfter != DefaultReadyAfter || c.ReadyAgreement != DefaultReadyAgreement {
+	if err != nil || !c.On() || c.ReadyAfter != (ReadyAfter{Read: 20, Write: 50}) || c.ReadyAgreement != DefaultReadyAgreement {
 		t.Fatalf("defaults = %+v, %v", c, err)
 	}
 	cfg := fw.DefaultConfig()
-	withBlock(t, cfg, "routines: {enabled: false, readyAfter: 20, readyAgreement: 0.8}\n")
-	if c, err := Load(cfg); err != nil || c.On() || c.ReadyAfter != 20 || c.ReadyAgreement != 0.8 {
+	withBlock(t, cfg, "routines: {enabled: false, readyAfter: 30, readyAgreement: 0.8}\n")
+	if c, err := Load(cfg); err != nil || c.On() || c.ReadyAfter != (ReadyAfter{Read: 30, Write: 30}) || c.ReadyAgreement != 0.8 {
 		t.Fatalf("the file = %+v, %v", c, err)
 	}
+	withBlock(t, cfg, "routines: {readyAfter: {read: 5}}\n")
+	if c, err := Load(cfg); err != nil || c.ReadyAfter != (ReadyAfter{Read: 5, Write: DefaultReadyAfterWrite}) {
+		t.Fatalf("a bound per risk = %+v, %v", c, err)
+	}
+	withBlock(t, cfg, "routines: {readyAfter: {read: 0, write: -1}}\n")
+	if _, err := Load(cfg); err == nil || !strings.Contains(err.Error(), "workbench.routines.readyAfter.write") {
+		t.Fatalf("a bound below 1 = %v", err)
+	}
+	withBlock(t, cfg, "routines: {enabled: false, readyAfter: 30, readyAgreement: 0.8}\n")
 	t.Setenv(EnvEnabled, "on")
 	t.Setenv(EnvReadyAfter, "10")
-	if c, err := Load(cfg); err != nil || !c.On() || c.ReadyAfter != 10 {
+	t.Setenv(EnvReadyAfterWrite, "12")
+	if c, err := Load(cfg); err != nil || !c.On() || c.ReadyAfter != (ReadyAfter{Read: 10, Write: 12}) {
 		t.Fatalf("the variables did not win: %+v, %v", c, err)
 	}
 	t.Setenv(EnvEnabled, "maybe")

@@ -486,19 +486,19 @@ func (b *natsBucket) Keys(ctx context.Context) ([]Entry, error) {
 // keysUnder lists the keys under first with a filter of the server, so
 // the server sends those keys only.
 func (b *natsBucket) keysUnder(ctx context.Context, first string) ([]string, error) {
-	entries, err := b.entriesUnder(ctx, first)
+	list, err := b.entriesUnder(ctx, first)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]string, 0, len(entries))
-	for _, e := range entries {
+	out := make([]string, 0, len(list))
+	for _, e := range list {
 		out = append(out, e.Key)
 	}
 	return out, nil
 }
 
-// entriesUnder lists the keys under first with the revisions of their
-// newest values, without the values, with a filter of the server.
+// entriesUnder lists the keys under first with their revisions, with a
+// filter of the server, so the server sends those keys only.
 func (b *natsBucket) entriesUnder(ctx context.Context, first string) ([]Entry, error) {
 	var out []Entry
 	err := b.read(ctx, func(kv jetstream.KeyValue) error {
@@ -780,10 +780,11 @@ func KeysUnder(ctx context.Context, b Bucket, first string) ([]string, error) {
 	return under(keys, first), nil
 }
 
-// EntriesUnder returns the keys of b whose first token is first, sorted,
-// with the revisions of their newest values and without the values, as
-// KeysUnder does. A reader that keeps a copy of the values reads again only
-// the keys whose revision changed.
+// EntriesUnder is KeysUnder with the revision and the time of the newest
+// value of each key, without the values, so a store that keeps a copy of
+// its records reads only the entries whose revision changed. first can
+// hold several tokens, such as note.<agent>, and then names the keys that
+// start with those tokens.
 func EntriesUnder(ctx context.Context, b Bucket, first string) ([]Entry, error) {
 	if l, ok := b.(lister); ok {
 		return l.entriesUnder(ctx, first)
@@ -795,7 +796,8 @@ func EntriesUnder(ctx context.Context, b Bucket, first string) ([]Entry, error) 
 	return entriesUnder(keys, first), nil
 }
 
-// entriesUnder returns the entries whose keys start with first and a dot.
+// entriesUnder returns the entries whose key starts with first and a dot,
+// sorted by key.
 func entriesUnder(keys []Entry, first string) []Entry {
 	var out []Entry
 	for _, e := range keys {

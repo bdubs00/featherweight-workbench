@@ -404,6 +404,9 @@ func (s *server) startOn(ctx context.Context, member string, in runArgs, act man
 	if in.Instructions != "" {
 		body["instructions"] = in.Instructions
 	}
+	if len(in.blocks) > 0 {
+		body["context"] = in.blocks
+	}
 	if in.Profile != nil {
 		body["profile"] = in.Profile
 	}

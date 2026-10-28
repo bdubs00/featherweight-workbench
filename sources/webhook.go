@@ -19,6 +19,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/internal/heldback"
 )
 
 // RoutePattern is the route of the webhook sources.
@@ -154,6 +155,7 @@ func (s *Sources) answerEvents(w http.ResponseWriter, r *http.Request, src *sour
 		refuse(http.StatusBadRequest, 1, err.Error(), "The events do not read: "+err.Error()+".")
 		return Delivered{Err: err}
 	}
+	itemsOf(r.Context(), events)
 	ans := answer{Source: name, Agent: src.cfg.Agent, Queue: src.queue, Batch: name, Runs: []runReq{}}
 	if len(events) == 0 {
 		ans.Note = "The body holds no event, so no run started."
@@ -174,6 +176,7 @@ func (s *Sources) answerEvents(w http.ResponseWriter, r *http.Request, src *sour
 			return Delivered{Events: len(events), Refused: len(events)}
 		}
 		it.req.ID = fw.NewID()
+		heldback.Mark(&it.req, src.cfg.HeldBack)
 		items = append(items, it)
 	}
 	// A caller that goes away does not stop the claims in the middle.

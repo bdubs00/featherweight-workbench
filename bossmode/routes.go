@@ -17,6 +17,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/conversations"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/knowhow"
 	"github.com/bdubs00/featherweight-workbench/routines"
 )
 
@@ -51,9 +52,10 @@ func extension(k *native.Kit) error {
 // choice when it creates an agent (fleet.TemplatesOf), an empty list for
 // none, the quick chat, when the configuration names one, whether this
 // process keeps routines and serves their routes, so the page shows the
-// place Routines only then, and whether it serves the packages of the
-// pools (fleet.PackagesOn), so the page shows the section Packages only
-// then.
+// place Routines only then, whether it keeps Know-how and serves its
+// routes (knowhow.Of), so the page shows the place Know-how only then, and
+// whether it serves the packages of the pools (fleet.PackagesOn), so the
+// page shows the section Packages only then.
 type Settings struct {
 	Manager    *Manager   `json:"manager"`
 	Placement  string     `json:"placement"`
@@ -62,6 +64,7 @@ type Settings struct {
 	Templates  []Template `json:"templates"`
 	Chat       *QuickChat `json:"chat"`
 	Routines   bool       `json:"routines"`
+	Knowhow    bool       `json:"knowhow"`
 	Packages   bool       `json:"packages"`
 	// Work is true when the front serves the board of the work, the plan
 	// of a task, and the value of the work (GET /v1/work, POST
@@ -146,7 +149,7 @@ func settingsRoute(k *native.Kit, c Config) http.HandlerFunc {
 			k.Fail(w, r, err)
 			return
 		}
-		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers, Theme: pageTheme(a, c.Theme), Templates: []Template{}, Routines: routines.Of(a) != nil, Packages: fleet.PackagesOn(a), Work: workOn.Load()}
+		out := Settings{Placement: b.Placement, MaxMembers: b.MaxMembers, Theme: pageTheme(a, c.Theme), Templates: []Template{}, Routines: routines.Of(a) != nil, Knowhow: knowhow.Of(a) != nil, Packages: fleet.PackagesOn(a), Work: workOn.Load()}
 		for _, t := range fleet.TemplatesOf(a) {
 			out.Templates = append(out.Templates, Template{Name: t.Name, Default: t.Default})
 		}

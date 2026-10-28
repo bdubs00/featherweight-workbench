@@ -3,8 +3,8 @@ package bossmode
 // This file feeds the stream with the events of the other packages of
 // bossmode (docs/ARCHITECTURE.md section 17.5): bridge.message and
 // bridge.member from the hooks of the bridges, page from the hook of the
-// wiki, face from the hook of the faces, and routine from the hook of the
-// routines. Each event goes to the stream
+// wiki, face from the hook of the faces, routine from the hook of the
+// routines, and knowhow from the hook of Know-how. Each event goes to the stream
 // of each agent of the process that runs bossmode, through PublishTo, with
 // the decision of its scope bound to that agent: the stream asks the rule
 // of the routes of the package once per event and per stream, for the
@@ -23,6 +23,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/faces"
+	"github.com/bdubs00/featherweight-workbench/knowhow"
 	"github.com/bdubs00/featherweight-workbench/pages"
 	"github.com/bdubs00/featherweight-workbench/routines"
 )
@@ -34,11 +35,16 @@ const (
 	KindPage          = "page"
 	KindFace          = "face"
 	KindRoutine       = "routine"
+	KindKnowhow       = "knowhow"
 )
 
 // RoutineEvery is the shortest time between two events routine of one
 // routine. A change within it goes out once at its end.
 const RoutineEvery = 2 * time.Second
+
+// KnowhowEvery is the shortest time between two events knowhow of one
+// agent. A change within it goes out once at its end.
+const KnowhowEvery = 2 * time.Second
 
 func init() {
 	bridges.OnMessage(feedMessage)
@@ -47,6 +53,7 @@ func init() {
 	pages.OnChange(feedPage)
 	faces.OnChange(feedFace)
 	routines.OnChange(feedRoutine)
+	knowhow.OnChange(feedKnowhow)
 }
 
 // bridgeMessage is the data of bridge.message. Partial is true when the
@@ -240,6 +247,32 @@ func (f *routineFeed) change(agent, name string, send func()) {
 func (h *Hub) publishRoutine(agent, name string) {
 	if err := PublishTo(h.a, KindRoutine, agent+"/"+name, routineEvent{Kind: KindRoutine, Agent: agent, Name: name}, ForAgent(agent)); err != nil {
 		h.log.Warn("bossmode: a routine is not on the stream", "agent", agent, "routine", name, "error", err)
+	}
+}
+
+// knowhowEvent is the data of knowhow: the agent whose notes, journal,
+// switch, or waiting list changed. The page reads them again.
+type knowhowEvent struct {
+	Kind  string `json:"kind"`
+	Agent string `json:"agent"`
+}
+
+// feedKnowhow publishes a change of the Know-how of an agent to every
+// caller who can view the agent, on each hub of the process that keeps
+// Know-how, at most once per agent in KnowhowEvery.
+func feedKnowhow(agent string) {
+	for _, a := range agents() {
+		if h := Of(a); h != nil && knowhow.Of(a) != nil {
+			h.knowhow.change(agent, "", func() { h.publishKnowhow(agent) })
+		}
+	}
+}
+
+// publishKnowhow puts the event knowhow on the stream of the hub, for the
+// callers who can view the agent.
+func (h *Hub) publishKnowhow(agent string) {
+	if err := PublishTo(h.a, KindKnowhow, agent, knowhowEvent{Kind: KindKnowhow, Agent: agent}, ForAgent(agent)); err != nil {
+		h.log.Warn("bossmode: a change of Know-how is not on the stream", "agent", agent, "error", err)
 	}
 }
 

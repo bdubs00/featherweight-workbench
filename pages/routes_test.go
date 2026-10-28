@@ -243,7 +243,7 @@ func TestRoutesAccess(t *testing.T) {
 func TestRoutesListPrefix(t *testing.T) {
 	a := newAgent(t, nil)
 	base := serve(t, a) + "/v1/pages"
-	for _, p := range []string{"agents/reviewer/learned.md", "agents/reviewer-two/notes.md", "agents/triage/learned.md", "runbooks/cron.md"} {
+	for _, p := range []string{"agents/reviewer/notes.md", "agents/reviewer-two/notes.md", "agents/triage/notes.md", "runbooks/cron.md"} {
 		if resp, out := do(t, "PUT", base+"/"+p, "alice", jsonText("# "+p+"\n")); resp.StatusCode != http.StatusCreated {
 			t.Fatalf("PUT %s = %d %s", p, resp.StatusCode, out)
 		}
@@ -268,11 +268,11 @@ func TestRoutesListPrefix(t *testing.T) {
 		return got
 	}
 	for query, want := range map[string]string{
-		"?prefix=agents/reviewer/": "agents/reviewer/learned.md",
-		"?prefix=agents/reviewer":  "agents/reviewer-two/notes.md agents/reviewer/learned.md",
-		"?prefix=agents%2F":        "agents/reviewer-two/notes.md agents/reviewer/learned.md agents/triage/learned.md",
-		"?prefix=":                 "agents/reviewer-two/notes.md agents/reviewer/learned.md agents/triage/learned.md runbooks/cron.md",
-		"":                         "agents/reviewer-two/notes.md agents/reviewer/learned.md agents/triage/learned.md runbooks/cron.md",
+		"?prefix=agents/reviewer/": "agents/reviewer/notes.md",
+		"?prefix=agents/reviewer":  "agents/reviewer-two/notes.md agents/reviewer/notes.md",
+		"?prefix=agents%2F":        "agents/reviewer-two/notes.md agents/reviewer/notes.md agents/triage/notes.md",
+		"?prefix=":                 "agents/reviewer-two/notes.md agents/reviewer/notes.md agents/triage/notes.md runbooks/cron.md",
+		"":                         "agents/reviewer-two/notes.md agents/reviewer/notes.md agents/triage/notes.md runbooks/cron.md",
 		"?prefix=wiki/":            "",
 	} {
 		if got := strings.Join(paths(query), " "); got != want {

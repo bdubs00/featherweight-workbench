@@ -54,9 +54,10 @@ func init() {
 }
 
 // Keys of the metadata that a duty gives each run, beside fw.batch and
-// fw.title.
+// fw.title. MetaDuty is the key of the kernel, fw.MetaDuty, so a routine
+// bound to a Duty finds the runs of that Duty.
 const (
-	MetaDuty    = "workbench.duty"        // the name of the duty
+	MetaDuty    = fw.MetaDuty             // the name of the duty
 	MetaSlot    = "workbench.dutySlot"    // the time of the start, RFC 3339 in UTC
 	MetaAttempt = "workbench.dutyAttempt" // the attempt, from 2, for a retry of the duty
 	MetaReview  = fleet.MetaReview        // 1 when the owner checks each result (Duty.Review)
@@ -109,10 +110,12 @@ type Service struct {
 	client  *http.Client
 	every   time.Duration // the longest pause of the engine
 
-	// The seams of the engine, which a test replaces.
+	// The seams of the engine, which a test replaces. output reads the
+	// output of a run for the block last.
 	enqueue func(ctx context.Context, agent, pool string, reqs []fw.RunRequest) (string, int, error)
 	runs    func(ctx context.Context, name string) (map[string]*fw.Run, error)
 	secret  func(ctx context.Context, name string) (string, error)
+	output  func(ctx context.Context, id string) string
 
 	// The seams of a write of a check (writecheck.go): the wait for a run
 	// that the front put on a queue, its cancel, and the longest wait.
@@ -125,6 +128,10 @@ type Service struct {
 	open    map[string]map[string]bool // per duty, the dates of its history with a start that works
 	seeded  map[string]bool            // per duty, whether this replica read its history once
 	warned  map[string]string          // per duty, the last problem of its schedule in the log
+
+	// heldBack is the share of the runs of each duty that the engine
+	// holds back from Know-how (workbench.knowhow.heldBack).
+	heldBack float64
 
 	// passive is true on a replica that cannot put a job on a queue
 	// (fleet.CanEnqueue): it serves the routes and runs no engine, and a
@@ -153,6 +160,10 @@ type Service struct {
 func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	log := a.Logger().With("component", "duties")
 	cfg, err := LoadConfig(a.Config())
+	if err != nil {
+		return nil, err
+	}
+	knowhow, err := LoadKnowhow(a.Config())
 	if err != nil {
 		return nil, err
 	}
@@ -189,6 +200,7 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 		return nil, fmt.Errorf("duties: %w", err)
 	}
 	s := newService(a, NewStore(duties, runs, seen, log), cfg, log)
+	s.heldBack = knowhow.Share()
 	s.closers = closers
 	s.passive = !fleet.CanEnqueue(a.Config())
 	// The entries of workbench.sources become duties before the engine
@@ -203,7 +215,7 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 		return s, nil
 	}
 	s.start()
-	log.Info("duties: the duties are on", "store", where, "replica", s.replica)
+	log.Info("duties: the duties are on", "store", where, "replica", s.replica, "heldBack", s.heldBack)
 	return s, nil
 }
 
@@ -227,6 +239,7 @@ func newService(a *fw.Agent, st *Store, cfg Config, log *slog.Logger) *Service {
 		return fleet.EnqueueFor(ctx, a, agent, pool, reqs)
 	}
 	s.runs = s.runsOfFleet
+	s.output = s.outputOf
 	s.await = func(ctx context.Context, id string) (*fw.Run, error) { return fleet.Await(ctx, a, id) }
 	s.stopRun = func(ctx context.Context, id string) error { return fleet.CancelRun(ctx, a, id) }
 	s.writeWait = WriteCheckTimeout

@@ -88,10 +88,14 @@ var (
 	ErrConflict = errors.New("pages: the page changed")
 	ErrLimit    = errors.New("pages: a limit of the wiki refuses the write")
 	ErrInvalid  = errors.New("pages: the request is not valid")
+	// ErrRefused means that the rules of Know-how keep the caller from the
+	// page (rules.go): only the front writes it, or it belongs to another
+	// agent.
+	ErrRefused = errors.New("pages: the caller does not write this page")
 )
 
 // Error is an error of the store: one of ErrNotFound, ErrConflict,
-// ErrLimit, and ErrInvalid, with the reason.
+// ErrLimit, ErrInvalid, and ErrRefused, with the reason.
 type Error struct {
 	Kind   error
 	Reason string
@@ -423,6 +427,7 @@ func (s *Store) write(ctx context.Context, p, text, by, run, summary, ifHash str
 	if did != unchanged {
 		s.reindex(ctx)
 		emitChange(page.PageInfo, false)
+		wrote(ctx, page.Path, page.Hash)
 	}
 	return page, did, nil
 }
@@ -625,6 +630,7 @@ func (s *Store) Delete(ctx context.Context, p, by, ifHash string) error {
 		gone := have.PageInfo
 		gone.Path, gone.By, gone.Run, gone.At = p, oneLine(by, 256), "", s.now().UTC()
 		emitChange(gone, true)
+		wrote(ctx, p, "")
 		return nil
 	}
 	return fail(ErrConflict, "other writers changed the page %s %d times while this removal tried; read it again and remove it again", p, writeAttempts)

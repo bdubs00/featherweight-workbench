@@ -17,6 +17,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/faces"
+	"github.com/bdubs00/featherweight-workbench/sources"
 )
 
 // Placeholders are the placeholders of a message.
@@ -24,6 +25,14 @@ var Placeholders = []string{"{date}", "{time}", "{found}", "{event}", "{last.tit
 
 // none stands for a placeholder without a value.
 const none = "none"
+
+// ContextLast is the source of the data block that holds the output of
+// the previous run of a duty (docs/KNOWHOW.md section 6.2). An earlier run
+// wrote it, so it never enters the message.
+const ContextLast = "last"
+
+// MaxLastBytes bounds the output of the previous run in the block last.
+const MaxLastBytes = 2 << 10
 
 // placeholders returns the values of the placeholders for a start: the
 // date and the time of the start in the zone of the duty, what the check
@@ -34,8 +43,8 @@ func placeholders(d *Duty, e entry, last *RunEntry) map[string]string {
 	v := map[string]string{
 		"{date}":       e.Slot.In(loc).Format(time.DateOnly),
 		"{time}":       e.Slot.In(loc).Format("15:04"),
-		"{found}":      orNone(e.FoundText),
-		"{event}":      orNone(e.Event),
+		"{found}":      framed("the check of the duty "+d.Name, e.FoundText),
+		"{event}":      framed("the event of the duty "+d.Name, e.Event),
 		"{last.title}": none,
 		"{last.run}":   none,
 		"{last.state}": none,
@@ -75,6 +84,23 @@ func eventName(raw string) string {
 		}
 	}
 	return "an event"
+}
+
+// framed is the text of an outside system between the two lines of
+// sources.Frame, each line on its own, or none for no text.
+func framed(from, text string) string {
+	if strings.TrimSpace(text) == "" {
+		return none
+	}
+	return "\n" + sources.Frame(from, text) + "\n"
+}
+
+// tidy takes away what a framed placeholder leaves around its lines: the
+// space before its first line, and an empty line at the start or the end
+// of the message.
+func tidy(msg string) string {
+	msg = strings.ReplaceAll(msg, " \n"+sources.FrameBegin, "\n"+sources.FrameBegin)
+	return strings.Trim(msg, "\n")
 }
 
 func orNone(s string) string {

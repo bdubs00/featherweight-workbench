@@ -140,11 +140,16 @@ func standingLine(rec Record) string {
 	signed := ""
 	if so := rec.SignedOff; so != nil {
 		signed = fmt.Sprintf("Signed off by %s on %s. ", so.By, so.At.UTC().Format("2 January 2006"))
+	} else if rec.Standing == Live {
+		signed = "It went live by itself, because it only reads and its rehearsal passed. "
 	}
 	switch rec.Standing {
 	case Live:
 		return signed + fmt.Sprintf("It is live: it acts on its own, and the agent still handles %s of the %s, to compare.", share(rec.Routine.CanaryShare()), runsWord)
 	case Rehearsing:
+		if rec.SteppedBack {
+			return "It stepped back by itself and is rehearsing again: it decides beside the agent and does not act."
+		}
 		return "It is rehearsing: it decides beside the agent and does not act."
 	case Paused:
 		return "It is paused: it does not run, and the agent handles every " + runWord + "."
