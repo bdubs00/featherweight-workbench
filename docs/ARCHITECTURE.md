@@ -3986,7 +3986,7 @@ The archive (section 4.18) applies each event to the summary of its run. It also
 | `done` | The field `done` of the newest `fw.run.finished`: `checked` when the definition of done of the agent passed (the kernel architecture, section 24), `failed` when its checks ended the run, and empty without one |
 | `canceledBy` | The person of a cancel |
 
-A summary that a server before this section wrote has no facts. The value counts such a run as unknown and says so.
+A summary that a server before this section wrote has no facts. The archive keeps every event of the run, so after each start the front reads them again in the background and writes the facts, once per run (`fleet/backfill.go`). It pauses 20 milliseconds between two runs, so a large archive does not flood the server of the bus. An event that arrives during the read makes the summary count more events than the read found, and the read starts again. A run whose start the stream no longer holds gets the mark `backfilled` and no facts, so the next start does not read it again. Every replica runs the backfill, and a replica that finds the facts there writes nothing. Until the backfill reaches a run, the value counts it as unknown and says so.
 
 ### 25.2 The answer
 

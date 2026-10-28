@@ -1,11 +1,13 @@
 package fleet
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/internal/bucket"
 )
 
 func ev(seq uint64, typ string, at time.Time, data any) fw.Event {
@@ -80,5 +82,64 @@ func TestWorkApply(t *testing.T) {
 	// A record that never saw the start has no facts.
 	if w := WorkOf([]fw.Event{ev(9, fw.EvRunFinished, at(9), fw.RunFinishedData{Outcome: "failed"})}); w.Facts {
 		t.Fatalf("a record without the start has facts: %+v", w)
+	}
+}
+
+// The backfill gives a summary that an older server wrote the facts of its
+// events, once. A summary whose run lost its start in the stream keeps a
+// mark, so the next start does not read it again, and a summary that
+// already has its facts stays as it is.
+func TestArchiveBackfill(t *testing.T) {
+	ctx := context.Background()
+	defer func(p time.Duration) { backfillPause = p }(backfillPause)
+	backfillPause = 0
+	a := newArchive(bucket.NewMem(ArchiveBucket), nil, quietLogger())
+	start := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	old := conversation(t, "01OLD", "ax:team/manager-0", start)
+	old = append(old[:5], archiveEvent(t, "01OLD", "ax:team/manager-0", fw.EvApprovalRequested, 6, start.Add(5*time.Second), fw.ApprovalRequestedData{ApprovalID: "a1", Tool: "bash"}),
+		archiveEvent(t, "01OLD", "ax:team/manager-0", fw.EvApprovalDecided, 7, start.Add(65*time.Second), fw.ApprovalDecidedData{ApprovalID: "a1", Decision: "allow", Decider: "alice", DeciderKind: fw.ActorPerson}),
+		archiveEvent(t, "01OLD", "ax:team/manager-0", fw.EvRunFinished, 8, start.Add(70*time.Second), fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "Done.", Done: fw.DoneChecked}))
+	fresh := conversation(t, "01NEW", "ax:team/manager-0", start)
+	for _, e := range append(append([]fw.Event{}, old...), fresh...) {
+		if err := a.add(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := a.summaries(ctx)["01OLD"].Work
+	// A server before the facts wrote no work into the summaries.
+	for _, id := range []string{"01OLD", "01TRIMMED"} {
+		if id == "01TRIMMED" {
+			if err := a.add(ctx, archiveEvent(t, id, "ax:team/manager-0", fw.EvRunFinished, 9, start, fw.RunFinishedData{Outcome: fw.OutcomeCompleted})); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := a.modify(ctx, id, func(r *archivedRun) bool {
+			r.Work = Work{}
+			r.Queued = true
+			return true
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := a.backfill(ctx); got != 1 {
+		t.Fatalf("the backfill gave %d runs their facts, want 1", got)
+	}
+	sums := a.summaries(ctx)
+	got := sums["01OLD"].Work
+	if !got.Backfilled || !got.Facts || got.Acts != 1 || got.Waits != 1 || got.WaitMS != 60000 || got.Done != fw.DoneChecked {
+		t.Fatalf("the backfilled facts = %+v", got)
+	}
+	got.Backfilled = false
+	if got != want {
+		t.Fatalf("the backfilled facts = %+v, want the facts of the stream %+v", got, want)
+	}
+	if w := sums["01TRIMMED"].Work; !w.Backfilled || w.Facts {
+		t.Fatalf("a run without its start = %+v, want the mark and no facts", w)
+	}
+	if w := sums["01NEW"].Work; w.Backfilled || !w.Facts {
+		t.Fatalf("a run with its facts = %+v", w)
+	}
+	if got := a.backfill(ctx); got != 0 {
+		t.Fatalf("a second backfill gave %d runs their facts", got)
 	}
 }

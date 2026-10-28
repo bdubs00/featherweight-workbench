@@ -47,6 +47,8 @@ const (
 //     its checks ended the run, and empty for a run without one or of an
 //     older kernel. It is no verdict of a person.
 //   - CanceledBy names the person who canceled the run, when one did.
+//   - Backfilled is true once the backfill of the archive (backfill.go)
+//     read the events of the run again for these facts.
 //
 // A branch counts the events that it kept from its source too, so a
 // reader that counts pieces of work takes no branch as one.
@@ -64,6 +66,7 @@ type Work struct {
 	Verdict      string    `json:"verdict,omitempty"`
 	Done         string    `json:"done,omitempty"`
 	CanceledBy   string    `json:"canceledBy,omitempty"`
+	Backfilled   bool      `json:"backfilled,omitempty"`
 }
 
 // Apply folds one event of the run into the facts. The events of a run

@@ -482,8 +482,10 @@ func (f *Fleet) startArchive(ctx context.Context, cfg *fw.Config, egress string)
 		f.archivePtr.Store(a)
 		f.archiveMu.Unlock()
 		// The summaries that the bucket holds from before this start load
-		// in the background.
+		// in the background, and those without the facts of their work
+		// get them (backfill.go).
 		a.summaries(f.ctx)
+		go a.backfill(f.ctx)
 		stop, err := OpenArchiveSource(f.ctx, f, cfg, egress, func(e fw.Event) error { return a.add(f.ctx, e) })
 		if err != nil {
 			f.log.Warn("fleet: the archive reads no new event", "error", err)
