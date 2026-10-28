@@ -305,3 +305,93 @@ func TestSignedOffReturnsToLive(t *testing.T) {
 		t.Fatalf("a routine that a person moved back: %s, ready %v", rec.Standing, rec.Ready)
 	}
 }
+
+// calls sends n rehearsal runs of a routine without questions, each with
+// the comparison of its calls, that agree or not.
+func (st *stream) calls(n int, risk string, agree bool) {
+	for range n {
+		st.n++
+		run := fmt.Sprintf("01R%05d", st.n)
+		c := fw.RoutineComparedData{Routine: "acknowledge", Version: st.version, Mode: fw.RoutineShadow, Calls: true, Agree: agree}
+		if !agree {
+			c.Step, c.Said, c.Observed = 2, `{"text":"STOCK pens=90"}`, `{"text":"STOCK pens=120"}`
+			c.Reason = "step 2 files: the key text differs"
+		}
+		st.send(
+			st.event(run, fw.EvRoutineDecided, fw.RoutineDecidedData{Routine: "acknowledge", Version: st.version, Mode: fw.RoutineShadow, Applies: true, Risk: risk}),
+			st.event(run, fw.EvRoutineCompared, c),
+		)
+	}
+}
+
+// plain is the routine of the tests without its questions, as Know-how
+// proposes it without a decider.
+func plain() fw.Routine {
+	r := ack()
+	r.Questions, r.Decider = nil, ""
+	r.Answer = "TRIAGE"
+	return r
+}
+
+// A routine without questions gains agreement from the comparison of its
+// calls. Ready, one that only reads goes live by itself, and one that
+// writes waits for a sign-off (docs/KNOWHOW.md section 6.5). A
+// disagreement of the calls shows with its reason.
+func TestReadyWithoutQuestions(t *testing.T) {
+	movesOf(t)
+	ctx := context.Background()
+	read, write := memStore(Config{}), memStore(Config{})
+	for _, s := range []*Store{read, write} {
+		if _, _, err := s.Put(ctx, PutRequest{Agent: "triage", Routine: plain(), Standing: Rehearsing, By: "alice"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := newStream(t, read)
+	r.calls(19, fw.RiskRead, true)
+	if rec := get(t, read); rec.Standing != Rehearsing || rec.Evidence.Totals.Agreed != 19 {
+		t.Fatalf("a read routine after 19 runs: %s, totals %+v", rec.Standing, rec.Evidence.Totals)
+	}
+	r.calls(1, fw.RiskRead, true)
+	if rec := get(t, read); rec.Standing != Live || rec.SignedOff != nil {
+		t.Fatalf("a read routine after 20 agreed runs: %s, signed off %+v", rec.Standing, rec.SignedOff)
+	}
+
+	w := newStream(t, write)
+	w.calls(1, fw.RiskWrite, false)
+	w.calls(50, fw.RiskWrite, true)
+	rec := get(t, write)
+	if rec.Standing != Rehearsing || !rec.Ready || rec.Evidence.Totals != (Counts{Decided: 51, Acted: 51, Agreed: 50, Disagreed: 1}) {
+		t.Fatalf("a write routine after 51 runs: %s, ready %v, totals %+v", rec.Standing, rec.Ready, rec.Evidence.Totals)
+	}
+	d := rec.Evidence.Disagreements
+	if len(d) != 1 || len(d[0].Answers) != 1 || !d[0].Answers[0].Calls || d[0].Answers[0].Reason != "step 2 files: the key text differs" ||
+		d[0].Answers[0].Said != `{"text":"STOCK pens=90"}` || d[0].Input != "#7 a ticket" {
+		t.Fatalf("disagreements = %+v", d)
+	}
+}
+
+// A live routine whose work failed the checks of done of a run steps back
+// to rehearsing, as for a run that came back.
+func TestStepBackOnFailedChecksOfDone(t *testing.T) {
+	movesOf(t)
+	s := memStore(Config{})
+	liveRoutine(t, s)
+	st := newStream(t, s)
+	st.send(
+		st.event("01FAIL", fw.EvRoutineDecided, fw.RoutineDecidedData{Routine: "acknowledge", Version: 1, Standing: fw.RoutineLive, Mode: fw.RoutineLive, Applies: true, Risk: fw.RiskWrite}),
+		st.event("01FAIL", fw.EvRoutineApplied, fw.RoutineAppliedData{Routine: "acknowledge", Version: 1, Steps: 2, FailedStep: 2}),
+	)
+	if rec := get(t, s); rec.Standing != Live {
+		t.Fatalf("a failed step moved the routine: %s", rec.Standing)
+	}
+	st.send(
+		st.event("01DONE", fw.EvRoutineDecided, fw.RoutineDecidedData{Routine: "acknowledge", Version: 1, Standing: fw.RoutineLive, Mode: fw.RoutineLive, Applies: true, Risk: fw.RiskWrite}),
+		st.event("01DONE", fw.EvRoutineApplied, fw.RoutineAppliedData{Routine: "acknowledge", Version: 1, Steps: 4, FailedStep: 4, Done: fw.DoneFailed,
+			Reason: `done: check 1 "the report is saved" (files) failed: the result lacks "STOCK"`}),
+	)
+	rec := get(t, s)
+	if last := rec.History[len(rec.History)-1]; rec.Standing != Rehearsing || last.By != ByKnowhow || !strings.Contains(last.Note, "run 01DONE") ||
+		!strings.Contains(last.Note, "checks of done") || rec.Evidence.Totals.Failed != 2 {
+		t.Fatalf("after failed checks of done: %s, last move %+v, totals %+v", rec.Standing, last, rec.Evidence.Totals)
+	}
+}

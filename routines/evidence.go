@@ -37,8 +37,8 @@ var bands = []float64{0, 0.5, 0.7, 0.85, 0.95}
 // Counts are the counts of a day or of a whole version. Decided counts the
 // decisions of the routine beside the agent (rehearsal and canary runs),
 // Acted those where it would have acted, and Agreed and Disagreed those of
-// Acted that the comparison settled: every compared question agreed, or
-// one did not. Handed counts every decision that did not apply, so the
+// Acted that the comparison settled: every compared question and the
+// comparison of the calls agreed, or one did not. Handed counts every decision that did not apply, so the
 // agent handled the run alone. Applied counts the live runs that the
 // routine completed, and Failed the live runs where it started and
 // stopped, so the agent took over.
@@ -70,12 +70,18 @@ type Band struct {
 
 // Compared is the answer of the routine to one question in one run,
 // beside what the agent did, with the probability of the chosen answer.
+// For the comparison of the calls (fw.RoutineComparedData.Calls), Calls is
+// true, Question is empty, Said and Observed are the input of the step of
+// the routine and of the call of the agent that differ, and Reason says
+// how they differ.
 type Compared struct {
 	Question    string  `json:"question"`
 	Said        string  `json:"said"`
 	Observed    string  `json:"observed"`
 	Agree       bool    `json:"agree"`
 	Probability float64 `json:"probability,omitempty"`
+	Calls       bool    `json:"calls,omitempty"`
+	Reason      string  `json:"reason,omitempty"`
 }
 
 // Disagreement is a run where the routine would have acted and one of its
@@ -157,6 +163,7 @@ type stepBack struct {
 const (
 	whyCanary   = "a canary run disagreed with the agent"
 	whySentBack = "a run that it completed was sent back"
+	whyNotDone  = "its work on a run failed the checks of done"
 )
 
 // noteStepBack sets the run that steps the routine back, when none came
@@ -385,6 +392,11 @@ func (ev *Evidence) applied(run string, at time.Time, d fw.RoutineAppliedData) b
 	} else {
 		m.Applied = "failed"
 		ev.count(m.Day, 1, func(c *Counts) *int { return &c.Failed })
+		if d.Done == fw.DoneFailed {
+			// The checks of done of the run refuted the work of the
+			// routine, as a receipt that sends a run back does.
+			ev.noteStepBack(m.Run, whyNotDone)
+		}
 	}
 	ev.sendBack(m)
 	return true
@@ -393,7 +405,9 @@ func (ev *Evidence) applied(run string, at time.Time, d fw.RoutineAppliedData) b
 // compared applies fw.routine.compared of the run, for the routine r,
 // with the line of the run: its title, else the first line of its input.
 // A comparison that comes before its decision waits in the mark of the
-// run. It reports whether the evidence changed.
+// run. The comparison of the calls has no question, so the mark keeps it
+// under the empty name, which no question has. It reports whether the
+// evidence changed.
 func (ev *Evidence) compared(run, line string, at time.Time, d fw.RoutineComparedData, r fw.Routine) bool {
 	m := ev.markOf(run)
 	if m == nil {
@@ -405,7 +419,8 @@ func (ev *Evidence) compared(run, line string, at time.Time, d fw.RoutineCompare
 	}
 	m.Done = append(m.Done, d.Question)
 	m.Input = cut(line, maxAnswerBytes)
-	a := Compared{Question: d.Question, Said: cut(d.Said, maxAnswerBytes), Observed: cut(d.Observed, maxAnswerBytes), Agree: d.Agree, Probability: m.P[d.Question]}
+	a := Compared{Question: d.Question, Said: cut(d.Said, maxAnswerBytes), Observed: cut(d.Observed, maxAnswerBytes), Agree: d.Agree, Probability: m.P[d.Question],
+		Calls: d.Calls, Reason: cut(d.Reason, maxAnswerBytes)}
 	if m.Early {
 		m.Answers = append(m.Answers, a)
 		return true
@@ -463,17 +478,21 @@ func (ev *Evidence) settle(m *mark, a Compared, r fw.Routine) {
 	}
 }
 
-// trim drops what a mark no longer needs once every question of the
-// routine that the kernel compares came: the mark keeps what makes an
-// event count once, and no more.
+// trim drops what a mark no longer needs once every comparison that the
+// kernel makes came: one per question with observe, and one of the calls
+// for a rehearsal that applies. The mark keeps what makes an event count
+// once, and no more.
 func (ev *Evidence) trim(m *mark, r fw.Routine) {
-	observed := 0
+	want := 0
 	for _, q := range r.Questions {
 		if q.Observe != nil {
-			observed++
+			want++
 		}
 	}
-	if len(m.Done) >= observed {
+	if m.Applies && rehearsal(m.Mode) && len(r.Steps)+len(r.After) > 0 {
+		want++
+	}
+	if len(m.Done) >= want {
 		m.P, m.Answers, m.Input = nil, nil, ""
 	}
 }

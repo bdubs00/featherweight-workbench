@@ -275,7 +275,7 @@ func (p *projector) applyGroup(ctx context.Context, g *group) error {
 				}
 			case fw.EvRoutineCompared:
 				var d fw.RoutineComparedData
-				if e.Decode(&d) == nil && d.Question != "" {
+				if e.Decode(&d) == nil && (d.Question != "" || d.Calls) {
 					changed = ev.compared(e.Subject, re.Line, e.Time, d, body) || changed
 				}
 			}

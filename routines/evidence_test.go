@@ -322,12 +322,18 @@ func TestEvidenceFitsTheBucket(t *testing.T) {
 	if len(value) > maxValue || len(ev.Marks) == 0 || ev.Marks[len(ev.Marks)-1].Run != "01RUN01199" || ev.Totals.Agreed != 1200 {
 		t.Fatalf("the evidence holds %d bytes and %d marks, the newest %s, agreed %d", len(value), len(ev.Marks), ev.Marks[len(ev.Marks)-1].Run, ev.Totals.Agreed)
 	}
-	// The tenth question of the newest run comes, and its mark drops what
-	// it no longer needs.
+	// The tenth question and the comparison of the calls of the newest
+	// run come, and its mark drops what it no longer needs.
 	ev, _ = s.updateEvidence(ctx, "triage", "acknowledge", func(ev *Evidence) bool {
 		return ev.compared("01RUN01199", "#1 a ticket", at, comparedData(r.QuestionNames()[9], "a", "a"), r)
 	})
-	if m := ev.markOf("01RUN01199"); m == nil || m.P != nil || m.Answers != nil || len(m.Done) != 10 {
+	if m := ev.markOf("01RUN01199"); m == nil || m.P == nil || len(m.Done) != 10 {
+		t.Fatalf("the mark without the comparison of the calls = %+v", m)
+	}
+	ev, _ = s.updateEvidence(ctx, "triage", "acknowledge", func(ev *Evidence) bool {
+		return ev.compared("01RUN01199", "#1 a ticket", at, fw.RoutineComparedData{Routine: "acknowledge", Version: 1, Mode: fw.RoutineShadow, Calls: true, Agree: true}, r)
+	})
+	if m := ev.markOf("01RUN01199"); m == nil || m.P != nil || m.Answers != nil || len(m.Done) != 11 {
 		t.Fatalf("the complete mark = %+v", m)
 	}
 }
