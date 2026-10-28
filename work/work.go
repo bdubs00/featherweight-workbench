@@ -190,7 +190,26 @@ type Answer struct {
 	// the canceled cards and the cards that were let go. Results counts
 	// done tasks the same way (plan A13).
 	Done int `json:"done"`
+	// Waiting is the one count of the work that needs the caller.
+	Waiting Waiting `json:"waiting"`
 }
+
+// Waiting is the one count of the work that needs the caller (plan A7):
+// the cards of the lane Needs you whose next move is the caller's
+// (NeedsYou), the cards of the lane To check whose next move is the
+// caller's (ToCheck), and the notes of Know-how that wait for the caller
+// under ask first (Notes). Count is their sum. The board, Activity, the
+// badge of the page, and Results read this one count, so they never
+// disagree. A stopped card is no wait on a person: it lets itself go.
+type Waiting struct {
+	Count    int `json:"count"`
+	NeedsYou int `json:"needsYou"`
+	ToCheck  int `json:"toCheck"`
+	Notes    int `json:"notes"`
+}
+
+// Sum sets Count to the sum of the parts.
+func (w *Waiting) Sum() { w.Count = w.NeedsYou + w.ToCheck + w.Notes }
 
 // Run is a run that the caller can view, with the facts of its work
 // (fleet.Work). Lost is true for a run that never ended and that no member
@@ -231,7 +250,10 @@ type Input struct {
 	LetGo map[string]LetGo
 	// Names holds a name of a person that people read, by subject, for
 	// the subjects that the records name alone (From.Display).
-	Names  map[string]string
+	Names map[string]string
+	// Notes counts the notes of Know-how that wait for the caller under
+	// ask first (knowhow.Service.WaitingFor), for Answer.Waiting.
+	Notes  int
 	Now    time.Time
 	Window time.Duration
 }
@@ -925,6 +947,8 @@ func (b *board) answer() Answer {
 	for _, s := range Stages {
 		ans.Lanes = append(ans.Lanes, *lanes[s])
 	}
+	ans.Waiting = Waiting{NeedsYou: lanes[StageNeedsYou].Yours, ToCheck: lanes[StageReview].Yours, Notes: b.in.Notes}
+	ans.Waiting.Sum()
 	ans.Sentence = sentence(ans, b.in.Now)
 	return ans
 }

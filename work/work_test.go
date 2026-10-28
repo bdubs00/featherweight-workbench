@@ -508,6 +508,32 @@ func TestStoppedLetsItselfGo(t *testing.T) {
 	}
 }
 
+// One count of the work that needs a person (plan A7): the cards of Needs
+// you and of To check whose next move is the caller's, and the notes of
+// Know-how that wait for the caller. A card of another person, a stopped
+// card, and a card that works do not count.
+func TestOneCount(t *testing.T) {
+	review := map[string]string{fleet.MetaReview: "1"}
+	asks := run("R-ASK", "writer", fw.StateInputRequired, ago(2*time.Hour), ago(time.Hour), nil)
+	asks.Pending = &fw.Approval{ID: "ap-1", Tool: "git.push"}
+	mine := run("R-MINE", "writer", fw.StateCompleted, ago(time.Hour), ago(time.Minute), review)
+	theirs := run("R-THEIRS", "writer", fw.StateCompleted, ago(time.Hour), ago(time.Minute), review)
+	theirs.Principal = "bob"
+	stopped := run("R-STOP", "writer", fw.StateFailed, ago(time.Hour), ago(time.Hour), nil)
+	works := run("R-WORK", "writer", fw.StateRunning, ago(time.Hour), ago(time.Minute), nil)
+	in := Input{Me: "alice", Now: t0, All: true, Notes: 2, Runs: []Run{{Run: asks}, {Run: mine}, {Run: theirs}, {Run: stopped}, {Run: works}},
+		Mine: map[string]bool{"R-ASK": true, "R-MINE": true, "R-STOP": true, "R-WORK": true}}
+	ans := Assemble(in)
+	if ans.Waiting != (Waiting{Count: 4, NeedsYou: 1, ToCheck: 1, Notes: 2}) {
+		t.Fatalf("the one count = %+v", ans.Waiting)
+	}
+	// The board of the caller alone gives the same count.
+	in.All = false
+	if mineOnly := Assemble(in); mineOnly.Waiting != ans.Waiting {
+		t.Fatalf("the one count of the board of the caller = %+v, of every card = %+v", mineOnly.Waiting, ans.Waiting)
+	}
+}
+
 // To check shows the newest result first, so a fresh result never sinks
 // under the old results of teams (plan A8). Needs you keeps the longest
 // wait first.

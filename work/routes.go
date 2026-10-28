@@ -23,6 +23,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/duties"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/knowhow"
 	"github.com/bdubs00/featherweight-workbench/manager"
 	"github.com/bdubs00/featherweight-workbench/sources"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
@@ -76,6 +77,20 @@ func For(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, erro
 		return Answer{}, err
 	}
 	c.put(key, ans, now)
+	return ans, nil
+}
+
+// Fresh returns the board of the caller in ctx for the default query, read
+// now and not from the cache, and keeps it in the cache. The inbox reads
+// the one count of the work that needs the caller from it (Waiting) after
+// each change that the page sees, so the badge never lags the board.
+func Fresh(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
+	q := Query{Days: DefaultDays}
+	ans, err := build(ctx, a, now, q)
+	if err != nil {
+		return Answer{}, err
+	}
+	cacheOf(a).put(cacheKey(ctx, q), ans, now)
 	return ans, nil
 }
 
@@ -193,6 +208,14 @@ func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, er
 				in.Starts = append(in.Starts, Start{Duty: v.Duty, Entry: e})
 			}
 		}
+	}
+	// The notes of Know-how that wait for the caller count in the one count
+	// of the work that needs the caller. A store that does not read counts
+	// none, and the board still answers.
+	if notes, err := knowhow.Of(a).WaitingFor(ctx); err != nil {
+		a.Logger().Warn("work: the notes that wait for a person do not read", "error", err)
+	} else {
+		in.Notes = len(notes)
 	}
 	if bv, ok := fleet.Of(a).(fleet.BatchView); ok {
 		for _, batch := range jobBatches(in) {
