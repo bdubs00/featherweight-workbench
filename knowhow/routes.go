@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
+	"github.com/bdubs00/featherweight-workbench/internal/bucket"
 	"github.com/bdubs00/featherweight-workbench/manager"
 	"github.com/bdubs00/featherweight-workbench/routines"
 )
@@ -517,11 +519,14 @@ func (rt *routes) putSettings(w http.ResponseWriter, r *http.Request, s *Service
 }
 
 // waiting answers GET /v1/knowhow/waiting?agent= with the changes that
-// wait for a person and that the caller can read.
+// wait for a person and that the caller can read. Without an agent, it
+// answers the changes of every agent that the caller can view, so the
+// list of agents of the page marks each agent that waits for a person.
 func (rt *routes) waiting(w http.ResponseWriter, r *http.Request, s *Service) {
 	ctx := onBehalf(r)
-	agent, ok := agentParam(w, r)
-	if !ok {
+	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
+	if agent == "" {
+		rt.waitingAll(w, r, s)
 		return
 	}
 	rg, err := s.rightsOn(ctx, agent)
@@ -535,6 +540,40 @@ func (rt *routes) waiting(w http.ResponseWriter, r *http.Request, s *Service) {
 		return
 	}
 	native.WriteJSON(w, http.StatusOK, map[string]any{"agent": agent, "waiting": list})
+}
+
+// waitingAll answers GET /v1/knowhow/waiting without an agent. An agent
+// that the caller cannot view adds nothing, as for one agent.
+func (rt *routes) waitingAll(w http.ResponseWriter, r *http.Request, s *Service) {
+	ctx := onBehalf(r)
+	keys, err := bucket.EntriesUnder(ctx, s.b, "waiting")
+	if err != nil {
+		rt.fail(w, r, fmt.Errorf("knowhow: list the waiting changes: %w", err))
+		return
+	}
+	of := map[string]*rights{}
+	out := []Waiting{}
+	for _, k := range keys {
+		got, err := s.b.Get(ctx, k.Key)
+		if err != nil {
+			continue
+		}
+		var x Waiting
+		if json.Unmarshal(got.Value, &x) != nil {
+			continue
+		}
+		rg, seen := of[x.Agent]
+		if !seen {
+			if g, err := s.rightsOn(ctx, x.Agent); err == nil {
+				rg = &g
+			}
+			of[x.Agent] = rg
+		}
+		if rg != nil && rg.seeSubject(x.Subject) {
+			out = append(out, x)
+		}
+	}
+	native.WriteJSON(w, http.StatusOK, map[string]any{"waiting": out})
 }
 
 // decide answers POST /v1/knowhow/waiting/{id} with {"keep": true} or

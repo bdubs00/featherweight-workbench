@@ -205,6 +205,20 @@ func TestRoutesJournalSettingsWaiting(t *testing.T) {
 	if len(waiting.Waiting) != 1 || waiting.Waiting[0].Text != "three" {
 		t.Fatalf("waiting = %s", body)
 	}
+	// Without an agent, the list holds the changes of every agent that the
+	// caller can view and read: alice reads the change of the Duty, carol
+	// does not.
+	for who, want := range map[string]int{"alice": 1, "carol": 0} {
+		resp, body = send(t, "GET", fr.url+"/v1/knowhow/waiting", who, "")
+		mustStatus(t, resp, body, http.StatusOK)
+		var all struct {
+			Waiting []Waiting `json:"waiting"`
+		}
+		decodeJSON(t, body, &all)
+		if len(all.Waiting) != want || (want > 0 && all.Waiting[0].Agent != "triage") {
+			t.Fatalf("%s reads every waiting change as %s", who, body)
+		}
+	}
 	resp, body = send(t, "POST", fr.url+"/v1/knowhow/waiting/"+waiting.Waiting[0].ID, "bob", `{"keep": true}`)
 	mustStatus(t, resp, body, http.StatusForbidden)
 	resp, body = send(t, "POST", fr.url+"/v1/knowhow/waiting/"+waiting.Waiting[0].ID, "alice", `{"keep": true}`)
