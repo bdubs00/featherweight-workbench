@@ -134,32 +134,41 @@ func (rt *routes) list(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ctx := r.Context()
-	recs, err := s.b.list(s.asFront(ctx))
+	items, err := s.List(r.Context(), false)
 	if err != nil {
 		rt.fail(w, r, err)
 		return
+	}
+	native.WriteJSON(w, http.StatusOK, map[string]any{"bridges": items})
+}
+
+// List returns the bridges that the list of the caller in ctx holds, by
+// the rule of GET /v1/bridges (listed), open first. With members, each
+// item holds its seats with their presence, as GET /v1/bridges/{id}
+// answers them; the board of the work reads them (package work).
+func (s *Store) List(ctx context.Context, members bool) ([]Item, error) {
+	recs, err := s.b.list(s.asFront(ctx))
+	if err != nil {
+		return nil, err
 	}
 	admin := s.isAdmin(ctx)
 	items := []Item{}
 	for _, rec := range recs {
 		ok, err := s.listed(ctx, rec, admin)
 		if err != nil {
-			rt.fail(w, r, err)
-			return
+			return nil, err
 		}
 		if !ok {
 			continue
 		}
-		it, err := s.item(ctx, rec, subjectOf(ctx), false)
+		it, err := s.item(ctx, rec, subjectOf(ctx), members)
 		if err != nil {
-			rt.fail(w, r, err)
-			return
+			return nil, err
 		}
 		items = append(items, it)
 	}
 	sortItems(items)
-	native.WriteJSON(w, http.StatusOK, map[string]any{"bridges": items})
+	return items, nil
 }
 
 // open answers POST /v1/bridges: 201 with the record and its members.
