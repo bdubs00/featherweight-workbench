@@ -26,6 +26,9 @@ const (
 	maxReviews = 10
 	// ReviewPrincipal is the workload principal of a run of the review.
 	ReviewPrincipal = "knowhow:review"
+	// ReviewBatch is the batch of the runs of the review, which the board
+	// shows as one card.
+	ReviewBatch = "knowhow:review"
 	// reviewScan is how often a replica reads the candidates of every
 	// agent while a slot waits for its first candidate.
 	reviewScan = 10 * time.Minute
@@ -67,26 +70,88 @@ func (s *Service) ReviewTick(ctx context.Context) ([]string, error) {
 	var started []string
 	var errs []error
 	for _, agent := range agents {
-		req := fw.RunRequest{
-			ID:    fw.NewID(),
-			Input: reviewInput(agent),
-			Metadata: map[string]string{
-				MetaReview:   agent,
-				fw.MetaTitle: "After-work review of " + agent,
-				fw.MetaBatch: "knowhow:review",
-			},
-			Principal:      ReviewPrincipal,
-			PrincipalKind:  fw.KindWorkload,
-			IdempotencyKey: "knowhow/review/" + agent + "/" + slot.Format(time.RFC3339),
-		}
-		if _, sent, err := s.enqueue(ctx, s.cfg.Review.Agent, []fw.RunRequest{req}); err != nil || sent != 1 {
-			errs = append(errs, fmt.Errorf("knowhow: start the review of %s: %w", agent, err))
+		if _, err := s.startReview(ctx, agent, slot.Format(time.RFC3339)); err != nil {
+			errs = append(errs, err)
 			continue
 		}
 		started = append(started, agent)
-		s.log.Info("knowhow: the after-work review started", "agent", agent, "profile", s.cfg.Review.Agent, "run", req.ID)
 	}
 	return started, errors.Join(errs...)
+}
+
+// startReview puts one run of the review of the agent on the queue of the
+// review profile, with the idempotency key of the slot, and returns its
+// id.
+func (s *Service) startReview(ctx context.Context, agent, slot string) (string, error) {
+	req := fw.RunRequest{
+		ID:    fw.NewID(),
+		Input: reviewInput(agent),
+		Metadata: map[string]string{
+			MetaReview:   agent,
+			fw.MetaTitle: "After-work review of " + agent,
+			fw.MetaBatch: ReviewBatch,
+		},
+		Principal:      ReviewPrincipal,
+		PrincipalKind:  fw.KindWorkload,
+		IdempotencyKey: "knowhow/review/" + agent + "/" + slot,
+	}
+	if _, sent, err := s.enqueue(ctx, s.cfg.Review.Agent, []fw.RunRequest{req}); err != nil || sent != 1 {
+		if err == nil {
+			err = errors.New("the queue took no run")
+		}
+		return "", fmt.Errorf("knowhow: start the review of %s: %w", agent, err)
+	}
+	s.log.Info("knowhow: the after-work review started", "agent", agent, "profile", s.cfg.Review.Agent, "run", req.ID)
+	return req.ID, nil
+}
+
+// ReviewNow is what a start of the review of one agent did: the run, or
+// the reason why no run started.
+type ReviewNow struct {
+	Agent   string `json:"agent"`
+	Started bool   `json:"started"`
+	Run     string `json:"run,omitempty"`
+	Profile string `json:"profile,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// ErrReviewOff means that no profile reviews the finished work, so
+// nothing starts: no model and no price are picked by default.
+var ErrReviewOff = errors.New(ReviewOff)
+
+// ReviewAgent starts the review of one agent now, for a person who does
+// not want to wait for the slot. It reads the finished runs first, so the
+// candidates are new. An agent without open candidates starts no run,
+// and the answer says why. A second start in the same minute is the same
+// run.
+func (s *Service) ReviewAgent(ctx context.Context, agent string) (ReviewNow, error) {
+	if err := CheckAgent(agent); err != nil {
+		return ReviewNow{}, err
+	}
+	if !s.cfg.Review.On() || s.enqueue == nil {
+		return ReviewNow{}, ErrReviewOff
+	}
+	if agent == s.cfg.Review.Agent {
+		return ReviewNow{}, fmt.Errorf("%w: the after-work review does not review its own runs", ErrInvalid)
+	}
+	if _, err := s.CandidatePass(ctx); err != nil {
+		s.log.Warn("knowhow: the pass of the candidates failed before a review", "agent", agent, "error", err)
+	}
+	open, err := s.Candidates(ctx, agent, func(c Candidate) bool { return c.State == CandOpen && c.ready() })
+	if err != nil {
+		return ReviewNow{}, err
+	}
+	out := ReviewNow{Agent: agent, Profile: s.cfg.Review.Agent}
+	if len(open) == 0 {
+		out.Reason = fmt.Sprintf("The agent %s has no open candidate. Nothing to review now.", agent)
+		return out, nil
+	}
+	run, err := s.startReview(ctx, agent, "now/"+s.now().UTC().Truncate(time.Minute).Format(time.RFC3339))
+	if err != nil {
+		return ReviewNow{}, err
+	}
+	out.Started, out.Run = true, run
+	return out, nil
 }
 
 // reviewable returns the agents with open candidates, at most maxReviews,

@@ -498,3 +498,60 @@ func TestRoutesOutOfDate(t *testing.T) {
 		t.Fatalf("the corrected note = %+v", n)
 	}
 }
+
+// An owner starts the after-work review of one agent, or the proposals of
+// its routines, at once. Without a review profile the start refuses and
+// says why. An operator and a viewer cannot start either, and a person who
+// cannot view the agent learns nothing.
+func TestRoutesStartNow(t *testing.T) {
+	runs := recordRuns(t, tickets(12))
+	runs[0] = withReceipt(runs[0], "accepted")
+	runs[1] = withReceipt(runs[1], "accepted")
+	fr := proposeFront(t, runs)
+	var started []fw.RunRequest
+	fr.s.enqueue = func(_ context.Context, agent string, reqs []fw.RunRequest) (string, int, error) {
+		started = append(started, reqs...)
+		return "q", len(reqs), nil
+	}
+	resp, body := send(t, "POST", fr.url+"/v1/knowhow/review/triage", "alice", "")
+	mustStatus(t, resp, body, http.StatusConflict)
+	if !strings.Contains(body, ReviewOff) || len(started) != 0 {
+		t.Fatalf("a start without a review profile = %s", body)
+	}
+	fr.s.cfg.Review = ReviewConfig{Agent: "review", Every: 24 * time.Hour}
+	for who, want := range map[string]int{"bob": http.StatusForbidden, "carol": http.StatusForbidden, "dave": http.StatusNotFound} {
+		resp, body = send(t, "POST", fr.url+"/v1/knowhow/review/triage", who, "")
+		mustStatus(t, resp, body, want)
+	}
+	resp, body = send(t, "POST", fr.url+"/v1/knowhow/review/review", "alice", "")
+	mustStatus(t, resp, body, http.StatusBadRequest)
+	fr.clk.add(time.Hour)
+	resp, body = send(t, "POST", fr.url+"/v1/knowhow/review/triage", "alice", "")
+	mustStatus(t, resp, body, http.StatusAccepted)
+	var now ReviewNow
+	decodeJSON(t, body, &now)
+	if !now.Started || now.Run == "" || now.Profile != "review" || len(started) != 1 || started[0].Principal != ReviewPrincipal || started[0].Metadata[MetaReview] != "triage" {
+		t.Fatalf("the start = %s, %+v", body, started)
+	}
+	// An agent with no open candidate starts nothing.
+	resp, body = send(t, "POST", fr.url+"/v1/knowhow/review/private", "dave", "")
+	mustStatus(t, resp, body, http.StatusOK)
+	if !strings.Contains(body, `"started":false`) || !strings.Contains(body, "no open candidate") || len(started) != 1 {
+		t.Fatalf("a start without candidates = %s", body)
+	}
+	// The proposals of one agent.
+	resp, body = send(t, "POST", fr.url+"/v1/knowhow/propose/triage", "bob", "")
+	mustStatus(t, resp, body, http.StatusForbidden)
+	resp, body = send(t, "POST", fr.url+"/v1/knowhow/propose/triage", "alice", "")
+	mustStatus(t, resp, body, http.StatusOK)
+	if !strings.Contains(body, `"proposed":["triage/duty-nightly"]`) {
+		t.Fatalf("the proposals = %s", body)
+	}
+	off := false
+	fr.s.cfg.Propose.Enabled = &off
+	resp, body = send(t, "POST", fr.url+"/v1/knowhow/propose/triage", "alice", "")
+	mustStatus(t, resp, body, http.StatusConflict)
+	if !strings.Contains(body, "proposals of routines are off") {
+		t.Fatalf("a start of the proposals while they are off = %s", body)
+	}
+}

@@ -78,7 +78,20 @@ func RoutineName(duty string) string {
 }
 
 // Propose runs the pass over the archive.
-func (s *Service) Propose(ctx context.Context) (ProposeResult, error) {
+func (s *Service) Propose(ctx context.Context) (ProposeResult, error) { return s.propose(ctx, "") }
+
+// ProposeFor runs the pass over the runs of one agent, for a person who
+// does not want to wait for the daily pass.
+func (s *Service) ProposeFor(ctx context.Context, agent string) (ProposeResult, error) {
+	if err := CheckAgent(agent); err != nil {
+		return ProposeResult{StaysOut: map[string]string{}}, err
+	}
+	return s.propose(ctx, agent)
+}
+
+// propose runs the pass over the runs of the agent only, or of every
+// agent when only is empty.
+func (s *Service) propose(ctx context.Context, only string) (ProposeResult, error) {
 	out := ProposeResult{StaysOut: map[string]string{}}
 	st := s.routineStore()
 	if st == nil {
@@ -90,7 +103,7 @@ func (s *Service) Propose(ctx context.Context) (ProposeResult, error) {
 		r := e.Run
 		duty := dutyOf(r)
 		if duty == "" || r.State != fw.StateCompleted || r.Depth != 0 || r.CreatedAt.Before(since) || CheckAgent(r.Agent) != nil ||
-			r.Agent == s.cfg.Review.Agent || r.Metadata[MetaReview] != "" {
+			r.Agent == s.cfg.Review.Agent || r.Metadata[MetaReview] != "" || (only != "" && r.Agent != only) {
 			continue
 		}
 		if groups[r.Agent] == nil {

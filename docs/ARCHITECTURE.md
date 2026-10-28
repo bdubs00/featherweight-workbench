@@ -4264,6 +4264,8 @@ Each move writes the journal entry `out-of-date` with the source that changed. T
 | `GET /v1/knowhow/waiting?agent=` | The changes that wait for a person, oldest first |
 | `POST /v1/knowhow/waiting/{id}` | `{"keep": true}` makes the change, and `{"keep": false}` drops it. A target that changed since gives 409. |
 | `GET /v1/knowhow/summary?agent=&days=7` | The four numbers, section 28.10 |
+| `POST /v1/knowhow/review/{agent}` | Starts the after-work review of the agent now (section 28.8). 202 with `run`, or 200 with `started: false` and the reason when the agent has no open candidate. Without a review profile, 409 with the reason. |
+| `POST /v1/knowhow/propose/{agent}` | Runs the proposals of routines for the agent now (section 28.9), and answers `proposed` and `staysOut`. 409 while the proposals or the routines are off. |
 
 A `PUT` answers 201 for a new note and 200 for a change or for the same text. It answers 202 for a change that waits for a person. When `ifHash` does not hold, it answers 412 with the hash in the member `hash` and in `ETag`. A `DELETE` answers 200, or 202 for a change that waits. It answers 404 for a note that the front does not have, and 412 for another hash.
 
@@ -4278,6 +4280,7 @@ Who reads and who changes:
 - A person who leaves out `principal` searches their own runs. The runs of a workload and the runs without a principal need the operator role.
 - A route acts for the person of a manager run, as the other routes of the front do (`manager.OnBehalf`).
 - The switch needs the owner role. An undo or a decision on a waiting change needs the right to change its note. For a routine, it needs the owner role.
+- A start of the review or of the proposals of an agent needs the owner role.
 
 The stream of bossmode carries the event `{"kind": "knowhow", "agent": "…"}`. It goes out after each change of the notes, the journal, the switch, or the waiting list of an agent. Every caller who can view the agent gets it, at most once per agent in two seconds (`bossmode.KnowhowEvery`). The settings of bossmode carry `knowhow: true` while the process keeps Know-how. So the page shows the place Know-how only then.
 
@@ -4346,6 +4349,8 @@ The trigger of a run is a hash of its input and of its blocks `found`, `event`, 
 
 The review is a run of the profile that `workbench.knowhow.review.agent` names. Without it, no review runs. The schedule then starts no run and writes nothing, and the settings say "The after-work review is off: no agent is set." Nothing picks a model or a price. The profile names its own, and the kernel refuses a run without a model.
 
+An owner of an agent can start its review at once with `POST /v1/knowhow/review/{agent}`. The front first reads the finished runs, then starts one run if the agent has open candidates. A second start in the same minute is the same run.
+
 At each slot of `review.every`, 24 hours by default, one replica claims the slot in the entry `mark.review`. It then puts one run of the profile on its queue for each agent with open candidates, at most 10. While the slot waits for its first candidate, a replica reads the candidates at most every ten minutes. The run has the principal `knowhow:review` of the kind workload and the metadata `workbench.knowhow.review` with the agent. Its input starts with "Review the finished work of the agent".
 
 The MCP server offers two tools. They answer only a run of the review profile, as `mcp.CallRun` names it with the static token.
@@ -4388,6 +4393,8 @@ Some proposals stay out:
 - a proposal that did not hold on a run that it did not see
 
 The journal says why with `stays-out`, once per reason of a Duty. A good proposal goes to the store of the routines as `proposed`, with its source. It is bound to its Duty (`duty`). Unless the switch is on, it moves to `rehearsing` at once. The journal records `proposed` with the verified runs, and `rehearsing`. A Duty whose routine exists in any standing gets no new proposal.
+
+An owner of an agent runs the pass for that agent at once with `POST /v1/knowhow/propose/{agent}`, so a person does not wait for the next day.
 
 The package writes the journal for its own moves of a routine. So `RoutineMoved` writes nothing for such a move. A value of the context marks it.
 
