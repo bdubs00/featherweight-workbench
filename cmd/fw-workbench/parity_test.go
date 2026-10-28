@@ -64,6 +64,8 @@ var parityRoutes = map[string]parity{
 	"POST /v1/bridges/{id}/questions/{seq}/settle":   {tool: "bridge_settle_question"},
 	"PATCH /v1/conversations/{run}":                  {tool: "conversation_patch"},
 	"PUT /v1/value/estimates":                        {tool: "value_estimate"},
+	"POST /v1/work/plan":                             {tool: "work_plan"},
+	"POST /v1/work/review":                           {tool: "work_review"},
 	"POST /v1/bridges/{id}/members":                  {tool: "bridge_add_member"},
 	"DELETE /v1/bridges/{id}/members/{handle}":       {tool: "bridge_remove_member"},
 	"PATCH /v1/bridges/{id}/members/{handle}":        {tool: "bridge_member_patch"},

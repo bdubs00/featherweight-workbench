@@ -225,3 +225,165 @@ func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 	r.Header.Set("Authorization", "Bearer "+b.token)
 	return http.DefaultTransport.RoundTrip(r)
 }
+
+// newFront serves an agent writer that answers at once, for alice and bob,
+// and returns the agent and the address of its native surface.
+func newFront(t *testing.T) (*fw.Agent, *httptest.Server) {
+	t.Helper()
+	t.Setenv("FW_ATESPACE", "")
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	cfg.Access.Default = "closed"
+	cfg.Agents = map[string]fw.AgentProfile{
+		"writer": {Description: "Writes release notes and summaries of the changes.", Access: &fw.Access{Owners: []string{"alice"}, Viewers: []string{"bob"}},
+			Policy: &fw.Rules{Default: "allow", Ask: []string{"bash: git push*"}}},
+		"ops": {Description: "Keeps the hosts in line with their roles.", Access: &fw.Access{Owners: []string{"carol"}}},
+	}
+	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(people{}), fw.WithModel(model()),
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithSurfaces(native.New()), fw.WithServices(duties.Start), fw.WithLogger(quiet()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := a.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	t.Cleanup(func() {
+		srv.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		a.Close(ctx)
+	})
+	return a, srv
+}
+
+// post sends a JSON body as a person and returns the status and the body.
+func post(t *testing.T, srv *httptest.Server, token, path, body string, header ...string) (int, []byte) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	for i := 0; i+1 < len(header); i += 2 {
+		req.Header.Set(header[i], header[i+1])
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, b
+}
+
+// A result that its person asked to check is a card in review. Looks
+// right is a thumb up, and the card is done and accepted at once. Needs
+// work needs a note: the thumb goes down, the note goes to the agent, and
+// the run works again. A person without the operator role cannot check,
+// and the tool does the same as the route.
+func TestReviewRoute(t *testing.T) {
+	a, srv := newFront(t)
+	start := func() string {
+		t.Helper()
+		r, err := a.Start(as("alice"), "", fw.WithRequest(fw.RunRequest{Agent: "writer", Input: "Draft the notes", Metadata: map[string]string{fleet.MetaReview: "1"}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, a, r.ID, fw.StateCompleted)
+		return r.ID
+	}
+	right, work := start(), start()
+	ans, err := For(as("alice"), a, time.Now(), Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.Lanes[4].Stage != StageReview || ans.Lanes[4].Count != 2 || ans.Lanes[4].Yours != 2 {
+		t.Fatalf("the lane review = %+v", ans.Lanes[4])
+	}
+	if code, b := post(t, srv, "alice", "/v1/work/review", `{"run":"`+right+`","verdict":"right"}`); code != http.StatusOK || !strings.Contains(string(b), `"reaction":"up"`) {
+		t.Fatalf("Looks right = %d %s", code, b)
+	}
+	// The check clears the cache, so the board shows it at once.
+	if c := cardOf(t, mustFor(t, a, "alice"), "run:"+right); c.Stage != StageDone || c.Verdict != VerdictAccepted {
+		t.Fatalf("the card after Looks right = %+v", c)
+	}
+	if code, b := post(t, srv, "alice", "/v1/work/review", `{"run":"`+work+`","verdict":"work"}`); code != http.StatusBadRequest || !strings.Contains(string(b), "needs a note") {
+		t.Fatalf("Needs work without a note = %d %s", code, b)
+	}
+	if code, b := post(t, srv, "bob", "/v1/work/review", `{"run":"`+work+`","verdict":"right"}`); code != http.StatusForbidden && code != http.StatusNotFound {
+		t.Fatalf("a check by a viewer = %d %s", code, b)
+	}
+	cs := connect(t, a, "alice")
+	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: ToolReview, Arguments: map[string]any{"run": work, "verdict": "work", "note": "Name the release in the title."}})
+	if err != nil || res.IsError {
+		t.Fatalf("Needs work = %+v, %v", res, err)
+	}
+	r, err := a.Get(context.Background(), work)
+	if err != nil || r.Reactions[fw.ReactionDown] != 1 {
+		t.Fatalf("the run after Needs work = %+v, %v", r, err)
+	}
+	// The follow-up made the run work again, and the model answered it.
+	waitFor(t, a, work, fw.StateCompleted)
+	events := 0
+	for e, err := range a.Ledger().Read(context.Background(), work, 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Type == fw.EvMessageReceived && strings.Contains(string(e.Data), "Name the release in the title.") {
+			events++
+		}
+	}
+	if events != 1 {
+		t.Fatalf("the follow-up reached the run %d times", events)
+	}
+}
+
+func mustFor(t *testing.T, a *fw.Agent, who string) Answer {
+	t.Helper()
+	ans, err := For(as(who), a, time.Now(), Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ans
+}
+
+// The route and the tool of the plan answer the same plan for the profiles
+// that the person can run: the description picks the agent, the policy
+// says when it asks, and the header names the time zone. An agent that the
+// person cannot run is no choice, and empty words or a time zone that does
+// not exist answer 400.
+func TestPlanRoute(t *testing.T) {
+	a, srv := newFront(t)
+	code, b := post(t, srv, "alice", "/v1/work/plan", `{"words":"Summarize the changes of the week every Friday at 4pm"}`, "X-Time-Zone", "Europe/Berlin")
+	var p Plan
+	if err := json.Unmarshal(b, &p); code != http.StatusOK || err != nil {
+		t.Fatalf("the plan = %d %s", code, b)
+	}
+	if p.Kind != PlanRepeat || len(p.Who) != 1 || p.Who[0].Agent != "writer" || p.When.Readback != "Every Friday at 4:00 PM, Berlin time." || p.Start.Duty == nil {
+		t.Fatalf("the plan = %s", b)
+	}
+	if strings.Join(p.Asks, "|") != "Before it runs git push|When it is not sure what you mean. The question waits for you" || len(p.Others) != 1 {
+		t.Fatalf("asks %q, others %+v", p.Asks, p.Others)
+	}
+	cs := connect(t, a, "alice")
+	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: ToolPlan, Arguments: map[string]any{"words": "Summarize the changes of the week every Friday at 4pm", "timeZone": "Europe/Berlin"}})
+	if err != nil || res.IsError {
+		t.Fatalf("the tool = %+v, %v", res, err)
+	}
+	raw, _ := json.Marshal(res.StructuredContent)
+	var tooled Plan
+	if err := json.Unmarshal(raw, &tooled); err != nil || tooled.Title != p.Title || tooled.When.Readback != p.When.Readback || tooled.Start.Duty["name"] != p.Start.Duty["name"] {
+		t.Fatalf("the plan of the tool = %s, %v", raw, err)
+	}
+	if txt := res.Content[0].(*sdk.TextContent).Text; !strings.Contains(txt, "Who: writer does it.") || !strings.Contains(txt, "Set the most it can spend before the start.") {
+		t.Fatalf("the text of the plan = %s", txt)
+	}
+	if code, b := post(t, srv, "alice", "/v1/work/plan", `{"words":"Check the hosts", "agent":"ops"}`); code != http.StatusOK || !strings.Contains(string(b), "You cannot run an agent named ops") {
+		t.Fatalf("an agent of another person = %d %s", code, b)
+	}
+	for _, x := range []struct{ body, zone string }{{`{"words":"  "}`, ""}, {`{"words":"Check the hosts"}`, "Mars/Olympus"}, {`{"words":"x","tell":"never"}`, ""}} {
+		if code, b := post(t, srv, "alice", "/v1/work/plan", x.body, "X-Time-Zone", x.zone); code != http.StatusBadRequest {
+			t.Fatalf("POST %s in %q = %d %s", x.body, x.zone, code, b)
+		}
+	}
+}
