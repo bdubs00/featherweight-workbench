@@ -435,6 +435,16 @@ func (b *board) start(s Start) {
 		}
 	case duties.StateCompleted:
 		p.stage, p.reason, p.verdict = StageDone, "Ended.", VerdictUnchecked
+	case string(fw.StateRunning), string(fw.StateSuspended), string(fw.StateInputRequired):
+		// A start that works carries the state of its run, and its run
+		// below says more. Without the run in the view it still works.
+		p.stage = StageWorking
+		if e.State == string(fw.StateInputRequired) {
+			p.stage = StageNeedsYou
+		}
+		if p.reason == "" {
+			p.reason = "Works."
+		}
 	case duties.StateCanceled:
 		p.stage, p.reason = StageDone, "Canceled."
 	case duties.StateLost:
@@ -453,7 +463,8 @@ func (b *board) start(s Start) {
 	// more than the start: it can work, wait for a person, end with a
 	// result to read, or have lost its worker.
 	switch e.State {
-	case duties.StateStarting, duties.StateQueued, duties.StateCompleted:
+	case duties.StateStarting, duties.StateQueued, duties.StateCompleted,
+		string(fw.StateRunning), string(fw.StateSuspended), string(fw.StateInputRequired):
 		if r, ok := b.byID[e.Run]; ok {
 			p = b.runPart(r)
 		}

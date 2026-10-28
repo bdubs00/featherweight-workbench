@@ -342,3 +342,32 @@ func TestReviewAndVerdicts(t *testing.T) {
 		t.Fatal("fleet.InReview")
 	}
 }
+
+// A start of a duty takes the state of its run while the run works, such
+// as running or input-required. Such a start works or needs a person; it
+// never stopped. Without its run in the view it still works.
+func TestDutyStartThatWorks(t *testing.T) {
+	slot := ago(time.Minute)
+	md := map[string]string{duties.MetaDuty: "report", duties.MetaSlot: slot.Format(time.RFC3339Nano), fw.MetaBatch: duties.BatchOf("report")}
+	working := run("R-W", "triage", fw.StateRunning, slot, slot, md)
+	d := duties.Duty{Name: "report", Agent: "triage", Owner: "alice"}
+	other := slot.Add(-time.Hour)
+	in := Input{
+		Me: "alice", Now: t0, Runs: []Run{{Run: working}}, Duties: []duties.Duty{d},
+		Starts: []Start{
+			{Duty: d, Entry: duties.RunEntry{At: slot, Slot: slot, Run: "R-W", State: string(fw.StateRunning), Start: duties.StartNow, Attempt: 1}},
+			{Duty: d, Entry: duties.RunEntry{At: other, Slot: other, Run: "R-GONE", State: string(fw.StateRunning), Start: duties.StartSchedule, Attempt: 1}},
+			{Duty: d, Entry: duties.RunEntry{At: other.Add(-time.Hour), Slot: other.Add(-time.Hour), Run: "R-ASKS", State: string(fw.StateInputRequired), Start: duties.StartSchedule, Attempt: 1}},
+		},
+	}
+	ans := Assemble(in)
+	if c := cardOf(t, ans, dutyKey("report", slot)); c.Stage != StageWorking {
+		t.Fatalf("the start whose run works = %+v", c)
+	}
+	if c := cardOf(t, ans, dutyKey("report", other)); c.Stage != StageWorking || c.Reason != "Works." {
+		t.Fatalf("the start whose run the view does not hold = %+v", c)
+	}
+	if c := cardOf(t, ans, dutyKey("report", other.Add(-time.Hour))); c.Stage != StageNeedsYou {
+		t.Fatalf("the start whose run asks = %+v", c)
+	}
+}
