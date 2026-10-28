@@ -5,7 +5,9 @@ package work
 // is the reaction up on the run. Needs work is the reaction down with a
 // note, and the note goes to the agent as a follow-up message, so the run
 // works again. Both go through the routes of the kernel on the member that
-// holds the run, with the access rules of those routes.
+// holds the run, with the access rules of those routes. The thumb goes on
+// the fw.run.finished of the run, so the kernel also records a quality
+// receipt.
 
 import (
 	"context"
@@ -69,7 +71,9 @@ func Review(ctx context.Context, a *fw.Agent, req ReviewRequest) (ReviewAnswer, 
 	if req.Verdict == ReviewWork {
 		ans.Reaction = fw.ReactionDown
 	}
-	reaction := fw.ReactionData{Reaction: ans.Reaction, Note: note}
+	// The thumb goes on the end of the run, so the kernel also records a
+	// quality receipt (fleet.AtEnd).
+	reaction := fw.ReactionData{Reaction: ans.Reaction, Note: note, Seq: fleet.FinishedSeq(ctx, a, "", id)}
 	err := a.React(ctx, id, reaction)
 	if err == nil {
 		if req.Verdict == ReviewWork {
@@ -99,7 +103,11 @@ func Review(ctx context.Context, a *fw.Agent, req ReviewRequest) (ReviewAnswer, 
 		return ReviewAnswer{}, err
 	}
 	path := "/v1/runs/" + url.PathEscape(id)
-	if err := fleet.PostJSON(mctx, v, run.Member, path+"/reactions", map[string]string{"reaction": ans.Reaction, "note": note}, nil); err != nil {
+	body := map[string]any{"reaction": ans.Reaction, "note": note}
+	if seq := fleet.FinishedSeq(mctx, a, run.Member, id); seq > 0 {
+		body["seq"] = seq
+	}
+	if err := fleet.PostJSON(mctx, v, run.Member, path+"/reactions", body, nil); err != nil {
 		return ReviewAnswer{}, err
 	}
 	if req.Verdict == ReviewWork {

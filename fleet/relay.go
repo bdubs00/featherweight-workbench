@@ -62,6 +62,7 @@ const (
 	routeMessages  = "POST /v1/runs/{id}/messages"
 	routeReactions = "POST /v1/runs/{id}/reactions"
 	routeFork      = "POST /v1/runs/{id}/fork"
+	routeQuality   = "POST /v1/runs/{id}/quality"
 )
 
 // Where the front answers a run route of the kernel for a run of another
@@ -93,6 +94,7 @@ var (
 		"POST /v1/runs/{id}/approvals/{approval}",
 		"POST /v1/runs/{id}/cancel",
 		routeFork,
+		routeQuality,
 	}
 )
 
@@ -110,6 +112,7 @@ var personDoes = map[string]string{
 	"POST /v1/runs/{id}/approvals/{approval}": "answer an approval of the run %s",
 	"POST /v1/runs/{id}/cancel":               "cancel the run %s",
 	routeFork:                                 "branch the run %s",
+	routeQuality:                              "record a receipt of the quality of the run %s",
 }
 
 // Can is the field can of the run object that the front answers to a
@@ -163,10 +166,24 @@ func (rl *Relay) Take(w http.ResponseWriter, r *http.Request) bool {
 		case !ok:
 			return true
 		case run == nil:
+			// A run of this process: the kernel answers, and a thumb on
+			// the run as a whole goes on its end first (endseq.go).
+			if r.Pattern == routeReactions && r.Method == http.MethodPost {
+				return !rl.localEnd(w, r, id)
+			}
 			return false
 		}
 		if p := fw.PrincipalFrom(r.Context()); IsPerson(p) {
 			rl.forPerson(w, r, run, p)
+			return true
+		}
+		if r.Pattern == routeReactions && r.Method == http.MethodPost {
+			body, ok := readBody(w, r)
+			if !ok {
+				return true
+			}
+			body = AtEnd(body, func() uint64 { return FinishedSeq(r.Context(), rl.a, run.Member, run.ID) })
+			rl.send(r.Context(), w, r, run.Member, body, nil)
 			return true
 		}
 		if !rl.answerAtRest(w, r, run, nil) {
@@ -229,6 +246,17 @@ func (rl *Relay) forPerson(w http.ResponseWriter, r *http.Request, run *fw.Run, 
 	}
 	if body, _, ok = personBody(w, r, body, p); !ok {
 		return
+	}
+	if r.Pattern == routeReactions {
+		// A thumb on the run as a whole goes on its end, so the kernel
+		// records a receipt too (endseq.go).
+		body = AtEnd(body, func() uint64 {
+			pctx, err := ForPerson(ctx, rl.a.Config(), p)
+			if err != nil {
+				return 0
+			}
+			return FinishedSeq(pctx, rl.a, run.Member, run.ID)
+		})
 	}
 	rl.sendFor(w, r, run.Member, body, p, can)
 }

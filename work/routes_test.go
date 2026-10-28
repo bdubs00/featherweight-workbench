@@ -303,6 +303,23 @@ func TestReviewRoute(t *testing.T) {
 	if code, b := post(t, srv, "alice", "/v1/work/review", `{"run":"`+right+`","verdict":"right"}`); code != http.StatusOK || !strings.Contains(string(b), `"reaction":"up"`) {
 		t.Fatalf("Looks right = %d %s", code, b)
 	}
+	// The thumb is on the end of the run, so the kernel recorded a receipt.
+	var end uint64
+	var thumb fw.ReactionData
+	for e, err := range a.Ledger().Read(context.Background(), right, 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch e.Type {
+		case fw.EvRunFinished:
+			end = e.Seq
+		case fw.EvRunReacted:
+			_ = e.Decode(&thumb)
+		}
+	}
+	if end == 0 || thumb.Seq != end || !thumb.Receipt || thumb.By != "alice" {
+		t.Fatalf("the thumb = %+v, the end %d", thumb, end)
+	}
 	// The check clears the cache, so the board shows it at once.
 	if c := cardOf(t, mustFor(t, a, "alice"), "run:"+right); c.Stage != StageDone || c.Verdict != VerdictAccepted {
 		t.Fatalf("the card after Looks right = %+v", c)
