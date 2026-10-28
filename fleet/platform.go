@@ -1195,11 +1195,31 @@ func (p *platform) records(now time.Time, all bool) []remote {
 		}
 	}
 	byMember := p.runsByMember()
+	own := p.ownMember()
 	out := make([]remote, 0, len(p.members))
 	for _, m := range p.members {
+		if own != "" && m.name == own {
+			// A front that takes its own intake and publishes its own
+			// egress hears its runs on the stream too. They are the runs
+			// of this process, which the lists read from its ledger, so the
+			// view keeps no second member for them. The watch still sends
+			// their changes, so the page and the bridges follow them.
+			continue
+		}
 		out = append(out, p.record(m, byMember[m.name], all))
 	}
 	return out
+}
+
+// ownMember returns the member name that the events of this process carry
+// on the egress stream, the name of its node, or "" when the platform has
+// no agent.
+func (p *platform) ownMember() string {
+	if p.f == nil || p.f.a == nil {
+		return ""
+	}
+	name, _, _ := memberOf(strings.TrimSpace(p.f.a.Node()))
+	return name
 }
 
 // memberRecord returns the record of one member as records gives it, or
