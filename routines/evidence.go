@@ -38,10 +38,10 @@ var bands = []float64{0, 0.5, 0.7, 0.85, 0.95}
 // decisions of the routine beside the agent (rehearsal and canary runs),
 // Acted those where it would have acted, and Agreed and Disagreed those of
 // Acted that the comparison settled: every compared question and the
-// comparison of the calls agreed, or one did not. Handed counts every decision that did not apply, so the
-// agent handled the run alone. Applied counts the live runs that the
-// routine completed, and Failed the live runs where it started and
-// stopped, so the agent took over.
+// comparison of the calls agreed, or one did not. Handed counts every
+// decision that did not apply, so the agent handled the run alone. Applied
+// counts the live runs that the routine completed, and Failed the live
+// runs where it started and stopped, so the agent took over.
 type Counts struct {
 	Decided   int `json:"decided"`
 	Acted     int `json:"acted"`

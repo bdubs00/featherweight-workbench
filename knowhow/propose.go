@@ -2,17 +2,18 @@ package knowhow
 
 // This file is the pass that proposes routines (docs/KNOWHOW.md section
 // 6.5). It runs once a day, and an owner starts it at once with the route
-// POST /v1/knowhow/propose. For each Duty of each agent, it takes the completed runs
-// of the archive of the last propose.days days. It needs propose.minRuns
-// runs, propose.minVerified of them verified, and it leaves out every run
-// that a receipt sent back, that its grader failed, that a person gave a
-// thumbs down, or that a routine did. It calls routine.Propose and then
-// routine.LeaveOneOut. A proposal with a free hole or a problem, or one
-// that did not hold on a run that it did not see, stays out, and the
-// journal says why once per reason. A good proposal goes to the store of
-// the routines bound to its Duty, as proposed, and moves to rehearsing at
-// once, unless the switch of the agent is on: then the move waits for a
-// person. The journal records each step.
+// POST /v1/knowhow/propose. For each Duty of each agent, it takes the
+// completed runs of the archive of the last propose.days days. It needs
+// propose.minRuns runs, propose.minVerified of them verified, and it
+// leaves out every run that a receipt sent back, that its grader failed,
+// that a person gave a thumbs down, or that a routine did. It calls
+// routine.Propose and then routine.LeaveOneOut. A proposal with a free
+// hole or a problem, or one that did not hold on a run that it did not
+// see, stays out, and the journal says why once per reason. A good
+// proposal goes to the store of the routines bound to its Duty, as
+// proposed, and moves to rehearsing at once, unless the switch of the
+// agent is on: then the move waits for a person. The journal records each
+// step.
 
 import (
 	"context"
