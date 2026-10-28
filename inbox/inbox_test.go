@@ -356,3 +356,54 @@ func TestInboxResultOfDuty(t *testing.T) {
 		}
 	}
 }
+
+// After Needs work, the new answer of the agent is a result to check
+// again, and the inbox says that it follows a note.
+func TestInboxResultAgain(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "")
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	cfg.Access.Default = "closed"
+	cfg.Agents = map[string]fw.AgentProfile{"writer": {Access: &fw.Access{Owners: []string{"alice"}}}}
+	answer := fw.ModelFunc{StreamFn: func(context.Context, *fw.Request, func(fw.Delta)) (*fw.Response, error) {
+		return &fw.Response{Content: []fw.Block{fw.Text("The draft.")}, StopReason: fw.StopEndTurn}, nil
+	}}
+	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(people{}), fw.WithModel(answer),
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithSurfaces(native.New()), fw.WithLogger(quiet()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		a.Close(ctx)
+	})
+	r, err := a.Start(as("alice"), "", fw.WithRequest(fw.RunRequest{Agent: "writer", Input: "Draft the notes", Metadata: map[string]string{fleet.MetaReview: "1"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, a, r.ID, fw.StateCompleted)
+	if err := a.React(as("alice"), r.ID, fw.ReactionData{Reaction: fw.ReactionDown, Note: "Shorter."}); err != nil {
+		t.Fatal(err)
+	}
+	if ans, err := For(as("alice"), a, time.Now()); err != nil || len(ans.Items) != 0 {
+		t.Fatalf("the inbox after Needs work = %+v, %v", ans.Items, err)
+	}
+	if err := a.Send(as("alice"), r.ID, fw.Message{Role: fw.RoleUser, Content: []fw.Block{fw.Text(fleet.SendBackText("Shorter."))}}, fw.OriginHTTP); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		ans, err := For(as("alice"), a, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ans.Items) == 1 && ans.Items[0].Kind == KindResult && strings.HasSuffix(ans.Items[0].Text, ": a new answer to check, after your note.") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the inbox after the new answer = %+v", ans.Items)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

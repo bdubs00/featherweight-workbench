@@ -158,7 +158,7 @@ func (rl *Relay) localCheck(w http.ResponseWriter, r *http.Request, id string) b
 		return true
 	}
 	if note, back := sendsBack(body); back {
-		if err := rl.a.Send(ctx, id, fw.Message{Role: fw.RoleUser, Content: []fw.Block{fw.Text(note)}}, fw.OriginHTTP); err != nil {
+		if err := rl.a.Send(ctx, id, fw.Message{Role: fw.RoleUser, Content: []fw.Block{fw.Text(SendBackText(note))}}, fw.OriginHTTP); err != nil {
 			fail(w, r, err)
 			return true
 		}
@@ -186,7 +186,7 @@ func (rl *Relay) remoteCheck(ctx context.Context, w http.ResponseWriter, r *http
 		return
 	}
 	if note, back := sendsBack(body); back {
-		if err := PostJSON(ctx, v, run.Member, path+"/messages", map[string]string{"content": note}, nil); err != nil {
+		if err := PostJSON(ctx, v, run.Member, path+"/messages", map[string]string{"content": SendBackText(note)}, nil); err != nil {
 			fail(w, r, err)
 			return
 		}

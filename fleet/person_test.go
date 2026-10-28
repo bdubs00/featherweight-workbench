@@ -666,7 +666,7 @@ func TestCheckOfAResult(t *testing.T) {
 	if react == nil || react.body["seq"] != float64(4) || react.body["reaction"] != "down" || react.person != "alice" || react.auth != "Bearer fleet-secret" {
 		t.Fatalf("the thumb = %+v of %+v", react, calls)
 	}
-	if msg == nil || msg.body["content"] != "Name the release in the title." || msg.person != "alice" {
+	if msg == nil || msg.body["content"] != SendBackText("Name the release in the title.") || msg.person != "alice" {
 		t.Fatalf("the follow-up = %+v of %+v", msg, calls)
 	}
 	since = len(pf.reached())

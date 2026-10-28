@@ -142,11 +142,26 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 	for _, r := range team {
 		near[r.ID] = true
 	}
+	// The facts of the runs tell a new answer after Needs work, which waits
+	// for a check again.
+	facts := map[string]fleet.Work{}
+	recent, err := fleet.WorkSince(ctx, a, now.Add(-ResultsFor))
+	if err != nil {
+		return Answer{}, err
+	}
+	for _, w := range recent {
+		if w.Run != nil {
+			facts[w.Run.ID] = w.Work
+		}
+	}
 	for _, r := range runs {
-		if r.Parent != "" || !fleet.InReview(r) || now.Sub(r.UpdatedAt) > ResultsFor || !(near[r.ID] || asks[duties.NameOf(r)] || hears[duties.NameOf(r)]) {
+		if r.Parent != "" || !fleet.ToCheck(r, facts[r.ID]) || now.Sub(r.UpdatedAt) > ResultsFor || !(near[r.ID] || asks[duties.NameOf(r)] || hears[duties.NameOf(r)]) {
 			continue
 		}
 		it := Item{Kind: KindResult, Run: r.ID, Duty: duties.NameOf(r), Agent: r.Agent, Since: r.UpdatedAt, Text: dashboard.TitleOf(r) + ": a result to check."}
+		if fleet.Again(facts[r.ID]) {
+			it.Text = dashboard.TitleOf(r) + ": a new answer to check, after your note."
+		}
 		if b, ok := strings.CutPrefix(r.Metadata[fw.MetaBatch], bridges.BatchPrefix); ok {
 			it.Bridge = b
 		}

@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,5 +212,54 @@ func TestArchiveRefreshReadsAChangedRun(t *testing.T) {
 	two.refresh(ctx)
 	if v := two.summaries(ctx)["01DONE"].Work.Verdict; v != "accepted" {
 		t.Fatalf("the second replica reads the verdict %q, want accepted", v)
+	}
+}
+
+// A result that a person sends back comes back to be checked: the follow-up
+// ends the run again, and the new answer waits for a check until a person
+// reacts to it. The first verdict stays for first-pass yield, and the
+// newest verdict is the one of the board. A reaction taken back opens the
+// check again.
+func TestWorkRework(t *testing.T) {
+	t0 := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	at := func(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
+	run := &fw.Run{ID: "R1", State: fw.StateCompleted, Metadata: map[string]string{MetaReview: "1"}}
+	events := []fw.Event{
+		ev(1, fw.EvRunQueued, at(0), fw.RunQueuedData{Agent: "writer"}),
+		ev(2, fw.EvRunFinished, at(5), fw.RunFinishedData{Outcome: "completed"}),
+	}
+	if w := WorkOf(events); !ToCheck(run, w) || Again(w) {
+		t.Fatalf("the first answer: to check %v, again %v (%+v)", ToCheck(run, w), Again(w), w)
+	}
+	events = append(events,
+		ev(3, fw.EvRunReacted, at(10), fw.ReactionData{Seq: 2, Reaction: fw.ReactionDown, Note: "Name the competitor on each line.", By: "alice"}),
+		ev(4, fw.EvMessageReceived, at(10), fw.MessageReceivedData{Role: fw.RoleUser, Origin: "http", By: "alice"}),
+	)
+	run.State = fw.StateRunning
+	if w := WorkOf(events); ToCheck(run, w) {
+		t.Fatalf("a run that works again is no result to check: %+v", w)
+	}
+	run.State = fw.StateCompleted
+	events = append(events, ev(5, fw.EvRunFinished, at(12), fw.RunFinishedData{Outcome: "completed"}))
+	w := WorkOf(events)
+	if !ToCheck(run, w) || !Again(w) || w.Note != "Name the competitor on each line." || w.Verdict != VerdictRejected || w.Rework != 1 {
+		t.Fatalf("the new answer: to check %v, again %v, %+v", ToCheck(run, w), Again(w), w)
+	}
+	events = append(events, ev(6, fw.EvRunReacted, at(15), fw.ReactionData{Seq: 5, Reaction: fw.ReactionUp, By: "alice"}))
+	w = WorkOf(events)
+	if ToCheck(run, w) || w.LastVerdict != VerdictAccepted || w.Verdict != VerdictRejected {
+		t.Fatalf("after Looks right: to check %v, %+v", ToCheck(run, w), w)
+	}
+	events = append(events, ev(7, fw.EvRunReacted, at(16), fw.ReactionData{Seq: 5, Reaction: fw.ReactionUp, By: "alice", Removed: true}))
+	if w = WorkOf(events); !ToCheck(run, w) || w.LastVerdict != "" {
+		t.Fatalf("after the undo: to check %v, %+v", ToCheck(run, w), w)
+	}
+	// Facts from before the archive counted ends fall back to the counts.
+	run.Reactions = map[string]int{fw.ReactionDown: 1}
+	if ToCheck(run, Work{Facts: true}) {
+		t.Fatal("a run with a thumb and old facts is no result to check")
+	}
+	if !strings.Contains(SendBackText("Shorter."), "Shorter.") || !strings.Contains(SendBackText("x"), "whole result") {
+		t.Fatalf("the follow-up = %q", SendBackText("Shorter."))
 	}
 }

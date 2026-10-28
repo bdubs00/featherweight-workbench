@@ -712,13 +712,18 @@ func (b *board) runPart(r Run) part {
 	case fw.StateCompleted:
 		p.stage = StageDone
 		switch v := judged(r); {
+		case fleet.ToCheck(r.Run, r.Work) && fleet.Again(r.Work):
+			p.stage, p.reason = StageReview, "A new answer to check."
+			if n := strings.TrimSpace(r.Work.Note); n != "" {
+				p.reason = "A new answer to check. Your note: " + oneLine(n, 120)
+			}
+		case fleet.ToCheck(r.Run, r.Work):
+			// The owner asked to check each result, and nobody did yet.
+			p.stage, p.reason = StageReview, "A result to check."
 		case v == VerdictAccepted:
 			p.verdict, p.reason = v, "Accepted."
 		case v == VerdictSentBack:
 			p.verdict, p.reason = v, "Sent back."
-		case r.Metadata[fleet.MetaReview] == "1":
-			// The owner asked to check each result, and nobody did yet.
-			p.stage, p.reason = StageReview, "A result to check."
 		case r.Done != nil && r.Done.State == fw.DoneChecked:
 			p.verdict, p.reason = VerdictChecked, "Its checks passed."
 		case strings.TrimSpace(r.Output) == "":
@@ -750,7 +755,7 @@ func (b *board) runPart(r Run) part {
 // run: the first verdict of its facts, else its reactions. A thumb down
 // sends the result back, and a thumb up or a heart accepts it.
 func judged(r Run) string {
-	switch r.Work.Verdict {
+	switch cmp.Or(r.Work.LastVerdict, r.Work.Verdict) {
 	case fleet.VerdictAccepted:
 		return VerdictAccepted
 	case fleet.VerdictRejected:
