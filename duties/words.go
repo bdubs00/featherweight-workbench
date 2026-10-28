@@ -94,11 +94,11 @@ func fill(msg string, values map[string]string) string {
 	return strings.NewReplacer(pairs...).Replace(msg)
 }
 
-// readback says a duty in plain words: when it starts, and what its check
-// looks for. It comes from the record, never from the words that a person
-// typed. The technical parts, such as the address of a webhook, are in
-// details.
-func readback(d *Duty) string {
+// readback says a duty in plain words to the person me: when it starts,
+// what its check looks for, and who hears of its results, with you for
+// me. It comes from the record, never from the words that a person typed.
+// The technical parts, such as the address of a webhook, are in details.
+func readback(d *Duty, me string) string {
 	var parts []string
 	switch w := d.When; {
 	case w.Schedule != nil:
@@ -115,10 +115,13 @@ func readback(d *Duty) string {
 	if c := d.CheckFirst; c != nil {
 		parts = append(parts, checkWords(d, c))
 	}
-	if w := resultWords(d); w != "" {
+	if w := resultWords(d, me); w != "" {
 		parts = append(parts, w)
 	}
-	if d.Review {
+	switch {
+	case d.Review && me != "" && (d.Owner == me || d.Owner == ""):
+		parts = append(parts, youReview)
+	case d.Review:
 		parts = append(parts, reviewWords)
 	}
 	return strings.Join(parts, " ")

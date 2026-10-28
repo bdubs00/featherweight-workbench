@@ -140,7 +140,7 @@ func TestRouteAndTool(t *testing.T) {
 	}
 	ask, done := ans.Cards[0], ans.Cards[1]
 	pending, _ := a.Get(context.Background(), r1.ID)
-	if ask.ID != "run:"+r1.ID || ask.Stage != StageNeedsYou || ask.Next != NextYou || pending.Pending == nil || ask.Links.Approval != pending.Pending.ID || ask.Reason != "Asks to run deploy." {
+	if ask.ID != "run:"+r1.ID || ask.Stage != StageNeedsYou || ask.Next != NextYou || pending.Pending == nil || ask.Links.Approval != pending.Pending.ID || ask.Reason != "Asks before it calls deploy." {
 		t.Fatalf("the card that needs alice = %+v", ask)
 	}
 	if done.ID != "run:"+r2.ID || done.Stage != StageDone || done.Verdict != VerdictUnchecked || done.Ended == nil {
@@ -182,7 +182,7 @@ func TestRouteAndTool(t *testing.T) {
 		t.Fatalf("the tool = %+v, %v", res, err)
 	}
 	txt := res.Content[0].(*sdk.TextContent).Text
-	if !strings.HasPrefix(txt, "1 task is open. 1 needs you") || !strings.Contains(txt, "\n\nNeeds you (1):\n- deploy the site, a conversation from alice: Asks to run deploy.") || !strings.Contains(txt, "Approval "+ask.Links.Approval+".") {
+	if !strings.HasPrefix(txt, "1 task is open. 1 needs you") || !strings.Contains(txt, "\n\nNeeds you (1):\n- deploy the site, a conversation from alice: Asks before it calls deploy.") || !strings.Contains(txt, "Approval "+ask.Links.Approval+".") {
 		t.Fatalf("the text of the tool = %s", txt)
 	}
 	b, _ := json.Marshal(res.StructuredContent)

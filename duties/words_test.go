@@ -83,7 +83,7 @@ func TestWebhookWords(t *testing.T) {
 	if got := details(&d); got != "Another app calls POST /v1/duties/tickets/call with the HMAC-SHA256 signature of the body in the header X-Gitea-Signature. A second call with the same issue.number within a week is a duplicate." {
 		t.Fatalf("details = %q", got)
 	}
-	if got := readback(&d); strings.Contains(got, "/v1/") || strings.Contains(got, "HMAC") || strings.Contains(got, "issue.number") {
+	if got := readback(&d, ""); strings.Contains(got, "/v1/") || strings.Contains(got, "HMAC") || strings.Contains(got, "issue.number") {
 		t.Fatalf("the readback holds a word of the API: %q", got)
 	}
 }
@@ -121,7 +121,7 @@ func TestReadbackNamesTheAgentInWords(t *testing.T) {
 	d := Duty{Name: "q", Agent: "triage", When: When{Event: &Event{Kind: EventQuestionWaiting, Agent: "triage", After: "1h"}},
 		CheckFirst: &CheckFirst{Look: Look{HTTP: &LookHTTP{URL: "https://example.com/q"}}, Wake: Wake{When: WakeAny}}}
 	w := f.s.worded(context.Background(), d)
-	if got := readback(&w); got != "When a question of Triage Desk waits longer than 1 hour. First it looks at example.com/q. Any item wakes Triage Desk." {
+	if got := readback(&w, ""); got != "When a question of Triage Desk waits longer than 1 hour. First it looks at example.com/q. Any item wakes Triage Desk." {
 		t.Fatalf("readback = %q", got)
 	}
 	if d.Agent != "triage" || d.When.Event.Agent != "triage" {

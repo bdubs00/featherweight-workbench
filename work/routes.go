@@ -501,7 +501,7 @@ var stageWords = map[string]string{
 // kindWords names a kind of card with its article.
 var kindWords = map[string]string{
 	KindConversation: "a conversation",
-	KindBridge:       "a bridge",
+	KindBridge:       "a team",
 	KindDuty:         "a duty",
 	KindJob:          "a job",
 	KindEvent:        "an event",

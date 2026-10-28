@@ -151,7 +151,7 @@ func TestPlanAsksOfItsTools(t *testing.T) {
 		t.Errorf("the asks of an agent with bash and files = %q", got)
 	}
 	got = strings.Join(asksOf(patterns, []string{"bash", "ansible.*", "front.*"}), "|")
-	if got != "Before it runs git push|Before it uses ansible.playbook with check=false|Before a step that changes or deletes something|Before it uses a tool of front" {
+	if got != "Before it runs git push|Before it calls playbook in ansible, with check=false|Before a step that changes or deletes something|Before it uses a tool of this server" {
 		t.Errorf("the asks of an agent with ansible = %q", got)
 	}
 	if n := len(asksOf(patterns, nil)); n != len(patterns) {

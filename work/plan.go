@@ -754,8 +754,11 @@ func perMonth(s schedule.Schedule) int {
 // asksOf words the patterns of a policy that ask a person. With tools,
 // the tools that the agent can call, it leaves out a pattern of a tool
 // that the agent lacks, so the readback names no ask that cannot happen.
-// A pattern with an argument of a tool other than bash names the tool, as
-// in "Before it uses ansible.playbook with check=false".
+// A tool reads as what its call does (toolWords), as in "Before it writes
+// a page of the wiki" for front.pages_write, and never by its name. A
+// pattern with an argument of bash names the command, as in "Before it
+// runs git push", and of another tool adds the argument, as in "Before it
+// calls playbook in ansible, with check=false".
 func asksOf(patterns, tools []string) []string {
 	var out []string
 	for _, p := range patterns {
@@ -773,16 +776,16 @@ func asksOf(patterns, tools []string) []string {
 			arg = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(arg), "*"))
 			switch {
 			case arg == "":
-				out = append(out, "Before it uses "+tool)
+				out = append(out, "Before it "+toolWords(tool))
 			case tool == "bash":
 				out = append(out, "Before it runs "+arg)
 			default:
-				out = append(out, "Before it uses "+tool+" with "+arg)
+				out = append(out, "Before it "+toolWords(tool)+", with "+arg)
 			}
 		case strings.HasSuffix(p, ".*"):
-			out = append(out, "Before it uses a tool of "+strings.TrimSuffix(p, ".*"))
+			out = append(out, "Before it uses a tool of "+serverWords(strings.TrimSuffix(p, ".*")))
 		default:
-			out = append(out, "Before it uses "+strings.TrimRight(p, "*"))
+			out = append(out, "Before it "+toolWords(strings.TrimRight(p, "*")))
 		}
 	}
 	return out

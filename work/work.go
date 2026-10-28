@@ -391,7 +391,7 @@ func (b *board) bridge(it bridges.Item) {
 				p.reason = m.Handle + " waits for you."
 			}
 		case bridges.PresenceWorking:
-			p.stage, p.reason = StageWorking, m.Handle+" works."
+			p.stage, p.reason = StageWorking, m.Handle+" works on its part."
 		case bridges.PresenceWaiting:
 			p.stage, p.reason = StageWaiting, m.Handle+" waits for a worker."
 		case bridges.PresenceError:
@@ -407,13 +407,13 @@ func (b *board) bridge(it bridges.Item) {
 			continue
 		default:
 			// idle and asleep: the seat ended its turn.
-			p.stage, p.reason = StageReview, "The seats ended their turns."
+			p.stage, p.reason = StageReview, teamDone
 			p.since = last
 		}
 		d.parts = append(d.parts, p)
 	}
 	if len(d.parts) == 0 {
-		d.parts = append(d.parts, part{stage: StageStopped, reason: "No seat.", since: last})
+		d.parts = append(d.parts, part{stage: StageStopped, reason: "The team has no agent.", since: last})
 	}
 }
 
@@ -432,10 +432,9 @@ func (b *board) start(s Start) {
 	}
 	d, _ := b.card(dutyKey(s.Duty.Name, e.Slot))
 	d.Kind, d.settled = KindDuty, true
-	d.Title = e.Title
-	if d.Title == "" {
-		d.Title = cmp.Or(s.Duty.Title, s.Duty.Name)
-	}
+	// A start reads as its duty: the title of the duty, else the title of
+	// its run, else the name of the duty.
+	d.Title = cmp.Or(strings.TrimSpace(s.Duty.Title), e.Title, s.Duty.Name)
 	d.Opened = e.Slot
 	if e.At.Before(d.Opened) || d.Opened.IsZero() {
 		d.Opened = e.At
@@ -472,7 +471,7 @@ func (b *board) start(s Start) {
 			p.stage = StageNeedsYou
 		}
 		if p.reason == "" {
-			p.reason = "Works."
+			p.reason = agentWorks
 		}
 	case duties.StateCanceled:
 		p.stage, p.reason = StageDone, "Canceled."
@@ -624,7 +623,7 @@ func (b *board) newCard(d *draft, r Run) {
 	switch {
 	case strings.HasPrefix(d.ID, "duty:"):
 		name := md[duties.MetaDuty]
-		d.Kind, d.Title = KindDuty, titleOf(r.Run)
+		d.Kind, d.Title = KindDuty, cmp.Or(strings.TrimSpace(b.dutyOf[name].Title), titleOf(r.Run))
 		d.From = From{Kind: "duty", Name: name}
 		d.Links.Duty = name
 		d.mine = b.ownsDuty("duty:"+name) || b.notifies(b.dutyOf[name])
@@ -749,9 +748,9 @@ func (b *board) runPart(r Run) part {
 		p.stage, p.reason, p.since = StageWaiting, "Waits for a worker.", r.CreatedAt
 	case fw.StateRunning, fw.StateSuspended:
 		p.stage, p.since = StageWorking, r.CreatedAt
-		p.reason = "Works."
+		p.reason = agentWorks
 		if a := r.Activity; a != nil && a.Tool != "" {
-			p.reason = "Runs " + a.Tool + "."
+			p.reason = capital(toolWords(a.Tool)) + "."
 		}
 	case fw.StateCompleted:
 		p.stage = StageDone
@@ -795,10 +794,17 @@ func (b *board) runPart(r Run) part {
 	case fw.StateCanceled:
 		p.stage, p.reason = StageDone, "Canceled."
 	default:
-		p.stage, p.reason = StageWorking, "Works."
+		p.stage, p.reason = StageWorking, agentWorks
 	}
 	return p
 }
+
+// Reasons of a card in plain words: no card says "Works." alone, and none
+// names the seats or the turns of a team (walk finding L8).
+const (
+	agentWorks = "The agent works on it."
+	teamDone   = "The agents finished, and the result waits for a check."
+)
 
 // judged is the verdict of a person, or of a receipt, on the result of a
 // run: the first verdict of its facts, else its reactions. A thumb down
@@ -848,7 +854,7 @@ func pendingWords(r *fw.Run) string {
 		}
 		return "Asks you a question."
 	case a.Tool != "":
-		return "Asks to run " + a.Tool + "."
+		return "Asks before it " + toolWords(a.Tool) + "."
 	}
 	return "Waits for you."
 }
@@ -943,7 +949,7 @@ func (b *board) settle(d *draft) {
 	d.Stage, d.Reason, d.Since = top.stage, top.reason, top.since
 	switch {
 	case d.Kind == KindBridge && d.Stage == StageReview:
-		d.Reason = "The seats ended their turns."
+		d.Reason = teamDone
 	case d.Kind == KindJob && d.Stage != StageNeedsYou,
 		d.Kind == KindBridge && d.Parts.Total > 1 && (d.Stage == StageWorking || d.Stage == StageWaiting):
 		if s := partWords(d.Parts); s != "" {
@@ -1095,17 +1101,17 @@ func titleOf(r *fw.Run) string {
 // oneLine cuts a text to one line of at most n bytes.
 // limitWords names the limit of a run that stopped at its budget, from
 // its error "budget exceeded: <limit>", in words for a person, such as
-// "its limit of turns" for maxTurns. An unknown limit is "a limit of its
+// "its limit of steps" for maxTurns. An unknown limit is "a limit of its
 // budget".
 func limitWords(err string) string {
 	name, _, _ := strings.Cut(strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(err, "budget exceeded"), ":")), " ")
 	switch strings.TrimRight(name, ".,;") {
 	case "maxTurns":
-		return "its limit of turns"
+		return "its limit of steps"
 	case "maxToolCalls":
 		return "its limit of tool calls"
 	case "maxCallsPerTurn":
-		return "its limit of tool calls in one turn"
+		return "its limit of tool calls in one step"
 	case "maxTokens":
 		return "its limit of tokens"
 	case "maxCostUSD":

@@ -736,7 +736,13 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 	slot := e.Slot.UTC().Format(time.RFC3339Nano)
 	input := fill(d.Do.Message(), placeholders(d, e, last))
 	md := map[string]string{MetaDuty: d.Name, MetaSlot: slot, fw.MetaBatch: BatchOf(d.Name)}
-	if title := fw.TitleFrom(fill(d.Do.Message(), titleValues(d, e, last))); title != "" {
+	// A run of a duty with a title takes the title of the duty, so its
+	// card reads as the duty, not as the first words of its message.
+	title := strings.TrimSpace(fill(d.Title, titleValues(d, e, last)))
+	if title == "" {
+		title = fw.TitleFrom(fill(d.Do.Message(), titleValues(d, e, last)))
+	}
+	if title != "" {
 		md[fw.MetaTitle] = title
 	}
 	key := "duty/" + d.Name + "/" + e.ID
