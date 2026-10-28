@@ -86,11 +86,25 @@ func (e *VersionError) Error() string {
 	return fmt.Sprintf("the move names version %d, and the routine is at version %d now. Read it again", e.Want, e.Version)
 }
 
-// SignOff says who signed a routine off, and when.
+// SignOff says who signed a routine off, when, and the version of the
+// body that the person signed off. A sign-off from before the version was
+// kept has version 0; a new body takes every sign-off away, so it holds
+// for the version of the record.
 type SignOff struct {
-	By string    `json:"by"`
-	At time.Time `json:"at"`
+	By      string    `json:"by"`
+	At      time.Time `json:"at"`
+	Version int       `json:"version,omitempty"`
 }
+
+// holds reports whether a person signed off the version, as opposed to a
+// move of Know-how.
+func (so *SignOff) holds(version int) bool {
+	return so != nil && so.By != ByKnowhow && (so.Version == 0 || so.Version == version)
+}
+
+// ByKnowhow is the writer of a move that Know-how makes by itself: a step
+// back, and a ready routine that goes live (docs/KNOWHOW.md section 6.5).
+const ByKnowhow = "knowhow"
 
 // Move is one entry of the history of a routine: a standing that the
 // routine took, who moved it, when, why, and the version of its body.
@@ -116,19 +130,22 @@ type Source struct {
 // store keeps no standing of the kernel in it, and as JSON the body has
 // none. Standing is the standing of the workbench. Ready is true for a
 // rehearsing routine whose evidence passes the rule of the configuration.
-// SignedOff is set by the last move to live. History holds the moves,
-// oldest first. Evidence is set only where a route asks for it.
+// SignedOff is set by the last move of a person to live, and a step back
+// keeps it. SteppedBack is true while a live routine that stepped back by
+// itself rehearses again. History holds the moves, oldest first. Evidence
+// is set only where a route asks for it.
 type Record struct {
-	Agent     string     `json:"agent"`
-	Routine   fw.Routine `json:"routine"`
-	Standing  string     `json:"standing"`
-	Ready     bool       `json:"ready"`
-	SignedOff *SignOff   `json:"signedOff,omitempty"`
-	History   []Move     `json:"history"`
-	Source    *Source    `json:"source,omitempty"`
-	CreatedAt time.Time  `json:"createdAt"`
-	UpdatedAt time.Time  `json:"updatedAt"`
-	Evidence  *Evidence  `json:"evidence,omitempty"`
+	Agent       string     `json:"agent"`
+	Routine     fw.Routine `json:"routine"`
+	Standing    string     `json:"standing"`
+	Ready       bool       `json:"ready"`
+	SignedOff   *SignOff   `json:"signedOff,omitempty"`
+	SteppedBack bool       `json:"steppedBack,omitempty"`
+	History     []Move     `json:"history"`
+	Source      *Source    `json:"source,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+	Evidence    *Evidence  `json:"evidence,omitempty"`
 }
 
 // Name returns the name of the routine.
@@ -172,6 +189,10 @@ type Store struct {
 	// summaries the summaries that hold for a minute (summary.go).
 	proj      *projector
 	summaries summaries
+
+	// moved follows a move that Know-how made by itself, such as the
+	// write of the runbook, which Start sets. Nil does nothing.
+	moved func(ctx context.Context, rec Record)
 }
 
 // cached is a record that the store read at a revision.
@@ -516,9 +537,10 @@ func (s *Store) Put(ctx context.Context, req PutRequest) (Record, PutResult, err
 	}
 	var rec, cur Record
 	var res PutResult
+	var moved *Move // the move that the write made, for OnMove
 	wrote, err := bucket.Modify(ctx, s.b, keyOf(req.Agent, body.Name), writeAttempts, func(value []byte, exists bool) ([]byte, error) {
 		now := s.now().UTC()
-		res, cur = PutResult{}, Record{}
+		res, cur, moved = PutResult{}, Record{}, nil
 		if exists {
 			var err error
 			if cur, err = decodeRecord(value); err != nil {
@@ -546,6 +568,7 @@ func (s *Store) Put(ctx context.Context, req PutRequest) (Record, PutResult, err
 			body.Version = 1
 			rec = Record{Agent: req.Agent, Routine: body, Standing: standing, CreatedAt: now}
 			rec.History = []Move{{At: now, By: req.By, Standing: standing, Note: note, Version: 1}}
+			moved = &rec.History[0]
 			res = PutResult{Created: true, Changed: true}
 		} else {
 			switch {
@@ -559,13 +582,17 @@ func (s *Store) Put(ctx context.Context, req PutRequest) (Record, PutResult, err
 			body.Version = cur.Version()
 			if !sameBody(body, cur.Routine) {
 				body.Version = cur.Version() + 1
-				rec.Routine, rec.Ready = body, false
+				rec.Routine, rec.Ready, rec.SteppedBack = body, false, false
 				res.Changed = true
+				// A new version holds no sign-off, also when it rehearses
+				// already.
+				rec.SignedOff = nil
 				if cur.Standing == Live || cur.Standing == Paused {
 					// A paused routine can go live with one move, so its
 					// new version rehearses first too.
-					rec.Standing, rec.SignedOff = Rehearsing, nil
+					rec.Standing = Rehearsing
 					rec.History = append(slices.Clone(cur.History), Move{At: now, By: req.By, Standing: Rehearsing, Note: joinNote("a new version rehearses again", note), Version: body.Version})
+					moved = &rec.History[len(rec.History)-1]
 				}
 			}
 		}
@@ -607,6 +634,13 @@ func (s *Store) Put(ctx context.Context, req PutRequest) (Record, PutResult, err
 	if wrote || req.Replay != nil {
 		emitChange(req.Agent, body.Name)
 	}
+	if wrote && moved != nil {
+		from := ""
+		if !res.Created {
+			from = cur.Standing
+		}
+		emitMove(ctx, req.Agent, body.Name, from, moved.Standing, moved.By, moved.Note)
+	}
 	return rec, res, nil
 }
 
@@ -640,6 +674,7 @@ func (s *Store) Move(ctx context.Context, req MoveRequest) (Record, bool, error)
 		return Record{}, false, err
 	}
 	var rec Record
+	from := ""
 	wrote, err := bucket.Modify(ctx, s.b, keyOf(req.Agent, req.Name), writeAttempts, func(value []byte, exists bool) ([]byte, error) {
 		if !exists {
 			return nil, fmt.Errorf("%w: the agent %s has no routine %s", ErrNotFound, req.Agent, req.Name)
@@ -648,7 +683,7 @@ func (s *Store) Move(ctx context.Context, req MoveRequest) (Record, bool, error)
 		if err != nil {
 			return nil, err
 		}
-		rec = cur
+		rec, from = cur, cur.Standing
 		switch {
 		case req.Version != 0 && req.Version != cur.Version():
 			return nil, &VersionError{Want: req.Version, Version: cur.Version(), Standing: cur.Standing}
@@ -660,11 +695,11 @@ func (s *Store) Move(ctx context.Context, req MoveRequest) (Record, bool, error)
 			return nil, fmt.Errorf("%w: a person signs a routine off: a user of the issuer or the local user, not the process, the static token, or a workload", fw.ErrForbidden)
 		}
 		now := s.now().UTC()
-		rec.Standing = req.To
+		rec.Standing, rec.SteppedBack = req.To, false
 		rec.History = trimHistory(append(slices.Clone(cur.History), Move{At: now, By: req.By, Standing: req.To, Note: note, Version: cur.Version()}))
 		rec.UpdatedAt = now
 		if req.To == Live {
-			rec.SignedOff = &SignOff{By: req.By, At: now}
+			rec.SignedOff = &SignOff{By: req.By, At: now, Version: cur.Version()}
 		}
 		rec.Ready = false
 		if req.To == Rehearsing {
@@ -693,8 +728,53 @@ func (s *Store) Move(ctx context.Context, req MoveRequest) (Record, bool, error)
 	}
 	if wrote {
 		emitChange(req.Agent, req.Name)
+		emitMove(ctx, req.Agent, req.Name, from, req.To, req.By, note)
 	}
 	return rec, wrote, nil
+}
+
+// autoMove is a move that Know-how makes by itself, with ByKnowhow as the
+// writer (docs/KNOWHOW.md section 6.5): a live routine that steps back to
+// rehearsing, which keeps its sign-off and marks SteppedBack, and a ready
+// routine that goes live. It moves only a routine that is at the version
+// and in the standing from, so a person or a new body that came first
+// wins. It reports whether the routine moved.
+func (s *Store) autoMove(ctx context.Context, agent, name string, version int, from, to, note string) (Record, bool, error) {
+	var rec Record
+	wrote, err := bucket.Modify(ctx, s.b, keyOf(agent, name), writeAttempts, func(value []byte, exists bool) ([]byte, error) {
+		if !exists {
+			return nil, nil
+		}
+		cur, err := decodeRecord(value)
+		if err != nil {
+			return nil, err
+		}
+		if cur.Standing != from || cur.Version() != version {
+			return nil, nil
+		}
+		now := s.now().UTC()
+		rec = cur
+		rec.Standing, rec.Ready, rec.UpdatedAt = to, false, now
+		rec.SteppedBack = from == Live && to == Rehearsing
+		if to == Live && !rec.SignedOff.holds(version) {
+			rec.SignedOff = nil
+		}
+		rec.History = trimHistory(append(slices.Clone(cur.History), Move{At: now, By: ByKnowhow, Standing: to, Note: note, Version: version}))
+		return encode(rec)
+	})
+	if errors.Is(err, bucket.ErrConflict) {
+		return Record{}, false, fmt.Errorf("%w: other writers changed the routine %s of %s %d times while Know-how moved it", ErrConflict, name, agent, writeAttempts)
+	}
+	if err != nil || !wrote {
+		return rec, false, err
+	}
+	s.log.Info("routines: a routine moved by itself", "agent", agent, "routine", name, "version", version, "from", from, "standing", to, "note", note)
+	emitChange(agent, name)
+	emitMove(ctx, agent, name, from, to, ByKnowhow, note)
+	if s.moved != nil {
+		s.moved(ctx, rec)
+	}
+	return rec, true, nil
 }
 
 // evidence returns the evidence of a routine and its revision, or nil and

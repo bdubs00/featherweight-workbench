@@ -2983,7 +2983,8 @@ On a NATS bus, the routines live in the key-value bucket `<stream>_ROUTINES`. Ea
 | `routine` | The body in the shape of the kernel, without `standing`. `version` is the version of the record. |
 | `standing` | `proposed`, `rehearsing`, `live`, `paused`, or `retired` (section 21.2) |
 | `ready` | True for a rehearsing routine whose evidence passes the rule of section 21.4. The page shows it as `needs you`. |
-| `signedOff` | `{"by", "at"}` of the last move to `live`. A new body takes it away. |
+| `signedOff` | `{"by", "at", "version"}` of the last move of a person to `live`, with the version that the person signed off. A step back keeps it, and a new body takes it away. |
+| `steppedBack` | True while a routine that stepped back by itself rehearses again (section 21.2.1) |
 | `history` | The moves, oldest first, each with `at`, `by`, `standing`, `note`, and `version`. The record keeps the newest 256. |
 | `source` | Where the routine comes from: `runs`, `from` and `to` as days, and `proposedBy`, such as `fw routine propose` |
 | `createdAt`, `updatedAt` | The time of the first write and of the last change |
@@ -2996,7 +2997,7 @@ A body changes only through `PUT`. A body that differs from the body that the st
 
 Every write is a compare-and-swap on the revision of the entry, up to eight times (`bucket.Modify`), so two replicas of the front never lose a write. A new routine that an operator proposes is a write that only creates, so it never changes a routine that another writer made in the meantime. The bucket keeps the last ten values of each entry. The front opens its own connection with `bus.url` and the options `credentials` and `token` of the bus. With NATS accounts, allow the front `$JS.API.>` and `$KV.<stream>_ROUTINES.>`. On the bus `mem`, the routines live in the process, and two processes share nothing. On another bus, the front logs once that the routines are off, and its routes answer that they are off (section 21.6). It offers no tool. The key `workbench.routines.enabled: false` does the same on any bus (section 21.7).
 
-Other packages use the routines through Go. `routines.Of(a)` returns the `*routines.Store` of an agent, or nil. The store has `List(ctx, agent)`, `Get(ctx, agent, name)`, which adds the evidence, `Put(ctx, PutRequest)`, `Move(ctx, MoveRequest)`, and `Reaching(ctx)` (section 21.3). `routines.Check(ctx, a, agent, action)` decides an action on the routines of an agent as the routes do. `routines.OnChange(func(agent, name string))` registers a hook that gets each change that the store wrote to a record or to its evidence. `routines.Status(cfg)` gives one line for `fw-workbench doctor`, which the line `bossmode` holds.
+Other packages use the routines through Go. `routines.Of(a)` returns the `*routines.Store` of an agent, or nil. The store has `List(ctx, agent)`, `Get(ctx, agent, name)`, which adds the evidence, `Put(ctx, PutRequest)`, `Move(ctx, MoveRequest)`, and `Reaching(ctx)` (section 21.3). `routines.Check(ctx, a, agent, action)` decides an action on the routines of an agent as the routes do. `routines.OnChange(func(agent, name string))` registers a hook that gets each change that the store wrote to a record or to its evidence. The function variable `routines.OnMove func(ctx, agent, name, from, to, by, note string)` gets every move that the store wrote: a new routine with `from` empty, a move of a person, a new body that sends a routine back to `rehearsing`, and each move of Know-how (section 21.2.1), whose `by` is `knowhow`. The package `knowhow` sets it at its start and writes its journal from it. The function variable `routines.AskFirst func(ctx, agent string) bool` says whether the agent asks a person first. Nil means false. Both run on the goroutine of the move and must not block. `routines.Status(cfg)` gives one line for `fw-workbench doctor`, which the line `bossmode` holds.
 
 ### 21.2 The standings
 
@@ -3011,6 +3012,16 @@ Other packages use the routines through Go. `routines.Of(a)` returns the `*routi
 A move that the table forbids answers 409 with the standing and the allowed moves. A move to the standing that a routine has changes nothing and answers 200. Every move records who made it, when, the note, and the version in `history`. A move to `live` sets `signedOff`, and it needs a person: a user of the issuer or the local user of the process. The process itself, the static token alone, a workload, and an anonymous caller cannot sign a routine off, and they get 403. A move can name `version`, the version of the body that the caller read. When the routine is at another version, the move answers 409 with the version and the standing that the routine has, so a sign-off holds for the body that the person read. A run of the manager signs off for the person of the run (section 19.2), and the note of the move names the run, as `by manager run 01K... for ada`. A routine that leaves `rehearsing` is not ready. A routine that comes back to `rehearsing` is ready when its evidence passes the rule.
 
 A new routine starts `proposed`. A caller who may edit the agent can start it `rehearsing`. It never starts in another standing.
+
+#### 21.2.1 Moves of Know-how
+
+Routines grow up by themselves (the kernel document `docs/KNOWHOW.md`, section 6.5). The projection of the evidence makes three moves, each with the writer `knowhow` in `history`, and each calls `routines.OnMove`:
+
+- Step back. One disagreement in a canary run of a live routine, or a run that a live routine completed and that came back with a `rejected` receipt, moves the routine to `rehearsing`. The note names the reason and the run, such as "It stepped back to rehearsing by itself: a canary run disagreed with the agent, run 01K...". The routine keeps `signedOff`, gets `steppedBack`, and the evidence gets `since`, so the ready rule counts only the runs after the step back. A person still cannot make this move: the table above stays as it is for people and the routes.
+- Live by itself. A ready routine whose risk is `read` goes live, unless `routines.AskFirst` says true for its agent. The kernel names the risk in `fw.routine.decided`, and the evidence keeps the newest one. Such a move sets no `signedOff`, because no person signed the routine off. The runbook says that it went live by itself.
+- Live again. A ready routine that stepped back, and whose version a person signed off, goes live again.
+
+Any other ready routine waits for a person, as `needs you` on the page: a routine whose risk is `write`, a routine whose risk the evidence does not know yet, and a routine whose agent asks first. A move of Know-how moves a routine only from the standing and the version that the projection read, so a move of a person or a new body that came first wins. A move of Know-how writes the runbook as a move of a person does.
 
 ### 21.3 Reaching the runs
 
@@ -3039,9 +3050,11 @@ The workers of a pool whose profiles run a routine publish `fw.routine.decided`,
 | `disagreements` | The last 50 runs where the routine would have acted and disagreed, newest first: `run`, `at`, `input`, the title that the start of the run names, else the first line of its input, `answers`, per compared question `said`, `observed`, `agree`, and `probability`, each answer cut to 200 bytes, and `verification`, the verification of the quality observation of the run once one came |
 | `sentBack` | The runs whose quality observation says `rejected`: `applied`, those that the routine completed, and `agreed`, those where it rehearsed and agreed with the agent |
 | `replay` | `{"matched", "total", "at"}`, the last replay of the routine over recorded runs, which a `PUT` sets |
+| `risk` | `read` or `write`, the risk that the newest `fw.routine.decided` named. `read` means that the annotations of every tool of the steps say read-only. |
+| `since` | `{"at", "totals", "sentBack"}`, the counts at the last step back (section 21.2.1). The ready rule counts only what came after them. |
 | `updatedAt` | The time of the last change |
 
-A rehearsing routine is ready when, over its current version, `acted` is at least `readyAfter`, `agreed` is at least `readyAgreement` of `acted`, and `sentBack.agreed` is 0. The projection writes `ready` into the record when it changes.
+A rehearsing routine is ready when, over its current version and since its last step back, `acted` is at least the bound of `readyAfter` for its risk, `agreed` is at least `readyAgreement` of `acted`, and `sentBack.agreed` is 0. The bound is `read` for a routine whose risk is `read`, and `write` for every other routine. The projection writes `ready` into the record when it changes, and then makes the moves of section 21.2.1.
 
 Each replica of the front reads the stream, so each event reaches every replica. The evidence keeps a mark for each of its last 1,000 runs with what it counted, and an event that a mark shows as counted counts no more. So two replicas count an event once, and a repeated event counts once. A bus can bring the events of a run out of order. A comparison that comes before its decision waits in the mark of its run and counts when the decision comes. An event that comes before the start of its run, whose agent the view does not know yet, waits in the projection until the start comes, for at most 1,024 runs. A mark drops its probabilities and its answers once every compared question came, and the oldest marks go until the evidence fits an entry of the bucket. The projection applies the events that wait as one write per routine. At most 4,096 events wait. Past that, the projection drops an event, and the log says so once until the queue has room. The projection never moves the evidence back to an older version. A quality observation counts only for a run whose decision this replica saw, and only while the evidence marks the run. The runs of the front itself are not on the egress stream, so their events reach no evidence.
 
@@ -3156,7 +3169,7 @@ The routines read the block `routines` under the key `workbench` of `fw.yaml`. E
 | Key | Variable | Meaning | Default |
 |---|---|---|---|
 | `workbench.routines.enabled` | `FW_WORKBENCH_ROUTINES_ENABLED` | `on` or `off`. Off keeps no store, answers `"off": true` on `GET /v1/routines` and 404 on the other routes of the routines, offers no tool, counts no evidence, and gives the pools no routine. | on, where the bus keeps a store: `nats` or `mem` |
-| `workbench.routines.readyAfter` | `FW_WORKBENCH_ROUTINES_READY_AFTER` | The runs that a rehearsing routine of the current version would have acted on before it is ready, 1 to 1000000 | `200` |
+| `workbench.routines.readyAfter` | `FW_WORKBENCH_ROUTINES_READY_AFTER` | The runs that a rehearsing routine of the current version would have acted on before it is ready, by its risk: `{read, write}`, each 1 to 1000000. One number sets both. The variable takes one number for both, and `FW_WORKBENCH_ROUTINES_READY_AFTER_READ` and `FW_WORKBENCH_ROUTINES_READY_AFTER_WRITE` set one bound each and win over it. | `{read: 20, write: 50}` |
 | `workbench.routines.readyAgreement` | `FW_WORKBENCH_ROUTINES_READY_AGREEMENT` | The share of those runs where it agreed with the agent, above 0 and at most 1 | `0.95` |
 
 A value outside its bound stops the start, and the error names the key. The variable of `enabled` also takes `true`, `false`, `yes`, `no`, `1`, and `0`. The model that answers the questions of a routine is configured on the workers, in the configuration of their pool (the kernel document `docs/ROUTINES.md`), never on the front.
@@ -3165,7 +3178,7 @@ A value outside its bound stops the start, and the error names the key. The vari
 workbench:
   routines:
     enabled: true
-    readyAfter: 200
+    readyAfter: {read: 20, write: 50}
     readyAgreement: 0.95
 ```
 
@@ -3183,7 +3196,7 @@ To stop one routine, pause or retire it. To stop every routine of the front, set
 ### 21.8 Security and bounds
 
 - A routine runs on a worker with the policy, the limits, and the budget of its run. The front grants it nothing.
-- A sign-off is the decision of a person. The process and the static token alone cannot make it.
+- A sign-off is the decision of a person. The process and the static token alone cannot make it. Know-how moves a ready routine that only reads to `live` by itself, and that move is no sign-off (section 21.2.1). A routine that writes goes live only with a sign-off of a person, also when it goes live again after a step back.
 - No token and no secret enters a record, its evidence, a log line, or an event. The evidence holds the first line of the input of a run, at most 200 bytes, as the view holds it.
 - A log line of a change names the agent, the routine, the version, the standing, and the writer.
 - The front does not run a replay. A replay runs where the ledgers are, with `fw routine replay`, and a `PUT` with `replay` gives the result to the evidence. A proposal runs there too, with `fw routine propose`. A worker built with the tag `lean` does not carry that verb. `fw` without the tag and `fw-workbench` do.

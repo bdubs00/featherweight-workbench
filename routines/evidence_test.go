@@ -29,7 +29,7 @@ func comparedData(question, said, observed string) fw.RoutineComparedData {
 // The ready rule: enough runs that the routine would have acted on, a
 // share of them agreed, and no agreed run sent back.
 func TestReadyRule(t *testing.T) {
-	c := Config{ReadyAfter: 200, ReadyAgreement: 0.95}
+	c := Config{ReadyAfter: ReadyAfter{Read: 200, Write: 200}, ReadyAgreement: 0.95}
 	for _, tc := range []struct {
 		acted, agreed, sentBack int
 		want                    bool
@@ -49,7 +49,7 @@ func TestReadyRule(t *testing.T) {
 	if (*Evidence)(nil).Ready(c) {
 		t.Error("no evidence is ready")
 	}
-	if ev := (&Evidence{Totals: Counts{Acted: 3, Agreed: 3}}); !ev.Ready(Config{ReadyAfter: 3, ReadyAgreement: 1}) {
+	if ev := (&Evidence{Totals: Counts{Acted: 3, Agreed: 3}}); !ev.Ready(Config{ReadyAfter: ReadyAfter{Read: 3, Write: 3}, ReadyAgreement: 1}) {
 		t.Error("a full agreement at the bound is not ready")
 	}
 }
@@ -99,7 +99,7 @@ func TestEvidenceCountsOnce(t *testing.T) {
 	if len(bands) != 5 || bands[0].Runs != 1 || bands[0].Agreed != 0 || bands[3].From != 0.85 || bands[3].Runs != 2 || bands[3].Agreed != 1 {
 		t.Fatalf("the reliability of type = %+v", bands)
 	}
-	if ev.Ready(Config{ReadyAfter: 2, ReadyAgreement: 0.5}) {
+	if ev.Ready(Config{ReadyAfter: ReadyAfter{Read: 2, Write: 2}, ReadyAgreement: 0.5}) {
 		t.Fatal("a routine whose agreed run came back is ready")
 	}
 
@@ -144,7 +144,7 @@ func TestProjectionOnTheStream(t *testing.T) {
 	if _, _, err := fr.s.Put(ctx, PutRequest{Agent: "triage", Routine: ack(), Standing: Rehearsing, By: "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	fr.s.cfg = Config{ReadyAfter: 3, ReadyAgreement: 0.6}
+	fr.s.cfg = Config{ReadyAfter: ReadyAfter{Read: 3, Write: 3}, ReadyAgreement: 0.6}
 	at := time.Date(2026, 10, 23, 11, 0, 0, 0, time.UTC)
 	answers := func(p float64) map[string]fw.Answer {
 		return map[string]fw.Answer{

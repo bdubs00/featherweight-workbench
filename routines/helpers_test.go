@@ -113,8 +113,11 @@ func newFront(t *testing.T, mut func(*fw.Config)) *front {
 
 // memStore returns a store in memory with the thresholds of c.
 func memStore(c Config) *Store {
-	if c.ReadyAfter == 0 {
-		c.ReadyAfter = DefaultReadyAfter
+	if c.ReadyAfter.Read == 0 {
+		c.ReadyAfter.Read = DefaultReadyAfterRead
+	}
+	if c.ReadyAfter.Write == 0 {
+		c.ReadyAfter.Write = DefaultReadyAfterWrite
 	}
 	if c.ReadyAgreement == 0 {
 		c.ReadyAgreement = DefaultReadyAgreement

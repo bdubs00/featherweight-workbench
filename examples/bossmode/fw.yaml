@@ -73,12 +73,14 @@ workbench:
     atespaces: [default]
     egress: fw.events
     intake: fw.jobs
-  # A rehearsing routine is ready for a sign-off after it would have acted
-  # on readyAfter runs of its version and agreed with the agent on
+  # A rehearsing routine is ready after it would have acted on readyAfter
+  # runs of its version, by its risk, and agreed with the agent on
   # readyAgreement of them, with no agreed run sent back
-  # (docs/ARCHITECTURE.md section 21.4). These are the defaults.
+  # (docs/ARCHITECTURE.md section 21.4). A ready routine that only reads
+  # goes live by itself, and one that writes waits for a sign-off. These
+  # are the defaults.
   routines:
-    readyAfter: 200
+    readyAfter: {read: 20, write: 50}
     readyAgreement: 0.95
   # The page of bossmode creates an agent with its workers from this
   # template: PUT /v1/agents/{name} makes a runtime pool of two workers for

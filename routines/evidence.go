@@ -111,6 +111,10 @@ type Replay struct {
 // Totals cover the version, and Days its last MaxDays days, oldest first.
 // Questions holds the reliability table of each question, and
 // Disagreements the last MaxDisagreements disagreements, newest first.
+// Risk is the risk that the newest decision of the kernel named,
+// fw.RiskRead or fw.RiskWrite, or "" before the first one. Since holds the
+// counts at the last step back, and the ready rule counts only what came
+// after it.
 type Evidence struct {
 	Version       int               `json:"version"`
 	Totals        Counts            `json:"totals"`
@@ -119,11 +123,71 @@ type Evidence struct {
 	Disagreements []Disagreement    `json:"disagreements"`
 	SentBack      SentBack          `json:"sentBack"`
 	Replay        *Replay           `json:"replay,omitempty"`
+	Risk          string            `json:"risk,omitempty"`
+	Since         *Since            `json:"since,omitempty"`
 	UpdatedAt     time.Time         `json:"updatedAt,omitzero"`
 
 	// Marks remembers what each recent run counted, oldest first, so an
 	// event counts once. The routes leave it out.
 	Marks []mark `json:"marks,omitempty"`
+
+	// stepBack is the first run of the events that this write applied
+	// that steps a live routine back: a disagreement in a canary run, or
+	// a run that the routine completed and a receipt rejected. The store
+	// keeps no such field.
+	stepBack *stepBack
+}
+
+// Since holds the totals and the runs sent back at the moment when a
+// routine stepped back (docs/KNOWHOW.md section 6.5). The ready rule
+// counts only the runs after it, so a routine that stepped back rehearses
+// again before it is ready.
+type Since struct {
+	At       time.Time `json:"at"`
+	Totals   Counts    `json:"totals"`
+	SentBack SentBack  `json:"sentBack"`
+}
+
+// stepBack is a run that steps a live routine back, and why, in words.
+type stepBack struct {
+	run, why string
+}
+
+// Why words of a step back, for the note of the move.
+const (
+	whyCanary   = "a canary run disagreed with the agent"
+	whySentBack = "a run that it completed was sent back"
+)
+
+// noteStepBack sets the run that steps the routine back, when none came
+// before it in this write.
+func (ev *Evidence) noteStepBack(run, why string) {
+	if ev.stepBack == nil {
+		ev.stepBack = &stepBack{run: run, why: why}
+	}
+}
+
+// stepBackAt sets Since to the counts of now.
+func (ev *Evidence) stepBackAt(at time.Time) {
+	ev.Since = &Since{At: at.UTC(), Totals: ev.Totals, SentBack: ev.SentBack}
+}
+
+// current returns the counts and the agreed runs sent back since the last
+// step back.
+func (ev *Evidence) current() (Counts, int) {
+	t, sent := ev.Totals, ev.SentBack.Agreed
+	if ev.Since != nil {
+		b := ev.Since.Totals
+		t.Decided -= b.Decided
+		t.Acted -= b.Acted
+		t.Agreed -= b.Agreed
+		t.Disagreed -= b.Disagreed
+		t.Handed -= b.Handed
+		t.Applied -= b.Applied
+		t.Failed -= b.Failed
+		sent -= ev.Since.SentBack.Agreed
+	}
+	return t, sent
 }
 
 // mark is what the evidence counted of one run. Day is the day of the
@@ -161,17 +225,18 @@ func newEvidence(version int) *Evidence {
 }
 
 // Ready reports whether a rehearsing routine may go live by the rule of the
-// configuration c: over its current version it would have acted on at
-// least ReadyAfter runs, it agreed with the agent on at least
-// ReadyAgreement of them, and no run where it agreed came back.
+// configuration c: over its current version, since its last step back, it
+// would have acted on at least the runs of ReadyAfter for its risk, it
+// agreed with the agent on at least ReadyAgreement of them, and no run
+// where it agreed came back.
 func (ev *Evidence) Ready(c Config) bool {
 	if ev == nil {
 		return false
 	}
-	t := ev.Totals
-	return t.Acted >= c.ReadyAfter && t.Acted > 0 &&
+	t, sentBack := ev.current()
+	return t.Acted >= c.ReadyAfter.For(ev.Risk) && t.Acted > 0 &&
 		float64(t.Agreed) >= c.ReadyAgreement*float64(t.Acted) &&
-		ev.SentBack.Agreed == 0
+		sentBack == 0
 }
 
 // public returns a copy of the evidence without the marks.
@@ -260,6 +325,9 @@ func (ev *Evidence) decided(run string, at time.Time, d fw.RoutineDecidedData, r
 	}
 	m.Early, m.Mode, m.Applies = false, d.Mode, d.Applies
 	m.Day, m.At = at.UTC().Format(time.DateOnly), at.UTC()
+	if d.Risk != "" {
+		ev.Risk = d.Risk
+	}
 	for q, a := range d.Answers {
 		if m.P == nil {
 			m.P = map[string]float64{}
@@ -369,6 +437,9 @@ func (ev *Evidence) settle(m *mark, a Compared, r fw.Routine) {
 		}
 		ev.count(m.Day, 1, func(c *Counts) *int { return &c.Disagreed })
 		m.Verdict = verdictDisagreed
+		if m.Mode == fw.RoutineCanary {
+			ev.noteStepBack(m.Run, whyCanary)
+		}
 		d := Disagreement{Run: m.Run, At: m.At, Input: m.Input, Answers: append(m.Answers, a), Verification: m.Verified}
 		m.Answers = nil
 		ev.Disagreements = append([]Disagreement{d}, ev.Disagreements...)
@@ -500,6 +571,7 @@ func (ev *Evidence) sendBack(m *mark) {
 	case m.Applied == "ok":
 		ev.SentBack.Applied++
 		m.Counted = true
+		ev.noteStepBack(m.Run, whySentBack)
 	case m.Verdict == verdictAgreed:
 		ev.SentBack.Agreed++
 		m.Counted = true
