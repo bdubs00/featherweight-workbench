@@ -103,6 +103,9 @@ func (s *Service) serveCall(w http.ResponseWriter, r *http.Request) {
 		s.log.Info("duties: a call delivered the events of a duty", "duty", name, "runs", len(got.Runs), "duplicates", got.Duplicates)
 		return
 	}
+	if events, err := sources.Events(body, ""); err == nil {
+		itemsOf(ctx, events)
+	}
 	key, window := "body:"+string(body), CallBodyWindow
 	if hook.Key != "" {
 		k, err := bodyKey(body, hook.Key)

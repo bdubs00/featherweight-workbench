@@ -620,6 +620,7 @@ func (s *Service) carry(ctx context.Context, st *stored, date string, e entry) O
 			return Outcome{Failed: reason}
 		}
 		s.checkPassed(ctx, d.Name)
+		itemsOf(ctx, res.Items)
 		if !res.Wakes {
 			_, wrote, err := s.st.setEntry(ctx, d.Name, date, e.ID, []string{StateStarting}, func(x *entry) bool {
 				x.State, x.Found, x.Reason = StateQuiet, len(res.Matched), res.Why

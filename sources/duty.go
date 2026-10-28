@@ -181,6 +181,7 @@ func DeliverDocument(ctx context.Context, a *fw.Agent, src Source, body []byte) 
 		return Delivered{}, err
 	}
 	run.count.polled(s.now())
+	itemsOf(ctx, events)
 	items, refused, _ := s.renderAll(run, events, false)
 	if len(items) == 0 {
 		return Delivered{Events: len(events), Refused: refused}, nil

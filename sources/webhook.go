@@ -154,6 +154,7 @@ func (s *Sources) answerEvents(w http.ResponseWriter, r *http.Request, src *sour
 		refuse(http.StatusBadRequest, 1, err.Error(), "The events do not read: "+err.Error()+".")
 		return Delivered{Err: err}
 	}
+	itemsOf(r.Context(), events)
 	ans := answer{Source: name, Agent: src.cfg.Agent, Queue: src.queue, Batch: name, Runs: []runReq{}}
 	if len(events) == 0 {
 		ans.Note = "The body holds no event, so no run started."

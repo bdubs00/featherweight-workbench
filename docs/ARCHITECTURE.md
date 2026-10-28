@@ -1435,6 +1435,12 @@ The bound of the attempts lasts as long as the key. Each write of a claim starts
 
 `redrive` needs the bus `nats`. A claim from before `redrive`, or a record of the dead letter from before it, holds no generation and matches no record, so that event still needs a person and `enqueue`. A pending claim from before `redrive` goes to the next delivery after two minutes, as in section 13.3. When a source turns `redrive` off, its consumer stays on the NATS server, and an operator can remove it with `nats consumer rm`. The name of the consumer holds the queue of the source, so when that queue changes, as when the pool of its agent takes a queue of its own (section 14.1), the next start of the front reads the new dead letter through a new consumer, and the old consumer stays in the same way. The redrive does not read the state of the failed run. A person who continues a failed run of a source, with a follow-up or a new budget, can therefore meet a second run of the same event, as with `bus.intakeRetries` (the kernel architecture, section 9.3).
 
+### 13.10 Items for Know-how
+
+An event can name an item of an outside system, such as an issue of Gitea. A note of an agent can name such an item as its source, with the version that the note read (the kernel document `docs/KNOWHOW.md`, section 5.2). `sources.ItemOf(event)` finds the item: the system, the key of the item in the system, and its version. It knows the issues and the pull requests of Gitea. A webhook of Gitea carries them in the object `issue` or `pull_request`, and the API of Gitea lists an issue as the event itself. The key is `<owner>/<repo>/issue/<number>` when the event names its repository, else `issue/<number>`, because Gitea counts the issues and the pull requests of a repository together. The version is `updated_at`. An object of GitHub carries `node_id` and names no item. A note names the item as `item:<system>/<key>`, such as `item:gitea/lab/helpdesk/issue/42` (`Item.Ref`).
+
+The function variable `sources.OnItem func(ctx, source, key, version string)` gets the item of each event that names one: each event of a webhook and of a poll, and each event that a duty delivers through the templates of its entry (section 22.8). A duplicate event counts too, because it still shows the version of the item. The package `knowhow` sets it at its start, so a note whose item shows another version goes out of date. Nil calls nothing, and the function must not block.
+
 ## 14. Pools
 
 A pool keeps a set of ax Tasks that run one agent profile. The block `workbench.pools` of `fw.yaml` lists the pools. Each pool names the image, the fw configuration of the workers, their variables, their egress, and the number of Tasks. At every interval, the front makes the Tasks of each pool match the configuration. A person no longer renders and applies the manifests of the workers by hand. The package `pools` reads the configuration, renders the Workspace and the Task of each worker, and runs the reconciler. The fleet runs it after each read of the Task list (section 4.1).
@@ -3453,6 +3459,7 @@ The later parts of the feature plug into the package without an edit of the engi
 | `OnNotice(fn)` | Gets each notice: `failed`, `paused`, `cap`, and `needs-you`. Each notice names the duty, its agent, its owner, the people of `notify`, the run, and the reason. |
 | `OnChange(fn)` | Gets the name of a duty after each change that this replica wrote, for the live stream of bossmode. An empty name is a change of the switch. |
 | `Service.Lookup(ctx, name)` and `NameOf(run)` | Read the duty of a run for the front itself, such as its `whileAway` |
+| `duties.OnItem func(ctx, source, key, version string)` | Gets the item that an event of a duty names, as `sources.ItemOf` finds it (section 13.10): every item of the answer of a check, also an item that `where` leaves out, and the body of a call of the webhook, also a duplicate call. A duty whose templates make the runs goes through the sources and reaches `sources.OnItem` instead. The package `knowhow` sets it at its start. Nil calls nothing. |
 
 ### 22.11 Security
 

@@ -39,6 +39,7 @@ const (
 // new items, which the duty remembers once their run is on the queue.
 // Why says why the agent does not wake, and Text is {found}.
 type checkResult struct {
+	Items   []map[string]any // every item of the answer, for OnItem
 	Matched []map[string]any
 	Wake    []map[string]any
 	New     []string
@@ -104,7 +105,7 @@ func (s *Service) judge(ctx context.Context, d *Duty, body []byte) (checkResult,
 	if err != nil {
 		return checkResult{}, fmt.Errorf("the answer does not read: %s", strings.TrimPrefix(err.Error(), "the items path"))
 	}
-	var res checkResult
+	res := checkResult{Items: items}
 	for _, it := range items {
 		if c.matches(it) {
 			res.Matched = append(res.Matched, it)
