@@ -298,7 +298,16 @@ func MakePlan(in PlanInput) Plan {
 		c := byName[agent]
 		if len(c.Costs) > 0 {
 			p.Cost.Low, p.Cost.High, p.Cost.Runs = slices.Min(c.Costs), slices.Max(c.Costs), len(c.Costs)
-			p.Cost.Basis = fmt.Sprintf("Runs of %s cost %s to %s in the last 30 days.", c.Name, money(p.Cost.Low), money(p.Cost.High))
+			switch {
+			case p.Cost.High < halfCent:
+				// A cheap model costs less than a cent a run, and "$0.00
+				// to $0.00" reads as no cost.
+				p.Cost.Basis = fmt.Sprintf("Runs of %s cost under $0.01 each in the last 30 days.", c.Name)
+			case money(p.Cost.Low) == money(p.Cost.High):
+				p.Cost.Basis = fmt.Sprintf("Runs of %s cost %s each in the last 30 days.", c.Name, money(p.Cost.High))
+			default:
+				p.Cost.Basis = fmt.Sprintf("Runs of %s cost %s to %s in the last 30 days.", c.Name, money(p.Cost.Low), money(p.Cost.High))
+			}
 		} else {
 			p.Cost.Basis = fmt.Sprintf("No run of %s in the last 30 days reports a cost.", c.Name)
 		}
@@ -752,7 +761,17 @@ func trimSlug(s string, n int) string {
 	return s
 }
 
-func money(v float64) string { return fmt.Sprintf("$%.2f", v) }
+// halfCent is the smallest cost that reads as a cent.
+const halfCent = 0.005
+
+// money words an amount in US dollars to the cent: a cost above zero and
+// below a cent is "under $0.01", as on Results (value.Dollars).
+func money(v float64) string {
+	if v > 0 && v < halfCent {
+		return "under $0.01"
+	}
+	return fmt.Sprintf("$%.2f", v)
+}
 
 // PlanFor makes the plan of the words of the caller in ctx, at the time
 // now, in the time zone zone (the header X-Time-Zone, UTC when empty). The

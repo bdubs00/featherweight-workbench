@@ -156,3 +156,31 @@ func TestPlanAsksOfItsTools(t *testing.T) {
 		t.Errorf("an agent without a list of tools has %d asks, want %d", n, len(patterns))
 	}
 }
+
+// A model that costs less than a cent a run never reads as no cost in the
+// basis of a plan: "$0.00 to $0.00" became "under $0.01 each".
+func TestPlanCostBelowACent(t *testing.T) {
+	setCosts := func(costs ...float64) func(*PlanInput) {
+		return func(in *PlanInput) {
+			for i := range in.Agents {
+				if in.Agents[i].Agent == "ops" {
+					in.Agents[i].Costs = costs
+				}
+			}
+		}
+	}
+	words := "Check the web hosts for drift from their Ansible roles every night"
+	cases := []struct {
+		costs []float64
+		want  string
+	}{
+		{[]float64{0.0007, 0.0024}, "Runs of Ops cost under $0.01 each in the last 30 days."},
+		{[]float64{0.0007, 0.03}, "Runs of Ops cost under $0.01 to $0.03 in the last 30 days."},
+		{[]float64{0.021, 0.024}, "Runs of Ops cost $0.02 each in the last 30 days."},
+	}
+	for _, c := range cases {
+		if p := planOf(t, words, setCosts(c.costs...)); p.Cost.Basis != c.want {
+			t.Fatalf("costs %v: the basis = %q, want %q", c.costs, p.Cost.Basis, c.want)
+		}
+	}
+}
