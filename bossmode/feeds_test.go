@@ -15,6 +15,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/faces"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/knowhow"
 	"github.com/bdubs00/featherweight-workbench/pages"
 	"github.com/bdubs00/featherweight-workbench/routines"
 )
@@ -322,6 +323,55 @@ func TestFeedRoutines(t *testing.T) {
 		t.Fatalf("routine = %s", got[0].data)
 	}
 	if got := kinds(t, carol, "routines-carol"); len(got) != 0 {
+		t.Errorf("carol, who views no agent, got %+v", got)
+	}
+}
+
+// A change of the Know-how of an agent reaches a caller who can view the
+// agent as knowhow, with the agent, at most once per agent in
+// KnowhowEvery, and the settings tell the page that the process keeps
+// Know-how.
+func TestFeedKnowhow(t *testing.T) {
+	fr := storeFront(t)
+	cl, err := knowhow.Start(context.Background(), fr.a)
+	if err != nil || cl == nil {
+		t.Fatalf("start Know-how: %v, %v", cl, err)
+	}
+	t.Cleanup(func() { _ = cl.Close() })
+	var set Settings
+	if resp, body := get(t, fr.url+"/v1/bossmode", "ada"); resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &set) != nil || !set.Knowhow {
+		t.Fatalf("settings with Know-how: %d %s", resp.StatusCode, body)
+	}
+	ada := openStream(t, fr, "ada", "")
+	carol := openStream(t, fr, "carol", "")
+	clock := time.Now()
+	var fire []func()
+	var mu sync.Mutex
+	f := fr.h.knowhow
+	f.mu.Lock()
+	f.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	f.after = func(_ time.Duration, fn func()) { mu.Lock(); fire = append(fire, fn); mu.Unlock() }
+	f.mu.Unlock()
+	s := knowhow.Of(fr.a)
+	ctx := context.Background()
+	for _, text := range []string{"one", "two", "three"} {
+		if _, err := s.Write(ctx, knowhow.WriteRequest{Agent: "manager", Scope: knowhow.Scope{Kind: knowhow.ScopeAgent}, Name: "a.md", Text: text, By: knowhow.ByAgent}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	if len(fire) != 1 {
+		t.Fatalf("%d timers wait, want 1", len(fire))
+	}
+	clock = clock.Add(KnowhowEvery)
+	end := fire[0]
+	mu.Unlock()
+	end()
+	got := kinds(t, ada, "knowhow")
+	if len(got) != 2 || got[0].kind != KindKnowhow || got[0].data != `{"kind":"knowhow","agent":"manager"}` {
+		t.Fatalf("ada got %+v", got)
+	}
+	if got := kinds(t, carol, "knowhow-carol"); len(got) != 0 {
 		t.Errorf("carol, who views no agent, got %+v", got)
 	}
 }

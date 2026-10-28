@@ -46,6 +46,7 @@ import (
 	_ "github.com/bdubs00/featherweight-workbench/duties/looks"
 	_ "github.com/bdubs00/featherweight-workbench/faces"
 	_ "github.com/bdubs00/featherweight-workbench/inbox"
+	_ "github.com/bdubs00/featherweight-workbench/knowhow"
 	_ "github.com/bdubs00/featherweight-workbench/pages"
 	_ "github.com/bdubs00/featherweight-workbench/playbooks"
 	_ "github.com/bdubs00/featherweight-workbench/routines"
