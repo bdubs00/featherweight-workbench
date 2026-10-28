@@ -3,11 +3,12 @@ package knowhow
 // This file reads what a finished run of the archive tells beside its
 // usage: whether a system verified it (docs/KNOWHOW.md section 1), whether
 // a routine did the work, whether its text came from the open world, and
-// what started it. Know-how learns only from results that a system
-// records: a receipt of accepted or satisfied, an outcome grader that
-// passed, and a thumbs up of a person. The service keeps the facts of each
-// run in memory at the revision of its summary in the archive, so a pass
-// reads the events of a run again only after the run changed.
+// what started it. Know-how learns only from results that a system records:
+// a receipt of accepted or satisfied, an outcome grader that passed, a
+// definition of done that passed in the kernel, and a thumbs up of a
+// person. The service keeps the facts of each run in memory at the revision
+// of its summary in the archive, so a pass reads the events of a run again
+// only after the run changed.
 
 import (
 	"context"
@@ -24,16 +25,18 @@ import (
 // maxFacts bounds the facts that the service keeps in memory.
 const maxFacts = 50000
 
-// runFacts is what one run tells. Verification is the newest receipt.
-// Grade is the verdict of its outcome grader. Untrusted is true when its
-// text came from a block found, event, or source, or from a message of
-// another principal. Trigger is a hash of what started the run: its input
-// and those blocks.
+// runFacts is what one run tells. Verification is the newest receipt. Grade
+// is the verdict of its outcome grader. Checked is true when the newest end
+// of the run says that its definition of done passed (fw.DoneChecked).
+// Untrusted is true when its text came from a block found, event, or
+// source, or from a message of another principal. Trigger is a hash of what
+// started the run: its input and those blocks.
 type runFacts struct {
 	updated      time.Time
 	Verification string
 	Grade        string
 	Up, Down     bool
+	Checked      bool
 	ByRoutine    bool
 	Untrusted    bool
 	Trigger      string
@@ -41,7 +44,7 @@ type runFacts struct {
 
 // verified reports whether a system recorded that the run did its work.
 func (f runFacts) verified() bool {
-	return f.Verification == "accepted" || f.Verification == "satisfied" || f.Grade == fw.GradeSatisfied || f.Up
+	return f.Verification == "accepted" || f.Verification == "satisfied" || f.Grade == fw.GradeSatisfied || f.Checked || f.Up
 }
 
 // rejected reports whether a receipt sent the run back.
@@ -79,6 +82,7 @@ func factsFrom(e fleet.ArchiveEntry, events []fw.Event) runFacts {
 		f.Grade = r.Outcome.Verdict
 	}
 	f.Up, f.Down = r.Reactions[fw.ReactionUp] > 0, r.Reactions[fw.ReactionDown] > 0
+	f.Checked = r.Done != nil && r.Done.State == fw.DoneChecked
 	trigger := sha256.New()
 	trigger.Write([]byte(r.Input))
 	for _, ev := range events {
@@ -86,6 +90,12 @@ func factsFrom(e fleet.ArchiveEntry, events []fw.Event) runFacts {
 		case fw.EvRunAnnotated:
 			if v := fleet.Verification(ev); v != "" {
 				f.Verification = v
+			}
+		case fw.EvRunFinished:
+			// A follow-up ends the run again, so the newest end tells.
+			var d fw.RunFinishedData
+			if ev.Decode(&d) == nil {
+				f.Checked = d.Done == fw.DoneChecked
 			}
 		case fw.EvRoutineApplied:
 			f.ByRoutine = f.ByRoutine || fleet.AppliedOK(ev)

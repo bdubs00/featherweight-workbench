@@ -572,6 +572,9 @@ func outcomeOf(f runFacts) (string, string) {
 	if f.Grade != "" && f.Grade != fw.GradeSkipped && f.Grade != fw.GradeUnparsed {
 		said = append(said, "a verdict of the grader of "+f.Grade)
 	}
+	if f.Checked {
+		said = append(said, "a definition of done that passed")
+	}
 	if f.Up {
 		said = append(said, "a thumbs up")
 	}

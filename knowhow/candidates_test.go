@@ -162,6 +162,26 @@ func TestTaint(t *testing.T) {
 	}
 }
 
+// A definition of done that passed in the kernel verifies a run, as a
+// receipt does. The newest end tells, so a follow-up that ended without
+// the checks takes it back.
+func TestDoneChecked(t *testing.T) {
+	rec := record("r1", day0).queued("triage", "x", "duty:nightly", nil).started("").
+		add(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "fixed", Done: fw.DoneChecked, Stop: fw.RunStopChecked})
+	f := factsFrom(entryOf(rec.out), rec.out)
+	if !f.Checked || !f.verified() {
+		t.Fatalf("a run whose checks passed = %+v", f)
+	}
+	if polarity, said := outcomeOf(f); polarity != "well" || !strings.Contains(said, "definition of done") {
+		t.Fatalf("the outcome of a checked run = %q, %q", polarity, said)
+	}
+	rec.add(fw.EvMessageReceived, fw.MessageReceivedData{Role: fw.RoleUser, Content: []fw.Block{fw.Text("again")}, By: "duty:nightly"}).
+		add(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeFailed, Error: "not done", Done: fw.DoneFailed, Stop: fw.RunStopNotDone})
+	if f := factsFrom(entryOf(rec.out), rec.out); f.Checked || f.verified() {
+		t.Fatalf("a run whose newest checks failed = %+v", f)
+	}
+}
+
 // entryOf makes an entry of the archive from events.
 func entryOf(events []fw.Event) fleet.ArchiveEntry {
 	run := &fw.Run{}
