@@ -15,6 +15,7 @@ package work
 import (
 	"cmp"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -354,7 +355,7 @@ func (b *board) bridge(it bridges.Item) {
 			if w, ok := asks[m.Handle]; ok {
 				p.since, p.approval = w.At, w.Approval
 				if w.Question > 0 {
-					p.reason = m.Handle + " asks: " + oneLine(w.Text, 200)
+					p.reason = m.Handle + " asks: " + oneLine(plainText(w.Text), 200)
 				} else {
 					p.reason = m.Handle + " waits for a decision."
 				}
@@ -731,7 +732,7 @@ func (b *board) runPart(r Run) part {
 		case r.Done != nil && r.Done.State == fw.DoneFailed:
 			p.reason = "Not done: " + notDone(r.Done)
 		case strings.HasPrefix(r.Error, "budget exceeded"):
-			p.reason = "Stopped at a limit: " + oneLine(strings.TrimPrefix(strings.TrimPrefix(r.Error, "budget exceeded"), ": "), 160) + "."
+			p.reason = "Stopped at " + limitWords(r.Error) + "."
 		case strings.TrimSpace(r.Error) != "":
 			p.reason = "Failed: " + oneLine(r.Error, 200)
 		default:
@@ -1037,6 +1038,53 @@ func titleOf(r *fw.Run) string {
 }
 
 // oneLine cuts a text to one line of at most n bytes.
+// limitWords names the limit of a run that stopped at its budget, from
+// its error "budget exceeded: <limit>", in words for a person, such as
+// "its limit of turns" for maxTurns. An unknown limit is "a limit of its
+// budget".
+func limitWords(err string) string {
+	name, _, _ := strings.Cut(strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(err, "budget exceeded"), ":")), " ")
+	switch strings.TrimRight(name, ".,;") {
+	case "maxTurns":
+		return "its limit of turns"
+	case "maxToolCalls":
+		return "its limit of tool calls"
+	case "maxCallsPerTurn":
+		return "its limit of tool calls in one turn"
+	case "maxTokens":
+		return "its limit of tokens"
+	case "maxCostUSD":
+		return "its limit of cost"
+	case "deadline":
+		return "its time limit"
+	}
+	return "a limit of its budget"
+}
+
+// markdownMarks are the marks of Markdown that a line of a card drops:
+// strong and code spans. A single underscore stays, as in node_exporter.
+var markdownMarks = strings.NewReplacer("**", "", "__", "", "`", "")
+
+// plainText returns the text of a message without the marks of Markdown,
+// so a card shows the words of a question, not its markup: no strong or
+// code marks, no heading, quote, or list mark at the start of a line, and
+// the text of a link without its address.
+func plainText(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		l = strings.TrimSpace(l)
+		l = strings.TrimLeft(l, "#> ")
+		for _, mark := range []string{"- ", "* ", "+ "} {
+			l = strings.TrimPrefix(l, mark)
+		}
+		lines[i] = reMarkdownLink.ReplaceAllString(l, "$1")
+	}
+	return markdownMarks.Replace(strings.Join(lines, "\n"))
+}
+
+// reMarkdownLink matches a link of Markdown, [text](address).
+var reMarkdownLink = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+
 func oneLine(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) <= n {

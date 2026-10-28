@@ -335,7 +335,7 @@ func TestReviewAndVerdicts(t *testing.T) {
 	if c := cardOf(t, ans, "run:NOTDONE"); c.Stage != StageStopped || c.Reason != "Not done: the check tests failed." {
 		t.Fatalf("a run that is not done = %+v", c)
 	}
-	if c := cardOf(t, ans, "run:LIMIT"); c.Stage != StageStopped || c.Reason != "Stopped at a limit: maxTurns." {
+	if c := cardOf(t, ans, "run:LIMIT"); c.Stage != StageStopped || c.Reason != "Stopped at its limit of turns." {
 		t.Fatalf("a run at a limit = %+v", c)
 	}
 	if !fleet.InReview(asked) || fleet.InReview(upped) || fleet.InReview(plain) {
@@ -369,5 +369,26 @@ func TestDutyStartThatWorks(t *testing.T) {
 	}
 	if c := cardOf(t, ans, dutyKey("report", other.Add(-time.Hour))); c.Stage != StageNeedsYou {
 		t.Fatalf("the start whose run asks = %+v", c)
+	}
+}
+
+// A card says why a run stopped at its budget in words, never with the
+// name of a key, and shows a question without the marks of Markdown.
+func TestReasonWords(t *testing.T) {
+	for err, want := range map[string]string{
+		"budget exceeded: maxTurns":     "its limit of turns",
+		"budget exceeded: maxToolCalls": "its limit of tool calls",
+		"budget exceeded: maxCostUSD":   "its limit of cost",
+		"budget exceeded: deadline":     "its time limit",
+		"budget exceeded":               "a limit of its budget",
+	} {
+		if got := limitWords(err); got != want {
+			t.Errorf("limitWords(%q) = %q, want %q", err, got, want)
+		}
+	}
+	q := "**Answer to @operator, on the `ca-certificates` package**\n- **What it is:** see [the docs](https://example.com/x) for node_exporter"
+	want := "Answer to @operator, on the ca-certificates package What it is: see the docs for node_exporter"
+	if got := oneLine(plainText(q), 200); got != want {
+		t.Errorf("plainText = %q, want %q", got, want)
 	}
 }
