@@ -138,8 +138,12 @@ func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, er
 		if err != nil {
 			return Answer{}, err
 		}
+		in.Next = map[string]time.Time{}
 		for _, v := range list.Duties {
 			in.Duties = append(in.Duties, v.Duty)
+			if !list.Paused && !v.Paused && len(v.Next) > 0 {
+				in.Next[v.Name] = v.Next[0]
+			}
 			starts, err := svc.Starts(ctx, v.Name, now.Add(-in.Window))
 			if err != nil {
 				return Answer{}, err
@@ -425,7 +429,11 @@ func Text(ans Answer, now time.Time) string {
 			if c.Reason != "" {
 				b.WriteString(": " + c.Reason)
 			}
-			fmt.Fprintf(&b, " For %s.", Span(now.Sub(c.Since)))
+			if c.Since.After(now) {
+				fmt.Fprintf(&b, " Starts in %s.", Span(c.Since.Sub(now)))
+			} else {
+				fmt.Fprintf(&b, " For %s.", Span(now.Sub(c.Since)))
+			}
 			if c.Next != "" {
 				b.WriteString(" Next: " + c.Next + ".")
 			}

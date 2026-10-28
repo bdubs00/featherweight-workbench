@@ -211,9 +211,12 @@ type Input struct {
 	Waiting []bridges.Waiting
 	Duties  []duties.Duty
 	Starts  []Start
-	Queued  map[string]int
-	Now     time.Time
-	Window  time.Duration
+	// Next holds the start that comes next of each duty that runs on a
+	// schedule and is not paused, by name.
+	Next   map[string]time.Time
+	Queued map[string]int
+	Now    time.Time
+	Window time.Duration
 }
 
 // DefaultDays is the window of the board in days, as the recent results of
@@ -243,6 +246,11 @@ func Assemble(in Input) Answer {
 	}
 	for _, s := range in.Starts {
 		b.start(s)
+	}
+	for _, d := range in.Duties {
+		if at, ok := in.Next[d.Name]; ok {
+			b.comingUp(d, at)
+		}
 	}
 	runs := slices.Clone(in.Runs)
 	slices.SortStableFunc(runs, func(x, y Run) int { return x.CreatedAt.Compare(y.CreatedAt) })
@@ -451,6 +459,22 @@ func (b *board) start(s Start) {
 		}
 	}
 	d.parts = append(d.parts, p)
+}
+
+// comingUp makes the card of the start that comes next of a duty: it
+// waits for its time, with since at that time.
+func (b *board) comingUp(dt duties.Duty, at time.Time) {
+	d, fresh := b.card(dutyKey(dt.Name, at))
+	if !fresh {
+		return
+	}
+	d.Kind, d.settled, d.Title = KindDuty, true, cmp.Or(dt.Title, dt.Name)
+	d.From = From{Kind: "duty", Name: dt.Name, Via: duties.StartSchedule}
+	d.Opened = at
+	d.Links.Duty = dt.Name
+	d.agents[dt.Agent] = true
+	d.mine = b.ownsDuty("duty:"+dt.Name) || b.notifies(dt)
+	d.parts = append(d.parts, part{stage: StageWaiting, reason: "Starts on its schedule.", since: at})
 }
 
 // run puts a run on its card: the card of its bridge, of its start, of
@@ -793,7 +817,8 @@ func (b *board) answer() Answer {
 		if d.Next == NextYou {
 			l.Yours++
 		}
-		if l.Oldest.IsZero() || d.Since.Before(l.Oldest) {
+		// A start that comes next waits for no one yet.
+		if !d.Since.After(b.in.Now) && (l.Oldest.IsZero() || d.Since.Before(l.Oldest)) {
 			l.Oldest = d.Since
 		}
 	}

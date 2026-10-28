@@ -404,3 +404,34 @@ func TestPlanRoute(t *testing.T) {
 		}
 	}
 }
+
+// A duty on a schedule shows its next start in the lane Coming up of its
+// owner, with since at that start. A paused duty shows none.
+func TestNextStartRoute(t *testing.T) {
+	t.Setenv(fleet.EnvIntake, "fw.jobs")
+	a, _ := newFront(t)
+	svc := duties.Of(a)
+	d := duties.Duty{Name: "notes", Agent: "writer", When: duties.When{Say: "every day at 9am"},
+		Do: duties.Do{Ask: &duties.Ask{Message: "Write the notes."}}, Limits: duties.Limits{Budget: &duties.Budget{MaxCostUSD: 0.5}}}
+	if _, err := svc.Put(as("alice"), "notes", duties.DutyBody{Duty: d}, duties.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := svc.Get(as("alice"), "notes")
+	if err != nil || len(v.Next) == 0 {
+		t.Fatalf("the duty = %+v, %v", v, err)
+	}
+	c := cardOf(t, mustFor(t, a, "alice"), dutyKey("notes", v.Next[0]))
+	if c.Stage != StageWaiting || !c.Since.Equal(v.Next[0]) || c.Kind != KindDuty || c.Links.Duty != "notes" {
+		t.Fatalf("the next start = %+v", c)
+	}
+	if _, err := svc.SetPaused(as("alice"), "notes", true); err != nil {
+		t.Fatal(err)
+	}
+	CacheFor = 0
+	t.Cleanup(func() { CacheFor = 10 * time.Second })
+	for _, c := range mustFor(t, a, "alice").Cards {
+		if c.Links.Duty == "notes" {
+			t.Fatalf("a paused duty shows %+v", c)
+		}
+	}
+}

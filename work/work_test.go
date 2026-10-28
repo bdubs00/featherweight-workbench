@@ -206,11 +206,22 @@ func TestDutyCards(t *testing.T) {
 			{Duty: other, Entry: duties.RunEntry{At: ago(time.Hour), Slot: ago(time.Hour), State: duties.StateFailed, Reason: "The queue did not take the run", Start: duties.StartEvent}},
 		},
 	}
+	next := t0.Add(3 * time.Hour)
+	in.Next = map[string]time.Time{"report": next, "watch": next}
 	ans := Assemble(in)
-	if len(ans.Cards) != 1 {
+	if len(ans.Cards) != 2 {
 		t.Fatalf("the cards of alice = %+v", ans.Cards)
 	}
-	c := ans.Cards[0]
+	// The start that comes next waits in the first lane, with since at
+	// its time, after the cards that wait now. It counts in no wait.
+	up := ans.Cards[0]
+	if up.ID != dutyKey("report", next) || up.Stage != StageWaiting || !up.Since.Equal(next) || up.From.Via != duties.StartSchedule || up.Title != "report" {
+		t.Fatalf("the next start = %+v", up)
+	}
+	if ans.Lanes[0].Count != 1 || !ans.Lanes[0].Oldest.IsZero() || strings.Contains(ans.Sentence, "coming up, the oldest") {
+		t.Fatalf("the lane of the next starts = %+v, %q", ans.Lanes[0], ans.Sentence)
+	}
+	c := ans.Cards[1]
 	if c.ID != dutyKey("report", slot) || c.Kind != KindDuty || c.Stage != StageNeedsYou || c.Next != NextManager || c.Links.Approval != "ap-9" || c.Links.Duty != "report" {
 		t.Fatalf("the start = %+v", c)
 	}
@@ -219,6 +230,7 @@ func TestDutyCards(t *testing.T) {
 	}
 	in.All = true
 	all := Assemble(in)
+	cardOf(t, all, dutyKey("watch", next))
 	f := cardOf(t, all, dutyKey("watch", ago(time.Hour)))
 	if f.Stage != StageStopped || f.Reason != "The queue did not take the run" || f.Next != NextPerson || f.From.Via != duties.StartEvent {
 		t.Fatalf("the failed start of bob = %+v", f)
