@@ -443,6 +443,12 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 		}
 		return seqLines(rec, lines, now), nil, nil, nil
 	}
+	if l, over := costCapLine(rec, runs); over {
+		if l != nil {
+			lines = append(lines, *l)
+		}
+		return seqLines(rec, lines, now), nil, nil, nil
+	}
 	targets := recipients(rec, msg.To)
 	minute := now.Truncate(time.Minute)
 	if !f.Minute.Equal(minute) {

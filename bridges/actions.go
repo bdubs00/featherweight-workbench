@@ -668,7 +668,7 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 				changed = true
 				// A raised cap delivers again, and a cap that still holds
 				// says so again.
-				rec.Fan.Capped, rec.Fan.TurnsCapped, rec.Fan.PairCapped, rec.Fan.MinuteCapped = false, false, nil, time.Time{}
+				rec.Fan.Capped, rec.Fan.TurnsCapped, rec.Fan.CostCapped, rec.Fan.PairCapped, rec.Fan.MinuteCapped = false, false, false, nil, time.Time{}
 			}
 		}
 		var l Message

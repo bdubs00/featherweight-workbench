@@ -54,6 +54,8 @@ const (
 	MaxFanoutLimit = 1000
 	// MaxTurnsLimit bounds maxTurns.
 	MaxTurnsLimit = 1000000
+	// MaxCostLimit bounds maxCostUSD, in dollars.
+	MaxCostLimit = 100000
 )
 
 // Config configures the bridges. Placement is the default placement of a
@@ -163,6 +165,9 @@ func checkCaps(c Caps) string {
 	}
 	if c.MaxTurns < 1 || c.MaxTurns > MaxTurnsLimit {
 		problems = append(problems, fmt.Sprintf("maxTurns (%s) must be 1 to %d, not %d", EnvMaxTurns, MaxTurnsLimit, c.MaxTurns))
+	}
+	if c.MaxCostUSD < 0 || c.MaxCostUSD > MaxCostLimit || c.MaxCostUSD != c.MaxCostUSD {
+		problems = append(problems, fmt.Sprintf("maxCostUSD must be 0 for no cap, or up to %d dollars, not %g", MaxCostLimit, c.MaxCostUSD))
 	}
 	return strings.Join(problems, "; ")
 }

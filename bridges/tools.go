@@ -94,7 +94,8 @@ const (
 			"maxMessages":{"type":"integer","minimum":1,"description":"The most messages that fan out."},
 			"maxFanoutPerMinute":{"type":"integer","minimum":1,"description":"The most deliveries in one minute."},
 			"maxPairMessages":{"type":"integer","minimum":1,"description":"The most messages between two agents without a message of a person."},
-			"maxTurns":{"type":"integer","minimum":1,"description":"The most turns of all runs of the bridge together. Past it nothing fans out."}
+			"maxTurns":{"type":"integer","minimum":1,"description":"The most turns of all runs of the bridge together. Past it nothing fans out."},
+			"maxCostUSD":{"type":"number","minimum":0,"description":"The most dollars that all runs of the bridge spend together. At it nothing fans out, and the open runs stop at a limit. 0 or missing sets no cap of cost."}
 		},"description":"The caps of the fan-out. A missing key takes the default."}
 	},"required":["title","members"]}`
 
@@ -118,7 +119,7 @@ const (
 		"title":{"type":"string","description":"A new title."},
 		"state":{"type":"string","enum":["open","closed"],"description":"closed closes the bridge, and open opens it again. A close cancels nothing."},
 		"delegation":{"type":"object","properties":{"approve":{"type":"boolean"},"budget":{"type":"boolean"},"members":{"type":"boolean"},"report":{"type":"boolean"}},"description":"What the manager can do in the bridge. A missing key stays."},
-		"caps":{"type":"object","properties":{"maxMessages":{"type":"integer","minimum":1},"maxFanoutPerMinute":{"type":"integer","minimum":1},"maxPairMessages":{"type":"integer","minimum":1},"maxTurns":{"type":"integer","minimum":1}},"description":"The caps of the fan-out. A missing key stays, and a raised cap delivers again."}
+		"caps":{"type":"object","properties":{"maxMessages":{"type":"integer","minimum":1},"maxFanoutPerMinute":{"type":"integer","minimum":1},"maxPairMessages":{"type":"integer","minimum":1},"maxTurns":{"type":"integer","minimum":1},"maxCostUSD":{"type":"number","minimum":0,"description":"The most dollars of all runs together; 0 removes the cap of cost."}},"description":"The caps of the fan-out. A missing key stays, and a raised cap delivers again."}
 	},"required":["bridge"]}`
 
 	memberPatchSchema = `{"type":"object","properties":{` + personBridgeArg + `,

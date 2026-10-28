@@ -178,6 +178,11 @@ func (s *Store) poll(ctx context.Context) {
 			delete(s.wholeAt, id)
 		}
 	}
+	for id := range s.capStops {
+		if !live[id] {
+			delete(s.capStops, id)
+		}
+	}
 	s.mu.Unlock()
 }
 
@@ -285,6 +290,9 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 				fans = append(fans, fanOut{seq: answer.Seq, plan: plan, seats: seats, inputs: inputs})
 			}
 		}
+		if l, _ := costCapLine(rec, runs); l != nil {
+			add(*l)
+		}
 		slept, marked := sleepLines(rec, runs, states, now, s.sleepHold)
 		for _, l := range slept {
 			add(l)
@@ -315,6 +323,9 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 		}
 	}
 	s.land(ctx, fresh.ID, lines...)
+	if fresh.Fan.CostCapped {
+		s.stopAtCap(fresh, runs)
+	}
 	for _, f := range fans {
 		for _, d := range f.plan {
 			s.submit(s.deliveryJob(d))
