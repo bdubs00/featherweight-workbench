@@ -77,6 +77,8 @@ func newPersonFront(t *testing.T) *personFront {
 	r1 := &fw.Run{ID: "r1", Agent: "team", State: fw.StateInputRequired, Principal: "alice", Seq: 5,
 		Pending: &fw.Approval{ID: "a1", Tool: "bash", RequestedAt: now}, CreatedAt: now, UpdatedAt: now}
 	r4 := &fw.Run{ID: "r4", Agent: "bare", State: fw.StateCompleted, Principal: "dave", Seq: 3, CreatedAt: now, UpdatedAt: now}
+	// r5 is a result that alice asked to check: its end is the event 4.
+	r5 := &fw.Run{ID: "r5", Agent: "team", State: fw.StateCompleted, Principal: "alice", Seq: 6, Output: "The draft.", Metadata: map[string]string{MetaReview: "1"}, CreatedAt: now, UpdatedAt: now}
 	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(headerTargetActor) != "team/rev" {
 			http.Error(w, "unexpected actor", http.StatusBadRequest)
@@ -100,10 +102,17 @@ func newPersonFront(t *testing.T) *personFront {
 		if strings.HasPrefix(r.URL.Path, "/v1/runs/r4") {
 			run = *r4
 		}
+		if strings.HasPrefix(r.URL.Path, "/v1/runs/r5") {
+			run = *r5
+		}
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && (r.URL.Path == "/v1/runs/r1" || r.URL.Path == "/v1/runs/r4"):
 			_ = json.NewEncoder(w).Encode(run)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/r5/events":
+			_ = json.NewEncoder(w).Encode(map[string]any{"run": run, "events": []fw.Event{
+				{Type: fw.EvRunStarted, Seq: 2, Subject: "r5"}, {Type: fw.EvRunFinished, Seq: 4, Subject: "r5"}, {Type: fw.EvRunAnnotated, Seq: 5, Subject: "r5"},
+			}})
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/events"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"run": run, "events": []fw.Event{}})
 		case r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/budget"):
@@ -129,7 +138,7 @@ func newPersonFront(t *testing.T) *personFront {
 		c.Access.Admins = append(c.Access.Admins, "kind:token", "kind:workload")
 		c.AX.Router = strings.TrimPrefix(router.URL, "http://")
 	}, fw.WithSurfaces(native.New()), fw.WithAuthn(people))
-	inject(pf.m.f, "team/rev", "ax:team/rev", "team", MemberLive, now, r1, r4)
+	inject(pf.m.f, "team/rev", "ax:team/rev", "team", MemberLive, now, r1, r4, r5)
 	h, err := pf.m.a.Handler()
 	if err != nil {
 		t.Fatal(err)
@@ -630,5 +639,49 @@ func TestReadJSONWordsARefusedToken(t *testing.T) {
 	token := fw.WithCredential(fw.WithPrincipal(context.Background(), people["fleet-secret"]), "Bearer fleet-secret")
 	if _, err = MemberRun(token, pf.m.f, "team/rev", "r1"); !errors.As(err, &me) || me.Token || me.Status != http.StatusUnauthorized {
 		t.Fatalf("a refused credential of the token = %#v", err)
+	}
+}
+
+// A thumb on a result that its person asked to check goes on the end of
+// the run, so the kernel of the member records a receipt. Needs work, a
+// thumb down with a note, also sends the note to the agent as a follow-up
+// after the member took the thumb. The static token takes the same path.
+// A thumb on another run goes on as the person sent it.
+func TestCheckOfAResult(t *testing.T) {
+	pf := newPersonFront(t)
+	since := len(pf.reached())
+	if code, b := pf.do(t, http.MethodPost, "/v1/runs/r5/reactions", `{"seq":0,"reaction":"down","note":"Name the release in the title."}`, "alice-token"); code != http.StatusOK {
+		t.Fatalf("Needs work = %d %s", code, b)
+	}
+	calls := pf.reached()[since:]
+	var react, msg *memberCall
+	for i := range calls {
+		switch {
+		case calls[i].method == http.MethodPost && calls[i].path == "/v1/runs/r5/reactions":
+			react = &calls[i]
+		case calls[i].method == http.MethodPost && calls[i].path == "/v1/runs/r5/messages":
+			msg = &calls[i]
+		}
+	}
+	if react == nil || react.body["seq"] != float64(4) || react.body["reaction"] != "down" || react.person != "alice" || react.auth != "Bearer fleet-secret" {
+		t.Fatalf("the thumb = %+v of %+v", react, calls)
+	}
+	if msg == nil || msg.body["content"] != "Name the release in the title." || msg.person != "alice" {
+		t.Fatalf("the follow-up = %+v of %+v", msg, calls)
+	}
+	since = len(pf.reached())
+	if code, b := pf.do(t, http.MethodPost, "/v1/runs/r5/reactions", `{"reaction":"up"}`, "fleet-secret"); code != http.StatusOK {
+		t.Fatalf("Looks right = %d %s", code, b)
+	}
+	for _, c := range pf.reached()[since:] {
+		if c.path == "/v1/runs/r5/messages" {
+			t.Fatalf("Looks right sent a follow-up: %+v", c)
+		}
+		if c.path == "/v1/runs/r5/reactions" && c.body["seq"] != float64(4) {
+			t.Fatalf("Looks right = %+v", c)
+		}
+	}
+	if code, b := pf.do(t, http.MethodPost, "/v1/runs/r1/reactions", `{"seq":0,"reaction":"up"}`, "alice-token"); code != http.StatusOK || pf.last(t).body["seq"] != float64(0) {
+		t.Fatalf("a thumb on another run = %d %s %+v", code, b, pf.last(t))
 	}
 }

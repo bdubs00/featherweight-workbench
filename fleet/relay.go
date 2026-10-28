@@ -166,10 +166,10 @@ func (rl *Relay) Take(w http.ResponseWriter, r *http.Request) bool {
 		case !ok:
 			return true
 		case run == nil:
-			// A run of this process: the kernel answers, and a thumb on
-			// the run as a whole goes on its end first (endseq.go).
+			// A run of this process: the kernel answers, unless the
+			// reaction checks a result (endseq.go).
 			if r.Pattern == routeReactions && r.Method == http.MethodPost {
-				return !rl.localEnd(w, r, id)
+				return rl.localCheck(w, r, id)
 			}
 			return false
 		}
@@ -177,13 +177,12 @@ func (rl *Relay) Take(w http.ResponseWriter, r *http.Request) bool {
 			rl.forPerson(w, r, run, p)
 			return true
 		}
-		if r.Pattern == routeReactions && r.Method == http.MethodPost {
+		if r.Pattern == routeReactions && r.Method == http.MethodPost && toCheck(run) {
 			body, ok := readBody(w, r)
 			if !ok {
 				return true
 			}
-			body = AtEnd(body, func() uint64 { return FinishedSeq(r.Context(), rl.a, run.Member, run.ID) })
-			rl.send(r.Context(), w, r, run.Member, body, nil)
+			rl.remoteCheck(r.Context(), w, r, run, body)
 			return true
 		}
 		if !rl.answerAtRest(w, r, run, nil) {
@@ -247,16 +246,15 @@ func (rl *Relay) forPerson(w http.ResponseWriter, r *http.Request, run *fw.Run, 
 	if body, _, ok = personBody(w, r, body, p); !ok {
 		return
 	}
-	if r.Pattern == routeReactions {
-		// A thumb on the run as a whole goes on its end, so the kernel
-		// records a receipt too (endseq.go).
-		body = AtEnd(body, func() uint64 {
-			pctx, err := ForPerson(ctx, rl.a.Config(), p)
-			if err != nil {
-				return 0
-			}
-			return FinishedSeq(pctx, rl.a, run.Member, run.ID)
-		})
+	if r.Pattern == routeReactions && toCheck(run) {
+		// The reaction checks a result (endseq.go).
+		pctx, err := ForPerson(ctx, rl.a.Config(), p)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		rl.remoteCheck(pctx, w, r, run, body)
+		return
 	}
 	rl.sendFor(w, r, run.Member, body, p, can)
 }
