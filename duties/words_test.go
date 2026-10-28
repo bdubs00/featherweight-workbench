@@ -37,9 +37,16 @@ func TestTitleNamesTheEventAndCountsTheItems(t *testing.T) {
 		if got := fw.TitleFrom(fill(d.Do.Message(), titleValues(d, e, nil))); got != c.title {
 			t.Errorf("title of %q = %q, want %q", c.message, got, c.title)
 		}
+		// The message names the block, and the block holds the JSON.
 		input := fill(d.Do.Message(), placeholders(d, e, nil))
-		if c.event != "" && !strings.Contains(input, c.event) || c.found != "" && !strings.Contains(input, c.found) {
-			t.Errorf("the message lost the JSON: %q", input)
+		req := fw.RunRequest{Input: input, Context: blocks(d.Do.Message(), e)}
+		if c.event != "" && (strings.Contains(input, c.event) || blockOf(req, ContextEvent) != c.event || !strings.Contains(input, BlockRef(ContextEvent))) ||
+			c.found != "" && (strings.Contains(input, c.found) || blockOf(req, ContextFound) != c.found || !strings.Contains(input, BlockRef(ContextFound))) {
+			t.Errorf("the message %q, the blocks %+v", input, req.Context)
+		}
+		// Inline puts the JSON back, for a post in a bridge.
+		if back := Inline(req); c.event != "" && !strings.Contains(back, c.event) || c.found != "" && !strings.Contains(back, c.found) {
+			t.Errorf("Inline = %q", back)
 		}
 	}
 }

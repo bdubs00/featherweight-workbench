@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 )
@@ -45,8 +46,11 @@ func TestRender(t *testing.T) {
 	if it.key != "90071992547409931/2026-10-19T10:00:00Z" || req.IdempotencyKey != "tickets/"+it.key {
 		t.Fatalf("key = %q, idempotency key = %q", it.key, req.IdempotencyKey)
 	}
-	if req.Input != "Triage ticket 90071992547409931: Printer  on fire for Ada. Priority normal." {
-		t.Fatalf("input = %q", req.Input)
+	// The rendered input goes in the block source, and the input of the
+	// run names the source, the title, and the block.
+	if req.Input != InputOf("tickets", req.Metadata[fw.MetaTitle]) || strings.Contains(req.Input, "Ada") ||
+		blockOf(req, ContextSource) != "Triage ticket 90071992547409931: Printer  on fire for Ada. Priority normal." {
+		t.Fatalf("input = %q, blocks %+v", req.Input, req.Context)
 	}
 	want := map[string]string{fw.MetaTitle: "Ticket 90071992547409931: Printer on fire", fw.MetaBatch: "tickets", MetaSource: "tickets",
 		MetaKey: it.key, "ticket": "90071992547409931", "requester": "ada"}
@@ -90,8 +94,9 @@ func TestRenderDefaultInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(it.req.Input, `"id": 90071992547409931`) || !strings.Contains(it.req.Input, `"name": "Ada"`) {
-		t.Fatalf("input = %s", it.req.Input)
+	if text := blockOf(it.req, ContextSource); !strings.Contains(text, `"id": 90071992547409931`) || !strings.Contains(text, `"name": "Ada"`) ||
+		it.req.Input != InputOf("tickets", "") {
+		t.Fatalf("input = %s, blocks %+v", it.req.Input, it.req.Context)
 	}
 	if _, ok := it.req.Metadata[fw.MetaTitle]; ok {
 		t.Fatalf("a title without a template: %v", it.req.Metadata)
@@ -206,5 +211,20 @@ func TestVerifyHMAC(t *testing.T) {
 	r.Header.Set("X-Signature-256", hex.EncodeToString(sum))
 	if v.body(r, []byte(`{"id": 2}`)) {
 		t.Fatal("the signature of another body passes")
+	}
+}
+
+// A rendered input above the bound of a data block is cut at a rune, with
+// a line that says how much the event held.
+func TestRenderCutsTheBlock(t *testing.T) {
+	src := compiled(t, Source{Name: "tickets", Agent: "triage", Key: "{{.id}}", Input: "{{.text}}"})
+	long := strings.Repeat("é", fw.MaxRunContextBytes)
+	it, err := src.render(1, map[string]any{"id": "1", "text": long})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := blockOf(it.req, ContextSource)
+	if len(text) > fw.MaxRunContextBytes || !utf8.ValidString(text) || !strings.HasSuffix(text, "(cut: the text of the event holds 32 KB)") {
+		t.Fatalf("the block holds %d bytes and ends %q", len(text), text[max(0, len(text)-60):])
 	}
 }

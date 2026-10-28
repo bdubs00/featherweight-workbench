@@ -98,8 +98,10 @@ func TestCheckWakesForNewItems(t *testing.T) {
 	f.clock.Set(slot.Add(time.Second))
 	f.pass(t)
 	req := f.queue.last(t)
-	if !strings.Contains(req.Input, `"number":"INC1"`) || !strings.Contains(req.Input, `"number":"INC3"`) || strings.Contains(req.Input, "INC2") {
-		t.Fatalf("the input = %q", req.Input)
+	found := blockOf(req, ContextFound)
+	if !strings.Contains(found, `"number":"INC1"`) || !strings.Contains(found, `"number":"INC3"`) || strings.Contains(found, "INC2") ||
+		req.Input != "Triage these incidents:\n"+BlockRef(ContextFound) {
+		t.Fatalf("the input = %q, the block found %q", req.Input, found)
 	}
 	h := f.history(t, "incidents")
 	if h[0].Found != 2 || !h[0].Woke || h[0].State != StateQueued {
@@ -120,8 +122,8 @@ func TestCheckWakesForNewItems(t *testing.T) {
 	f.clock.Set(slot.Add(30*time.Minute + time.Second))
 	f.pass(t)
 	req = f.queue.last(t)
-	if !strings.Contains(req.Input, "INC4") || strings.Contains(req.Input, "INC1") {
-		t.Fatalf("the input = %q", req.Input)
+	if found := blockOf(req, ContextFound); !strings.Contains(found, "INC4") || strings.Contains(found, "INC1") || strings.Contains(req.Input, "INC") {
+		t.Fatalf("the input = %q, the block found %q", req.Input, found)
 	}
 }
 
@@ -335,8 +337,8 @@ func TestCheckTool(t *testing.T) {
 	}()
 	f.clock.Set(t0.Add(30*time.Minute + time.Second))
 	f.pass(t)
-	if req := f.queue.last(t); !strings.Contains(req.Input, "INC9") {
-		t.Fatalf("the input = %q", req.Input)
+	if req := f.queue.last(t); !strings.Contains(blockOf(req, ContextFound), "INC9") {
+		t.Fatalf("the blocks = %+v", req.Context)
 	}
 }
 
@@ -363,8 +365,8 @@ func TestCheckGivesBackTheItemsOfAFailedStart(t *testing.T) {
 	f.queue.setFail(nil)
 	f.clock.Set(slot.Add(15*time.Minute + time.Second))
 	f.pass(t)
-	if req := f.queue.last(t); !strings.Contains(req.Input, "INC1") {
-		t.Fatalf("the input = %q", req.Input)
+	if req := f.queue.last(t); !strings.Contains(blockOf(req, ContextFound), "INC1") {
+		t.Fatalf("the blocks = %+v", req.Context)
 	}
 	f.clock.Set(slot.Add(30*time.Minute + time.Second))
 	f.pass(t)

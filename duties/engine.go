@@ -655,7 +655,15 @@ func (s *Service) carry(ctx context.Context, st *stored, date string, e entry) O
 // engine follows by its run.
 func (s *Service) act(ctx context.Context, st *stored, date string, e entry) Outcome {
 	d := &st.Duty
-	req := s.request(st, e, s.lastRun(ctx, d.Name, e.Slot))
+	last := s.lastRun(ctx, d.Name, e.Slot)
+	req := s.request(st, e, last)
+	if last != nil && last.Run != "" {
+		// The output of the previous run, which an earlier run wrote,
+		// goes in a data block.
+		if out := strings.TrimSpace(s.output(ctx, last.Run)); out != "" {
+			req.Context = append(req.Context, fw.RunContext{Source: ContextLast, Text: cut(out, MaxLastBytes)})
+		}
+	}
 	_, wrote, err := s.st.setEntry(ctx, d.Name, date, e.ID, []string{StateStarting}, func(x *entry) bool {
 		x.Run, x.Title = req.ID, req.Metadata[fw.MetaTitle]
 		x.Found, x.Woke, x.FoundText = e.Found, e.Woke, e.FoundText
@@ -728,8 +736,9 @@ func reasonOf(err error) string {
 }
 
 // request returns the run request of a start: the message with its
-// placeholders filled, the budget, the principal, the metadata of the
-// duty, and the idempotency key duty/<name>/<id>, which is
+// placeholders filled, the data blocks of what the check found and of the
+// event, the budget, the principal, the metadata of the duty, and the
+// idempotency key duty/<name>/<id>, which is
 // duty/<name>/<time> for a time of the schedule, with the attempt after it
 // for a retry. The request names its run, so the front knows the run at
 // once.
@@ -764,6 +773,7 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 		ID:             fw.NewID(),
 		Agent:          d.Agent,
 		Input:          input,
+		Context:        blocks(d.Do.Message(), e),
 		Budget:         budget,
 		Metadata:       md,
 		Principal:      principal,
@@ -776,8 +786,28 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 	return req
 }
 
+// outputOf returns the output of a run as the front knows it: from this
+// process, from the view of the fleet, or from the archive, or "". The
+// egress stream cuts it to fleet.EgressMaxBytes. The context carries no
+// principal, so the read sees every run.
+func (s *Service) outputOf(ctx context.Context, id string) string {
+	ctx = fw.WithPrincipal(ctx, nil)
+	if r, err := s.a.Get(ctx, id); err == nil {
+		return r.Output
+	}
+	if v := fleet.Of(s.a); v != nil {
+		if r, err := v.Run(ctx, id); err == nil && r != nil && r.Output != "" {
+			return r.Output
+		}
+	}
+	if r, ok, err := fleet.ArchivedRun(ctx, s.a, id); err == nil && ok {
+		return r.Output
+	}
+	return ""
+}
+
 // lastRun returns the newest start of a duty with a run before the slot,
-// for the placeholders {last.*}, or nil.
+// for the placeholders {last.*} and the block last, or nil.
 func (s *Service) lastRun(ctx context.Context, name string, slot time.Time) *RunEntry {
 	list, err := s.st.history(ctx, name, 50)
 	if err != nil {

@@ -88,3 +88,41 @@ func TestTemplatedDutyRunsHeldBack(t *testing.T) {
 		t.Fatalf("the run request = %+v", req.Metadata)
 	}
 }
+
+// A run of a duty gets the output of its previous run in the block last,
+// cut to 2 KB, and no text of an earlier run, of a check, or of an event
+// reaches its message or its instructions.
+func TestDutyBlockLast(t *testing.T) {
+	f := newFront(t, "", nil)
+	d := daily("report")
+	d.Do.Ask.Message = "Write the report of {date}. The last report is {last.title}."
+	f.put(t, "alice", d)
+	f.clock.Set(nine.Add(time.Second))
+	f.pass(t)
+	first := f.queue.last(t)
+	if len(first.Context) != 0 {
+		t.Fatalf("the first run has blocks: %+v", first.Context)
+	}
+	output := "The report: " + strings.Repeat("all hosts are up. ", 300)
+	f.s.output = func(_ context.Context, id string) string {
+		if id == first.ID {
+			return output
+		}
+		return ""
+	}
+	f.view.set(first.ID, fw.StateCompleted, 0, func(r *fw.Run) { r.Title = "Report of Saturday" })
+	f.pass(t)
+	f.clock.Set(nine.AddDate(0, 0, 1).Add(time.Second))
+	f.pass(t)
+	second := f.queue.last(t)
+	last := blockOf(second, ContextLast)
+	if len(last) == 0 || len(last) > MaxLastBytes || !strings.HasPrefix(output, last) {
+		t.Fatalf("the block last holds %d bytes: %.60q", len(last), last)
+	}
+	if strings.Contains(second.Input, "hosts are up") || strings.Contains(second.Instructions, "hosts are up") || second.Instructions != "" {
+		t.Fatalf("the output of the previous run reached the message: %q, instructions %q", second.Input, second.Instructions)
+	}
+	if second.Input != "Write the report of 2026-10-25. The last report is Report of Saturday." {
+		t.Fatalf("the second input = %q", second.Input)
+	}
+}

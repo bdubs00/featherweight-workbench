@@ -1219,7 +1219,7 @@ A source is an entry of the list `workbench.sources` in `fw.yaml`. There are two
 - A webhook source takes events on `POST /v1/sources/<name>`. The outside system sends one event, a JSON object, or an array of events.
 - A poll source reads an HTTP endpoint at an interval, for a system that sends no webhooks. The endpoint answers JSON to a GET, and a dotted path names the array of items in the answer.
 
-For each event, the source renders its templates into a run request of its agent profile: the input, the title, the metadata, and the de-duplication key. The source claims the key (section 13.3). Then it puts the request on the queue of the pool that runs the profile, or of the pool that `pool` names, through `fleet.EnqueueFor`, the publish of the tool `enqueue` (section 4.9). Only a profile that no pool runs takes the queue `<workbench.fleet.intake>.<agent>`. After the publish, the front wakes the sleeping Tasks that take the queue (section 4.12).
+For each event, the source renders its templates into a run request of its agent profile: the input, the title, the metadata, and the de-duplication key. The text of an event comes from an outside system, so the rendered input never becomes the message of the run (the kernel document `docs/KNOWHOW.md`, section 6.2). It goes in the data block `source` of the run (`RunRequest.Context`, `sources.ContextSource`), and the kernel puts that block at the start of the first user message. The input of the run is one short line that names the source, the rendered title, and the block, such as "An event of the source tickets: #42 Printer on fire (the text is in the block source)" (`sources.InputOf`). A rendered input above 16 KB, the bound of a block of the kernel, is cut at a character, with a last line that says how many KB the event held. The source claims the key (section 13.3). Then it puts the request on the queue of the pool that runs the profile, or of the pool that `pool` names, through `fleet.EnqueueFor`, the publish of the tool `enqueue` (section 4.9). Only a profile that no pool runs takes the queue `<workbench.fleet.intake>.<agent>`. After the publish, the front wakes the sleeping Tasks that take the queue (section 4.12).
 
 The source finds its queue when the front starts, after the fleet, and the redrive reads the dead letter of that queue (section 13.9). A profile that several pools run as their `agent` needs `pool`, and a pool that does not run the profile stops the start. Each publish finds the queue again. When a pool of the agent comes or goes while the front runs, the publish takes the new queue, and the log names it once. The redrive reads the dead letter of the first queue until the front starts again.
 
@@ -1255,7 +1255,7 @@ Each entry of `workbench.sources` takes these keys. No variable sets the list.
 | `poll.secret` | The variable that holds the credential of the poll | none |
 | `poll.header` | The header that carries the credential as it is. Without it, the credential goes as `Authorization: Bearer <credential>`. | none |
 | `items` | A dotted path to the array of events in the body or in the answer, such as `result.tickets` | the body itself |
-| `input` | The template of the input of the run | the event as indented JSON |
+| `input` | The template of the text of the event that the run gets in its block `source` (section 13.1) | the event as indented JSON |
 | `title` | The template of the title of the run, cut to 200 characters | no title |
 | `metadata` | Templates of metadata, by key | none |
 | `key` | The template of the de-duplication key, at most 512 bytes | required |
@@ -3274,6 +3274,8 @@ Each start in `lastRun` and `history` has `at`, `slot`, `run`, `state`, and `cos
 
 The message of `ask` is plain text with these placeholders, which the front replaces before the run goes on the queue: `{date}`, `{time}`, `{found}`, `{event}`, `{last.title}`, `{last.run}`, `{last.state}`, and `{duty}`. The date and the time are those of the start in the time zone of the duty. `{last.*}` names the newest earlier run of the duty. A placeholder without a value becomes `none`. No other text is a placeholder.
 
+Outside systems wrote the text of `{found}` and `{event}`, so it never enters the message (the kernel document `docs/KNOWHOW.md`, section 6.2). The front puts it in a data block of the run, `found` or `event` (`RunRequest.Context`), and the placeholder becomes a short reference: "(the text is in the block found)" (`duties.BlockRef`). The kernel puts each block at the start of the first user message. A message without the placeholder gets no block. Every run of a duty also gets the block `last`: the output of the newest earlier run of the duty, cut to 2 KB, which the front reads from this process, the view of the fleet, or the archive (section 4.18). A run without such an output gets no block `last`. The action `post` posts the message with the text of the blocks in place of their references, and the action `open` takes it as the goal of the bridge (`duties.Inline`), because neither starts a run with the message.
+
 The title of the run comes from the same message, because a person reads it in Activity and in the history. In the title, `{found}` becomes the count of the items, such as "2 items". `{event}` becomes the title, the path, the name, or the kind of the event, in that order. The message to the agent keeps the JSON of both.
 
 ### 22.2 The schedule in words
@@ -3411,7 +3413,7 @@ The front sends a GET with the poll of the sources (section 13.5). The value of 
 - `where` keeps the items that pass every filter. Each filter has a dotted `field` and one of `is`, `isNot`, `oneOf`, `contains`, `atLeast`, and `atMost`. Two numbers compare as numbers. This rule also holds for a number in text, such as `"1"` against `1`. Other values compare as text, so dates in the form `2006-01-02` order too. `contains` finds a text in a text, without case, or a value in a list.
 - `wake.when` is `new`, `any`, or `atLeast` with `count`. With `new`, the default, only the items whose `key` no earlier check saw wake the agent. The front remembers those keys once their run is on the queue. If the start then fails after its retries, the front forgets its keys, so the next check wakes the agent for the same items. A start that its run reached, or that somebody canceled, keeps them.
 
-The run gets the items that woke it through `{found}`: one item as compact JSON per line, within 8 KB. A check that finds no work writes a start with the state `quiet` and starts no run. A check that fails writes `check-failed`, and the model does not wake. When three checks fail in a row, the duty pauses itself. A check that works ends the row.
+The run gets the items that woke it through `{found}`, in the block `found`: one item as compact JSON per line, within 8 KB. A check that finds no work writes a start with the state `quiet` and starts no run. A check that fails writes `check-failed`, and the model does not wake. When three checks fail in a row, the duty pauses itself. A check that works ends the row.
 
 A dry run with `test=true` runs the check once. The answer adds `check`: the items that wake the agent now, at most 20, with `count`, `wakes`, `matched`, and `reason`. A test writes no seen key. When the address fails, the answer is 502.
 
@@ -3466,7 +3468,7 @@ The words. No answer of a route or a tool says "the front". It says "the server"
 
 `POST /v1/duties/{name}/call` sits outside the authentication of the native API, as the route of a webhook source does. The duty compares the credential of the call with its own secret, with the code of the sources (section 13.4). The credential is a bearer token, or the HMAC-SHA256 of the body in `auth.header`, `X-Signature-256` by default.
 
-The body is the event, at most 1 MB. The run gets it through `{event}`, as compact JSON within 4 KB. When the duty names `when.webhook.key`, a second call with the same key within a week is a duplicate. Without a key, a second call with the same body within ten minutes is a duplicate.
+The body is the event, at most 1 MB. The run gets it through `{event}`, in the block `event`, as compact JSON within 4 KB. When the duty names `when.webhook.key`, a second call with the same key within a week is a duplicate. Without a key, a second call with the same body within ten minutes is a duplicate.
 
 | Status | When |
 |---|---|

@@ -46,8 +46,8 @@ func TestCallBearer(t *testing.T) {
 	if resp.StatusCode != http.StatusAccepted || !strings.Contains(b, `"run":"`) {
 		t.Fatalf("a call = %d %s", resp.StatusCode, b)
 	}
-	if req := f.queue.last(t); req.Input != `Handle {"id":1}` {
-		t.Fatalf("the input = %q", req.Input)
+	if req := f.queue.last(t); req.Input != "Handle "+BlockRef(ContextEvent) || blockOf(req, ContextEvent) != `{"id":1}` {
+		t.Fatalf("the input = %q, the blocks %+v", req.Input, req.Context)
 	}
 	if h := f.history(t, "hook"); h[0].Start != StartCall {
 		t.Fatalf("history = %+v", h[0])

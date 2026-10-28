@@ -96,7 +96,7 @@ func TestFireChain(t *testing.T) {
 		t.Fatalf("FireChain = %+v, %v", out, err)
 	}
 	req := f.queue.last(t)
-	if req.Metadata[MetaChain] != "2" || req.Metadata[MetaDuty] != "watch" || req.Input != `Look at {"run":"R1"}.` {
+	if req.Metadata[MetaChain] != "2" || req.Metadata[MetaDuty] != "watch" || req.Input != "Look at "+BlockRef(ContextEvent)+"." || blockOf(req, ContextEvent) != `{"run":"R1"}` {
 		t.Fatalf("the request = %+v", req)
 	}
 	f.view.set(req.ID, fw.StateCompleted, 0)

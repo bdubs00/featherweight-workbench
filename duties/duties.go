@@ -108,10 +108,12 @@ type Service struct {
 	client  *http.Client
 	every   time.Duration // the longest pause of the engine
 
-	// The seams of the engine, which a test replaces.
+	// The seams of the engine, which a test replaces. output reads the
+	// output of a run for the block last.
 	enqueue func(ctx context.Context, agent, pool string, reqs []fw.RunRequest) (string, int, error)
 	runs    func(ctx context.Context, name string) (map[string]*fw.Run, error)
 	secret  func(ctx context.Context, name string) (string, error)
+	output  func(ctx context.Context, id string) string
 
 	// The seams of a write of a check (writecheck.go): the wait for a run
 	// that the front put on a queue, its cancel, and the longest wait.
@@ -235,6 +237,7 @@ func newService(a *fw.Agent, st *Store, cfg Config, log *slog.Logger) *Service {
 		return fleet.EnqueueFor(ctx, a, agent, pool, reqs)
 	}
 	s.runs = s.runsOfFleet
+	s.output = s.outputOf
 	s.await = func(ctx context.Context, id string) (*fw.Run, error) { return fleet.Await(ctx, a, id) }
 	s.stopRun = func(ctx context.Context, id string) error { return fleet.CancelRun(ctx, a, id) }
 	s.writeWait = WriteCheckTimeout
