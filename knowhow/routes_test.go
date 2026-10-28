@@ -472,3 +472,29 @@ func TestReasonHidesWhatExists(t *testing.T) {
 		t.Errorf("reason = %q", got)
 	}
 }
+
+// An out-of-date note offers no undo of the move: the route answers 409
+// with outOfDate, so the page offers Edit and Put away. An owner corrects
+// a note of the agent that went out of date, and an operator cannot.
+func TestRoutesOutOfDate(t *testing.T) {
+	fr := newFront(t, nil)
+	fr.write(t, agentScope, "launch.md", "The launch is on the 3rd.", Source{Ref: "page:launch.md", Version: Hash("v1")})
+	PageWritten(context.Background(), "launch.md", Hash("v2"))
+	j := fr.journal(t)
+	for _, e := range j {
+		resp, body := send(t, "POST", fr.url+"/v1/knowhow/journal/"+e.ID+"/undo", "alice", "")
+		mustStatus(t, resp, body, http.StatusConflict)
+		if !strings.Contains(body, `"outOfDate":true`) || !strings.Contains(body, "edit the note or put it away") {
+			t.Fatalf("the undo of %s = %s", e.What, body)
+		}
+	}
+	n := fr.note(t, agentScope, "launch.md")
+	put := `{"text": "The launch is on the 10th.", "ifHash": "` + n.Hash + `", "sources": [{"ref": "page:launch.md", "version": "` + Hash("v1") + `"}]}`
+	resp, body := send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/agent/launch.md", "bob", put)
+	mustStatus(t, resp, body, http.StatusForbidden)
+	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/agent/launch.md", "alice", put)
+	mustStatus(t, resp, body, http.StatusOK)
+	if n := fr.note(t, agentScope, "launch.md"); n.State != StateChecked || n.By != "person:alice" || n.Sources[0].Version != Hash("v2") {
+		t.Fatalf("the corrected note = %+v", n)
+	}
+}

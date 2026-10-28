@@ -4243,7 +4243,9 @@ Every write reads the entry and writes at the revision that it read, as the othe
 
 ### 28.2 Out of date
 
-`PageWritten(ctx, path, hash)` marks out of date every note that names `page:<path>` with another version than the hash. An empty hash is a removal of the page. `ItemChanged(ctx, source, key, version)` does the same for `item:<source>/<key>`. A source `run:<id>` never goes out of date. A note that a person wrote stays as it is.
+`PageWritten(ctx, path, hash)` marks out of date every note that names `page:<path>` with another version than the hash. An empty hash is a removal of the page. `ItemChanged(ctx, source, key, version)` does the same for `item:<source>/<key>`. A source `run:<id>` never goes out of date. A note that a person wrote stays as it is. The mark `outOfDate` holds `since`, `source`, and `version`, the version of the source now. A later change of the same source moves `version`.
+
+The move to out of date has no undo, because an undo would make the agent trust the note over its source again. An owner of the agent corrects the note instead: a new text or a put-away. When a person writes a note that is out of date, the source that changed takes the version of `outOfDate`, because the person read the source as it is now. A page that was removed leaves the sources. So the corrected note is checked against the page as it is, and the journal counts a correction.
 
 Each move writes the journal entry `out-of-date` with the source that changed. The note also gets a candidate `recheck` for the after-work review, in the scope of the note (section 28.7).
 
@@ -4290,7 +4292,7 @@ An entry holds `id`, `at`, `agent`, `what`, `subject`, and `why`. It also holds 
 - Code writes `why` from a fixed set of sentences. The review writes it for `learned` and `updated`.
 - `corrects` is true for a change that replaced or put away a note that was out of date. The summary counts these entries.
 
-An undo of a note puts back the revision before the change, which `undo.revision` names, as a new revision. An undo of a change that made a note puts the note away. The note must still be at the revision that the change wrote (`undo.after`). Otherwise the undo gives 409.
+An undo of a note puts back the revision before the change, which `undo.revision` names, as a new revision. An undo of a change that made a note puts the note away. So does an undo of the keep of a note that waited for a person (section 28.5), because the agent never had the note before the keep. The note must still be at the revision that the change wrote (`undo.after`). Otherwise the undo gives 409. An entry `out-of-date` has no `undo`. An undo of an earlier change of a note that is out of date now gives 409 with `outOfDate: true`, and the page offers Edit and Put away in its place (section 28.2).
 
 An undo of a routine makes the opposite move. The routine must still have the standing and the version of the move, and `docs/ROUTINES.md` must allow the opposite move. Each undo writes the entry `undone`, which an undo takes back too. The entry that it took back names it in `undoneBy`.
 

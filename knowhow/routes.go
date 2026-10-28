@@ -69,6 +69,14 @@ type conflictProblem struct {
 	Hash string `json:"hash,omitempty"`
 }
 
+// outOfDateProblem is the 409 of an undo that would make the agent trust
+// a note that went out of date. OutOfDate tells the page to offer Edit and
+// Put away in place of the undo.
+type outOfDateProblem struct {
+	native.Problem
+	OutOfDate bool `json:"outOfDate"`
+}
+
 // fail maps an error of Know-how to a problem document.
 func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var ce *ConflictError
@@ -83,6 +91,13 @@ func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 		_ = json.NewEncoder(w).Encode(conflictProblem{
 			Problem: native.Problem{Type: "about:blank", Title: http.StatusText(http.StatusPreconditionFailed), Status: http.StatusPreconditionFailed, Detail: ce.Error(), Instance: r.URL.Path},
 			Hash:    ce.Hash,
+		})
+	case errors.Is(err, ErrOutOfDate):
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(outOfDateProblem{
+			Problem:   native.Problem{Type: "about:blank", Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict, Detail: reason(err), Instance: r.URL.Path},
+			OutOfDate: true,
 		})
 	case errors.Is(err, ErrHidden), errors.Is(err, ErrNotFound), errors.Is(err, routines.ErrNotFound):
 		native.WriteProblem(w, r, http.StatusNotFound, reason(err))
@@ -105,7 +120,7 @@ func reason(err error) string {
 		return hiddenReason
 	}
 	msg := err.Error()
-	for _, e := range []error{ErrInvalid, ErrNotFound, ErrLater, ErrBusy, fw.ErrInvalidRequest, fw.ErrForbidden, routines.ErrNotFound, routines.ErrInvalid} {
+	for _, e := range []error{ErrInvalid, ErrNotFound, ErrLater, ErrBusy, ErrOutOfDate, fw.ErrInvalidRequest, fw.ErrForbidden, routines.ErrNotFound, routines.ErrInvalid} {
 		msg = strings.TrimPrefix(msg, e.Error()+": ")
 	}
 	return strings.TrimPrefix(msg, "knowhow: ")

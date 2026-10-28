@@ -92,6 +92,20 @@ func (s *Service) outOfDate(ctx context.Context, ref, version, why string) {
 		return
 	}
 	for key, n := range notes {
+		if n.OutOfDate != nil && n.OutOfDate.Source == ref && n.OutOfDate.Version != version && n.State != StatePutAway {
+			// A note that is out of date already keeps the version of its
+			// source now, so a person who corrects it vouches for that one.
+			if _, err := s.setStateAny(ctx, key, func(x *Note) bool {
+				if x.OutOfDate == nil || x.OutOfDate.Source != ref || x.OutOfDate.Version == version {
+					return false
+				}
+				x.OutOfDate.Version = version
+				return true
+			}); err != nil {
+				s.log.Warn("knowhow: a note out of date does not know the new version of its source", "agent", n.Agent, "note", n.Name, "error", err)
+			}
+			continue
+		}
 		if n.ByPerson() || n.State == StatePutAway || n.State == StateOutOfDate || n.OutOfDate != nil {
 			continue
 		}
@@ -110,7 +124,7 @@ func (s *Service) outOfDate(ctx context.Context, ref, version, why string) {
 			if x.OutOfDate != nil || x.State == StatePutAway {
 				return false
 			}
-			x.OutOfDate = &OutOfDate{Since: now, Source: ref}
+			x.OutOfDate = &OutOfDate{Since: now, Source: ref, Version: version}
 			switch x.State {
 			case StateChecked, StateUnchecked:
 				x.State = StateOutOfDate
