@@ -13,6 +13,7 @@ package bridges
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
@@ -45,8 +46,20 @@ func costCapLine(rec *record, runs map[string]*fw.Run) (*Message, bool) {
 		return nil, true
 	}
 	rec.Fan.CostCapped = true
-	m := system(EventCap, fmt.Sprintf("The bridge reached its cap of $%.2f: its runs cost $%.2f. Its open runs stop at a limit", limit, spent))
+	cap, cost := capDollars(limit, spent)
+	m := system(EventCap, fmt.Sprintf("The bridge reached its cap of %s: its runs cost %s. Its open runs stop at a limit", cap, cost))
 	return &m, true
+}
+
+// capDollars words a cap of cost and the cost of the runs to the cent,
+// or to a tenth of a cent when the cap is not a whole number of cents. A
+// cap of $0.005 then reads "$0.005", not "$0.01", and its cost "$0.007".
+func capDollars(limit, spent float64) (string, string) {
+	format := "$%.2f"
+	if c := limit * 100; math.Abs(c-math.Round(c)) > 1e-9 {
+		format = "$%.3f"
+	}
+	return fmt.Sprintf(format, limit), fmt.Sprintf(format, spent)
 }
 
 // capBudget is the change of budget that stops a run at a limit: its cost

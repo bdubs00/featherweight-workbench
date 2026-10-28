@@ -72,3 +72,25 @@ func TestCostCapStopsTheBridge(t *testing.T) {
 	s.poll(context.Background())
 	say(t, fm, url, id, `{"text":"Now go on.","to":["reviewer"]}`, pathRev, 1)
 }
+
+// The line at the cap names a cap below a whole cent to a tenth of a cent,
+// so a cap of $0.005 does not read as $0.01 beside a cost of $0.01.
+func TestCostCapLineWordsSmallCaps(t *testing.T) {
+	for _, c := range []struct {
+		limit, spent float64
+		want         string
+	}{
+		{1.5, 1.6, "The bridge reached its cap of $1.50: its runs cost $1.60."},
+		{0.005, 0.0071681, "The bridge reached its cap of $0.005: its runs cost $0.007."},
+		{0.3, 0.3012, "The bridge reached its cap of $0.30: its runs cost $0.30."},
+	} {
+		rec := &record{}
+		rec.Caps.MaxCostUSD = c.limit
+		run := &fw.Run{ID: "r"}
+		run.Usage.CostUSD = c.spent
+		m, at := costCapLine(rec, map[string]*fw.Run{"r": run})
+		if !at || m == nil || !strings.HasPrefix(m.Text, c.want) {
+			t.Errorf("the line at a cap of %v and a cost of %v = %v %+v, want %q", c.limit, c.spent, at, m, c.want)
+		}
+	}
+}

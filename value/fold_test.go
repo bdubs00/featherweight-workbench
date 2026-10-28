@@ -118,6 +118,12 @@ func TestFold(t *testing.T) {
 		}
 	}
 
+	for v, want := range map[float64]string{0: "$0.00", 0.0033: "under $0.01", 0.005: "$0.01", 1.266: "$1.27"} {
+		if got := Dollars(v); got != want {
+			t.Errorf("Dollars(%v) = %q, want %q", v, got, want)
+		}
+	}
+
 	empty := Fold(nil, Options{Now: now, Days: 30})
 	if empty.Sentence != "In the last 30 days, the agents finished no work that you can view." || len(empty.Periods) != 5 || empty.Lines == nil {
 		t.Fatalf("an empty fold = %+v", empty)

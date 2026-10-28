@@ -559,13 +559,13 @@ func sentence(a Answer) string {
 	if a.People.WaitSeconds > 0 {
 		fmt.Fprintf(&b, " Work waited %s for people.", Duration(a.People.WaitSeconds))
 	}
-	cost := fmt.Sprintf("$%.2f", a.Spend.USD)
+	cost := Dollars(a.Spend.USD)
 	if a.Spend.AtLeast {
 		cost = "at least " + cost
 	}
 	fmt.Fprintf(&b, " The work cost %s", cost)
 	if a.Work.Done > 0 {
-		fmt.Fprintf(&b, ", $%.2f for each finished piece", a.Spend.PerDone)
+		fmt.Fprintf(&b, ", %s for each finished piece", Dollars(a.Spend.PerDone))
 	}
 	b.WriteString(".")
 	if a.Spend.Unpriced > 0 {
@@ -578,6 +578,16 @@ func sentence(a Answer) string {
 		fmt.Fprintf(&b, " %s no record of the actions of people.", plural(a.Unknown, "piece has", "pieces have"))
 	}
 	return b.String()
+}
+
+// Dollars words an amount in US dollars to the cent, as the page does: a
+// cost above zero and below a cent is "under $0.01", never "$0.00", so a
+// sponsor does not read a small cost as no cost.
+func Dollars(v float64) string {
+	if v > 0 && v < 0.005 {
+		return "under $0.01"
+	}
+	return fmt.Sprintf("$%.2f", v)
 }
 
 func plural(n int, one, many string) string {
