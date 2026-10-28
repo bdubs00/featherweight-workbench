@@ -116,3 +116,80 @@ func TestArchivedRunRoutes(t *testing.T) {
 		t.Fatalf("a run that nobody holds = %d %s", resp.StatusCode, b)
 	}
 }
+
+// A run that only the archive holds and that never ended is lost: the pool
+// replaced its worker while it waited. GET /v1/fleet/runs names it with
+// "lost": true, the glance counts it neither as working nor as waiting, a
+// filter by state leaves it out, and the home of its person does not list
+// it as a run that needs the person.
+func TestLostRunsCountNowhere(t *testing.T) {
+	bus := fw.NewMemBus()
+	a := newAgent(t, newScript().model(), fw.WithBus(bus))
+	srv := serve(t, a)
+	// The archive takes the events, and the view never sees them, as for
+	// a worker that the pool replaced before the front started.
+	var feed func(fw.Event) error
+	was := fleet.OpenArchiveSource
+	fleet.OpenArchiveSource = func(_ context.Context, _ *fleet.Fleet, _ *fw.Config, _ string, h func(fw.Event) error) (func(), error) {
+		feed = h
+		return func() {}, nil
+	}
+	t.Cleanup(func() { fleet.OpenArchiveSource = was })
+	f, err := fleet.Open(context.Background(), a, fleet.Config{Name: "front", Egress: "fw.events", Interval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	fleet.Attach(a, f)
+	t.Cleanup(func() { fleet.Attach(a, nil) })
+	if feed == nil {
+		t.Fatal("the archive opened no source")
+	}
+	start := time.Now().Add(-time.Hour).UTC()
+	for i, x := range []struct {
+		typ  string
+		data any
+	}{
+		{fw.EvRunQueued, fw.RunQueuedData{Agent: "manager", Input: "Push the branch", Origin: "native", Principal: "tok"}},
+		{fw.EvRunStarted, map[string]any{}},
+		{fw.EvApprovalRequested, fw.ApprovalRequestedData{ApprovalID: "ap-1", Tool: "bash"}},
+	} {
+		raw, _ := json.Marshal(x.data)
+		e := fw.Event{SpecVersion: fw.SpecVersion, ID: fmt.Sprintf("LOST-%d", i+1), Type: x.typ, Time: start.Add(time.Duration(i) * time.Second), Subject: "01LOST", Seq: uint64(i + 1), Node: "ax:team/manager-0", Data: raw}
+		if err := feed(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var list struct {
+		Runs   []map[string]any `json:"runs"`
+		Total  int              `json:"total"`
+		Glance struct {
+			Working int `json:"working"`
+			Waiting int `json:"waiting"`
+		} `json:"glance"`
+	}
+	resp, b := do(t, "GET", srv.URL+"/v1/fleet/runs", "", "Authorization", "Bearer tok")
+	decodeJSON(t, resp, b, 200, &list)
+	if list.Total != 1 || list.Runs[0]["id"] != "01LOST" || list.Runs[0]["lost"] != true || list.Runs[0]["archived"] != true || list.Runs[0]["state"] != "input-required" {
+		t.Fatalf("the list = %s", b)
+	}
+	if list.Glance.Working != 0 || list.Glance.Waiting != 0 {
+		t.Fatalf("the glance counts a lost run: %s", b)
+	}
+	for _, state := range []string{"active", "input-required"} {
+		resp, b := do(t, "GET", srv.URL+"/v1/fleet/runs?state="+state, "", "Authorization", "Bearer tok")
+		decodeJSON(t, resp, b, 200, &list)
+		if list.Total != 0 {
+			t.Fatalf("state=%s lists a lost run: %s", state, b)
+		}
+	}
+	var home struct {
+		NeedsYou   []any `json:"needsYou"`
+		InProgress []any `json:"inProgress"`
+	}
+	resp, b = do(t, "GET", srv.URL+"/v1/home", "", "Authorization", "Bearer tok")
+	decodeJSON(t, resp, b, 200, &home)
+	if len(home.NeedsYou) != 0 || len(home.InProgress) != 0 {
+		t.Fatalf("the home lists a lost run: %s", b)
+	}
+}

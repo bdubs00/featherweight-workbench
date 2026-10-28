@@ -9,7 +9,9 @@ package web
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
@@ -117,11 +119,27 @@ func (s *server) fleetRuns(w http.ResponseWriter, r *http.Request) {
 			view.SortRuns(runs)
 		}
 	}
+	// A run of the archive that never ended is lost: the pool replaced its
+	// worker, so it neither works nor waits. A filter by state leaves it
+	// out, and the glance does not count it.
+	lost := map[string]bool{}
+	for _, run := range runs {
+		if archived[run.ID] && !run.State.Terminal() {
+			lost[run.ID] = true
+		}
+	}
 	matched := view.FilterBatch(view.Filter(runs, q.Get("agent"), q.Get("state"), q.Get("principal"), 0), q.Get("batch"))
+	if len(lost) > 0 && strings.TrimSpace(q.Get("state")) != "" {
+		matched = slices.DeleteFunc(matched, func(run *fw.Run) bool { return lost[run.ID] })
+	}
 	// The titles of the caller, and the runs that the caller hid, which
 	// the list leaves out unless the query asks for them (section 4.20).
 	matched, marks := conversations.Mark(r.Context(), s.a, matched, q.Get("hidden") == "true")
-	glance, total := view.GlanceOf(matched, time.Now()), len(matched)
+	counted := matched
+	if len(lost) > 0 {
+		counted = slices.DeleteFunc(slices.Clone(matched), func(run *fw.Run) bool { return lost[run.ID] })
+	}
+	glance, total := view.GlanceOf(counted, time.Now()), len(matched)
 	if limit > 0 && len(matched) > limit {
 		matched = matched[:limit]
 	}
@@ -138,13 +156,13 @@ func (s *server) fleetRuns(w http.ResponseWriter, r *http.Request) {
 		end, ended := ends[run.ID]
 		switch {
 		case marked || ended:
-			l := listedRun{Run: run, Archived: archived[run.ID], MyTitle: mark.MyTitle, Hidden: mark.Hidden}
+			l := listedRun{Run: run, Archived: archived[run.ID], Lost: lost[run.ID], MyTitle: mark.MyTitle, Hidden: mark.Hidden}
 			if ended {
 				l.EndedAt = &end
 			}
 			list = append(list, l)
 		case archived[run.ID]:
-			list = append(list, archivedRun{Run: run, Archived: true})
+			list = append(list, archivedRun{Run: run, Archived: true, Lost: lost[run.ID]})
 		default:
 			list = append(list, run)
 		}
@@ -153,10 +171,11 @@ func (s *server) fleetRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 // archivedRun is a run of the archive in an answer: the run object with
-// "archived": true.
+// "archived": true, and "lost": true for a run that never ended.
 type archivedRun struct {
 	*fw.Run
 	Archived bool `json:"archived"`
+	Lost     bool `json:"lost,omitempty"`
 }
 
 // listedRun is a run of a list with what the front adds to the run
@@ -165,6 +184,7 @@ type archivedRun struct {
 type listedRun struct {
 	*fw.Run
 	Archived bool       `json:"archived,omitempty"`
+	Lost     bool       `json:"lost,omitempty"`
 	MyTitle  string     `json:"myTitle,omitempty"`
 	Hidden   bool       `json:"hidden,omitempty"`
 	EndedAt  *time.Time `json:"endedAt,omitempty"`
