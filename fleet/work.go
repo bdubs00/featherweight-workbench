@@ -9,6 +9,7 @@ package fleet
 // this process come from its ledger.
 
 import (
+	"cmp"
 	"context"
 	"time"
 
@@ -184,6 +185,12 @@ func (w *Work) Apply(e fw.Event) {
 		}
 	}
 }
+
+// Judged is the newest verdict on the result of a run: the newest thumb of
+// a person or receipt, else the first one. The board and Results both read
+// it, so they count a result that a person sent back and then accepted the
+// same way (plan A13).
+func (w Work) Judged() string { return cmp.Or(w.LastVerdict, w.Verdict) }
 
 // Checked reports whether the definition of done of a run passed in the
 // kernel with a pass that shows the work of the run (fw.CheckedDone): the

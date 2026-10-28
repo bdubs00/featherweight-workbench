@@ -186,6 +186,10 @@ type Answer struct {
 	// Days is the window of the board: the cards that ended or changed
 	// in the last Days days. A card that did not end stays, however old.
 	Days int `json:"days"`
+	// Done counts the done cards that completed: the lane Done without
+	// the canceled cards and the cards that were let go. Results counts
+	// done tasks the same way (plan A13).
+	Done int `json:"done"`
 }
 
 // Run is a run that the caller can view, with the facts of its work
@@ -816,7 +820,7 @@ const (
 // sends the result back, and a thumb up accepts it. A heart keeps the
 // result on the wiki, and it is no verdict.
 func judged(r Run) string {
-	switch cmp.Or(r.Work.LastVerdict, r.Work.Verdict) {
+	switch r.Work.Judged() {
 	case fleet.VerdictAccepted:
 		return VerdictAccepted
 	case fleet.VerdictRejected:
@@ -892,6 +896,9 @@ func (b *board) answer() Answer {
 			continue
 		}
 		ans.Cards = append(ans.Cards, d.Card)
+		if completed(d.Card) {
+			ans.Done++
+		}
 		l := lanes[d.Stage]
 		l.Count++
 		if d.Next == NextYou {
@@ -920,6 +927,16 @@ func (b *board) answer() Answer {
 	}
 	ans.Sentence = sentence(ans, b.in.Now)
 	return ans
+}
+
+// completed reports whether a card is done and completed: it has a verdict
+// of a result, so it is no canceled card and no card that was let go.
+func completed(c Card) bool {
+	switch c.Verdict {
+	case VerdictAccepted, VerdictChecked, VerdictSentBack, VerdictUnchecked:
+		return c.Stage == StageDone
+	}
+	return false
 }
 
 // settle gives a draft its stage from its parts, and its next move.
@@ -1067,9 +1084,14 @@ func sentence(ans Answer, now time.Time) string {
 		parts = append(parts, s+".")
 	}
 	for _, l := range ans.Lanes {
-		if l.Stage == StageDone && l.Count > 0 {
-			parts = append(parts, fmt.Sprintf("%d done in the last %s.", l.Count, plural(ans.Days, "day", "days")))
+		if l.Stage != StageDone || l.Count == 0 {
+			continue
 		}
+		s := fmt.Sprintf("%d done in the last %s", ans.Done, plural(ans.Days, "day", "days"))
+		if n := l.Count - ans.Done; n > 0 {
+			s += fmt.Sprintf(", and %d canceled or let go", n)
+		}
+		parts = append(parts, s+".")
 	}
 	return strings.Join(parts, " ")
 }

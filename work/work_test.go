@@ -464,6 +464,11 @@ func TestLetGoCards(t *testing.T) {
 	if ans.Lanes[5].Count != 2 || ans.Lanes[3].Count != 0 {
 		t.Fatalf("the lanes = %+v", ans.Lanes)
 	}
+	// A card that was let go is in Done, but it is no done task, as in
+	// Results (plan A13).
+	if ans.Done != 0 || !strings.HasSuffix(ans.Sentence, "0 done in the last 7 days, and 2 canceled or let go.") {
+		t.Fatalf("the done tasks = %d, the sentence = %q", ans.Done, ans.Sentence)
+	}
 }
 
 // A card that stopped a week ago and that nobody moved lets itself go: it

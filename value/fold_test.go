@@ -171,6 +171,46 @@ func TestFoldChecked(t *testing.T) {
 	}
 }
 
+// The board and Results count done work the same way (plan A13). A run
+// that continues a conversation is a part of its task, not a task of its
+// own: the newest run says where the task stands and its verdict, and the
+// cost of every run is the cost of the task. The newest verdict counts, so
+// a result that a person sent back and then accepted is accepted.
+func TestFoldCountsTasksAsTheBoard(t *testing.T) {
+	h := time.Hour
+	first := run("R1", "writer", fw.StateCompleted, 5*h, 0.01, nil)
+	cont := map[string]string{fleet.MetaContinues: "R1"}
+	second := run("R2", "writer", fw.StateCompleted, 4*h, 0.02, cont)
+	third := run("R3", "writer", fw.StateCompleted, 3*h, 0.03, map[string]string{fleet.MetaContinues: "R2"})
+	lastFacts := facts(3*h, time.Minute, 1, fleet.VerdictRejected)
+	lastFacts.LastVerdict = fleet.VerdictAccepted
+	// A run that continues a conversation of before the window is a task.
+	alone := run("R4", "writer", fw.StateCompleted, 2*h, 0.01, map[string]string{fleet.MetaContinues: "R-OLD"})
+	runs := []fleet.WorkRun{
+		{Run: first, Work: facts(5*h, time.Minute, 0, fleet.VerdictRejected)},
+		{Run: second, Work: facts(4*h, time.Minute, 1, "")},
+		{Run: third, Work: lastFacts},
+		{Run: alone, Work: facts(2*h, time.Minute, 0, "")},
+	}
+	a := Fold(runs, Options{Now: now, Days: 7})
+	if a.Work.Pieces != 2 || a.Work.Done != 2 {
+		t.Fatalf("the work = %+v, want 2 tasks", a.Work)
+	}
+	if a.Checks != (Checks{Accepted: 1, Unchecked: 1}) {
+		t.Fatalf("the checks = %+v, want the newest verdict of the conversation", a.Checks)
+	}
+	if a.Spend.USD != 0.07 || a.Lines[0].USD != 0.07 || a.People.Actions != 2 {
+		t.Fatalf("the spend = %+v, the line = %+v, the actions = %d", a.Spend, a.Lines[0], a.People.Actions)
+	}
+
+	// A conversation whose newest run works is open.
+	working := run("R5", "writer", fw.StateRunning, time.Hour, 0, map[string]string{fleet.MetaContinues: "R1"})
+	b := Fold(append(runs, fleet.WorkRun{Run: working, Work: facts(time.Hour, 0, 0, "")}), Options{Now: now, Days: 7})
+	if b.Work.Open != 1 || b.Work.Done != 1 {
+		t.Fatalf("a conversation that works again = %+v", b.Work)
+	}
+}
+
 // A run of the after-work review of Know-how is no piece: no person or
 // duty asked for it. Its cost is in the spend.
 func TestFoldKnowhowReview(t *testing.T) {
