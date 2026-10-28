@@ -114,9 +114,7 @@ func startPost(ctx context.Context, a *fw.Agent, d *duties.Duty, req fw.RunReque
 		return duties.Started{}, errors.New("the bridges are off in this server")
 	}
 	p := d.Do.Post
-	// A post is a message in a channel, not a run, so it carries the text
-	// of the blocks in place of their references.
-	m, err := s.PostFor(ctx, strings.TrimSpace(p.Bridge), bridges.PostSpec{Text: duties.Inline(req), To: p.To}, principalOf(req), SenderName(d.Name))
+	m, err := s.PostFor(ctx, strings.TrimSpace(p.Bridge), bridges.PostSpec{Text: req.Input, To: p.To}, principalOf(req), SenderName(d.Name))
 	if err != nil {
 		return duties.Started{}, fmt.Errorf("the post in the bridge %s: %s", p.Bridge, words(err))
 	}
@@ -219,7 +217,7 @@ func startOpen(ctx context.Context, a *fw.Agent, d *duties.Duty, req fw.RunReque
 		}
 		spec.Caps = &caps
 	}
-	if goal := strings.TrimSpace(duties.Inline(req)); goal != "" {
+	if goal := strings.TrimSpace(req.Input); goal != "" {
 		spec.Goal = goal
 	}
 	it, err := b.OpenFor(ctx, spec, principalOf(req))

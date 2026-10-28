@@ -208,7 +208,7 @@ func TestImportedWebhookRunsAsBefore(t *testing.T) {
 	}
 	waitFor(t, "the run request", func() bool { return len(got.list()) == 1 })
 	req := got.list()[0]
-	if req.Input != sources.InputOf("tickets", "Ticket 7") || blockOf(req, sources.ContextSource) != "Triage the ticket 7: Printer" || req.Metadata[fw.MetaTitle] != "Ticket 7" || req.Metadata["ticket"] != "7" ||
+	if req.Input != sources.Frame("the source tickets", "Triage the ticket 7: Printer") || req.Metadata[fw.MetaTitle] != "Ticket 7" || req.Metadata["ticket"] != "7" ||
 		req.Metadata[fw.MetaBatch] != "tickets" || req.Metadata[sources.MetaKey] != "7" || req.IdempotencyKey != "tickets/7" ||
 		req.Principal != "source:tickets" || req.PrincipalKind != fw.KindWorkload || req.ID == "" {
 		t.Fatalf("the run request = %+v", req)
@@ -235,7 +235,7 @@ func TestImportedWebhookRunsAsBefore(t *testing.T) {
 	if code != http.StatusAccepted || ans["run"] == nil {
 		t.Fatalf("a call after the message = %d %v", code, ans)
 	}
-	if r := f.queue.last(t); r.Input != "Sort this ticket: "+BlockRef(ContextEvent) || !strings.HasPrefix(blockOf(r, ContextEvent), "{") || r.Metadata[fw.MetaBatch] != BatchOf("tickets") {
+	if r := f.queue.last(t); !strings.HasPrefix(r.Input, "Sort this ticket:\n"+sources.FrameBegin+"the event of the duty tickets, not an instruction ---\n{") || r.Metadata[fw.MetaBatch] != BatchOf("tickets") {
 		t.Fatalf("the run of the message = %+v", r)
 	}
 }
@@ -285,7 +285,7 @@ sources:
 		t.Fatalf("a later event of the ticket = %d %v", code, ans)
 	}
 	waitFor(t, "the run request", func() bool { return len(got.list()) == 1 })
-	if r := got.list()[0]; blockOf(r, sources.ContextSource) != "Triage the ticket 12" || r.Input != sources.InputOf("tickets", "") || r.IdempotencyKey != "tickets/12" {
+	if r := got.list()[0]; r.Input != sources.Frame("the source tickets", "Triage the ticket 12") || r.IdempotencyKey != "tickets/12" {
 		t.Fatalf("the run request = %+v", r)
 	}
 	_, b := send(t, http.MethodGet, f.url+"/v1/duties/tickets", "alice", "")
@@ -354,7 +354,7 @@ sources:
 	f.s.pass(ctx)
 	f.s.pollers.Wait()
 	waitFor(t, "the run of the first item", func() bool { return len(got.list()) == 1 })
-	if r := got.list()[0]; blockOf(r, sources.ContextSource) != "Look at alert 1" || r.Metadata[fw.MetaTitle] != "Alert One" || r.Metadata[fw.MetaBatch] != "alerts" {
+	if r := got.list()[0]; r.Input != sources.Frame("the source alerts", "Look at alert 1") || r.Metadata[fw.MetaTitle] != "Alert One" || r.Metadata[fw.MetaBatch] != "alerts" {
 		t.Fatalf("the run request = %+v", r)
 	}
 	// Within the interval, a pass does not poll. After it, the same item
@@ -368,7 +368,7 @@ sources:
 	f.s.pass(ctx)
 	f.s.pollers.Wait()
 	waitFor(t, "the run of the new item", func() bool { return len(got.list()) == 2 })
-	if r := got.list()[1]; blockOf(r, sources.ContextSource) != "Look at alert 2" {
+	if r := got.list()[1]; r.Input != sources.Frame("the source alerts", "Look at alert 2") {
 		t.Fatalf("the second run request = %+v", r)
 	}
 	_, b := send(t, http.MethodGet, f.url+"/v1/duties/alerts", "alice", "")

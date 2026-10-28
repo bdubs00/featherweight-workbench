@@ -736,16 +736,15 @@ func reasonOf(err error) string {
 }
 
 // request returns the run request of a start: the message with its
-// placeholders filled, the data blocks of what the check found and of the
-// event, the budget, the principal, the metadata of the duty, and the
-// idempotency key duty/<name>/<id>, which is
+// placeholders filled, the budget, the principal, the metadata of the
+// duty, and the idempotency key duty/<name>/<id>, which is
 // duty/<name>/<time> for a time of the schedule, with the attempt after it
 // for a retry. The request names its run, so the front knows the run at
 // once.
 func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 	d := &st.Duty
 	slot := e.Slot.UTC().Format(time.RFC3339Nano)
-	input := fill(d.Do.Message(), placeholders(d, e, last))
+	input := tidy(fill(d.Do.Message(), placeholders(d, e, last)))
 	md := map[string]string{MetaDuty: d.Name, MetaSlot: slot, fw.MetaBatch: BatchOf(d.Name)}
 	if title := fw.TitleFrom(fill(d.Do.Message(), titleValues(d, e, last))); title != "" {
 		md[fw.MetaTitle] = title
@@ -773,7 +772,6 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 		ID:             fw.NewID(),
 		Agent:          d.Agent,
 		Input:          input,
-		Context:        blocks(d.Do.Message(), e),
 		Budget:         budget,
 		Metadata:       md,
 		Principal:      principal,

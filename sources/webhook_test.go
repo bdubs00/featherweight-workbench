@@ -67,7 +67,7 @@ func TestWebhookMakesOneRunPerEvent(t *testing.T) {
 		return len(runs) == 1 && runs[0].State.Terminal()
 	})
 	r := runsOf(t, worker)[0]
-	if r.Principal != "source:tickets" || r.Input != InputOf("tickets", "Ticket 1") || r.Title != "Ticket 1" ||
+	if r.Principal != "source:tickets" || r.Input != Frame("the source tickets", "Triage ticket 1: Printer 1 is on fire") || r.Title != "Ticket 1" ||
 		r.Metadata[fw.MetaBatch] != "tickets" || r.Metadata[MetaKey] != "1/2026-10-19T10:00:00Z" || r.Metadata["ticket"] != "1" ||
 		r.Metadata["idempotencyKey"] != "tickets/1/2026-10-19T10:00:00Z" || r.Origin != fw.OriginBus {
 		t.Fatalf("run = %+v", r)

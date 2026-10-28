@@ -303,14 +303,3 @@ func (d detach) Close() error {
 	fleet.Attach(d.a, nil)
 	return nil
 }
-
-// blockOf returns the text of the data block of the source in a request,
-// or "".
-func blockOf(req fw.RunRequest, source string) string {
-	for _, b := range req.Context {
-		if b.Source == source {
-			return b.Text
-		}
-	}
-	return ""
-}

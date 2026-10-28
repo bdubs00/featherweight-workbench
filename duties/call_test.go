@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bdubs00/featherweight-workbench/sources"
 )
 
 // hookDuty starts on a call with the bearer token of HOOK_TOKEN.
@@ -46,8 +48,8 @@ func TestCallBearer(t *testing.T) {
 	if resp.StatusCode != http.StatusAccepted || !strings.Contains(b, `"run":"`) {
 		t.Fatalf("a call = %d %s", resp.StatusCode, b)
 	}
-	if req := f.queue.last(t); req.Input != "Handle "+BlockRef(ContextEvent) || blockOf(req, ContextEvent) != `{"id":1}` {
-		t.Fatalf("the input = %q, the blocks %+v", req.Input, req.Context)
+	if req := f.queue.last(t); req.Input != "Handle\n"+sources.Frame("the event of the duty hook", `{"id":1}`) {
+		t.Fatalf("the input = %q", req.Input)
 	}
 	if h := f.history(t, "hook"); h[0].Start != StartCall {
 		t.Fatalf("history = %+v", h[0])

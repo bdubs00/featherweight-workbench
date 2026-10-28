@@ -17,6 +17,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/faces"
+	"github.com/bdubs00/featherweight-workbench/sources"
 )
 
 // Placeholders are the placeholders of a message.
@@ -25,34 +26,25 @@ var Placeholders = []string{"{date}", "{time}", "{found}", "{event}", "{last.tit
 // none stands for a placeholder without a value.
 const none = "none"
 
-// The sources of the data blocks of a run of a duty (docs/KNOWHOW.md
-// section 6.2): what the check found, the event of a call or of the
-// fleet, and the output of the previous run of the duty. Outside systems
-// and earlier runs wrote that text, so it never enters the message itself.
-const (
-	ContextFound = "found"
-	ContextEvent = "event"
-	ContextLast  = "last"
-)
+// ContextLast is the source of the data block that holds the output of
+// the previous run of a duty (docs/KNOWHOW.md section 6.2). An earlier run
+// wrote it, so it never enters the message.
+const ContextLast = "last"
 
 // MaxLastBytes bounds the output of the previous run in the block last.
 const MaxLastBytes = 2 << 10
 
-// BlockRef is the short reference that takes the place of a placeholder
-// whose text goes in the data block of the source.
-func BlockRef(source string) string { return "(the text is in the block " + source + ")" }
-
 // placeholders returns the values of the placeholders for a start: the
-// date and the time of the start in the zone of the duty, a reference to
-// the block of what the check found and of the event of a call, the last
-// run before the start, and the name of the duty.
+// date and the time of the start in the zone of the duty, what the check
+// found, the event of a call, the last run before the start, and the name
+// of the duty.
 func placeholders(d *Duty, e entry, last *RunEntry) map[string]string {
 	loc := d.zone()
 	v := map[string]string{
 		"{date}":       e.Slot.In(loc).Format(time.DateOnly),
 		"{time}":       e.Slot.In(loc).Format("15:04"),
-		"{found}":      refOrNone(e.FoundText, ContextFound),
-		"{event}":      refOrNone(e.Event, ContextEvent),
+		"{found}":      framed("the check of the duty "+d.Name, e.FoundText),
+		"{event}":      framed("the event of the duty "+d.Name, e.Event),
 		"{last.title}": none,
 		"{last.run}":   none,
 		"{last.state}": none,
@@ -64,48 +56,10 @@ func placeholders(d *Duty, e entry, last *RunEntry) map[string]string {
 	return v
 }
 
-// refOrNone is the reference to the block of the source for a text, or
-// none for no text.
-func refOrNone(text, source string) string {
-	if strings.TrimSpace(text) == "" {
-		return none
-	}
-	return BlockRef(source)
-}
-
-// blocks returns the data blocks of a start for the placeholders that the
-// message names: what the check found, as {found}, and the event, as
-// {event}, each with a text.
-func blocks(msg string, e entry) []fw.RunContext {
-	var out []fw.RunContext
-	for _, b := range []struct{ placeholder, source, text string }{
-		{"{found}", ContextFound, e.FoundText},
-		{"{event}", ContextEvent, e.Event},
-	} {
-		if strings.Contains(msg, b.placeholder) && strings.TrimSpace(b.text) != "" {
-			out = append(out, fw.RunContext{Source: b.source, Text: b.text})
-		}
-	}
-	return out
-}
-
-// Inline returns the input of a run request with the text of its blocks
-// found and event in place of their references, for an action whose
-// message is not a run, such as a post in a bridge.
-func Inline(req fw.RunRequest) string {
-	input := req.Input
-	for _, b := range req.Context {
-		if b.Source == ContextFound || b.Source == ContextEvent {
-			input = strings.ReplaceAll(input, BlockRef(b.Source), b.Text)
-		}
-	}
-	return input
-}
-
 // titleValues are the values of the placeholders for the title of a run.
-// The agent reads {found} and {event} in their blocks, but a person reads
-// the title, so the title takes the count of the items and the name of
-// the event instead.
+// The agent reads {found} and {event} as JSON, but a person reads the
+// title, so the title takes the count of the items and the name of the
+// event instead.
 func titleValues(d *Duty, e entry, last *RunEntry) map[string]string {
 	v := placeholders(d, e, last)
 	if e.Found > 0 {
@@ -130,6 +84,23 @@ func eventName(raw string) string {
 		}
 	}
 	return "an event"
+}
+
+// framed is the text of an outside system between the two lines of
+// sources.Frame, each line on its own, or none for no text.
+func framed(from, text string) string {
+	if strings.TrimSpace(text) == "" {
+		return none
+	}
+	return "\n" + sources.Frame(from, text) + "\n"
+}
+
+// tidy takes away what a framed placeholder leaves around its lines: the
+// space before its first line, and an empty line at the start or the end
+// of the message.
+func tidy(msg string) string {
+	msg = strings.ReplaceAll(msg, " \n"+sources.FrameBegin, "\n"+sources.FrameBegin)
+	return strings.Trim(msg, "\n")
 }
 
 func orNone(s string) string {
