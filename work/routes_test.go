@@ -240,7 +240,7 @@ func newFront(t *testing.T) (*fw.Agent, *httptest.Server) {
 		"ops": {Description: "Keeps the hosts in line with their roles.", Access: &fw.Access{Owners: []string{"carol"}}},
 	}
 	a, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(people{}), fw.WithModel(model()),
-		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithSurfaces(native.New()), fw.WithServices(duties.Start), fw.WithLogger(quiet()))
+		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fw.NewMemBus()), fw.WithSurfaces(native.New()), fw.WithServices(duties.Start, Service), fw.WithLogger(quiet()))
 	if err != nil {
 		t.Fatal(err)
 	}

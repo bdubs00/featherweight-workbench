@@ -416,3 +416,45 @@ func TestMergeRunsKeepsTheArchiveOfAnEnd(t *testing.T) {
 		t.Errorf("a run of the view alone = %+v", got[2].Run)
 	}
 }
+
+// A stopped card that a person let go is done with the verdict let-go,
+// and its reason names the person, or you for the caller. A let-go older
+// than the window drops out with the card. A card that moved on since its
+// let-go keeps its stage.
+func TestLetGoCards(t *testing.T) {
+	lost := run("R-LOST", "helper", fw.StateRunning, ago(10*24*time.Hour), ago(10*24*time.Hour), nil)
+	failed := run("R-FAIL", "helper", fw.StateFailed, ago(2*time.Hour), ago(time.Hour), nil)
+	failed.Error = "budget exceeded: maxTurns"
+	old := run("R-OLD", "helper", fw.StateFailed, ago(20*24*time.Hour), ago(20*24*time.Hour), nil)
+	again := run("R-AGAIN", "helper", fw.StateRunning, ago(time.Hour), ago(time.Minute), nil)
+	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: lost, Lost: true}, {Run: failed}, {Run: old, Lost: true}, {Run: again}},
+		LetGo: map[string]LetGo{
+			"run:R-LOST":  {Card: "run:R-LOST", By: "alice", Name: "Alice", At: ago(time.Hour)},
+			"run:R-FAIL":  {Card: "run:R-FAIL", By: "bob", Name: "Bob", At: ago(30 * time.Minute)},
+			"run:R-OLD":   {Card: "run:R-OLD", By: "bob", At: ago(9 * 24 * time.Hour)},
+			"run:R-AGAIN": {Card: "run:R-AGAIN", By: "fd1e8a14-ac12-5a00-b4d6-bb6e50d15c10", At: ago(2 * time.Hour)},
+		}}
+	in.Mine = mineAll(in.Runs...)
+	ans := Assemble(in)
+	l := cardOf(t, ans, "run:R-LOST")
+	if l.Stage != StageDone || l.Verdict != VerdictLetGo || l.Reason != "Let go by you." || l.Next != "" || l.Ended == nil || !l.Ended.Equal(ago(time.Hour)) || !l.Lost {
+		t.Fatalf("a lost card that alice let go = %+v", l)
+	}
+	if f := cardOf(t, ans, "run:R-FAIL"); f.Stage != StageDone || f.Reason != "Let go by Bob." {
+		t.Fatalf("a failed card that bob let go = %+v", f)
+	}
+	for _, c := range ans.Cards {
+		if c.ID == "run:R-OLD" {
+			t.Fatalf("a let-go older than the window shows %+v", c)
+		}
+	}
+	if a := cardOf(t, ans, "run:R-AGAIN"); a.Stage != StageWorking {
+		t.Fatalf("a card that works again = %+v", a)
+	}
+	if got := letGoName(LetGo{By: "fd1e8a14-ac12-5a00-b4d6-bb6e50d15c10"}, "alice"); got != "a person" {
+		t.Fatalf("the name of a person with an id = %q", got)
+	}
+	if ans.Lanes[5].Count != 2 || ans.Lanes[3].Count != 0 {
+		t.Fatalf("the lanes = %+v", ans.Lanes)
+	}
+}

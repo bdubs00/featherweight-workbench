@@ -31,6 +31,7 @@ import (
 )
 
 func init() {
+	fw.RegisterService(Service)
 	native.Extend(mount)
 	mcp.RegisterTools(tools)
 }
@@ -115,6 +116,11 @@ func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, er
 	if p := fw.PrincipalFrom(ctx); p != nil {
 		in.Me = p.Subject
 	}
+	letGo, err := Of(a).All(ctx)
+	if err != nil {
+		return Answer{}, err
+	}
+	in.LetGo = letGo
 	live, err := dashboard.Runs(ctx, a, dashboard.ScopeFleet, "")
 	if err != nil {
 		return Answer{}, err
@@ -202,7 +208,8 @@ func jobBatches(in Input) []string {
 	return out
 }
 
-// mount serves GET /v1/work, POST /v1/work/plan, and POST /v1/work/review.
+// mount serves GET /v1/work, POST /v1/work/plan, POST /v1/work/review, and
+// POST /v1/work/letgo.
 func mount(k *native.Kit) error {
 	a := k.Agent()
 	bossmode.OfferWork()
@@ -263,6 +270,23 @@ func mount(k *native.Kit) error {
 		cacheOf(a).clear()
 		native.WriteJSON(w, http.StatusOK, ans)
 	})
+	k.Handle("POST /v1/work/letgo", func(w http.ResponseWriter, r *http.Request) {
+		var req LetGoRequest
+		if !k.Decode(w, r, &req) {
+			return
+		}
+		ctx, _, acting := manager.OnBehalf(r.Context())
+		if acting {
+			native.WriteProblem(w, r, http.StatusForbidden, "only a person lets a card go")
+			return
+		}
+		c, err := LetGoCard(ctx, a, time.Now(), req)
+		if err != nil {
+			fail(w, r, k, err)
+			return
+		}
+		native.WriteJSON(w, http.StatusOK, c)
+	})
 	return nil
 }
 
@@ -282,6 +306,12 @@ func fail(w http.ResponseWriter, r *http.Request, k *native.Kit, err error) {
 		native.WriteProblem(w, r, http.StatusNotFound, bridges.Detail(err))
 	case errors.Is(err, bridges.ErrConflict):
 		native.WriteProblem(w, r, http.StatusConflict, bridges.Detail(err))
+	case errors.Is(err, ErrNoCard):
+		native.WriteProblem(w, r, http.StatusNotFound, strings.TrimPrefix(err.Error(), ErrNoCard.Error()+": "))
+	case errors.Is(err, ErrNotStopped):
+		native.WriteProblem(w, r, http.StatusConflict, strings.TrimPrefix(err.Error(), ErrNotStopped.Error()+": "))
+	case errors.Is(err, ErrOff):
+		native.WriteProblem(w, r, http.StatusServiceUnavailable, strings.TrimPrefix(err.Error(), ErrOff.Error()+": "))
 	case errors.Is(err, ErrNoBridges):
 		native.WriteProblem(w, r, http.StatusServiceUnavailable, "the bridges are off in this process")
 	case errors.As(err, &me) && me.Status >= 400 && me.Status < 500:
@@ -296,12 +326,13 @@ const (
 	ToolWork   = "work"
 	ToolPlan   = "work_plan"
 	ToolReview = "work_review"
+	ToolLetGo  = "work_letgo"
 )
 
 func ptr[T any](v T) *T { return &v }
 
-// tools builds the tools work, work_plan, and work_review for one MCP
-// server.
+// tools builds the tools work, work_plan, work_review, and work_letgo for
+// one MCP server.
 func tools(srv *mcp.Server) []mcp.Tool {
 	a := srv.Agent()
 	type planIn struct {
@@ -369,6 +400,23 @@ func tools(srv *mcp.Server) []mcp.Tool {
 			text = "Needs work: the run " + ans.Run + " has a thumb down, and the note went to the agent."
 		}
 		return mcp.Result(text, ans), nil, nil
+	}), mcp.NewTool(&sdk.Tool{
+		Name:  ToolLetGo,
+		Title: "Let a stopped task go",
+		Description: "Let a stopped card of the board go, for the person: card is the id of the card, as the tool work answers it. The card moves to done with the verdict let-go, and the front keeps who let it go and when. Its runs keep their state, so the value of the work counts them as before. " +
+			"Only a person whose move the card is (next is you), or an owner of one of its agents, can let it go. A card that a person let go already stays as it is. A card that is not stopped cannot go.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"card":{"type":"string"}},"required":["card"]}`),
+		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, IdempotentHint: true, OpenWorldHint: ptr(false)},
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in LetGoRequest) (*sdk.CallToolResult, any, error) {
+		ctx, _, acting := manager.OnBehalf(ctx)
+		if acting {
+			return mcp.ErrorResult("Forbidden: only a person lets a card go; a run of an agent cannot."), nil, nil
+		}
+		c, err := LetGoCard(ctx, a, time.Now(), in)
+		if err != nil {
+			return mcp.ErrorResult(mcp.Explain(err)), nil, nil
+		}
+		return mcp.Result("Let go: "+c.Title+". "+c.Reason+" It is in Done now.", c), nil, nil
 	})}
 }
 

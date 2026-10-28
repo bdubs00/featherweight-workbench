@@ -152,8 +152,8 @@ type Card struct {
 	Links   Links      `json:"links"`
 	CostUSD float64    `json:"costUSD"`
 	// Verdict says who or what checked the result of a done card:
-	// accepted, checked, sent-back, or unchecked. A canceled card has
-	// none.
+	// accepted, checked, sent-back, or unchecked, or let-go for a stopped
+	// card that a person let go. A canceled card has none.
 	Verdict string `json:"verdict,omitempty"`
 	// Lost is true when no worker holds a part of the card that had not
 	// ended: the pool replaced its worker, so the part cannot go on.
@@ -216,6 +216,9 @@ type Input struct {
 	// schedule and is not paused, by name.
 	Next   map[string]time.Time
 	Queued map[string]int
+	// LetGo holds the let-go of the cards that people let go, by the id of
+	// the card (letgo.go).
+	LetGo  map[string]LetGo
 	Now    time.Time
 	Window time.Duration
 }
@@ -825,6 +828,7 @@ func (b *board) answer() Answer {
 			continue
 		}
 		b.settle(d)
+		b.letGo(d)
 		if d.Stage == StageDone && d.Since.Before(b.in.Now.Add(-b.in.Window)) {
 			continue
 		}
