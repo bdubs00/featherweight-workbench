@@ -96,7 +96,7 @@ func (s *Service) serveCall(w http.ResponseWriter, r *http.Request) {
 			native.WriteJSON(w, http.StatusOK, map[string]string{"skipped": why})
 			return
 		}
-		got := sources.ServeEvents(w, r.WithContext(ctx), s.a, st.sourceOf(), body)
+		got := sources.ServeEvents(w, r.WithContext(ctx), s.a, st.sourceOf(s.heldBack), body)
 		if len(got.Runs) > 0 {
 			s.recordDelivery(ctx, st, StartCall, got)
 		}

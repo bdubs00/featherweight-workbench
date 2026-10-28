@@ -19,6 +19,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/internal/heldback"
 )
 
 // RoutePattern is the route of the webhook sources.
@@ -175,6 +176,7 @@ func (s *Sources) answerEvents(w http.ResponseWriter, r *http.Request, src *sour
 			return Delivered{Events: len(events), Refused: len(events)}
 		}
 		it.req.ID = fw.NewID()
+		heldback.Mark(&it.req, src.cfg.HeldBack)
 		items = append(items, it)
 	}
 	// A caller that goes away does not stop the claims in the middle.

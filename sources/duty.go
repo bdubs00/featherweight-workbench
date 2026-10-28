@@ -20,6 +20,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/native"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/internal/heldback"
 )
 
 // ErrNotStarted means that the sources of the process have not started,
@@ -147,6 +148,7 @@ func (s *Sources) renderAll(src *source, events []map[string]any, strict bool) (
 			continue
 		}
 		it.req.ID = fw.NewID()
+		heldback.Mark(&it.req, src.cfg.HeldBack)
 		items = append(items, it)
 	}
 	return items, refused, nil

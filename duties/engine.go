@@ -27,6 +27,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/duties/schedule"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/internal/heldback"
 )
 
 // Times of the engine.
@@ -759,7 +760,7 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 	if b := d.Limits.Budget; b != nil {
 		budget = &fw.Budget{MaxCostUSD: b.MaxCostUSD, MaxTurns: b.MaxTurns, MaxTokens: b.MaxTokens, MaxToolCalls: b.MaxToolCalls}
 	}
-	return fw.RunRequest{
+	req := fw.RunRequest{
 		ID:             fw.NewID(),
 		Agent:          d.Agent,
 		Input:          input,
@@ -769,6 +770,10 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 		PrincipalKind:  kind,
 		IdempotencyKey: key,
 	}
+	// A share of the runs gets none of what the agent learned, for the
+	// comparison of Know-how.
+	heldback.Mark(&req, s.heldBack)
+	return req
 }
 
 // lastRun returns the newest start of a duty with a run before the slot,

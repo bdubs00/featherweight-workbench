@@ -157,6 +157,9 @@ func (src *source) render(index int, event map[string]any) (rendered, error) {
 	md[fw.MetaBatch] = src.cfg.Name
 	md[MetaSource] = src.cfg.Name
 	md[MetaKey] = key
+	if src.cfg.Duty != "" {
+		md[fw.MetaDuty] = src.cfg.Duty
+	}
 	// The claim adds the generation after the render, so it needs an entry.
 	if src.cfg.Redrive != nil && len(md) >= fw.MaxMetadataEntries {
 		return rendered{}, errors.New("the metadata leave no room for the source generation")
