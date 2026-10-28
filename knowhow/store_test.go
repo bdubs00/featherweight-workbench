@@ -133,11 +133,24 @@ func TestOutOfDate(t *testing.T) {
 	if n := fr.note(t, duty, "issue.md"); n.State != StateOutOfDate || n.OutOfDate.Source != "item:gitea/issue/42" {
 		t.Fatalf("the note of the item = %+v", n)
 	}
-	// A recheck waits for the review for each note of a principal; the
-	// note of the agent changes by a person only, so it has none.
+	// A recheck waits for the review for each note that went out of date,
+	// in the scope of its note: the notes of the principal and the note of
+	// the agent. A note that a person wrote gets none.
+	fr.s.Write(ctx, WriteRequest{Agent: "triage", Scope: Scope{Kind: ScopeAgent}, Name: "person.md", Text: "Mine.", By: "person:alice",
+		Sources: []Source{{Ref: "page:agents/triage/labels.md", Version: Hash("v2")}}})
+	PageWritten(ctx, "agents/triage/labels.md", Hash("v3"))
 	open, err := fr.s.Candidates(ctx, "triage", func(c Candidate) bool { return c.Kind == KindRecheck })
-	if err != nil || len(open) != 2 || open[0].State != CandOpen || open[0].Note != "labels.md" || open[0].Sources[0].Version != Hash("v2") {
+	scopes := map[string]Scope{}
+	byNote := map[string]Candidate{}
+	for _, c := range open {
+		scopes[c.Note], byNote[c.Note] = c.Scope, c
+	}
+	if err != nil || len(open) != 4 || byNote["labels.md"].State != CandOpen || byNote["labels.md"].Sources[0].Version != Hash("v2") ||
+		scopes["shared.md"] != (Scope{Kind: ScopeAgent}) || scopes["issue.md"] != duty || scopes["fresh.md"] != duty || len(scopes) != 4 {
 		t.Fatalf("rechecks = %+v, %v", open, err)
+	}
+	if fr.note(t, Scope{Kind: ScopeAgent}, "person.md").State != StateChecked {
+		t.Fatal("automation marked a note of a person out of date")
 	}
 	// A new text replaces it, and the journal counts a correction.
 	res := fr.write(t, duty, "labels.md", "The label bug means broken for the requester.", Source{Ref: "page:agents/triage/labels.md", Version: Hash("v2")})

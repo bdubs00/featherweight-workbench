@@ -4243,7 +4243,7 @@ Every write reads the entry and writes at the revision that it read, as the othe
 
 `PageWritten(ctx, path, hash)` marks out of date every note that names `page:<path>` with another version than the hash. An empty hash is a removal of the page. `ItemChanged(ctx, source, key, version)` does the same for `item:<source>/<key>`. A source `run:<id>` never goes out of date. A note that a person wrote stays as it is.
 
-Each move writes the journal entry `out-of-date` with the source that changed. A note of a principal also gets a candidate `recheck` for the after-work review (section 28.7). A note of the agent changes only by a person, so it gets no candidate.
+Each move writes the journal entry `out-of-date` with the source that changed. The note also gets a candidate `recheck` for the after-work review, in the scope of the note (section 28.7).
 
 ### 28.3 The routes
 
@@ -4319,11 +4319,13 @@ A pass at each minute reads the finished runs of the archive behind a durable cu
 | Kind | What the code finds |
 |---|---|
 | `gotcha` | A tool call that failed, and a later call of the same tool in the same run that passed with another input. Two runs with the same failure make one candidate. The numbers of the error do not count. |
-| `place` | The same read call, tool and canonical input, in two runs or more of one principal, with the same result. The entry `places.<agent>.<principal>` keeps at most 500 read calls with their last three runs. |
+| `place` | The same read call, tool and canonical input, in two runs or more of the agent, with the same result. The entry `places.<agent>.agent._` keeps at most 500 read calls with their last three runs. |
 | `outcome` | A run with a receipt, a verdict of its grader, a definition of done that passed without a weak pass (section 25.1, `fw.CheckedDone`), or a thumbs up or down. The runs of one Duty that went well make one candidate, and those that went badly make another. |
-| `recheck` | A note of a principal that went out of date, with the sources of the note at the new version |
+| `recheck` | A note that went out of date, with the sources of the note at the new version. A note that a person wrote gets none. |
 
-A candidate is the entry `cand.<agent>.<id>`. Its id is a hash of its kind, its scope, and what it found, then a dash and the agent in base64url. A candidate belongs to the scope of the principal of its runs. It holds at most eight runs with their evidence, and it gets the source `run:<id>` of each run. It drops 14 days after the pass found it.
+A candidate is the entry `cand.<agent>.<id>`. Its id is a hash of its kind, its scope, and what it found, then a dash and the agent in base64url. A candidate belongs to the scope of the agent, because the runs of the agent read the notes of that scope, the default of the kernel. So the same finding in the runs of two principals is one candidate. A recheck keeps the scope of its note. A candidate holds at most eight runs with their evidence, and it gets the source `run:<id>` of each run. It drops 14 days after the pass found it.
+
+A candidate also gets the pages of the wiki that it rests on, so its note goes out of date when a page changes. A call of `pages_read` of the front that read the newest version of a page names the page: `page:<path>` with the hash of the first line of the result as the version. A place gets the page of its read call. An outcome gets the pages that its runs read, at most eight a run, with the version of the newest run. A read of an older version names no page.
 
 The origin of a candidate is `untrusted` in each of these cases:
 
@@ -4352,9 +4354,10 @@ The front checks each keep:
 - The text holds at most 600 characters.
 - No line starts with `always`, `never`, `do not`, `don't`, `you must`, or `make sure`. The error gives the reason and an example of a fact.
 - `why` is one line.
-- The note gets the sources of the candidate and no other. It goes to the scope of the runs of the candidate, with `by` review and the run of the review.
+- The text holds no path of one machine: a home directory such as `/home/<name>/` or `/Users/<name>/`, `~/`, `/root`, a temporary directory such as `/tmp` or `/var/folders/`, or a drive of Windows. The next run can run on another machine. The error says to write the path from the root of its tool.
+- The note gets the sources of the candidate and no other. It goes to the scope of the agent, where every run of the agent reads it, with `by` review and the run of the review. A recheck writes to the scope of its note.
 - An untrusted candidate that waits for a second trigger is refused.
-- `add` needs a name that no note has. `supersede` needs a note that exists and that no person wrote. A recheck supersedes its own note.
+- `add` needs a name that no note has. Without a name, the front picks one from the kind and the first six words of the text, such as `gotchas/gitea-refuses-a-label-name-with.md`, with `-2` and up when a note has it. The answer names the note. `supersede` needs the name of a note that exists and that no person wrote. A recheck supersedes its own note.
 - The journal keeps the old revision for an undo. With the switch on, the change waits.
 
 A decided candidate stays decided until it drops.
@@ -4450,7 +4453,8 @@ The package needs four small seams outside it:
 
 ### 28.13 Security and bounds
 
-- The notes of one principal never move to another scope. The review writes only to the scope of the principal of the runs of its candidate, and never a note of the agent. A note of the agent comes only from a person with the owner role, or from the memory tool of a run with that scope.
+- The review keeps its notes in the scope of the agent, where the runs of the agent read them, as the memory tool of a run with that scope does. So a note that the review kept from the runs of one person reaches the runs of every person of the agent, and every viewer of the agent reads it. The review keeps no one-off story (its rules), an owner reads each note in the journal and can undo it, and with the switch on, each note waits for a person. A pool whose workers set `tools.memory.scope: principal` reads the notes of the principal of a run only, so it does not get the notes of the review.
+- The review never moves a note of one principal to another scope. A recheck supersedes a note in its own scope.
 - The model of the review chooses among the candidates that code found. It cannot add a source, choose a scope, or keep an order.
 - The text of a note, of a candidate, and of a run is data. The tools and the input of the review say so.
 - No text of a note enters a log line. A write logs the agent, the scope kind, the name, the writer, and the hash.
