@@ -115,6 +115,12 @@ func readback(d *Duty) string {
 	if c := d.CheckFirst; c != nil {
 		parts = append(parts, checkWords(d, c))
 	}
+	if w := resultWords(d); w != "" {
+		parts = append(parts, w)
+	}
+	if d.Review {
+		parts = append(parts, reviewWords)
+	}
 	return strings.Join(parts, " ")
 }
 

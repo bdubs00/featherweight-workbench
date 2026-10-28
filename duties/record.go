@@ -39,6 +39,10 @@ type Duty struct {
 	Notify     *Notify     `json:"notify,omitempty"`
 	RunAs      string      `json:"runAs,omitempty"`
 	Paused     bool        `json:"paused"`
+	// Review asks the owner to check each result: each start carries the
+	// metadata workbench.review with 1 (MetaReview), and a run with it
+	// waits in the review stage of the work until its first reaction.
+	Review bool `json:"review,omitempty"`
 
 	// from is the hidden part of an imported duty (imported.go): its
 	// templates and the address and the secrets that the configuration of
@@ -291,14 +295,25 @@ type WhileAway struct {
 	Then    string `json:"then"`
 }
 
-// Notify names who hears of a failed run and of a question of a run:
-// "owner", the subject of a person, or channel:<name> for a shared
-// channel of the operator (workbench.notifications.shared), which the
-// notification reaches without a person.
+// Notify names who hears of a failed run, of a question of a run, and of
+// a result: "owner", the subject of a person, or channel:<name> for a
+// shared channel of the operator (workbench.notifications.shared), which
+// the notification reaches without a person. ResultWhen says which
+// results reach the people of Result: ResultAlways, each completed start,
+// or ResultFound, a start that found something (result.go). A duty with
+// people in Result and no ResultWhen takes ResultAlways.
 type Notify struct {
-	Failure  []string `json:"failure,omitempty"`
-	NeedsYou []string `json:"needsYou,omitempty"`
+	Failure    []string `json:"failure,omitempty"`
+	NeedsYou   []string `json:"needsYou,omitempty"`
+	Result     []string `json:"result,omitempty"`
+	ResultWhen string   `json:"resultWhen,omitempty"`
 }
+
+// Choices of notify.resultWhen.
+const (
+	ResultAlways = "always" // each completed start
+	ResultFound  = "found"  // a completed start that found something (result.go)
+)
 
 // NotifyChannelPrefix starts an entry of a notify list that names a shared
 // channel of the operator, such as channel:ops-room.
@@ -470,12 +485,16 @@ func (d *Duty) normalize(zone string) {
 	if d.Notify == nil {
 		d.Notify = &Notify{Failure: []string{RunAsOwner}, NeedsYou: []string{RunAsOwner}}
 	}
-	for _, list := range [][]string{d.Notify.Failure, d.Notify.NeedsYou} {
+	for _, list := range [][]string{d.Notify.Failure, d.Notify.NeedsYou, d.Notify.Result} {
 		for i, who := range list {
 			if name, ok := ChannelOf(strings.TrimSpace(who)); ok {
 				list[i] = NotifyChannelPrefix + strings.TrimSpace(name)
 			}
 		}
+	}
+	d.Notify.ResultWhen = strings.ToLower(strings.TrimSpace(d.Notify.ResultWhen))
+	if len(d.Notify.Result) > 0 && d.Notify.ResultWhen == "" {
+		d.Notify.ResultWhen = ResultAlways
 	}
 	d.RunAs = strings.ToLower(strings.TrimSpace(d.RunAs))
 	if d.RunAs == "" {
@@ -650,7 +669,7 @@ func (d *Duty) problems() []string {
 		for _, f := range []struct {
 			path string
 			list []string
-		}{{"notify.failure", n.Failure}, {"notify.needsYou", n.NeedsYou}} {
+		}{{"notify.failure", n.Failure}, {"notify.needsYou", n.NeedsYou}, {"notify.result", n.Result}} {
 			if len(f.list) > maxNotify {
 				add(f.path, "The list names %d people, and the most is %d.", len(f.list), maxNotify)
 			}
@@ -666,6 +685,20 @@ func (d *Duty) problems() []string {
 				}
 			}
 		}
+	}
+	if n := d.Notify; n != nil {
+		switch n.ResultWhen {
+		case "", ResultAlways:
+		case ResultFound:
+			if d.CheckFirst == nil && (d.Do.Post != nil || d.Do.Open != nil) {
+				add("notify.resultWhen", "A duty that posts or opens a bridge has no answer that says what it found. Pick always, or add a check first.")
+			}
+		default:
+			add("notify.resultWhen", "%q is not a choice. Pick always or found.", n.ResultWhen)
+		}
+	}
+	if d.Review && (d.Do.Post != nil || d.Do.Open != nil) {
+		add("review", "A duty that posts or opens a bridge starts no run of its own, so it has no result to check. Leave review off.")
 	}
 	if d.RunAs != RunAsDuty && d.RunAs != RunAsOwner {
 		add("runAs", "%q is not a choice. Pick duty or owner.", d.RunAs)

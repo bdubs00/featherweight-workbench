@@ -596,7 +596,7 @@ func (s *Service) channelProblems(n *Notify) []string {
 	for _, f := range []struct {
 		path string
 		list []string
-	}{{"notify.failure", n.Failure}, {"notify.needsYou", n.NeedsYou}} {
+	}{{"notify.failure", n.Failure}, {"notify.needsYou", n.NeedsYou}, {"notify.result", n.Result}} {
 		for _, who := range f.list {
 			name, ok := ChannelOf(who)
 			switch {

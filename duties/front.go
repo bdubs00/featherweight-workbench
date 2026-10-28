@@ -176,8 +176,11 @@ func (s *Service) Tell(ctx context.Context, kind, name, run, reason string) erro
 	var list []string
 	if d.Notify != nil {
 		list = d.Notify.Failure
-		if kind == NoticeNeedsYou || kind == NoticeDecided {
+		switch kind {
+		case NoticeNeedsYou, NoticeDecided:
 			list = d.Notify.NeedsYou
+		case NoticeResult:
+			list = d.Notify.Result
 		}
 	}
 	n := Notice{Kind: kind, Duty: d.Name, Agent: d.Agent, Owner: d.Owner, Run: run, Reason: reason, At: s.now().UTC()}

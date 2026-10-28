@@ -768,3 +768,15 @@ func TestStartWithoutIntake(t *testing.T) {
 	}
 	_ = c.Close()
 }
+
+// A result of a duty goes to a channel that sends live notices, and not to
+// a channel of the digest alone. Its title names the duty.
+func TestResultNoticeKind(t *testing.T) {
+	if !wants(Send{Questions: true}, duties.NoticeResult) || !wants(Send{Failures: true}, duties.NoticeResult) || wants(Send{Digest: true}, duties.NoticeResult) {
+		t.Fatal("the switches of a result")
+	}
+	title, text, prio := words(duties.Notice{Kind: duties.NoticeResult, Duty: "drift", Reason: " Found: web-3 drifts. "})
+	if title != "Duty drift: a result" || text != "Found: web-3 drifts." || prio != 3 {
+		t.Fatalf("the words = %q, %q, %d", title, text, prio)
+	}
+}

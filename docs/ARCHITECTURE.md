@@ -2274,7 +2274,7 @@ Every run of a bridge carries the batch `bridge:<id>` in the metadata `fw.batch`
 | `createdAt`, `closedAt` | The times of the open and of the last close, or null |
 | `manager` | `{"member", "run"}`: the fleet member that runs the manager, and the manager run of the bridge, or null. In a spawn bridge the run is the root of the tree of the seats. A bridge that the manager opened names the run that opened it. |
 | `delegation` | `{"approve", "budget", "members", "report"}`: what the operator lets the manager do in this bridge. A new bridge delegates the report alone. |
-| `caps` | `{"maxMessages", "maxFanoutPerMinute", "maxPairMessages", "maxTurns"}` (section 18.5). A record of an older front has no `maxTurns`; the routes answer the default, 1000, and the fan-out holds it. |
+| `caps` | `{"maxMessages", "maxFanoutPerMinute", "maxPairMessages", "maxTurns", "maxCostUSD"}` (section 18.5). A record of an older front has no `maxTurns`; the routes answer the default, 1000, and the fan-out holds it. `maxCostUSD` is absent or 0 for a bridge without a cap of cost. |
 | `members` | The seats |
 | `lastSeq` | The seq of the newest entry of the channel |
 
@@ -2400,6 +2400,7 @@ The caps of a bridge bound the fan-out. Past a cap the front delivers nothing mo
 | `maxFanoutPerMinute` | The deliveries of the current minute | The rest of the minute delivers nothing; the line names the members that missed the message |
 | `maxPairMessages` | The messages between two agents since the last message of a person | The two get nothing more from each other until a person writes or the operator raises the cap |
 | `maxTurns` | The turns of every run of the bridge together, as this replica sees them: the seats, their helpers, and in a spawn bridge the manager run and its children. A run that the view forgot no longer counts. | No message fans out and nothing seats until the operator raises the cap. Each message gives a seat its allowance again, so this cap is what stops agents that keep each other busy. |
+| `maxCostUSD` | The cost of every run of the bridge together, at the prices of the workers, as this replica sees it: each run counts its own usage, never the usage of its tree. 0 or absent sets no cap of cost, and the front never fills one in. | No message fans out and nothing seats. Each open run that the channel mirrors also stops at a limit of its budget, as the tool `run_budget` does. These runs are the seat runs and the manager run of a spawn bridge. A run with a priced cost gets `maxCostUSD` at its cost so far, so its next model call stops it at once. A run without a priced cost gets `maxTurns` at its turns so far, so it stops at its next turn with its final report. If a run waits for a person, it stops when it goes on. The front sends each stop once per run and cap (`bridges/costcap.go`). A stop that fails gets a line `failed`. After a raise of the cap, the next message of a person continues a stopped seat with its allowance. This is the rule for any run that stopped at a limit. |
 
 A change of the caps clears the lines that they posted, so a cap that still holds says so again. The change of the record that gives a message its seq also decides its deliveries under the caps and moves the counters, so two replicas never deliver past a cap. The replica that took the post delivers, so a message is delivered once. A delivery runs on a worker of the front, four at a time, with at most 4,096 that wait, and never on the request of the poster. A delivery that fails with an answer of 5xx or 429, or without an answer, is tried again after a pause of one second that doubles up to one minute, for up to ten minutes. Then, and at once for another failure such as a 409, the channel gets one line with the event `failed` that names the member and the message.
 
@@ -3224,7 +3225,8 @@ The page and the MCP tools write the same record. The contract of the build, `re
 | `limits.catchUp` | A span from `0` to `24h`. A missed time younger than this span runs once. The default is `1h`. |
 | `limits.retries` | 0 to 3. A failed run goes again this many times. The default is 1. |
 | `whileAway` | Who decides a question of a run while nobody watches. The default is `{"decider": "manager", "timeout": "2h", "then": "deny"}`. The front keeps it, and a later part of the build applies it. |
-| `notify` | Who hears of a failed run and of a question: `owner`, the subject of a person, or `channel:<name>`, a shared channel of the operator that the notification reaches without a person (section 23.1). The default names the owner for both. |
+| `notify` | Who hears of a failed run (`failure`), of a question (`needsYou`), and of a result (`result`): `owner`, the subject of a person, or `channel:<name>`, a shared channel of the operator that the notification reaches without a person (section 23.1). The default names the owner for a failure and a question, and nobody for a result. `resultWhen` is `always` or `found`, and a list of `result` without it takes `always` (section 22.12). |
+| `review` | True asks the owner to check each result. Each start carries the metadata `workbench.review` with `1`, and the run waits in the review stage of the work until its first reaction. A duty that posts or opens a bridge starts no run of its own, so `review` is a problem there. |
 | `runAs` | `duty`, the principal `duty:<name>` of the kind `workload`, or `owner`. Only the owner sets `owner`. When another person changes the duty, `runAs` goes back to `duty`. |
 | `paused` | `true` pauses the duty. A write that leaves it out keeps the pause of the duty. |
 
@@ -3452,7 +3454,7 @@ The later parts of the feature plug into the package without an edit of the engi
 | `RegisterAction(name, Action)` | Turns on `do.post`, `do.open`, or `do.manager`. `Action.Start` gets the run request of `ask`, with the placeholders filled. It answers the run that the engine follows, or none. |
 | `RegisterEvents(check)` and `Service.Fire(ctx, name, event)` | Turn on `when.event`. The package that serves the events calls `Fire` for each event of the fleet that a duty waits for. |
 | `RegisterLook("tool", fn)` | Turns on `checkFirst.look.tool`. The function answers the JSON document of the check run of the kernel. |
-| `OnNotice(fn)` | Gets each notice: `failed`, `paused`, `cap`, and `needs-you`. Each notice names the duty, its agent, its owner, the people of `notify`, the run, and the reason. |
+| `OnNotice(fn)` | Gets each notice: `failed`, `paused`, `cap`, `needs-you`, and `result`. Each notice names the duty, its agent, its owner, the people of `notify`, the run, and the reason. |
 | `OnChange(fn)` | Gets the name of a duty after each change that this replica wrote, for the live stream of bossmode. An empty name is a change of the switch. |
 | `Service.Lookup(ctx, name)` and `NameOf(run)` | Read the duty of a run for the front itself, such as its `whileAway` |
 
@@ -3464,6 +3466,23 @@ The later parts of the feature plug into the package without an edit of the engi
 - The call of a webhook takes no credential of the native API. Prefer `hmac`, and limit who reaches `/v1/duties/` with the gateway.
 - The content of an event or of an item of a check becomes the input of a run. Give the agent of a duty only the tools that its work needs, and make the tools that change things ask first.
 - Unattended runs make the open item of the ax API urgent: the ax API and the router take the static token with no other check.
+
+### 22.12 Results
+
+A completed start tells the people of `notify.result` of its result, as the notice `result` (section 23.1). Its text is the start of the answer of the run, at most 300 bytes. For an action without a run, such as a post, it is the note of the action. `notify.resultWhen` says which starts send it (`duties/result.go`):
+
+- `always`: each completed start
+- `found`: a start that found something
+
+The contract of found:
+
+- If the check first of a duty finds no item, the duty starts no run. So each completed start of such a duty found something, and the notice begins with the count, such as "The check found 3 items."
+- A duty without a check first tells its agent the contract in the instructions of each run (`FoundInstructions`). The answer starts with one line `Found: <a few words>`. If the run found nothing, the line is `Found: nothing`.
+- The front reads the first line of the answer. If the view holds the whole answer, the front also reads its last line. The first line counts first, because the view cuts a long answer at its end (section 4.2). The case and the marks of Markdown do not count. `nothing`, `none`, `no`, `0`, `nothing new`, `nothing found`, `no items`, and `n/a` found nothing, and the start sends no notice.
+- An answer without the line sends its result, so a run that broke the contract never hides a result.
+- A duty that posts or opens a bridge has no answer that says what it found. Without a check first, `found` is a problem there.
+
+The readback names who hears of a result, and when. An example is "A result goes to the owner when the run says that it found something." With `review`, the readback adds "The owner checks each result before it counts as done." The dry run and the problems of a write check `notify.result` as the other lists, and a shared channel that the front does not have is a problem of `notify.result`.
 
 ## 23. Attention and decisions
 
@@ -3538,6 +3557,7 @@ A switch sends these notices:
 |---|---|
 | `questions` | `needs-you`, a run of a duty that waits for the person, and `decided`, a decision of the front while the person was away |
 | `failures` | `failed`, a failed run, `paused`, a duty that paused itself, and `cap`, a duty at a daily cap |
+| `questions` or `failures` | `result`, the result of a start for the people of `notify.result`. A person who stands in that list asked for it by name, so a channel that sends live notices sends it, and a channel of the digest alone does not. |
 | `digest` | The daily digest |
 
 Each kind has its fields and its send:
@@ -3989,16 +4009,17 @@ The archive (section 4.18) applies each event to the summary of its run. It also
 | `handled` | Each decision that no person made: the kind of the decider is token, workload, parent, or kernel |
 | `waitMs`, `waits`, `asked` | The time from each `fw.approval.requested` to its decision by a person, and the request that waits now |
 | `verdict` | The first thumb or heart (`fw.run.reacted`), or the first quality receipt (`fw.run.annotated`): `accepted` or `rejected`. A grade of a model is no verdict. |
+| `done` | The field `done` of the newest `fw.run.finished`: `checked` when the definition of done of the agent passed (the kernel architecture, section 24), `failed` when its checks ended the run, and empty without one |
 | `canceledBy` | The person of a cancel |
 
-A summary that a server before this section wrote has no facts. The value counts such a run as unknown and says so.
+A summary that a server before this section wrote has no facts. The archive keeps every event of the run. So after each start, the front reads them again in the background and writes the facts, once per run (`fleet/backfill.go`). It pauses 20 milliseconds between two runs, so a large archive does not flood the server of the bus. An event that arrives during the read makes the summary count more events than the read found, and the read starts again. A run whose start the stream no longer holds gets the mark `backfilled` and no facts, so the next start does not read it again. Every replica runs the backfill, and a replica that finds the facts there writes nothing. Until the backfill reaches a run, the value counts it as unknown and says so.
 
 ### 25.2 The answer
 
 `GET /v1/value?days=7|30|90` and the MCP tool `value` call `value.For` with the access rules of the runs (`fleet.WorkSince`). A piece of work is a run without a parent. A branch, a check run, and a run of the manager or of the quick chat are no pieces. The answer counts the pieces that people, duties, sources, and jobs asked for in the window:
 
 - `work`: done, failed, stopped, open, and lost. A lost piece is a run of the archive that never ended and that no member holds: a pool replaced its worker while it worked or waited. It counts as failed work in the spend, and its wait does not grow.
-- `checks`: the done pieces by verdict, accepted, sent back, and unchecked
+- `checks`: the done pieces by verdict: accepted, checked, sent back, and unchecked. Accepted and sent back are the first verdict of a person or of a receipt. Checked is a piece that no person judged and whose definition of done passed in the kernel. A verdict of a person wins over the checks. Unchecked is a piece that nobody and nothing judged. A worker of an older kernel sends no `done`, so its pieces are never checked.
 - `people`: the actions of people, and the done pieces that needed none. Also the pieces that a person wrote to after the end. Also the time that work waited for a decision of a person, and the pieces that wait now.
 - `lead`: the median time from the ask to the first end, and the part of all such time that waited for people. The time that a job waited in its queue is not in it.
 - `spend`: the cost of every run of the window at the prices of the workers, and the cost per done piece. Also the cost of failed work and of coordination. The runs with tokens without a price make the spend a lower bound.

@@ -162,6 +162,7 @@ type Store struct {
 	wholeAt  map[string]time.Time // by run id: the last read of the whole call that the run waits for (wholeDue)
 	shown    map[string]string    // by bridge and handle: the presence and activity that a hook got
 	canceled map[string]bool      // by run id: the runs of fired seats that a cancel went to
+	capStops map[string]float64   // by run id: the cap of cost at which a stop at a limit went to the run (costcap.go)
 	missing  map[string]missing   // by bridge and handle: the newest run of a seat that a settled view did not hold
 
 	// feeds holds what this replica gave its streams of each channel
@@ -202,6 +203,7 @@ func New(a *fw.Agent, records, channels bucket.Bucket, cfg Config, log *slog.Log
 		wholeAt:     map[string]time.Time{},
 		shown:       map[string]string{},
 		canceled:    map[string]bool{},
+		capStops:    map[string]float64{},
 		missing:     map[string]missing{},
 		feeds:       feeds{by: map[string]*feedMark{}},
 	}

@@ -149,12 +149,15 @@ type Delegation struct {
 // turns of every run of the bridge together, so the allowance that each
 // message gives a seat (grant) cannot spend without end. A record of an
 // older front has no MaxTurns, and DefaultMaxTurns holds for it
-// (turnCap).
+// (turnCap). MaxCostUSD bounds the cost of every run of the bridge
+// together, at the prices of the workers; zero means no cap of cost
+// (costcap.go).
 type Caps struct {
-	MaxMessages        int `json:"maxMessages"`
-	MaxFanoutPerMinute int `json:"maxFanoutPerMinute"`
-	MaxPairMessages    int `json:"maxPairMessages"`
-	MaxTurns           int `json:"maxTurns"`
+	MaxMessages        int     `json:"maxMessages"`
+	MaxFanoutPerMinute int     `json:"maxFanoutPerMinute"`
+	MaxPairMessages    int     `json:"maxPairMessages"`
+	MaxTurns           int     `json:"maxTurns"`
+	MaxCostUSD         float64 `json:"maxCostUSD,omitempty"`
 }
 
 // turnCap is the cap of the turns of a bridge: MaxTurns, or
@@ -461,6 +464,8 @@ type fanMark struct {
 	// same for maxTurns.
 	Capped      bool `json:"capped,omitempty"`
 	TurnsCapped bool `json:"turnsCapped,omitempty"`
+	// CostCapped is the same for maxCostUSD.
+	CostCapped bool `json:"costCapped,omitempty"`
 	// Pairs counts the messages between two agents since the last message
 	// of a person, by pairKey, and PairCapped names the pairs that the
 	// channel holds a cap line of.

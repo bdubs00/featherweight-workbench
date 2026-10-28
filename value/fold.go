@@ -92,11 +92,15 @@ type Counts struct {
 	Lost    int `json:"lost"`
 }
 
-// Checks splits the done pieces by the first verdict on their result:
-// Accepted, SentBack, and Unchecked, which no person and no receipt
-// judged.
+// Checks splits the done pieces by the verdict on their result. Accepted
+// and SentBack are the first verdict of a person or of a receipt. Checked
+// is a piece that no person judged and whose definition of done passed in
+// the kernel (fw.run.finished with done checked). Unchecked is a piece
+// that nobody and nothing judged. The verdict of a person wins over the
+// checks of the kernel.
 type Checks struct {
 	Accepted  int `json:"accepted"`
+	Checked   int `json:"checked"`
 	SentBack  int `json:"sentBack"`
 	Unchecked int `json:"unchecked"`
 }
@@ -172,6 +176,7 @@ type Period struct {
 	End       time.Time `json:"end"`
 	Done      int       `json:"done"`
 	Accepted  int       `json:"accepted"`
+	Checked   int       `json:"checked"`
 	SentBack  int       `json:"sentBack"`
 	Unchecked int       `json:"unchecked"`
 	Failed    int       `json:"failed"`
@@ -360,6 +365,16 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 				if per != nil {
 					per.SentBack++
 				}
+			case "":
+				if doneChecked(r, wk) {
+					ans.Checks.Checked++
+					ln.Checks.Checked++
+					if per != nil {
+						per.Checked++
+					}
+					break
+				}
+				fallthrough
 			default:
 				ans.Checks.Unchecked++
 				ln.Checks.Unchecked++
@@ -448,6 +463,16 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 	return ans
 }
 
+// doneChecked reports whether the definition of done of a run passed in
+// the kernel: the facts of its work say so, else the run object of a newer
+// kernel does.
+func doneChecked(r *fw.Run, w fleet.Work) bool {
+	if w.Done != "" {
+		return w.Done == fw.DoneChecked
+	}
+	return r.Done != nil && r.Done.State == fw.DoneChecked
+}
+
 // periods returns the parts of a window: a day each for a window of a
 // week or less, else a week each, the newest ending at until and the
 // oldest starting at since.
@@ -524,7 +549,11 @@ func sentence(a Answer) string {
 		fmt.Fprintf(&b, " %s lost when a pool replaced the worker.", plural(a.Work.Lost, "piece was", "pieces were"))
 	}
 	if a.Work.Done > 0 {
-		fmt.Fprintf(&b, " People accepted %d and sent back %d; %d %s unchecked.", a.Checks.Accepted, a.Checks.SentBack, a.Checks.Unchecked, isAre(a.Checks.Unchecked))
+		fmt.Fprintf(&b, " People accepted %d and sent back %d.", a.Checks.Accepted, a.Checks.SentBack)
+		if a.Checks.Checked > 0 {
+			fmt.Fprintf(&b, " The checks of the agents passed for %d more.", a.Checks.Checked)
+		}
+		fmt.Fprintf(&b, " %d %s unchecked.", a.Checks.Unchecked, isAre(a.Checks.Unchecked))
 		fmt.Fprintf(&b, " %d of the %d finished without an action of a person.", a.People.NoPerson, a.Work.Done)
 	}
 	if a.People.WaitSeconds > 0 {

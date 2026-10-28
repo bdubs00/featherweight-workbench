@@ -244,7 +244,7 @@ func names(d duties.Duty, subject string) bool {
 	if d.Notify == nil {
 		return false
 	}
-	for _, list := range [][]string{d.Notify.Failure, d.Notify.NeedsYou} {
+	for _, list := range [][]string{d.Notify.Failure, d.Notify.NeedsYou, d.Notify.Result} {
 		if slices.Contains(list, subject) {
 			return true
 		}

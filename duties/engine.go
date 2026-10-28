@@ -747,6 +747,13 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 	if e.Chain > 0 {
 		md[MetaChain] = strconv.Itoa(e.Chain)
 	}
+	if d.Review {
+		md[MetaReview] = "1"
+	}
+	instructions := ""
+	if n := d.Notify; n != nil && len(n.Result) > 0 && n.ResultWhen == ResultFound && d.CheckFirst == nil {
+		instructions = FoundInstructions
+	}
 	principal, kind := "duty:"+d.Name, fw.KindWorkload
 	if d.RunAs == RunAsOwner && d.Owner != "" {
 		principal, kind = d.Owner, st.OwnerKind
@@ -762,6 +769,7 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 		ID:             fw.NewID(),
 		Agent:          d.Agent,
 		Input:          input,
+		Instructions:   instructions,
 		Budget:         budget,
 		Metadata:       md,
 		Principal:      principal,
@@ -1187,6 +1195,7 @@ func (s *Service) settle(ctx context.Context, st *stored, date string, e entry, 
 	switch {
 	case after.State == StateCompleted:
 		s.completed(ctx, d.Name)
+		s.resultNotice(ctx, st, after, r.Output)
 	case after.State == StateFailed:
 		s.failed(ctx, st, after, reason)
 	case after.State == string(fw.StateInputRequired) && !e.Asked && !awayHandled():
