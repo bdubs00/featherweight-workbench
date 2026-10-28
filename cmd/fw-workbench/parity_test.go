@@ -83,6 +83,14 @@ var parityRoutes = map[string]parity{
 	"POST /v1/bossmode/skills/preview":               {tool: "skill_preview"},
 	"POST /v1/bossmode/skills":                       {tool: "skill_install"},
 	"DELETE /v1/bossmode/skills/{name}":              {why: "no tool yet: an admin removes an imported skill on the page; a later build adds skill_remove"},
+	// Know-how (knowhow). The kernel of a worker keeps the notes of a run
+	// with these routes and the static token, so a run reaches them through
+	// its memory tool, not through a tool of the front.
+	"PUT /v1/knowhow/notes/{agent}/{scope}/{name...}":    {why: "the kernel of a worker pushes each change of a note of its memory tool here with the static token; a person changes a note on the page"},
+	"DELETE /v1/knowhow/notes/{agent}/{scope}/{name...}": {why: "the kernel of a worker puts a note away here when its memory tool deletes it; a person puts a note away on the page"},
+	"POST /v1/knowhow/journal/{id}/undo":                 {why: "no tool yet: a person takes a change back on the page, What it learned; an agent never takes back what it learned"},
+	"PUT /v1/knowhow/settings/{agent}":                   {why: "no tool yet: the owner of an agent turns Ask me before it keeps what it learns on or off on the page"},
+	"POST /v1/knowhow/waiting/{id}":                      {why: "a person decides a change that waits for them on the page, as the sign-off of a routine; the switch exists to keep agents out of that decision"},
 }
 
 // unreadable names the files whose calls of Handle or HandlePublic take a
