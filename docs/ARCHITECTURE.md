@@ -3972,7 +3972,7 @@ A sponsor pays for the agents and asks whether they are worth it. The package `v
 
 ### 25.1 The facts of the work of a run
 
-The archive (section 4.18) folds the facts of the work of each run into its summary, under `work`, as it applies each event (`fleet.Work`). A run of this process gets the same facts from its ledger. The facts are:
+The archive (section 4.18) applies each event to the summary of its run. It also folds the facts of the work of the run into the summary, under `work` (`fleet.Work`). A run of this process gets the same facts from its ledger. The facts are:
 
 | Fact | From |
 |---|---|
@@ -3989,16 +3989,16 @@ A summary that a server before this section wrote has no facts. The value counts
 
 ### 25.2 The answer
 
-`GET /v1/value?days=7|30|90` and the MCP tool `value` call `value.For` with the access rules of the runs (`fleet.WorkSince`). A piece of work is a run without a parent that is no branch, no check run, and no run of the manager or of the quick chat. The answer counts the pieces that people, duties, sources, and jobs asked for in the window:
+`GET /v1/value?days=7|30|90` and the MCP tool `value` call `value.For` with the access rules of the runs (`fleet.WorkSince`). A piece of work is a run without a parent. A branch, a check run, and a run of the manager or of the quick chat are no pieces. The answer counts the pieces that people, duties, sources, and jobs asked for in the window:
 
 - `work`: done, failed, stopped, open, and lost. A lost piece is a run of the archive that never ended and that no member holds: a pool replaced its worker while it worked or waited. It counts as failed work in the spend, and its wait does not grow.
 - `checks`: the done pieces by verdict, accepted, sent back, and unchecked
-- `people`: the actions of people, the done pieces that needed none, the pieces that a person wrote to after the end, the time that work waited for a decision of a person, and the pieces that wait now
+- `people`: the actions of people, and the done pieces that needed none. Also the pieces that a person wrote to after the end, the time that work waited for a decision of a person, and the pieces that wait now.
 - `lead`: the median time from the ask to the first end, and the part of all such time that waited for people. The time that a job waited in its queue is not in it.
-- `spend`: the cost of every run of the window at the prices of the workers, the cost per done piece, the cost of failed work and of coordination, and the runs with tokens without a price, which make the spend a lower bound
+- `spend`: the cost of every run of the window at the prices of the workers, and the cost per done piece. Also the cost of failed work and of coordination. The runs with tokens without a price make the spend a lower bound.
 - `periods`: a day each for 7 days, else a week each
 - `lines`: the same numbers per duty, source, and agent
 
 ### 25.3 The estimates
 
-The front measures no time that a person spends. An owner of the agent of a line sets the minutes that a person takes for one piece with `PUT /v1/value/estimates` and the body `{"line", "minutes"}`, or with the tool `value_estimate`. The estimate keeps the person and the time. The answer then multiplies it by the done pieces of the line that nobody sent back, under `estimated`. Zero minutes removes it. The estimates live in the key-value bucket `<stream>_VALUE`; on a bus without a store the value answers without them.
+The front measures no time that a person spends. An owner of the agent of a line sets the minutes that a person takes for one piece. The route is `PUT /v1/value/estimates` with the body `{"line", "minutes"}`, and the tool is `value_estimate`. The estimate keeps the person and the time. The answer then multiplies it by the done pieces of the line that nobody sent back, under `estimated`. Zero minutes removes it. The estimates live in the key-value bucket `<stream>_VALUE`. On a bus without a store, the value answers without them.
