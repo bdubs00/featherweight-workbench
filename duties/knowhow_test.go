@@ -11,17 +11,18 @@ import (
 	"github.com/bdubs00/featherweight-workbench/internal/heldback"
 )
 
-// workbench.knowhow.heldBack is 0.05 by default, the file and the
-// variable set it, and a share outside 0 to 1 names the key.
+// workbench.knowhow.heldBack is 0 by default, so no run is held back
+// until a person sets a share. The file and the variable set it, and a
+// share outside 0 to 1 names the key.
 func TestLoadKnowhow(t *testing.T) {
 	t.Setenv(EnvHeldBack, "")
 	cfg := fw.DefaultConfig()
-	if c, err := LoadKnowhow(cfg); err != nil || c.Share() != DefaultHeldBack {
+	if c, err := LoadKnowhow(cfg); err != nil || c.Share() != 0 || DefaultHeldBack != 0 {
 		t.Fatalf("the default = %+v, %v", c, err)
 	}
-	cfg.Extensions = workbench(t, "knowhow: {heldBack: 0}\n")
-	if c, err := LoadKnowhow(cfg); err != nil || c.Share() != 0 {
-		t.Fatalf("0 = %+v, %v", c, err)
+	cfg.Extensions = workbench(t, "knowhow: {heldBack: 0.05}\n")
+	if c, err := LoadKnowhow(cfg); err != nil || c.Share() != 0.05 {
+		t.Fatalf("0.05 = %+v, %v", c, err)
 	}
 	t.Setenv(EnvHeldBack, "0.1")
 	if c, err := LoadKnowhow(cfg); err != nil || c.Share() != 0.1 {

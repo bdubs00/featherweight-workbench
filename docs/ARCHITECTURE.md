@@ -3386,7 +3386,9 @@ The block `knowhow` under the key `workbench` holds the configuration of Know-ho
 
 | Key | Variable | Meaning | Default |
 |---|---|---|---|
-| `workbench.knowhow.heldBack` | `FW_WORKBENCH_KNOWHOW_HELD_BACK` | The share of the runs of each duty that the engine holds back from Know-how, from 0 to 1 (section 22.5). `0` holds no run back. | `0.05` |
+| `workbench.knowhow.heldBack` | `FW_WORKBENCH_KNOWHOW_HELD_BACK` | The share of the runs of each duty that the engine holds back from Know-how, from 0 to 1 (section 22.5). `0` holds no run back. | `0` |
+
+The comparison of held-back runs needs about 400 firings before it says anything, and a held-back run does its work without what the agent learned. So no run is held back until a person sets a share, such as 1 run in 20:
 
 ```yaml
 workbench:
@@ -3427,7 +3429,7 @@ A start of a time goes through these steps:
 
 The run request carries the idempotency key `duty/<name>/<time>`, with the time in RFC 3339 in UTC. It also carries the metadata `workbench.duty`, `workbench.dutySlot`, `fw.batch` (`duty:<name>`), and `fw.title`, and `workbench.review` and `workbench.found` when they apply (sections 22.12 and 26.4). The key `workbench.duty` is the key of the kernel, `fw.MetaDuty`. So a routine bound to the duty, with its field `duty`, finds the runs of the duty. A run of the duty acts as `duty:<name>` of the kind `workload`, or as the owner with `runAs: owner`. Its budget is `limits.budget`.
 
-Held back. A share of the runs of each duty gets none of what the agent learned. The page can then compare the runs with and without it (the kernel document `docs/KNOWHOW.md`, sections 4.6 and 6.6). The share is `workbench.knowhow.heldBack`, 0.05 by default. The engine decides by a stable hash of the run id. When the first 53 bits of the SHA-256 of the id, as a fraction of 1, fall below the share, the run is held back. A held-back run carries the metadata `fw.knowhow: off`. The kernel then gives it no notes, no memory tools, and no routine. The engine gives it no block `last` (section 22.1), and `{last.title}`, `{last.run}`, and `{last.state}` stay as for every run. A retry is a new run with a new id, so it decides again. The engine marks the runs of a duty whose templates make the runs (section 22.8) the same way. These runs also carry `workbench.duty` with the name of the duty, so a routine bound to the duty finds them.
+Held back. A share of the runs of each duty gets none of what the agent learned. The page can then compare the runs with and without it (the kernel document `docs/KNOWHOW.md`, sections 4.6 and 6.6). The share is `workbench.knowhow.heldBack`, 0 by default, so no run is held back until a person sets a share. The engine decides by a stable hash of the run id. When the first 53 bits of the SHA-256 of the id, as a fraction of 1, fall below the share, the run is held back. A held-back run carries the metadata `fw.knowhow: off`. The kernel then gives it no notes, no memory tools, and no routine. The engine gives it no block `last` (section 22.1), and `{last.title}`, `{last.run}`, and `{last.state}` stay as for every run. A retry is a new run with a new id, so it decides again. The engine marks the runs of a duty whose templates make the runs (section 22.8) the same way. These runs also carry `workbench.duty` with the name of the duty, so a routine bound to the duty finds them.
 
 A missed time is a time that passed while no replica ran. If the newest missed time is younger than `catchUp`, it runs once. If it is older, it does not run, and the history says why. A pass that meets a time within a minute starts it, also with a `catchUp` of `0`. The times of a pause do not run after the resume.
 
