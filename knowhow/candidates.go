@@ -80,6 +80,7 @@ const (
 	maxCandRuns   = 8
 	evidenceCut   = 1024
 	inputCut      = 512
+	pageCut       = 4096
 	passBatch     = 200
 	settle        = 2 * time.Minute
 	maxPlaces     = 500
@@ -851,8 +852,75 @@ func (s *Service) recheck(ctx context.Context, n Note, ref, version string) erro
 	if origin == "" {
 		origin = OriginTrusted
 	}
-	text := fmt.Sprintf("The note %s says:\n%s\nIts source %s changed since the note was written.", n.Name, cut(full.Text, evidenceCut), ref)
 	c := Candidate{ID: candID(KindRecheck, n.Agent, n.Scope, n.Name+"\x00"+ref+"\x00"+version), Agent: n.Agent, Kind: KindRecheck, Scope: n.Scope,
 		Origin: origin, Note: n.Name, Sources: sources, Summary: fmt.Sprintf("The note %s is out of date: %s changed", n.Name, ref)}
-	return s.add(ctx, c, nil, Evidence{Text: text})
+	return s.add(ctx, c, nil, Evidence{Text: s.recheckEvidence(ctx, full, ref)})
+}
+
+// recheckEvidence words the evidence of a recheck from the note and its
+// source as they are now: the text of the note, and for a page of the wiki
+// the text of the page now, cut to pageCut, so the review can correct the
+// note from the evidence alone. The list of the candidates words it again
+// each time (OpenCandidates), so the review never reads an old text.
+func (s *Service) recheckEvidence(ctx context.Context, n Note, ref string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "The note %s says now:\n%s\n", n.Name, cut(n.Text, evidenceCut))
+	path, ok := strings.CutPrefix(ref, "page:")
+	if !ok {
+		fmt.Fprintf(&b, "Its source %s changed since the note was written.", ref)
+		return b.String()
+	}
+	text, _, err := s.pageAt(ctx, path)
+	switch {
+	case errors.Is(err, errNoPage):
+		fmt.Fprintf(&b, "Its source, the page %s of the wiki, was removed since the note was written.", path)
+	case err != nil:
+		fmt.Fprintf(&b, "Its source, the page %s of the wiki, changed since the note was written. The page does not read now.", path)
+	default:
+		fmt.Fprintf(&b, "Its source, the page %s of the wiki, changed since the note was written. The page says now:\n%s", path, cut(text, pageCut))
+	}
+	return b.String()
+}
+
+// recheckNote returns the note of a recheck as it is now, and whether the
+// recheck still stands: the note is out of date, and the review can change
+// it. A note that a person or the agent corrected, that was put away, or
+// that a person wrote ends its recheck.
+func (s *Service) recheckNote(ctx context.Context, c Candidate) (Note, bool, error) {
+	n, err := s.get(ctx, noteKey(c.Agent, c.Scope, c.Note))
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return Note{}, false, nil
+	case err != nil:
+		return Note{}, false, err
+	}
+	return n, n.State != StatePutAway && !n.ByPerson() && n.OutOfDate != nil, nil
+}
+
+// openCandidates returns the candidates of an agent that the review can
+// decide now, the oldest first. A recheck that no longer stands
+// (recheckNote) is decided on the spot and left out, so no review starts
+// for it.
+func (s *Service) openCandidates(ctx context.Context, agent string) ([]Candidate, error) {
+	list, err := s.Candidates(ctx, agent, func(c Candidate) bool { return c.State == CandOpen && c.ready() })
+	if err != nil {
+		return nil, err
+	}
+	out := list[:0]
+	for _, c := range list {
+		if c.Kind == KindRecheck {
+			_, stands, err := s.recheckNote(ctx, c)
+			if err != nil {
+				return nil, err
+			}
+			if !stands {
+				if err := s.decided(ctx, c, CandSkipped, Decision{Op: OpSkip, Note: c.Note, By: ByKnowhow}); err != nil {
+					s.log.Warn("knowhow: a recheck whose note was corrected stays open", "agent", c.Agent, "candidate", c.ID, "error", err)
+				}
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	return out, nil
 }

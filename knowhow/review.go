@@ -137,7 +137,7 @@ func (s *Service) ReviewAgent(ctx context.Context, agent string) (ReviewNow, err
 	if _, err := s.CandidatePass(ctx); err != nil {
 		s.log.Warn("knowhow: the pass of the candidates failed before a review", "agent", agent, "error", err)
 	}
-	open, err := s.Candidates(ctx, agent, func(c Candidate) bool { return c.State == CandOpen && c.ready() })
+	open, err := s.openCandidates(ctx, agent)
 	if err != nil {
 		return ReviewNow{}, err
 	}
@@ -166,7 +166,7 @@ func (s *Service) reviewable(ctx context.Context) ([]string, error) {
 		if agent == s.cfg.Review.Agent {
 			continue
 		}
-		open, err := s.Candidates(ctx, agent, func(c Candidate) bool { return c.State == CandOpen && c.ready() })
+		open, err := s.openCandidates(ctx, agent)
 		if err != nil {
 			return nil, err
 		}

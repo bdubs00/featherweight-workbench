@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/memory"
@@ -249,5 +250,71 @@ func TestStaticTokenWritesAsAPerson(t *testing.T) {
 	}
 	if n := fr.note(t, Scope{Kind: ScopeAgent}, "hour.md"); n.By != ByAgent || n.State != StateWaiting {
 		t.Fatalf("the note of the run under the switch = %+v", n)
+	}
+}
+
+// TestRecheckEvidence drives a recheck with the wiki of this front. The
+// evidence of a recheck holds the note and the page as they are when the
+// review lists it: a second change of the page shows in it, and a long
+// page is cut. A supersede of the review names the page at its version
+// now. A note that an owner corrected ends its recheck, so the review
+// neither lists it nor starts for it.
+func TestRecheckEvidence(t *testing.T) {
+	fr, wiki, _ := kernelFront(t)
+	fr.s.cfg.Review = ReviewConfig{Agent: "review", Every: 24 * time.Hour}
+	var started int
+	fr.s.enqueue = func(_ context.Context, _ string, reqs []fw.RunRequest) (string, int, error) {
+		started += len(reqs)
+		return "q", len(reqs), nil
+	}
+	ctx := context.Background()
+	port, err := wiki.Write(ctx, "lab/backup.md", "# Backup\nThe backup server listens on port 7341.\n", "alice", "the port", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	printer, err := wiki.Write(ctx, "lab/printer.md", "# Printer\nThe printer is heron-2.\n", "alice", "the printer", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr.write(t, agentScope, "port.md", "The backup server listens on port 7341.\n", Source{Ref: "page:lab/backup.md", Version: port.Hash})
+	fr.write(t, agentScope, "printer.md", "The printer is heron-2.\n", Source{Ref: "page:lab/printer.md", Version: printer.Hash})
+	if _, err := wiki.Write(ctx, "lab/backup.md", "# Backup\nThe backup server listens on port 7342.\n", "alice", "a new port", port.Hash); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := wiki.Write(ctx, "lab/backup.md", "# Backup\nThe backup server listens on port 7343.\n"+strings.Repeat("Old ports: 7000 to 7340.\n", 400), "alice", "again", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wiki.Write(ctx, "lab/printer.md", "# Printer\nThe printer is heron-3.\n", "alice", "a new printer", printer.Hash); err != nil {
+		t.Fatal(err)
+	}
+
+	// The owner corrects the note of the printer.
+	n := fr.note(t, agentScope, "printer.md")
+	if _, err := fr.s.Write(ctx, WriteRequest{Agent: "triage", Scope: agentScope, Name: "printer.md", Text: "The printer is heron-3.\n", IfHash: n.Hash, Sources: n.Sources, By: "person:alice"}); err != nil {
+		t.Fatal(err)
+	}
+	open, err := fr.s.OpenCandidates(ctx, "triage", 10)
+	if err != nil || len(open.Candidates) != 1 || open.Candidates[0].Note != "port.md" || len(open.Candidates[0].Evidence) != 1 {
+		t.Fatalf("the open candidates = %+v, %v", open, err)
+	}
+	ev := open.Candidates[0].Evidence[0].Text
+	if !strings.Contains(ev, "The note port.md says now:\nThe backup server listens on port 7341.") || !strings.Contains(ev, "The page says now:\n# Backup\nThe backup server listens on port 7343.") ||
+		strings.Contains(ev, "7342") || len(ev) > pageCut+evidenceCut || !strings.HasSuffix(ev, "…") {
+		t.Fatalf("the evidence of the recheck = %q", ev)
+	}
+	re, _ := fr.s.Candidates(ctx, "triage", func(c Candidate) bool { return c.Note == "printer.md" })
+	if len(re) != 1 || re[0].State != CandSkipped || re[0].Decided == nil || re[0].Decided.By != ByKnowhow {
+		t.Fatalf("the recheck of the corrected note = %+v", re)
+	}
+
+	// The review supersedes the note from the evidence, against the page
+	// as it is now.
+	res, err := fr.s.Keep(ctx, KeepRequest{Candidate: open.Candidates[0].ID, Op: OpSupersede, Text: "The backup server listens on port 7343.", Why: "The page names a new port.", Run: fw.NewID()})
+	if err != nil || res.Note.State != StateChecked || len(res.Note.Sources) != 1 || res.Note.Sources[0].Version != moved.Hash {
+		t.Fatalf("the keep = %+v, %v", res, err)
+	}
+	if out, err := fr.s.ReviewAgent(ctx, "triage"); err != nil || out.Started || started != 0 {
+		t.Fatalf("the review after the rechecks = %+v, %v, %d runs", out, err, started)
 	}
 }
