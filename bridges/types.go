@@ -245,6 +245,12 @@ type Item struct {
 	NeedsYou    int    `json:"needsYou"`
 	WaitsFor    string `json:"waitsFor,omitempty"`
 	Summary     string `json:"summary,omitempty"`
+	// SummaryAt, SummaryBy, and SummaryRun are the time, the seat, and the
+	// run of the post that Summary reads, so a result names the agent and
+	// the time of that post, never of another one.
+	SummaryAt  *time.Time `json:"summaryAt,omitempty"`
+	SummaryBy  string     `json:"summaryBy,omitempty"`
+	SummaryRun string     `json:"summaryRun,omitempty"`
 	// People are the people of the channel, each with the display name
 	// that a page shows: the person who asked for it first, then the owner
 	// of the duty that opened it, then the people who posted lately.

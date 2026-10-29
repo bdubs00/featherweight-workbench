@@ -258,6 +258,7 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 	}
 	gone := s.goneSeats(rec, runs, settled)
 	now := s.now().UTC()
+	lostAt := s.lostTimes(ctx, rec, gone, now)
 	var lines []Message
 	var cards []Message   // cards whose decision landed, written again
 	var repairs []Message // cards that get the whole input of their call
@@ -297,8 +298,15 @@ func (s *Store) observe(ctx context.Context, rec *record, states map[string]stri
 		for _, l := range slept {
 			add(l)
 		}
-		for _, l := range goneLines(rec, runs, gone) {
+		for _, l := range goneLines(rec, runs, gone, lostAt) {
+			// A line that a seat lost its run carries when the run was
+			// lost, not when this front found out, such as after a
+			// start of the front (live walk N1).
+			at := l.At
 			add(l)
+			if !at.IsZero() {
+				lines[len(lines)-1].At = at
+			}
 		}
 		if !changed && !marked && len(lines) == 0 && len(cards) == 0 && len(repairs) == 0 {
 			return errNoChange
@@ -968,11 +976,34 @@ func (s *Store) goneSeats(rec *record, runs map[string]*fw.Run, settled bool) ma
 	return out
 }
 
+// lostTimes returns when each run of gone was lost, by handle: the time
+// that fleet.LostAt knows, but not before the newest entry of the channel,
+// so the channel stays in the order of its times, and not after now. A run
+// whose time the front does not know is lost now.
+func (s *Store) lostTimes(ctx context.Context, rec *record, gone map[string]string, now time.Time) map[string]time.Time {
+	if len(gone) == 0 {
+		return nil
+	}
+	floor := s.b.newestAt(s.asFront(ctx), rec)
+	out := make(map[string]time.Time, len(gone))
+	for handle, id := range gone {
+		at := fleet.LostAt(ctx, s.a, id)
+		if at.Before(floor) {
+			at = floor
+		}
+		if at.IsZero() || at.After(now) {
+			at = now
+		}
+		out[handle] = at.UTC()
+	}
+	return out
+}
+
 // goneLines returns one line for each seat of gone whose newest run is
 // still that run and still missing, and marks the seat in the record, so
 // the channel says it once and every replica shows the seat idle or in
 // error (decorate). It runs inside the change of the record.
-func goneLines(rec *record, runs map[string]*fw.Run, gone map[string]string) []Message {
+func goneLines(rec *record, runs map[string]*fw.Run, gone map[string]string, at map[string]time.Time) []Message {
 	var out []Message
 	for _, m := range rec.Members {
 		id, ok := gone[m.Handle]
@@ -984,7 +1015,9 @@ func goneLines(rec *record, runs map[string]*fw.Run, gone map[string]string) []M
 			continue
 		}
 		sm.Gone = id
-		out = append(out, system(EventLost, fmt.Sprintf("%s stopped: the agent that held its work was replaced. A message to %s starts it again.", m.Handle, m.Handle)))
+		l := system(EventLost, fmt.Sprintf("%s stopped: the agent that held its work was replaced. A message to %s starts it again.", m.Handle, m.Handle))
+		l.At = at[m.Handle]
+		out = append(out, l)
 	}
 	return out
 }

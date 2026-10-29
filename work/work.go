@@ -169,6 +169,22 @@ type Card struct {
 	// first line of the newest result. It is empty when the card has
 	// nothing more to say than its reason.
 	Summary string `json:"summary,omitempty"`
+	// Result names the post of a team in To check or in Done whose first
+	// line Summary reads: its agent, its seat, its run, when it came, and
+	// what that run cost. The time of the card in To check is that time,
+	// so a line of the front, such as a lost run, never dates a result.
+	Result *CardResult `json:"result,omitempty"`
+}
+
+// CardResult is the post of an agent that a card of a team shows as its
+// result. CostUSD is the cost of the run that posted it, or zero when the
+// board does not hold that run.
+type CardResult struct {
+	Agent   string    `json:"agent,omitempty"`
+	Handle  string    `json:"handle,omitempty"`
+	Run     string    `json:"run,omitempty"`
+	At      time.Time `json:"at"`
+	CostUSD float64   `json:"costUSD,omitempty"`
 }
 
 // Lane is one stage of the board: its cards, the cards whose next move is
@@ -359,8 +375,10 @@ type draft struct {
 	agents  map[string]bool
 	settled bool // the record of the card (a bridge or a start) gave the stage
 	// result is the first line of the newest message of an agent of a
-	// bridge, the summary of a team whose agents finished.
+	// bridge, the summary of a team whose agents finished, and post names
+	// that message.
 	result string
+	post   *CardResult
 }
 
 // part is one seat or one run of a card: its stage, the reason in words,
@@ -395,6 +413,17 @@ func (b *board) bridge(it bridges.Item) {
 	d.Kind, d.Title, d.Opened, d.settled = KindBridge, it.Title, it.CreatedAt, true
 	d.Links.Bridge, d.Links.Batch = it.ID, bridges.BatchOf(it.ID)
 	d.result = it.Summary
+	if it.Summary != "" && it.SummaryAt != nil {
+		d.post = &CardResult{Agent: it.SummaryBy, Handle: it.SummaryBy, Run: it.SummaryRun, At: *it.SummaryAt}
+		for _, m := range it.Members {
+			if m.Handle == it.SummaryBy {
+				d.post.Agent = m.Agent
+			}
+		}
+		if r, ok := b.byID[it.SummaryRun]; ok && r.Run != nil {
+			d.post.CostUSD = r.Usage.CostUSD
+		}
+	}
 	d.From = b.fromSubject(it.Operator, it.OperatorName, "bridge")
 	if it.Manager != nil && it.Manager.Run != "" && d.From.Kind == "person" {
 		if r, ok := b.byID[it.Manager.Run]; ok && r.Agent != "" && it.Placement == bridges.PlacementQueue {
@@ -1169,7 +1198,11 @@ func (b *board) settle(d *draft) {
 	}
 	d.Stage, d.Reason, d.Since, d.Summary = top.stage, top.reason, top.since, top.summary
 	if d.Kind == KindBridge && (d.Stage == StageReview || d.Stage == StageDone) && d.result != "" {
-		d.Summary = d.result
+		d.Summary, d.Result = d.result, d.post
+		if d.Stage == StageReview && d.post != nil {
+			// The result waits since its post came (live walk N1).
+			d.Since = d.post.At
+		}
 	}
 	switch {
 	case d.Kind == KindBridge && d.Stage == StageReview:

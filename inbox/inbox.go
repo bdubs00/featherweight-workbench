@@ -315,6 +315,11 @@ func fromBoard(board work.Answer, items []Item) []Item {
 		}
 		it.Card, it.CostUSD = c.ID, c.CostUSD
 		it.Summary = c.Summary
+		if r := c.Result; r != nil && c.Stage == work.StageReview {
+			// The summary, the time, the agent, and the cost of a result of
+			// a team come from one post (live walk N1).
+			it.Since, it.Agent, it.CostUSD = r.At, r.Agent, r.CostUSD
+		}
 		if it.Summary == "" && it.Kind == KindQuestion {
 			it.Summary = bridges.FirstLine(questionText(it.Text), 200)
 		}

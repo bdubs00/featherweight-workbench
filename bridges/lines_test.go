@@ -72,6 +72,22 @@ func TestSeatThatLostItsRun(t *testing.T) {
 	if got := presenceOf(t, url, it.ID); got["migrator-1"] != PresenceError || got["reviewer"] != PresenceIdle {
 		t.Fatalf("presence after = %v", got)
 	}
+	// A line of a lost run carries the time of the loss as the front knows
+	// it, never later than when it found out, and not before the entry
+	// before it; this front knows no time of the loss, so the entry before
+	// gives it. And a second front that starts again posts no line twice
+	// (live walk N1).
+	all := channel(t, s, it.ID)
+	before := all[len(all)-3]
+	if !lost[0].At.Equal(before.At) || !lost[1].At.Equal(before.At) {
+		t.Fatalf("the times of the lost lines = %v %v, the entry before %v", lost[0].At, lost[1].At, before.At)
+	}
+	again := newStoreOn(t, a, s.b.records, s.b.channels, nil)
+	again.poll(ctx)
+	again.poll(ctx)
+	if got := withEvent(channel(t, s, it.ID), EventLost); len(got) != 2 {
+		t.Fatalf("a front that started again posted %+v", got)
+	}
 
 	// Seat again: a patch with the same task gives the seat a new run.
 	resp, body := do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID+"/members/migrator-1", "alice", `{"task":"Migrate the logrotate module"}`)

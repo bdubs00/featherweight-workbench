@@ -815,3 +815,28 @@ func TestFailedJobs(t *testing.T) {
 		t.Fatalf("waiting = %+v", ans.Waiting)
 	}
 }
+
+// A team in To check shows the newest post of an agent as its result, and
+// the time of the card, the agent, and the cost come from that post, not
+// from a later line of the front or from the first agent by name (live
+// walk N1).
+func TestTeamResultFromOnePost(t *testing.T) {
+	posted := ago(6 * 24 * time.Hour)
+	rev := run("R-REV", "reviewer", fw.StateCompleted, ago(7*24*time.Hour), posted, map[string]string{fw.MetaBatch: "bridge:B1"})
+	rev.Usage.CostUSD = 0.01
+	keeper := run("R-KEEP", "backup-keeper", fw.StateCompleted, ago(7*24*time.Hour), posted, map[string]string{fw.MetaBatch: "bridge:B1"})
+	keeper.Usage.CostUSD = 0.03
+	last := ago(time.Minute) // a line of a lost run after a start of the front
+	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: rev}, {Run: keeper}},
+		Bridges: []bridges.Item{{Bridge: bridges.Bridge{ID: "B1", Title: "Backup policy", Operator: "alice", State: bridges.StateOpen, CreatedAt: ago(7 * 24 * time.Hour), Members: []bridges.Member{
+			{Handle: "backup-keeper", Agent: "backup-keeper", Runs: []string{"R-KEEP"}, Presence: bridges.PresenceIdle},
+			{Handle: "reviewer", Agent: "reviewer", Runs: []string{"R-REV"}, Presence: bridges.PresenceIdle}}},
+			LastAt: &last, Summary: "Review of the policy: PASS.", SummaryAt: &posted, SummaryBy: "reviewer", SummaryRun: "R-REV"}},
+	}
+	in.Mine = mineAll(in.Runs...)
+	c := cardOf(t, Assemble(in), "bridge:B1")
+	if c.Stage != StageReview || !c.Since.Equal(posted) || c.Summary != "Review of the policy: PASS." || c.Result == nil ||
+		c.Result.Agent != "reviewer" || c.Result.Run != "R-REV" || c.Result.CostUSD != 0.01 || !c.Result.At.Equal(posted) {
+		t.Fatalf("the team = %+v, result %+v", c, c.Result)
+	}
+}

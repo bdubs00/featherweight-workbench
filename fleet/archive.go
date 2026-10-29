@@ -569,6 +569,32 @@ func LostRun(ctx context.Context, a *fw.Agent, id string) bool {
 	return run != nil && !run.State.Terminal() && !f.held(id)
 }
 
+// LostAt returns when the run id was lost to the best of the knowledge of
+// this front: the time at which the view dropped it with its Task, when
+// this process saw that, else the time of the newest event of the run in
+// the archive, the last moment that the front knows it alive. It returns
+// the zero time when the front knows neither.
+func LostAt(ctx context.Context, a *fw.Agent, id string) time.Time {
+	f, _ := Of(a).(*Fleet)
+	if f == nil || id == "" {
+		return time.Time{}
+	}
+	if p := f.platform; p != nil {
+		p.mu.Lock()
+		fr, ok := p.gone[id]
+		p.mu.Unlock()
+		if ok && !fr.at.IsZero() {
+			return fr.at
+		}
+	}
+	if arch := f.arch(); arch != nil {
+		if run := arch.summaries(ctx)[id].listed(); run != nil {
+			return run.UpdatedAt
+		}
+	}
+	return time.Time{}
+}
+
 // held reports whether a member of the view or this process holds the
 // run, so the archive does not answer for it.
 func (f *Fleet) held(id string) bool {

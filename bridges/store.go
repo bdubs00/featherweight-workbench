@@ -76,7 +76,8 @@ type summary struct {
 	quiet bool
 	// first is the first line of the text of a message of an agent, for
 	// the summary of a bridge (lastPost), and "" for another entry.
-	first string
+	// handle and run name the seat and the run of that message.
+	first, handle, run string
 }
 
 // quietLine reports whether an entry is a line of sleep or wake: a worker
@@ -94,7 +95,7 @@ func quietLine(m Message) bool {
 func summarize(m Message) summary {
 	s := summary{kind: m.From.Kind, name: m.From.Name, at: m.At, quiet: quietLine(m)}
 	if m.From.Kind == KindAgent {
-		s.first = FirstLine(m.Text, summaryRunes)
+		s.first, s.handle, s.run = FirstLine(m.Text, summaryRunes), m.From.Handle, m.From.Run
 	}
 	return s
 }
@@ -161,19 +162,28 @@ const postersScan = lastPostScan
 // one.
 const lastPostScan = 24
 
-// lastPost returns the first line of the newest message of an agent of a
-// channel, from the summaries, or "" when the last entries hold none.
-func (b *buckets) lastPost(ctx context.Context, rec *record) string {
+// post is the newest message of an agent of a channel: the first line of
+// its text, when it came, the seat that posted it, and its run.
+type post struct {
+	first, handle, run string
+	at                 time.Time
+}
+
+// lastPost returns the newest message of an agent of a channel that says
+// something, from the summaries, or an empty post when the last entries
+// hold none. The summary of a bridge, its time, its agent, and its cost
+// all come from this one post (live walk N1).
+func (b *buckets) lastPost(ctx context.Context, rec *record) post {
 	for seq, n := rec.LastSeq, 0; seq > 0 && n < lastPostScan; seq, n = seq-1, n+1 {
 		s, ok, err := b.summaryOf(ctx, rec.ID, seq)
 		if err != nil {
-			return ""
+			return post{}
 		}
 		if ok && s.first != "" {
-			return s.first
+			return post{first: s.first, handle: s.handle, run: s.run, at: s.at}
 		}
 	}
-	return ""
+	return post{}
 }
 
 // maxSummaries bounds the summaries that a process keeps.
@@ -388,31 +398,43 @@ func (b *buckets) summaryOf(ctx context.Context, id string, seq uint64) (summary
 }
 
 // lastAtScan bounds the seqs that lastAt reads back from the newest one,
-// past the gaps of writes that a crash cut or that did not land yet.
-const lastAtScan = 8
+// past the system lines and past the gaps of writes that a crash cut or
+// that did not land yet. It is the scan of lastPost, so a list reads each
+// entry once.
+const lastAtScan = lastPostScan
 
-// lastAt returns the time of the newest entry of a channel that is not a
-// line of sleep or wake, from the summaries, which a count of the unread
-// entries reads anyway. When the scan finds only such lines, the newest of
-// them gives the time. It reports false for a channel without an entry.
+// lastAt returns the time of the newest post of a person or an agent in a
+// channel, from the summaries, which a count of the unread entries reads
+// anyway. A system line is no activity of the channel: a line of sleep or
+// wake, a line that a seat lost its run, which a front that starts again
+// can post days after the last post, and the other lines of the front
+// never make a channel look fresh (live walk N1). When the scan finds no
+// post, the open of the channel gives the time.
 func (b *buckets) lastAt(ctx context.Context, rec *record) (time.Time, bool) {
-	var quiet time.Time
 	for seq, n := rec.LastSeq, 0; seq > 0 && n < lastAtScan; seq, n = seq-1, n+1 {
 		s, ok, err := b.summaryOf(ctx, rec.ID, seq)
 		if err != nil {
 			return time.Time{}, false
 		}
-		if !ok || s.at.IsZero() {
+		if !ok || s.at.IsZero() || s.kind == KindSystem {
 			continue
 		}
-		if !s.quiet {
-			return s.at, true
-		}
-		if quiet.IsZero() {
-			quiet = s.at
+		return s.at, true
+	}
+	// No post of a person or an agent in the last entries: the channel
+	// moved last when it opened.
+	return rec.CreatedAt, !rec.CreatedAt.IsZero()
+}
+
+// newestAt returns the time of the newest entry of a channel, a system
+// line too, or the zero time.
+func (b *buckets) newestAt(ctx context.Context, rec *record) time.Time {
+	for seq, n := rec.LastSeq, 0; seq > 0 && n < lastAtScan; seq, n = seq-1, n+1 {
+		if s, ok, err := b.summaryOf(ctx, rec.ID, seq); err == nil && ok && !s.at.IsZero() {
+			return s.at
 		}
 	}
-	return quiet, !quiet.IsZero()
+	return time.Time{}
 }
 
 // Bounds of a page of the channel.

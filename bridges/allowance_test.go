@@ -289,30 +289,50 @@ func TestSelfAddressAndRepeatedAnswer(t *testing.T) {
 	}
 }
 
-// The list says when the newest entry of each channel came.
+// The list says when the newest post of a person or an agent of each
+// channel came. A channel with no post yet moved when it opened.
 func TestListCarriesTheTimeOfTheNewestEntry(t *testing.T) {
 	s, _, _, url, id := budgetBridge(t, "")
-	msgs := channel(t, s, id)
-	newest := msgs[len(msgs)-1].At
-	resp, body := do(t, http.MethodGet, url+"/v1/bridges", "alice", "")
-	var list struct {
-		Bridges []Item `json:"bridges"`
+	listed := func() *time.Time {
+		t.Helper()
+		resp, body := do(t, http.MethodGet, url+"/v1/bridges", "alice", "")
+		var list struct {
+			Bridges []Item `json:"bridges"`
+		}
+		decodeJSON(t, body, &list)
+		if resp.StatusCode != http.StatusOK || len(list.Bridges) != 1 {
+			t.Fatalf("list = %d %s", resp.StatusCode, body)
+		}
+		return list.Bridges[0].LastAt
 	}
-	decodeJSON(t, body, &list)
-	if resp.StatusCode != http.StatusOK || len(list.Bridges) != 1 || list.Bridges[0].LastAt == nil || !list.Bridges[0].LastAt.Equal(newest) {
-		t.Fatalf("list = %d %s, newest %v", resp.StatusCode, body, newest)
+	rec, _, _ := s.b.get(context.Background(), id)
+	if at := listed(); at == nil || !at.Equal(rec.CreatedAt) {
+		t.Fatalf("a channel without a post = %v, opened %v", at, rec.CreatedAt)
+	}
+	alice := fw.WithPrincipal(context.Background(), callers["alice"])
+	m, err := s.postAs(alice, id, PostSpec{Text: "Go on."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at := listed(); at == nil || !at.Equal(m.At) {
+		t.Fatalf("the newest post = %v, want %v", at, m.At)
 	}
 }
 
-// A line of sleep or wake does not make a bridge fresh: a worker that
-// serves seats of several bridges wakes for one, and each other bridge gets
-// the line too.
+// A system line does not make a bridge fresh: a line of sleep or wake,
+// which every bridge of a worker gets, and a line that a seat lost its
+// run, which a front that starts again posts days after the last post
+// (live walk N1).
 func TestListTimeSkipsTheLinesOfSleepAndWake(t *testing.T) {
 	s, _, _, url, id := budgetBridge(t, "")
-	msgs := channel(t, s, id)
-	newest := msgs[len(msgs)-1].At
+	alice := fw.WithPrincipal(context.Background(), callers["alice"])
+	m, err := s.postAs(alice, id, PostSpec{Text: "Go on."})
+	if err != nil {
+		t.Fatal(err)
+	}
 	time.Sleep(5 * time.Millisecond)
-	if err := s.postLines(context.Background(), id, system(EventAsleep, "reviewer went to sleep"), system(EventStarted, "reviewer woke up")); err != nil {
+	if err := s.postLines(context.Background(), id, system(EventAsleep, "reviewer went to sleep"), system(EventStarted, "reviewer woke up"),
+		system(EventLost, "reviewer stopped: the agent that held its work was replaced.")); err != nil {
 		t.Fatal(err)
 	}
 	resp, body := do(t, http.MethodGet, url+"/v1/bridges", "alice", "")
@@ -320,8 +340,8 @@ func TestListTimeSkipsTheLinesOfSleepAndWake(t *testing.T) {
 		Bridges []Item `json:"bridges"`
 	}
 	decodeJSON(t, body, &list)
-	if resp.StatusCode != http.StatusOK || len(list.Bridges) != 1 || list.Bridges[0].LastAt == nil || !list.Bridges[0].LastAt.Equal(newest) {
-		t.Fatalf("list = %d %s, newest %v", resp.StatusCode, body, newest)
+	if resp.StatusCode != http.StatusOK || len(list.Bridges) != 1 || list.Bridges[0].LastAt == nil || !list.Bridges[0].LastAt.Equal(m.At) {
+		t.Fatalf("list = %d %s, newest post %v", resp.StatusCode, body, m.At)
 	}
 	if !quietLine(system(EventStarted, "reviewer woke up")) || quietLine(system(EventStarted, "reviewer started: Review the roles")) {
 		t.Fatal("quietLine tells a wake line from the start of a seat wrongly")

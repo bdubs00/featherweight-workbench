@@ -555,7 +555,8 @@ func TestTeamAndNoteItems(t *testing.T) {
 	at := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
 	board := work.Answer{Cards: []work.Card{
 		{ID: "run:R0", Kind: work.KindConversation, Title: "Deploy", Stage: work.StageNeedsYou, Next: work.NextYou, Since: at, Summary: "Asks before it runs a shell command.", Links: work.Links{Run: "R0", Approval: "ap0", Runs: []string{"R0"}}},
-		{ID: "bridge:B1", Kind: work.KindBridge, Title: "Release notes", Stage: work.StageReview, Next: work.NextYou, Since: at, Agents: []string{"writer", "reviewer"}, Summary: "The notes are in the wiki.", CostUSD: 0.12, Links: work.Links{Bridge: "B1"}},
+		{ID: "bridge:B1", Kind: work.KindBridge, Title: "Release notes", Stage: work.StageReview, Next: work.NextYou, Since: at, Agents: []string{"reviewer", "writer"}, Summary: "The notes are in the wiki.", CostUSD: 0.12, Links: work.Links{Bridge: "B1"},
+			Result: &work.CardResult{Agent: "writer", Handle: "writer", Run: "RW", At: at.Add(-time.Hour), CostUSD: 0.05}},
 		{ID: "bridge:B2", Kind: work.KindBridge, Title: "Theirs", Stage: work.StageReview, Next: work.NextPerson, Links: work.Links{Bridge: "B2"}},
 		{ID: "bridge:B3", Kind: work.KindBridge, Title: "Busy", Stage: work.StageWorking, Next: work.NextAgent, Links: work.Links{Bridge: "B3"}},
 		{ID: "duty:found@x", Kind: work.KindDuty, Title: "Found check", Stage: work.StageReview, Next: work.NextYou, Since: at, Reason: "Found: zebra", Summary: "zebra", Agents: []string{"pooled"}, Links: work.Links{Run: "R1", Duty: "found", Runs: []string{"R1"}}},
@@ -571,7 +572,7 @@ func TestTeamAndNoteItems(t *testing.T) {
 	if len(got) != 4 || got[0].Card != "run:R0" || got[0].Approval != "ap0" || got[0].Agent != "ops" || strings.Join(got[0].Actions, " ") != "allow deny" {
 		t.Fatalf("the decision = %+v", got)
 	}
-	if got[1].Kind != KindResult || got[1].Bridge != "B1" || got[1].Agent != "writer" || got[1].Channel != "Release notes" || got[1].Summary != "The notes are in the wiki." || got[1].CostUSD != 0.12 ||
+	if got[1].Kind != KindResult || got[1].Bridge != "B1" || got[1].Agent != "writer" || got[1].Channel != "Release notes" || got[1].Summary != "The notes are in the wiki." || got[1].CostUSD != 0.05 || !got[1].Since.Equal(at.Add(-time.Hour)) ||
 		strings.Join(got[1].Actions, " ") != "looks-right needs-work" {
 		t.Fatalf("the team = %+v", got[1])
 	}
