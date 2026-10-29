@@ -153,8 +153,9 @@ func (b *buckets) posters(ctx context.Context, rec *record) []string {
 	return out
 }
 
-// postersScan bounds the entries that posters reads back.
-const postersScan = 50
+// postersScan bounds the entries that posters reads back. It is the scan
+// of lastPost, so a list of the bridges reads each entry once.
+const postersScan = lastPostScan
 
 // lastPostScan bounds the entries that lastPost reads back from the newest
 // one.
