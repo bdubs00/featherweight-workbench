@@ -167,21 +167,40 @@ func TestProposeFromRecordedRuns(t *testing.T) {
 	}
 }
 
-// One verified run is too few, and a rejected run is never used: with it
-// left out, too few runs remain.
+// One verified run is too few: the Duty stays out with the counts, in the
+// answer and once in the journal, also when a count changes. A rejected
+// run is never used: with it left out, too few runs remain, and the
+// answer says so with the counts. A Duty with too few runs says so too.
+// Neither of those writes the journal.
 func TestProposeNeedsVerifiedRuns(t *testing.T) {
-	runs := recordRuns(t, tickets(10))
+	runs := recordRuns(t, tickets(11))
 	runs[0] = withReceipt(runs[0], "accepted")
-	fr := proposeFront(t, runs)
+	fr := proposeFront(t, runs[:10])
 	ctx := context.Background()
-	if res, err := fr.s.Propose(ctx); err != nil || len(res.Proposed) != 0 || len(res.StaysOut) != 0 || len(fr.journal(t)) != 0 {
+	res, err := fr.s.Propose(ctx)
+	why := res.StaysOut["triage/nightly"]
+	if err != nil || len(res.Proposed) != 0 || !strings.Contains(why, "The Duty nightly has 10 runs that can make a routine, and 1 of them is verified; a proposal needs 2 verified runs.") {
 		t.Fatalf("one verified run = %+v, %v", res, err)
+	}
+	j := fr.journal(t)
+	if len(j) != 1 || j[0].What != WhatStaysOut || j[0].Why != why || len(j[0].Runs) != 10 {
+		t.Fatalf("journal = %+v", j)
+	}
+	// An eleventh run changes a count, and the journal says nothing new.
+	fr.arch.put(runs[10], day0)
+	if res, _ := fr.s.Propose(ctx); !strings.Contains(res.StaysOut["triage/nightly"], "11 runs that can make a routine") || len(fr.journal(t)) != 1 {
+		t.Fatalf("a new count = %+v, %d entries", res, len(fr.journal(t)))
 	}
 	runs[1] = withReceipt(runs[1], "accepted")
 	runs[2] = withReceipt(runs[2], "rejected")
-	fr = proposeFront(t, runs)
-	if res, err := fr.s.Propose(ctx); err != nil || len(res.Proposed) != 0 {
+	fr = proposeFront(t, runs[:10])
+	res, err = fr.s.Propose(ctx)
+	if err != nil || len(res.Proposed) != 0 || !strings.Contains(res.StaysOut["triage/nightly"], "10 completed runs in the last 30 days, and 9 of them can make a routine; a proposal needs 10.") || len(fr.journal(t)) != 0 {
 		t.Fatalf("nine usable runs = %+v, %v", res, err)
+	}
+	fr = proposeFront(t, runs[:3])
+	if res, _ := fr.s.Propose(ctx); res.StaysOut["triage/nightly"] != "The Duty nightly has 3 completed runs in the last 30 days, and a proposal needs 10." || len(fr.journal(t)) != 0 {
+		t.Fatalf("three runs = %+v", res)
 	}
 }
 
@@ -373,7 +392,7 @@ func TestProposeRoute(t *testing.T) {
 	}
 	resp, body = send(t, http.MethodPost, url, "alice", "")
 	mustStatus(t, resp, body, http.StatusOK)
-	if decodeJSON(t, body, &res); len(res.Proposed) != 0 {
+	if decodeJSON(t, body, &res); len(res.Proposed) != 0 || !strings.Contains(res.StaysOut["triage/nightly"], "has its routine duty-nightly already (rehearsing)") {
 		t.Fatalf("a second pass = %s", body)
 	}
 

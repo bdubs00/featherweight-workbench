@@ -26,24 +26,30 @@ func comparedData(question, said, observed string) fw.RoutineComparedData {
 	return fw.RoutineComparedData{Routine: "acknowledge", Version: 1, Mode: fw.RoutineShadow, Question: question, Said: said, Observed: observed, Agree: said == observed}
 }
 
-// The ready rule: enough runs that the routine would have acted on, a
-// share of them agreed, and no agreed run sent back.
+// The ready rule: enough runs that the routine would have acted on, each
+// with its comparison, a share of them agreed, and no agreed run sent
+// back. A run whose comparison has not come counts toward no bound and
+// against the agreement.
 func TestReadyRule(t *testing.T) {
 	c := Config{ReadyAfter: ReadyAfter{Read: 200, Write: 200}, ReadyAgreement: 0.95}
 	for _, tc := range []struct {
-		acted, agreed, sentBack int
-		want                    bool
+		acted, agreed, disagreed, sentBack int
+		want                               bool
 	}{
-		{200, 190, 0, true},
-		{199, 199, 0, false},
-		{200, 189, 0, false},
-		{1000, 950, 0, true},
-		{1000, 950, 1, false},
-		{0, 0, 0, false},
+		{200, 190, 10, 0, true},
+		{199, 199, 0, 0, false},
+		{200, 189, 11, 0, false},
+		{1000, 950, 50, 0, true},
+		{1000, 950, 50, 1, false},
+		{0, 0, 0, 0, false},
+		// The comparison of the last run has not come.
+		{200, 199, 0, 0, false},
+		{201, 200, 0, 0, true},
+		{210, 199, 0, 0, false},
 	} {
-		ev := &Evidence{Totals: Counts{Acted: tc.acted, Agreed: tc.agreed}, SentBack: SentBack{Agreed: tc.sentBack}}
+		ev := &Evidence{Totals: Counts{Acted: tc.acted, Agreed: tc.agreed, Disagreed: tc.disagreed}, SentBack: SentBack{Agreed: tc.sentBack}}
 		if got := ev.Ready(c); got != tc.want {
-			t.Errorf("Ready(acted %d, agreed %d, sent back %d) = %v", tc.acted, tc.agreed, tc.sentBack, got)
+			t.Errorf("Ready(acted %d, agreed %d, disagreed %d, sent back %d) = %v", tc.acted, tc.agreed, tc.disagreed, tc.sentBack, got)
 		}
 	}
 	if (*Evidence)(nil).Ready(c) {

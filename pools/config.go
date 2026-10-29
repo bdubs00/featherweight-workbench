@@ -122,6 +122,10 @@ type Pool struct {
 	warnings []string
 	front    Front   // what the pool took from the front, for a render with an overlay
 	overlay  Overlay // the overlay that WithOverlay merged, empty for the configuration alone
+	// routinesFront is true when the workers read the routines of the
+	// front at the start of each run (Overlay.RoutinesFront), so the
+	// merge left them out.
+	routinesFront bool
 
 	// intakeSet is true when the configuration sets Intake, so the intake
 	// is no default (defaultIntake).
@@ -882,10 +886,11 @@ func (p *Pool) workerFile(front Front, hash bool) (string, error) {
 	}
 	b["egress"] = front.Egress
 	b["egressTypes"] = append([]string(nil), front.EgressTypes...)
-	if runsRoutines(m) {
+	if runsRoutines(m) || readsRoutines(m) {
 		// The events of the routines go out only from a pool whose
-		// profiles run one, so a front that adds them replaces no Task of
-		// a pool without routines; the routines replace the Tasks anyway.
+		// profiles run one, or whose runs read their routines from the
+		// front, so a front that adds them replaces no Task of a pool
+		// without routines.
 		b["egressTypes"] = append(b["egressTypes"].([]string), RoutineEventTypes...)
 	}
 	if _, set := b["egressMaxBytes"]; !set && front.MaxBytes > 0 {
@@ -922,6 +927,15 @@ func runsRoutines(m map[string]any) bool {
 		}
 	}
 	return false
+}
+
+// readsRoutines reports whether the runs of a worker read their routines
+// from the front (routines.front), so any run can get a routine.
+func readsRoutines(m map[string]any) bool {
+	routines, _ := m["routines"].(map[string]any)
+	front, _ := routines["front"].(map[string]any)
+	url, _ := front["url"].(string)
+	return strings.TrimSpace(url) != ""
 }
 
 // merge returns base with over on top. A mapping in both merges key by

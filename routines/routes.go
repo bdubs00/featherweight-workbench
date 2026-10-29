@@ -32,6 +32,7 @@ func mount(k *native.Kit) error {
 	rt := &routes{k: k, a: k.Agent()}
 	k.Handle("GET /v1/routines", rt.list)
 	k.Handle("GET /v1/routines/summary", rt.on(rt.summary))
+	k.Handle("GET /v1/routines/now", rt.now)
 	k.Handle("GET /v1/routines/{agent}/{name}", rt.on(rt.get))
 	k.Handle("PUT /v1/routines/{agent}/{name}", rt.on(rt.put))
 	k.Handle("POST /v1/routines/{agent}/{name}/standing", rt.on(rt.standing))

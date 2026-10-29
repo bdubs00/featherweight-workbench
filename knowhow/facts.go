@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,7 +33,8 @@ const maxFacts = 50000
 // before the run shows nothing about the run, so it verifies nothing.
 // Untrusted is true when its text came from a block found, event, or
 // source, or from a message of another principal. Trigger is a hash of what
-// started the run: its input and those blocks.
+// started the run: its input and those blocks. Thumbs holds the notes that
+// people wrote with a thumb on the run, oldest first.
 type runFacts struct {
 	updated      time.Time
 	Verification string
@@ -42,7 +44,18 @@ type runFacts struct {
 	ByRoutine    bool
 	Untrusted    bool
 	Trigger      string
+	Thumbs       []thumbNote
 }
+
+// thumbNote is the note that a person wrote with a thumb, up or down.
+type thumbNote struct {
+	Reaction string
+	Note     string
+}
+
+// maxThumbNotes bounds the notes of thumbs that the facts of a run keep,
+// the newest ones.
+const maxThumbNotes = 4
 
 // verified reports whether a system recorded that the run did its work.
 func (f runFacts) verified() bool {
@@ -88,8 +101,29 @@ func factsFrom(e fleet.ArchiveEntry, events []fw.Event) runFacts {
 	f.Checked = r.Done != nil && fw.CheckedDone(r.Done.State, r.Done.Weak)
 	trigger := sha256.New()
 	trigger.Write([]byte(r.Input))
+	// The thumbs of a person, by the event that they react to: the last
+	// reaction of a person on an event decides, and a thumb taken back
+	// takes its note along.
+	type thumbKey struct {
+		seq          uint64
+		reaction, by string
+	}
+	var thumbs []thumbKey
+	notes := map[thumbKey]string{}
 	for _, ev := range events {
 		switch ev.Type {
+		case fw.EvRunReacted:
+			var d fw.ReactionData
+			if ev.Decode(&d) != nil || (d.Reaction != fw.ReactionUp && d.Reaction != fw.ReactionDown) {
+				continue
+			}
+			k := thumbKey{seq: d.Seq, reaction: d.Reaction, by: d.By}
+			thumbs = slices.DeleteFunc(thumbs, func(x thumbKey) bool { return x == k })
+			delete(notes, k)
+			if note := strings.TrimSpace(d.Note); !d.Removed && note != "" {
+				thumbs = append(thumbs, k)
+				notes[k] = note
+			}
 		case fw.EvRunAnnotated:
 			if v := fleet.Verification(ev); v != "" {
 				f.Verification = v
@@ -128,6 +162,12 @@ func factsFrom(e fleet.ArchiveEntry, events []fw.Event) runFacts {
 				f.Untrusted = true
 			}
 		}
+	}
+	if len(thumbs) > maxThumbNotes {
+		thumbs = thumbs[len(thumbs)-maxThumbNotes:]
+	}
+	for _, k := range thumbs {
+		f.Thumbs = append(f.Thumbs, thumbNote{Reaction: k.reaction, Note: notes[k]})
 	}
 	f.Trigger = hex.EncodeToString(trigger.Sum(nil)[:8])
 	return f

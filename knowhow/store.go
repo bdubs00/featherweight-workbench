@@ -637,9 +637,11 @@ type WriteResult struct {
 }
 
 // Write writes the text of a note, as the condition IfHash allows. A note
-// that a person wrote changes only by a person. With Hold and the switch
-// of the agent on, a new note waits in the state waiting, and a change of
-// a note that exists waits beside it, and the note stays as it is.
+// that a person wrote changes only by a person, and the write of a person
+// names each page of its sources at the version of the page now. With
+// Hold and the switch of the agent on, a new note waits in the state
+// waiting, and a change of a note that exists waits beside it, and the
+// note stays as it is.
 func (s *Service) Write(ctx context.Context, req WriteRequest) (WriteResult, error) {
 	if err := checkNote(req.Agent, req.Scope, req.Name); err != nil {
 		return WriteResult{}, err
@@ -657,6 +659,9 @@ func (s *Service) Write(ctx context.Context, req WriteRequest) (WriteResult, err
 	}
 	if req.By == "" {
 		req.By = ByAgent
+	}
+	if isPerson(req.By) {
+		sources = s.currentSources(ctx, sources)
 	}
 	hold := req.Hold && !isPerson(req.By) && s.AskFirst(ctx, req.Agent)
 	key := noteKey(req.Agent, req.Scope, req.Name)
@@ -779,6 +784,32 @@ func vouched(list []Source, ood OutOfDate) []Source {
 			src.Version = ood.Version
 		}
 		out = append(out, src)
+	}
+	return out
+}
+
+// currentSources returns the sources of a note that a person writes, with
+// each page of the wiki at its version now. The person read the page as it
+// is, such as an owner who corrects a note on the page, which sends the
+// sources of the note as they were. A page that the wiki no longer has
+// leaves the list. A page that does not read keeps its version, and so
+// does a source of another kind; vouched moves an item that went out of
+// date.
+func (s *Service) currentSources(ctx context.Context, list []Source) []Source {
+	out := make([]Source, 0, len(list))
+	for _, src := range list {
+		if path, ok := strings.CutPrefix(src.Ref, "page:"); ok {
+			_, hash, err := s.pageAt(ctx, path)
+			switch {
+			case errors.Is(err, errNoPage):
+				continue
+			case err == nil:
+				src.Version = hash
+			}
+		}
+		if !slices.Contains(out, src) {
+			out = append(out, src)
+		}
 	}
 	return out
 }

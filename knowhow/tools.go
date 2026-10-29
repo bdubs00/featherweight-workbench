@@ -188,13 +188,14 @@ func candidatesTool(ctx context.Context, s *Service, in candidatesArgs) *sdk.Cal
 }
 
 // OpenCandidates returns the open candidates of an agent, the oldest
-// first, at most limit, each with the notes of its scope.
+// first, at most limit, each with the notes of its scope. The evidence of
+// a recheck holds the note and its page as they are now.
 func (s *Service) OpenCandidates(ctx context.Context, agent string, limit int) (candidatesResult, error) {
 	if limit <= 0 {
 		limit = defaultCandidates
 	}
 	limit = min(limit, maxCandidates)
-	list, err := s.Candidates(ctx, agent, func(c Candidate) bool { return c.State == CandOpen && c.ready() })
+	list, err := s.openCandidates(ctx, agent)
 	if err != nil {
 		return candidatesResult{}, err
 	}
@@ -207,6 +208,12 @@ func (s *Service) OpenCandidates(ctx context.Context, agent string, limit int) (
 	}
 	out := candidatesResult{Agent: agent, Candidates: []candidateView{}}
 	for _, c := range list {
+		if c.Kind == KindRecheck {
+			// The note and its page as they are now.
+			if n, stands, err := s.recheckNote(ctx, c); err == nil && stands {
+				c.Evidence = []Evidence{{Text: s.recheckEvidence(ctx, n, n.OutOfDate.Source)}}
+			}
+		}
 		v := candidateView{Candidate: c, Notes: []scopeNote{}}
 		sc := keepScope(c)
 		for _, n := range notes {
@@ -399,7 +406,13 @@ func (s *Service) Keep(ctx context.Context, req KeepRequest) (keepResult, error)
 	case op == OpSupersede:
 		cond = cur.Hash
 	}
-	res, err := s.Write(ctx, WriteRequest{Agent: c.Agent, Scope: sc, Name: name, Text: strings.TrimSpace(req.Text), IfHash: cond, Sources: c.Sources,
+	sources := c.Sources
+	if c.Kind == KindRecheck && live && cur.OutOfDate != nil {
+		// The review read the source as it is now, so the note names it at
+		// its version now, as the correction of a person does.
+		sources = vouched(sources, *cur.OutOfDate)
+	}
+	res, err := s.Write(ctx, WriteRequest{Agent: c.Agent, Scope: sc, Name: name, Text: strings.TrimSpace(req.Text), IfHash: cond, Sources: sources,
 		By: ByReview, Run: req.Run, Origin: originOf(c), Why: why, Runs: c.runIDs(), Hold: true, Candidate: c.ID})
 	if err != nil {
 		return keepResult{}, err

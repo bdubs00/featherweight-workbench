@@ -233,18 +233,26 @@ func newEvidence(version int) *Evidence {
 
 // Ready reports whether a rehearsing routine may go live by the rule of the
 // configuration c: over its current version, since its last step back, it
-// would have acted on at least the runs of ReadyAfter for its risk, it
-// agreed with the agent on at least ReadyAgreement of them, and no run
-// where it agreed came back.
+// would have acted on at least the runs of ReadyAfter for its risk, each
+// with its comparison, it agreed with the agent on at least ReadyAgreement
+// of the runs that it would have acted on, and no run where it agreed came
+// back. The decision of a run comes at its start and the comparison at
+// its end, so a run that still works counts toward no bound and against
+// the agreement: the routine never gets ready on a run whose comparison
+// has not come.
 func (ev *Evidence) Ready(c Config) bool {
 	if ev == nil {
 		return false
 	}
 	t, sentBack := ev.current()
-	return t.Acted >= c.ReadyAfter.For(ev.Risk) && t.Acted > 0 &&
+	return t.compared() >= c.ReadyAfter.For(ev.Risk) && t.Acted > 0 &&
 		float64(t.Agreed) >= c.ReadyAgreement*float64(t.Acted) &&
 		sentBack == 0
 }
+
+// compared counts the runs that the routine would have acted on and whose
+// comparison came: those that agreed and those that did not.
+func (c Counts) compared() int { return c.Agreed + c.Disagreed }
 
 // public returns a copy of the evidence without the marks.
 func (ev *Evidence) public() *Evidence {

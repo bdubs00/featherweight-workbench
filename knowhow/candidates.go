@@ -80,6 +80,7 @@ const (
 	maxCandRuns   = 8
 	evidenceCut   = 1024
 	inputCut      = 512
+	pageCut       = 4096
 	passBatch     = 200
 	settle        = 2 * time.Minute
 	maxPlaces     = 500
@@ -105,6 +106,10 @@ type Candidate struct {
 	First    time.Time      `json:"first"`
 	Updated  time.Time      `json:"updated"`
 	Decided  *Decision      `json:"decided,omitempty"`
+
+	// reopen makes a new run with new evidence open a decided candidate
+	// again (add). The store keeps no such field.
+	reopen bool
 }
 
 // CandidateRun is one run of a candidate, with its trigger.
@@ -184,8 +189,11 @@ func candAgent(id string) (string, error) {
 }
 
 // add adds one run and its evidence to the candidate c, or creates it. A
-// run that the candidate holds changes nothing. A decided candidate stays
-// decided.
+// run that the candidate holds changes only the text of its evidence, such
+// as a thumb with a note that came after the run was read. A decided
+// candidate stays decided, unless c.reopen: then a new run with new
+// evidence opens it again, with that run alone, because the review decided
+// on the runs before it.
 func (s *Service) add(ctx context.Context, c Candidate, run *CandidateRun, ev Evidence) error {
 	now := s.now().UTC()
 	wrote, _, _, err := s.modify(ctx, candKey(c.Agent, c.ID), func(value []byte, exists bool, _ uint64) ([]byte, error) {
@@ -200,16 +208,25 @@ func (s *Service) add(ctx context.Context, c Candidate, run *CandidateRun, ev Ev
 			}
 		}
 		if exists && (cur.State == CandKept || cur.State == CandSkipped) {
-			return nil, nil
+			if !c.reopen || run == nil || ev.Text == "" || cur.holds(run.Run, ev.Text) {
+				return nil, nil
+			}
+			// The 14 days of the candidate start again with this run.
+			exists = false
+			cur.Decided, cur.Origin, cur.Sources = nil, "", nil
 		}
 		if !exists {
 			cur.First, cur.Runs, cur.Evidence, cur.State = now, nil, nil, CandGathering
 		}
 		if run != nil {
-			for _, r := range cur.Runs {
-				if r.Run == run.Run {
+			if slices.ContainsFunc(cur.Runs, func(r CandidateRun) bool { return r.Run == run.Run }) {
+				i := slices.IndexFunc(cur.Evidence, func(e Evidence) bool { return e.Run == run.Run })
+				if ev.Text == "" || i < 0 || cur.Evidence[i].Text == ev.Text {
 					return nil, nil
 				}
+				cur.Evidence[i].Text = ev.Text
+				cur.Updated = now
+				return encode(cur)
 			}
 			if len(cur.Runs) >= maxCandRuns {
 				return nil, nil
@@ -241,6 +258,12 @@ func (s *Service) add(ctx context.Context, c Candidate, run *CandidateRun, ev Ev
 		emitChange(c.Agent)
 	}
 	return err
+}
+
+// holds reports whether the candidate holds the run with this text of
+// evidence.
+func (c Candidate) holds(run, text string) bool {
+	return slices.ContainsFunc(c.Evidence, func(e Evidence) bool { return e.Run == run && e.Text == text })
 }
 
 // appendSource adds a source to a list. A page that the list names already
@@ -406,6 +429,41 @@ func (s *Service) CandidatePass(ctx context.Context) (int, error) {
 		err = nil
 	}
 	return len(todo), err
+}
+
+// maxPassRounds bounds the passes of a start of the review by a person,
+// each of at most passBatch runs.
+const maxPassRounds = 10
+
+// readUpToNow reads the finished runs of the archive up to now for a
+// person who starts the review of an agent: the pass behind the cursor
+// until no run waits, and then the runs of the agent that changed within
+// the last two minutes, which the pass leaves for later. Those it reads
+// without the cursor, which another replica can move only past runs that
+// it knows: the pass reads them again once they settle, and a candidate
+// counts each run once.
+func (s *Service) readUpToNow(ctx context.Context, agent string) error {
+	for range maxPassRounds {
+		n, err := s.CandidatePass(ctx)
+		if err != nil {
+			return err
+		}
+		if n < passBatch {
+			break
+		}
+	}
+	cutoff := s.now().UTC().Add(-settle)
+	var errs []error
+	for _, e := range s.archive(ctx) {
+		if ctx.Err() != nil {
+			break
+		}
+		if e.Run == nil || e.Run.Agent != agent || !e.Run.State.Terminal() || !e.Updated.After(cutoff) {
+			continue
+		}
+		errs = append(errs, s.learnFrom(ctx, e))
+	}
+	return errors.Join(errs...)
 }
 
 // call is one tool call of the agent in a run, with its result.
@@ -630,12 +688,26 @@ func (s *Service) learnFrom(ctx context.Context, e fleet.ArchiveEntry) error {
 		if duty == "" {
 			label = "runs without a Duty"
 		}
-		text := fmt.Sprintf("What was recorded: %s.\nThe input of the run was:\n%s\nThe answer of the run was:\n%s", what, cut(r.Input, evidenceCut), cut(r.Output, evidenceCut))
+		text := fmt.Sprintf("What was recorded: %s.\n%sThe input of the run was:\n%s\nThe answer of the run was:\n%s", what, thumbsText(f.Thumbs), cut(r.Input, evidenceCut), cut(r.Output, evidenceCut))
+		// A new run that went badly, or that a person gave a thumb, opens a
+		// decided outcome again. A run that only a check of the system
+		// verified does not, so a Duty with checks does not start a review
+		// every day.
 		cand := Candidate{ID: candID(KindOutcome, r.Agent, sc, duty+"\x00"+polarity), Agent: r.Agent, Kind: KindOutcome, Scope: sc, Origin: origin(false),
-			Summary: fmt.Sprintf("%s that went %s", label, polarity), Sources: pagesRead(calls)}
+			Summary: fmt.Sprintf("%s that went %s", label, polarity), Sources: pagesRead(calls), reopen: polarity == "badly" || f.Up || f.Down}
 		errs = append(errs, s.add(ctx, cand, &run, Evidence{Run: r.ID, Text: text}))
 	}
 	return errors.Join(errs...)
+}
+
+// thumbsText words the notes that people wrote with a thumb on a run, for
+// the evidence of an outcome, each on lines of its own.
+func thumbsText(thumbs []thumbNote) string {
+	var b strings.Builder
+	for _, t := range thumbs {
+		fmt.Fprintf(&b, "A person wrote with a thumbs %s:\n%s\n", t.Reaction, cut(t.Note, evidenceCut))
+	}
+	return b.String()
 }
 
 // outcomeOf returns well or badly for a run that a system or a person
@@ -815,8 +887,75 @@ func (s *Service) recheck(ctx context.Context, n Note, ref, version string) erro
 	if origin == "" {
 		origin = OriginTrusted
 	}
-	text := fmt.Sprintf("The note %s says:\n%s\nIts source %s changed since the note was written.", n.Name, cut(full.Text, evidenceCut), ref)
 	c := Candidate{ID: candID(KindRecheck, n.Agent, n.Scope, n.Name+"\x00"+ref+"\x00"+version), Agent: n.Agent, Kind: KindRecheck, Scope: n.Scope,
 		Origin: origin, Note: n.Name, Sources: sources, Summary: fmt.Sprintf("The note %s is out of date: %s changed", n.Name, ref)}
-	return s.add(ctx, c, nil, Evidence{Text: text})
+	return s.add(ctx, c, nil, Evidence{Text: s.recheckEvidence(ctx, full, ref)})
+}
+
+// recheckEvidence words the evidence of a recheck from the note and its
+// source as they are now: the text of the note, and for a page of the wiki
+// the text of the page now, cut to pageCut, so the review can correct the
+// note from the evidence alone. The list of the candidates words it again
+// each time (OpenCandidates), so the review never reads an old text.
+func (s *Service) recheckEvidence(ctx context.Context, n Note, ref string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "The note %s says now:\n%s\n", n.Name, cut(n.Text, evidenceCut))
+	path, ok := strings.CutPrefix(ref, "page:")
+	if !ok {
+		fmt.Fprintf(&b, "Its source %s changed since the note was written.", ref)
+		return b.String()
+	}
+	text, _, err := s.pageAt(ctx, path)
+	switch {
+	case errors.Is(err, errNoPage):
+		fmt.Fprintf(&b, "Its source, the page %s of the wiki, was removed since the note was written.", path)
+	case err != nil:
+		fmt.Fprintf(&b, "Its source, the page %s of the wiki, changed since the note was written. The page does not read now.", path)
+	default:
+		fmt.Fprintf(&b, "Its source, the page %s of the wiki, changed since the note was written. The page says now:\n%s", path, cut(text, pageCut))
+	}
+	return b.String()
+}
+
+// recheckNote returns the note of a recheck as it is now, and whether the
+// recheck still stands: the note is out of date, and the review can change
+// it. A note that a person or the agent corrected, that was put away, or
+// that a person wrote ends its recheck.
+func (s *Service) recheckNote(ctx context.Context, c Candidate) (Note, bool, error) {
+	n, err := s.get(ctx, noteKey(c.Agent, c.Scope, c.Note))
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return Note{}, false, nil
+	case err != nil:
+		return Note{}, false, err
+	}
+	return n, n.State != StatePutAway && !n.ByPerson() && n.OutOfDate != nil, nil
+}
+
+// openCandidates returns the candidates of an agent that the review can
+// decide now, the oldest first. A recheck that no longer stands
+// (recheckNote) is decided on the spot and left out, so no review starts
+// for it.
+func (s *Service) openCandidates(ctx context.Context, agent string) ([]Candidate, error) {
+	list, err := s.Candidates(ctx, agent, func(c Candidate) bool { return c.State == CandOpen && c.ready() })
+	if err != nil {
+		return nil, err
+	}
+	out := list[:0]
+	for _, c := range list {
+		if c.Kind == KindRecheck {
+			_, stands, err := s.recheckNote(ctx, c)
+			if err != nil {
+				return nil, err
+			}
+			if !stands {
+				if err := s.decided(ctx, c, CandSkipped, Decision{Op: OpSkip, Note: c.Note, By: ByKnowhow}); err != nil {
+					s.log.Warn("knowhow: a recheck whose note was corrected stays open", "agent", c.Agent, "candidate", c.ID, "error", err)
+				}
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	return out, nil
 }

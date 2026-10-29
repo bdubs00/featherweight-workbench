@@ -26,7 +26,7 @@ func TestRoutesWorkerPush(t *testing.T) {
 	if w.Note.Hash != Hash("Gitea refuses a label with a space.") || w.Note.State != StateChecked || resp.Header.Get("ETag") != `"`+w.Note.Hash+`"` || w.Note.Text != "" {
 		t.Fatalf("the answer = %+v, %v", w, resp.Header)
 	}
-	resp, body = send(t, "PUT", base, "fleet", `{"text": "two", "ifHash": "`+Hash("old")+`"}`)
+	resp, body = send(t, "PUT", base, "fleet", `{"text": "two", "ifHash": "`+Hash("old")+`", "by": "agent"}`)
 	mustStatus(t, resp, body, http.StatusPreconditionFailed)
 	var p struct {
 		Hash string `json:"hash"`
@@ -37,7 +37,7 @@ func TestRoutesWorkerPush(t *testing.T) {
 	}
 	resp, body = send(t, "PUT", base, "fleet", `{"text": "two", "ifHash": "`+w.Note.Hash+`", "by": "boss"}`)
 	mustStatus(t, resp, body, http.StatusBadRequest)
-	resp, body = send(t, "PUT", base, "fleet", `{"text": "two", "ifHash": "`+w.Note.Hash+`"}`)
+	resp, body = send(t, "PUT", base, "fleet", `{"text": "two", "ifHash": "`+w.Note.Hash+`", "by": "agent"}`)
 	mustStatus(t, resp, body, http.StatusOK)
 	// The pull lists the scope with its states and hashes, without text.
 	resp, body = send(t, "GET", fr.url+"/v1/knowhow/notes?agent=triage&scope=principal&principal=duty:nightly", "fleet", "")
@@ -56,7 +56,7 @@ func TestRoutesWorkerPush(t *testing.T) {
 	}
 	// The kernel deletes the note: the front puts it away, and the list
 	// leaves it out unless putAway is true.
-	resp, body = send(t, "DELETE", base+"&ifHash="+Hash("two"), "fleet", "")
+	resp, body = send(t, "DELETE", base+"&ifHash="+Hash("two")+"&by=agent", "fleet", "")
 	mustStatus(t, resp, body, http.StatusOK)
 	_, body = send(t, "GET", fr.url+"/v1/knowhow/notes?agent=triage&scope=principal&principal=duty:nightly", "fleet", "")
 	if strings.Contains(body, "labels.md") {
@@ -70,7 +70,7 @@ func TestRoutesWorkerPush(t *testing.T) {
 	if _, err := fr.s.SetAskFirst(context.Background(), "triage", true, "person:alice"); err != nil {
 		t.Fatal(err)
 	}
-	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/principal/new.md?principal=duty:nightly", "fleet", `{"text": "new", "ifHash": "absent"}`)
+	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/principal/new.md?principal=duty:nightly", "fleet", `{"text": "new", "ifHash": "absent", "by": "agent"}`)
 	mustStatus(t, resp, body, http.StatusAccepted)
 	if !strings.Contains(body, `"waiting"`) || !strings.Contains(body, `"state":"waiting"`) {
 		t.Fatalf("202 = %s", body)
@@ -134,7 +134,7 @@ func TestRoutesPeople(t *testing.T) {
 	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/agent/agent.md", "alice", `{"text": "by alice"}`)
 	mustStatus(t, resp, body, http.StatusOK)
 	// Now the agent cannot change the note of a person.
-	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/agent/agent.md", "fleet", `{"text": "by the agent"}`)
+	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/agent/agent.md", "fleet", `{"text": "by the agent", "by": "agent"}`)
 	mustStatus(t, resp, body, http.StatusForbidden)
 	// A bad scope and a bad name answer 400.
 	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/shared/a.md", "fleet", `{"text": "x"}`)
@@ -418,13 +418,13 @@ func TestKernelWireShapes(t *testing.T) {
 
 	// DELETE: 412 for another hash, 2xx with the hash, 404 for a note that
 	// the front does not have.
-	resp, body = send(t, "DELETE", base+"?ifHash="+Hash("other"), "fleet", "")
+	resp, body = send(t, "DELETE", base+"?ifHash="+Hash("other")+"&by=agent", "fleet", "")
 	mustStatus(t, resp, body, http.StatusPreconditionFailed)
-	resp, body = send(t, "DELETE", base+"?ifHash="+Hash("two"), "fleet", "")
+	resp, body = send(t, "DELETE", base+"?ifHash="+Hash("two")+"&by=agent", "fleet", "")
 	if resp.StatusCode/100 != 2 {
 		t.Fatalf("DELETE = %d %s", resp.StatusCode, body)
 	}
-	resp, body = send(t, "DELETE", fr.url+"/v1/knowhow/notes/triage/agent/never.md?ifHash="+Hash("x"), "fleet", "")
+	resp, body = send(t, "DELETE", fr.url+"/v1/knowhow/notes/triage/agent/never.md?ifHash="+Hash("x")+"&by=agent", "fleet", "")
 	mustStatus(t, resp, body, http.StatusNotFound)
 	resp, body = send(t, "GET", base, "fleet", "")
 	if resp.StatusCode != http.StatusNotFound && !strings.Contains(body, `"state":"put-away"`) {
@@ -553,5 +553,39 @@ func TestRoutesStartNow(t *testing.T) {
 	mustStatus(t, resp, body, http.StatusConflict)
 	if !strings.Contains(body, "proposals of routines are off") {
 		t.Fatalf("a start of the proposals while they are off = %s", body)
+	}
+}
+
+// Review now reads the runs that ended a moment ago, which the pass of the
+// candidates leaves for two minutes, so a person who gives a thumb down
+// and starts the review at once gets a review of that run. It reads them
+// without the cursor: the pass reads them again once they settle, and the
+// candidate counts each run once.
+func TestReviewNowReadsUpToNow(t *testing.T) {
+	fr := newFront(t, func(c *KnowhowConfig) { c.Review.Agent = "review" })
+	var started int
+	fr.s.enqueue = func(_ context.Context, _ string, reqs []fw.RunRequest) (string, int, error) {
+		started += len(reqs)
+		return "q", len(reqs), nil
+	}
+	ctx := context.Background()
+	run := chatRun("01KNOW00000000000000000001", fr.clk.now().Add(-time.Minute), "What do I check first when the backup fails?").
+		thumb(fw.ReactionDown, "alice", "The backup job logs to backup.log on the NAS.")
+	fr.arch.put(run.out, fr.clk.now().Add(-30*time.Second))
+	resp, body := send(t, "POST", fr.url+"/v1/knowhow/review/triage", "alice", "")
+	mustStatus(t, resp, body, http.StatusAccepted)
+	if started != 1 {
+		t.Fatalf("the start = %s, %d runs", body, started)
+	}
+	if got, err := fr.s.b.Get(ctx, cursorKey); err == nil && strings.Contains(string(got.Value), "01KNOW00000000000000000001") {
+		t.Fatalf("Review now moved the cursor past a run that did not settle: %s", got.Value)
+	}
+	fr.clk.add(time.Hour)
+	if n, err := fr.s.CandidatePass(ctx); err != nil || n != 1 {
+		t.Fatalf("the pass after the run settled read %d runs, %v", n, err)
+	}
+	list, _ := fr.s.Candidates(ctx, "triage", func(c Candidate) bool { return c.Kind == KindOutcome })
+	if len(list) != 1 || len(list[0].Runs) != 1 || len(list[0].Evidence) != 1 {
+		t.Fatalf("the outcome = %+v", list)
 	}
 }

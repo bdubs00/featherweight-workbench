@@ -37,11 +37,19 @@ import (
 // profile without routines as it is, so its hash stays. Packages holds
 // the packages of the workers (packages.go), nil when the overlay sets
 // none and the configuration of the pool decides.
+//
+// RoutinesFront is true when the front keeps routines. A pool whose
+// workers reach the front (FrontServer) then gets routines.front instead
+// of Routines: each run reads the routines of its agent from the front at
+// its start, so the routines are not part of the merged file or of the
+// hash, and a move of a routine replaces no Task (withRoutinesFront). A
+// pool that does not reach the front gets Routines merged as before.
 type Overlay struct {
-	Profiles []OverlayProfile        `json:"profiles,omitempty"`
-	Allow    []OverlayRule           `json:"allow,omitempty"`
-	Packages *PackageSetting         `json:"packages,omitempty"`
-	Routines map[string][]fw.Routine `json:"-"`
+	Profiles      []OverlayProfile        `json:"profiles,omitempty"`
+	Allow         []OverlayRule           `json:"allow,omitempty"`
+	Packages      *PackageSetting         `json:"packages,omitempty"`
+	Routines      map[string][]fw.Routine `json:"-"`
+	RoutinesFront bool                    `json:"-"`
 }
 
 // OverlayProfile is one profile of an overlay, with the subject that wrote
@@ -84,7 +92,7 @@ func (o Overlay) Profile(name string) (OverlayProfile, bool) {
 // WithProfile returns a copy of the overlay with e in place of the profile
 // of the same name.
 func (o Overlay) WithProfile(e OverlayProfile) Overlay {
-	out := Overlay{Allow: slices.Clone(o.Allow), Packages: o.Packages, Routines: o.Routines}
+	out := Overlay{Allow: slices.Clone(o.Allow), Packages: o.Packages, Routines: o.Routines, RoutinesFront: o.RoutinesFront}
 	for _, old := range o.Profiles {
 		if old.Profile.Name != e.Profile.Name {
 			out.Profiles = append(out.Profiles, old)
@@ -98,7 +106,7 @@ func (o Overlay) WithProfile(e OverlayProfile) Overlay {
 // WithRule returns a copy of the overlay with the rule r, in place of a
 // rule with the same text.
 func (o Overlay) WithRule(r OverlayRule) Overlay {
-	out := Overlay{Profiles: slices.Clone(o.Profiles), Packages: o.Packages, Routines: o.Routines}
+	out := Overlay{Profiles: slices.Clone(o.Profiles), Packages: o.Packages, Routines: o.Routines, RoutinesFront: o.RoutinesFront}
 	for _, old := range o.Allow {
 		if old.Rule != r.Rule {
 			out.Allow = append(out.Allow, old)
@@ -112,7 +120,7 @@ func (o Overlay) WithRule(r OverlayRule) Overlay {
 // WithPackages returns a copy of the overlay with the packages s, or
 // without an entry of the packages for nil.
 func (o Overlay) WithPackages(s *PackageSetting) Overlay {
-	out := Overlay{Profiles: slices.Clone(o.Profiles), Allow: slices.Clone(o.Allow), Routines: o.Routines}
+	out := Overlay{Profiles: slices.Clone(o.Profiles), Allow: slices.Clone(o.Allow), Routines: o.Routines, RoutinesFront: o.RoutinesFront}
 	if s != nil {
 		c := s.Clone()
 		out.Packages = &c
@@ -255,11 +263,21 @@ func (p *Pool) WithOverlay(o Overlay) (*Pool, error) {
 	c.overlay = o
 	c.lenient = false
 	c.base = p.baseHash()
-	merged, err := overlayFW(p.FW, o, p.worker.Agents)
+	// The workers of a pool that reach the front read the routines of the
+	// store at the start of each run, so the merge leaves them out.
+	c.routinesFront = o.RoutinesFront && reachesFront(p.FW)
+	merge := o
+	if c.routinesFront {
+		merge.Routines = nil
+	}
+	merged, err := overlayFW(p.FW, merge, p.worker.Agents)
 	if err != nil {
 		return nil, fmt.Errorf("pools: the overlay of the pool %s: %w", p.Name, err)
 	}
 	c.FW = withMemoryFront(merged, p.tokenEnv)
+	if c.routinesFront {
+		c.FW = withRoutinesFront(c.FW, p.tokenEnv)
+	}
 	c.skillFiles, c.skillNames, c.skillSkipped = nil, nil, nil
 	if problems := c.render(p.front); len(problems) > 0 {
 		return nil, fmt.Errorf("pools: the overlay of the pool %s does not fit: %s", p.Name, strings.Join(problems, "; "))
@@ -408,25 +426,9 @@ func withMemoryFront(fwBlock map[string]any, tokenEnv string) map[string]any {
 	if _, set := memory["front"]; set {
 		return fwBlock
 	}
-	url, bearer := "", ""
-	list, _ := tools["mcp"].([]any)
-	for _, e := range list {
-		m, _ := e.(map[string]any)
-		if name, _ := m["name"].(string); strings.TrimSpace(name) != FrontServer {
-			continue
-		}
-		endpoint, _ := m["endpoint"].(string)
-		url = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(endpoint), "/"), frontMCPPath)
-		if auth, ok := m["auth"].(map[string]any); ok {
-			bearer, _ = auth["bearer"].(string)
-		}
-		break
-	}
+	url, bearer := frontOf(fwBlock, tokenEnv)
 	if url == "" {
 		return fwBlock
-	}
-	if bearer = strings.TrimSpace(bearer); bearer == "" {
-		bearer = tokenEnv
 	}
 	nextMemory := make(map[string]any, len(memory)+1)
 	for k, v := range memory {
@@ -443,6 +445,71 @@ func withMemoryFront(fwBlock map[string]any, tokenEnv string) map[string]any {
 		out[k] = v
 	}
 	out["tools"] = nextTools
+	return out
+}
+
+// frontOf returns the address of the front that the entry FrontServer of
+// tools.mcp of a block fw reaches, without the path of the MCP server, and
+// the variable of its bearer, or tokenEnv when the entry names none. The
+// address is "" for a block without the entry.
+func frontOf(fwBlock map[string]any, tokenEnv string) (url, bearer string) {
+	tools, _ := fwBlock["tools"].(map[string]any)
+	list, _ := tools["mcp"].([]any)
+	for _, e := range list {
+		m, _ := e.(map[string]any)
+		if name, _ := m["name"].(string); strings.TrimSpace(name) != FrontServer {
+			continue
+		}
+		endpoint, _ := m["endpoint"].(string)
+		url = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(endpoint), "/"), frontMCPPath)
+		if auth, ok := m["auth"].(map[string]any); ok {
+			bearer, _ = auth["bearer"].(string)
+		}
+		break
+	}
+	if bearer = strings.TrimSpace(bearer); bearer == "" {
+		bearer = tokenEnv
+	}
+	return url, bearer
+}
+
+// reachesFront reports whether the workers of a block fw reach the front:
+// the block has the entry FrontServer of tools.mcp, or it sets
+// routines.front itself.
+func reachesFront(fwBlock map[string]any) bool {
+	if url, _ := frontOf(fwBlock, ""); url != "" {
+		return true
+	}
+	routines, _ := fwBlock["routines"].(map[string]any)
+	_, set := routines["front"]
+	return set
+}
+
+// withRoutinesFront returns the block fw of a pool with routines.front
+// set to the front that its entry FrontServer of tools.mcp reaches, as
+// withMemoryFront sets the front of the notes. Each run of a worker then
+// reads the routines of its agent from the front at its start
+// (docs/ROUTINES.md section 3.1). A block that sets routines.front itself
+// stays as it is. The argument does not change.
+func withRoutinesFront(fwBlock map[string]any, tokenEnv string) map[string]any {
+	routines, _ := fwBlock["routines"].(map[string]any)
+	if _, set := routines["front"]; set {
+		return fwBlock
+	}
+	url, bearer := frontOf(fwBlock, tokenEnv)
+	if url == "" {
+		return fwBlock
+	}
+	next := make(map[string]any, len(routines)+1)
+	for k, v := range routines {
+		next[k] = v
+	}
+	next["front"] = map[string]any{"url": url, "tokenEnv": bearer}
+	out := make(map[string]any, len(fwBlock))
+	for k, v := range fwBlock {
+		out[k] = v
+	}
+	out["routines"] = next
 	return out
 }
 

@@ -138,11 +138,12 @@ type Service struct {
 	now func() time.Time
 
 	// The seams of the passes, which a test replaces: the archive, the
-	// queue of a run, and the store of the routines.
+	// queue of a run, the store of the routines, and the wiki.
 	arch     archiveReader
 	enqueue  func(ctx context.Context, agent string, reqs []fw.RunRequest) (string, int, error)
 	routines func() *routines.Store
 	check    func(ctx context.Context, agent string, list []fw.Routine) error
+	page     func(ctx context.Context, path string) (text, hash string, err error)
 
 	mu      sync.Mutex
 	notes   map[string]cachedNote // by key: a note at a revision
@@ -177,8 +178,44 @@ func New(a *fw.Agent, b bucket.Bucket, c KnowhowConfig, log *slog.Logger) *Servi
 			_, err := fleet.CheckRoutines(ctx, a, agent, list)
 			return err
 		}
+		s.page = func(ctx context.Context, path string) (string, string, error) {
+			return readPage(ctx, pages.Of(a), path)
+		}
 	}
 	return s
+}
+
+// Errors of a read of a page of the wiki.
+var (
+	// errNoWiki means that the process keeps no wiki.
+	errNoWiki = errors.New("knowhow: the process keeps no wiki")
+	// errNoPage means that the wiki has no page at the path.
+	errNoPage = errors.New("knowhow: the wiki has no page at the path")
+)
+
+// readPage returns the text and the hash of the page at path as it is
+// now: errNoWiki without a wiki, and errNoPage for a page that the wiki
+// does not have.
+func readPage(ctx context.Context, st *pages.Store, path string) (string, string, error) {
+	if st == nil {
+		return "", "", errNoWiki
+	}
+	p, err := st.Read(ctx, path, 0)
+	switch {
+	case errors.Is(err, pages.ErrNotFound):
+		return "", "", errNoPage
+	case err != nil:
+		return "", "", err
+	}
+	return p.Text, p.Hash, nil
+}
+
+// pageAt reads a page of the wiki through the seam of the service.
+func (s *Service) pageAt(ctx context.Context, path string) (string, string, error) {
+	if s.page == nil {
+		return "", "", errNoWiki
+	}
+	return s.page(ctx, path)
 }
 
 // Config returns the configuration of the service.

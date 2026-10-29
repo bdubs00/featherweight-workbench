@@ -120,10 +120,10 @@ type ReviewNow struct {
 var ErrReviewOff = errors.New(ReviewOff)
 
 // ReviewAgent starts the review of one agent now, for a person who does
-// not want to wait for the slot. It reads the finished runs first, so the
-// candidates are new. An agent without open candidates starts no run,
-// and the answer says why. A second start in the same minute is the same
-// run.
+// not want to wait for the slot. It reads the finished runs up to now
+// first (readUpToNow), also a run that ended a moment ago, so the
+// candidates are new. An agent without open candidates starts no run, and
+// the answer says why. A second start in the same minute is the same run.
 func (s *Service) ReviewAgent(ctx context.Context, agent string) (ReviewNow, error) {
 	if err := CheckAgent(agent); err != nil {
 		return ReviewNow{}, err
@@ -134,10 +134,10 @@ func (s *Service) ReviewAgent(ctx context.Context, agent string) (ReviewNow, err
 	if agent == s.cfg.Review.Agent {
 		return ReviewNow{}, fmt.Errorf("%w: the after-work review does not review its own runs", ErrInvalid)
 	}
-	if _, err := s.CandidatePass(ctx); err != nil {
-		s.log.Warn("knowhow: the pass of the candidates failed before a review", "agent", agent, "error", err)
+	if err := s.readUpToNow(ctx, agent); err != nil {
+		s.log.Warn("knowhow: the finished runs were not all read before a review", "agent", agent, "error", err)
 	}
-	open, err := s.Candidates(ctx, agent, func(c Candidate) bool { return c.State == CandOpen && c.ready() })
+	open, err := s.openCandidates(ctx, agent)
 	if err != nil {
 		return ReviewNow{}, err
 	}
@@ -166,7 +166,7 @@ func (s *Service) reviewable(ctx context.Context) ([]string, error) {
 		if agent == s.cfg.Review.Agent {
 			continue
 		}
-		open, err := s.Candidates(ctx, agent, func(c Candidate) bool { return c.State == CandOpen && c.ready() })
+		open, err := s.openCandidates(ctx, agent)
 		if err != nil {
 			return nil, err
 		}
