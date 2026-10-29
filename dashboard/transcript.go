@@ -20,12 +20,18 @@ const (
 	ItemTool      = "tool"      // a tool call: Tool, CallID, Input, and Profile for propose_agent
 	ItemResult    = "result"    // the result of a tool call: CallID, Text, IsError
 	ItemFile      = "file"      // a change to a file: Tool, CallID, Path, Text (the operation), Detail (the old path), Size
+	ItemMemory    = "memory"    // a change to a note by a tool call: Tool, CallID, Path (the ref of the note), Text (the operation), Detail (MemoryWaiting when the change waits for a person)
 	ItemAsk       = "ask"       // an approval request: ID, Tool, CallID, Input, Detail, and Connect for a connect
 	ItemDecided   = "decided"   // a decision: ID, Text ("allow" or "deny"), Who, Detail, and Connect for a connect
 	ItemNote      = "note"      // a fact about the run, such as a compaction or an error
 	ItemEnd       = "end"       // the end of a turn of work: Text is the outcome
 	ItemTools     = "tools"     // the tools that the run has beyond its agent: Text names them, separated by commas
 )
+
+// MemoryWaiting is the Detail of an item ItemMemory whose change waits for
+// a person under ask first, so the page says that the note waits, not that
+// the agent keeps it.
+const MemoryWaiting = "waiting"
 
 // MaxItemText is the largest Text, Detail, or Input of an item in bytes.
 // A longer value is cut, and Cut is set.
@@ -171,6 +177,19 @@ func Transcript(events []fw.Event) []Item {
 			}
 			it := at(ItemFile)
 			it.Tool, it.CallID, it.Path, it.Text, it.Detail, it.Size = d.Tool, d.CallID, d.Path, d.Op, d.OldPath, d.Size
+			out = append(out, it)
+		case fw.EvMemoryChanged:
+			var d fw.MemoryChangedData
+			// The item names the note and whether the change waits, never
+			// its text, which the event does not hold.
+			if e.Decode(&d) != nil || d.CallID == "" {
+				continue
+			}
+			it := at(ItemMemory)
+			it.Tool, it.CallID, it.Path, it.Text, it.Size = d.Tool, d.CallID, d.Ref, d.Op, d.Size
+			if d.Waiting {
+				it.Detail = MemoryWaiting
+			}
 			out = append(out, it)
 		case fw.EvApprovalRequested:
 			var d fw.ApprovalRequestedData

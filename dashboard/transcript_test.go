@@ -141,3 +141,25 @@ func TestTranscriptSender(t *testing.T) {
 		t.Errorf("JSON of the item = %s", b)
 	}
 }
+
+// A change of a note by a tool call is an item that names the note and
+// says whether the change waits for a person, never its text. A change
+// without a call makes none.
+func TestTranscriptMemoryItems(t *testing.T) {
+	id := "run-notes"
+	evs := []fw.Event{
+		fw.MustEvent(id, fw.EvMemoryChanged, fw.MemoryChangedData{CallID: "c1", Tool: "memory", Op: "create", Ref: "mem://agent/triage/ports.md", Size: 30, Waiting: true}),
+		fw.MustEvent(id, fw.EvMemoryChanged, fw.MemoryChangedData{CallID: "c2", Tool: "memory", Op: "delete", Ref: "mem://agent/triage/old.md"}),
+		fw.MustEvent(id, fw.EvMemoryChanged, fw.MemoryChangedData{Op: "create", Ref: "mem://agent/triage/api.md"}),
+	}
+	for i := range evs {
+		evs[i].Seq = uint64(i + 1)
+	}
+	items := Transcript(evs)
+	first := items[0]
+	if len(items) != 2 || first.Kind != ItemMemory || first.Tool != "memory" || first.CallID != "c1" || first.Path != "mem://agent/triage/ports.md" ||
+		first.Text != "create" || first.Detail != MemoryWaiting || first.Size != 30 || len(first.Input) != 0 ||
+		items[1].Kind != ItemMemory || items[1].Detail != "" || items[1].CallID != "c2" {
+		t.Fatalf("items = %+v", items)
+	}
+}

@@ -230,7 +230,7 @@ The redirect address is `/ui/connect/callback` on the origin of `auth.oidc.redir
 
 ### 2.2 Transcript pages
 
-`GET /v1/runs/{id}/transcript` answers `{"run", "items", "next", "prev"}`. The items are the chat items of the dashboard, built from the ledger. `limit` sets the size of a page, 200 by default and 1000 at most.
+`GET /v1/runs/{id}/transcript` answers `{"run", "items", "next", "prev"}`. The items are the chat items of the dashboard, built from the ledger. `limit` sets the size of a page, 200 by default and 1000 at most. An item `memory` is a change of a note by a tool call, from `fw.memory.changed`: `callId`, `tool`, `path` (the ref of the note), `text` (the operation), and `detail` `waiting` when the change waits for a person under ask first. It never holds the text of the note. The page then says that a note waits for the person on the line of the call, not that the agent wrote in its notes.
 
 - Without `from` and `before`, the page holds the last `limit` events. A long conversation therefore opens at its recent end.
 - `before=<seq>` reads the last `limit` events with a smaller sequence number. If events follow the page, `next` is `before`.
