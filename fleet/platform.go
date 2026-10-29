@@ -65,14 +65,17 @@ const fillParallel = 8
 // the input and the output of each tool call for the activity of the run
 // (watch.go), each string cut to EgressMaxBytes. fw.memory.used names
 // the notes that a run read, without their text, so the front counts the
-// uses of each note (docs/KNOWHOW.md section 4.5). A worker sets
-// bus.egressTypes to this list.
+// uses of each note (docs/KNOWHOW.md section 4.5). fw.memory.changed names
+// each note that a run wrote or put away, without its text, with waiting
+// when the front holds the change for a person, so the front sees that a
+// note waits as the run writes it, also after the run ended. A worker
+// sets bus.egressTypes to this list.
 var EgressTypes = []string{
 	fw.EvRunQueued, fw.EvRunStarted, fw.EvRunResumed, fw.EvRunSuspended, fw.EvRunFinished,
 	fw.EvApprovalRequested, fw.EvApprovalDecided, fw.EvRunAnnotated, fw.EvTurnStarted, fw.EvMessageReceived,
 	fw.EvRunChild, fw.EvOutcomeEvaluated,
 	fw.EvToolRequested, fw.EvToolResponded, fw.EvTurnFinished, fw.EvRunReacted,
-	fw.EvMemoryUsed,
+	fw.EvMemoryUsed, fw.EvMemoryChanged,
 }
 
 // EgressMaxBytes is bus.egressMaxBytes of a worker of a pool, unless the

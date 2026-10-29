@@ -118,3 +118,45 @@ func TestPlatformUsageFromLifecycleEvents(t *testing.T) {
 		t.Fatalf("Runs = %+v, %v", runs, err)
 	}
 }
+
+// A worker of a pool sends fw.memory.changed on its egress, so the front
+// sees a note that waits for a person as the run writes it. The event
+// holds no text.
+func TestEgressCarriesAMemoryChange(t *testing.T) {
+	ctx := context.Background()
+	bus := fw.NewMemBus()
+	var mu sync.Mutex
+	var got []fw.MemoryChangedData
+	stop, err := bus.Subscribe(ctx, "fw.events.>", func(e fw.Event) error {
+		var d fw.MemoryChangedData
+		if e.Type == fw.EvMemoryChanged && e.Decode(&d) == nil {
+			mu.Lock()
+			got = append(got, d)
+			mu.Unlock()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	// The tool writes a note that the front holds for a person, as the
+	// memory tool does under ask first.
+	notes := fw.NewTool(fw.ToolSpec{Name: "echo"}, func(ctx context.Context, _ json.RawMessage) (fw.ToolResult, error) {
+		fw.RecordMemoryChange(ctx, fw.MemoryChangedData{Op: "create", Ref: "mem://agent/manager/webinar.md", Scope: fw.MemoryAgentScope, Size: 30, Waiting: true})
+		return fw.TextResult("Not kept yet."), nil
+	})
+	worker := newWorker(t, bus, "box:8080", fw.WithModel(toolModel()), fw.WithTools(notes))
+	r, err := worker.Run(as("ada"), "Keep the date of the webinar.")
+	if err != nil || r.State != fw.StateCompleted {
+		t.Fatalf("worker run = %+v, %v", r, err)
+	}
+	eventually(t, "the egress carries the change of the note", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(got) == 1
+	})
+	if d := got[0]; !d.Waiting || d.Tool != "echo" || d.Ref != "mem://agent/manager/webinar.md" {
+		t.Fatalf("the change = %+v", d)
+	}
+}
