@@ -443,6 +443,12 @@ const maxPassRounds = 10
 // it knows: the pass reads them again once they settle, and a candidate
 // counts each run once.
 func (s *Service) readUpToNow(ctx context.Context, agent string) error {
+	// The other replica can have applied a thumb of a moment ago, and this
+	// one reads the changes of the archive every few seconds alone, so
+	// Review now two seconds after a thumbs-down missed it (live walk).
+	if r, ok := s.arch.(refresher); ok {
+		r.Refresh(ctx)
+	}
 	for range maxPassRounds {
 		n, err := s.CandidatePass(ctx)
 		if err != nil {

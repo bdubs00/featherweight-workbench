@@ -589,3 +589,24 @@ func TestReviewNowReadsUpToNow(t *testing.T) {
 		t.Fatalf("the outcome = %+v", list)
 	}
 }
+
+// Review now reads the changes of the archive first: a thumb that the
+// other replica applied two seconds ago, and that this replica would read
+// on its next refresh only, makes the candidate of the review (live
+// walk).
+func TestReviewNowReadsTheThumbOfAMomentAgo(t *testing.T) {
+	fr := newFront(t, func(c *KnowhowConfig) { c.Review.Agent = "review" })
+	var started int
+	fr.s.enqueue = func(_ context.Context, _ string, reqs []fw.RunRequest) (string, int, error) {
+		started += len(reqs)
+		return "q", len(reqs), nil
+	}
+	run := chatRun("01KNOW00000000000000000002", fr.clk.now().Add(-time.Minute), "What do I check first when the backup fails?").
+		thumb(fw.ReactionDown, "alice", "The backup job logs to backup.log on the NAS.")
+	fr.arch.putLater(run.out, fr.clk.now().Add(-2*time.Second))
+	resp, body := send(t, "POST", fr.url+"/v1/knowhow/review/triage", "alice", "")
+	mustStatus(t, resp, body, http.StatusAccepted)
+	if started != 1 || fr.arch.refresh == 0 {
+		t.Fatalf("the start = %s, %d runs, %d refreshes", body, started, fr.arch.refresh)
+	}
+}

@@ -128,6 +128,16 @@ func (f fleetArchive) Events(ctx context.Context, id string) ([]fw.Event, error)
 	return fleet.ArchiveEvents(ctx, f.a, id)
 }
 
+// Refresh reads the summaries of the archive that changed now
+// (refresher).
+func (f fleetArchive) Refresh(ctx context.Context) { fleet.ArchiveRefresh(ctx, f.a) }
+
+// refresher is an archive that reads its changes on demand, so a pass that
+// a person starts sees what just happened.
+type refresher interface {
+	Refresh(ctx context.Context)
+}
+
 // Service is the Know-how of one agent of the process: the store, the
 // passes, and the configuration. Build it with New.
 type Service struct {

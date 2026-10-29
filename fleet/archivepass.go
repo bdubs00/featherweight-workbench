@@ -69,6 +69,22 @@ func ArchiveAll(ctx context.Context, a *fw.Agent) ([]ArchiveEntry, bool) {
 	return out, true
 }
 
+// ArchiveRefresh reads the summaries of the archive that changed in the
+// bucket now, and waits for the read, where a list reads them every few
+// seconds in the background. A pass that a person starts, such as Review
+// now of Know-how, calls it first, so it sees a thumb that the other
+// replica applied a moment ago.
+func ArchiveRefresh(ctx context.Context, a *fw.Agent) {
+	f, _ := Of(a).(*Fleet)
+	if f == nil || f.arch() == nil {
+		return
+	}
+	arch := f.arch()
+	arch.reading.Lock()
+	defer arch.reading.Unlock()
+	arch.refresh(ctx)
+}
+
 // ArchiveEvents returns the events of the run id that the archive keeps,
 // in the order of its ledger, held by a member or not. It decides nothing
 // for a caller. The events are those of the egress stream, so each long

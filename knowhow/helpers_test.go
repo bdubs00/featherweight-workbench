@@ -66,11 +66,39 @@ func (c *clock) add(d time.Duration) {
 	c.t = c.t.Add(d)
 }
 
-// fakeArchive is an archive of runs that a test fills.
+// fakeArchive is an archive of runs that a test fills. A run that a test
+// puts later (putLater) is a change that the other replica wrote: All
+// lists it only after Refresh.
 type fakeArchive struct {
-	mu     sync.Mutex
-	runs   map[string]fleet.ArchiveEntry
-	events map[string][]fw.Event
+	mu      sync.Mutex
+	runs    map[string]fleet.ArchiveEntry
+	events  map[string][]fw.Event
+	later   map[string]fleet.ArchiveEntry
+	refresh int
+}
+
+// Refresh reads the changes of the other replica (knowhow.refresher).
+func (f *fakeArchive) Refresh(context.Context) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refresh++
+	for id, e := range f.later {
+		f.runs[id] = e
+	}
+	f.later = nil
+}
+
+// putLater puts a run as put does, as a change of the other replica.
+func (f *fakeArchive) putLater(events []fw.Event, updated time.Time) {
+	f.put(events, updated)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := events[0].Subject
+	if f.later == nil {
+		f.later = map[string]fleet.ArchiveEntry{}
+	}
+	f.later[id] = f.runs[id]
+	delete(f.runs, id)
 }
 
 func newFakeArchive() *fakeArchive {
