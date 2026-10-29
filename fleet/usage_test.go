@@ -160,3 +160,39 @@ func TestEgressCarriesAMemoryChange(t *testing.T) {
 		t.Fatalf("the change = %+v", d)
 	}
 }
+
+// A worker of a pool sends fw.done.checked on its egress, so the front,
+// and the archive that keeps each event of the stream, show which check
+// of done ran on a run and how it went, also after the pool replaced the
+// Task.
+func TestEgressCarriesTheChecksOfDone(t *testing.T) {
+	ctx := context.Background()
+	bus := fw.NewMemBus()
+	var mu sync.Mutex
+	var got []fw.DoneCheckedData
+	stop, err := bus.Subscribe(ctx, "fw.events.>", func(e fw.Event) error {
+		var d fw.DoneCheckedData
+		if e.Type == fw.EvDoneChecked && e.Decode(&d) == nil {
+			mu.Lock()
+			got = append(got, d)
+			mu.Unlock()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	check := fw.DoneCheck{Name: "the echo answers", Tool: "echo", Input: `{"text": "a"}`, Contains: []string{"text"}}
+	worker := newWorker(t, bus, "box:8080", fw.WithModel(toolModel()), fw.WithTools(echoTool()),
+		fw.WithProfile(fw.AgentProfile{Name: "default", Done: &fw.Done{Checks: []fw.DoneCheck{check}}}))
+	r, err := worker.Run(as("ada"), "hello")
+	if err != nil || r.State != fw.StateCompleted || r.Done == nil || len(r.Done.Checks) != 1 {
+		t.Fatalf("worker run = %+v, %v", r, err)
+	}
+	eventually(t, "the stream carries the pass of the checks", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(got) == 1 && got[0].Passed && len(got[0].Checks) == 1 && got[0].Checks[0].Name == "the echo answers"
+	})
+}
