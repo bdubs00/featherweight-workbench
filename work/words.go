@@ -26,10 +26,14 @@ var toolDoes = map[string]string{
 	"pages_search":  "searches the wiki",
 	"pages_list":    "lists the pages of the wiki",
 	"pages_history": "reads the history of a page of the wiki",
-	"bridge_open":   "opens a team",
-	"bridge_post":   "posts in the channel of its team",
-	"bridge_read":   "reads the channel of its team",
-	"bridge_close":  "closes a team",
+	"bridge_open":   "opens a channel",
+	"bridge_post":   "posts in its channel",
+	"bridge_read":   "reads its channel",
+	"bridge_close":  "closes a channel",
+	"duty_put":      "saves a job",
+	"duty_run_now":  "starts a job now",
+	"duty_pause":    "pauses a job",
+	"duty_delete":   "deletes a job",
 	"spawn_task":    "hands a task to another agent",
 	"send":          "sends a message to another agent",
 	"ask_user":      "asks you a question",
@@ -56,7 +60,9 @@ func toolWords(tool string) string {
 	case strings.HasPrefix(base, "pages_"):
 		return "uses the wiki"
 	case strings.HasPrefix(base, "bridge_"):
-		return "uses a team"
+		return "uses a channel"
+	case strings.HasPrefix(base, "duty_"), strings.HasPrefix(base, "duties_"):
+		return "uses a job"
 	case base == "":
 		return "uses a tool"
 	}

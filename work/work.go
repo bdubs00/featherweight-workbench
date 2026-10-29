@@ -441,7 +441,7 @@ func (b *board) bridge(it bridges.Item) {
 		d.parts = append(d.parts, p)
 	}
 	if len(d.parts) == 0 {
-		d.parts = append(d.parts, part{stage: StageStopped, reason: "The team has no agent.", since: last})
+		d.parts = append(d.parts, part{stage: StageStopped, reason: "The channel has no agent.", since: last})
 	}
 }
 

@@ -122,7 +122,7 @@ func TestPlanTeam(t *testing.T) {
 	}
 	b := p.Start.Bridge
 	seats := b["members"].([]map[string]any)
-	if len(seats) != 4 || seats[0]["handle"] != "migrator-1" || seats[3]["agent"] != "reviewer" || b["placement"] != "queue" || !strings.HasSuffix(p.Cost.Basis, "The team stops at your limit.") {
+	if len(seats) != 4 || seats[0]["handle"] != "migrator-1" || seats[3]["agent"] != "reviewer" || b["placement"] != "queue" || !strings.HasSuffix(p.Cost.Basis, "The channel stops at your limit.") {
 		t.Fatalf("the bridge = %+v", b)
 	}
 	r := planOf(t, "Write a summary of the launch and have it reviewed", nil)
@@ -236,7 +236,7 @@ func TestPlanCostOfTask(t *testing.T) {
 	if team.Kind != PlanTeam || team.Who[0].Agent != "migrator" || team.Who[0].Count != 4 {
 		t.Fatalf("the team = %+v", team.Who)
 	}
-	if team.Cost.Low != 1.2 || team.Cost.High != 7.2 || team.Cost.Runs != 2 || !strings.Contains(team.Cost.Basis, "The whole team cost $1.20 to $7.20. The team stops at your limit.") {
+	if team.Cost.Low != 1.2 || team.Cost.High != 7.2 || team.Cost.Runs != 2 || !strings.Contains(team.Cost.Basis, "All its agents together cost $1.20 to $7.20. The channel stops at your limit.") {
 		t.Fatalf("the cost of the team = %+v", team.Cost)
 	}
 	none := planOf(t, "Write a summary of the launch every Friday", nil)
