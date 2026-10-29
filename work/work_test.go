@@ -342,9 +342,18 @@ func TestReviewAndVerdicts(t *testing.T) {
 	notDone.Done = &fw.RunDone{State: fw.DoneFailed, Checks: []fw.DoneResult{{Name: "tests", Tool: "bash"}, {Name: "lint", Tool: "bash", Passed: true}}}
 	limit := run("LIMIT", "writer", fw.StateFailed, ago(time.Hour), ago(time.Hour), nil)
 	limit.Error = "budget exceeded: maxTurns"
+	// A run at a limit runs its checks after its final report.
+	limitPassed := run("LIMITPASS", "writer", fw.StateFailed, ago(time.Hour), ago(time.Hour), nil)
+	limitPassed.Error, limitPassed.Done = "budget exceeded: maxToolCalls", &fw.RunDone{State: fw.DoneChecked}
+	limitFailed := run("LIMITFAIL", "writer", fw.StateFailed, ago(time.Hour), ago(time.Hour), nil)
+	limitFailed.Error = "budget exceeded: maxToolCalls"
+	limitFailed.Done = &fw.RunDone{State: fw.DoneFailed, Checks: []fw.DoneResult{{Name: "the report is saved", Tool: "files"}}}
+	limitWeak := run("LIMITWEAK", "writer", fw.StateFailed, ago(time.Hour), ago(time.Hour), nil)
+	limitWeak.Error, limitWeak.Done = "budget exceeded: maxToolCalls", &fw.RunDone{State: fw.DoneChecked, Weak: true}
 	in := Input{Me: "alice", Now: t0, All: true, Runs: []Run{
 		{Run: asked}, {Run: upped}, {Run: downed}, {Run: receipt, Work: fleet.Work{Verdict: fleet.VerdictAccepted}},
 		{Run: checked}, {Run: weak}, {Run: plain}, {Run: hearted}, {Run: notDone}, {Run: limit},
+		{Run: limitPassed}, {Run: limitFailed}, {Run: limitWeak},
 	}}
 	ans := Assemble(in)
 	if c := cardOf(t, ans, "run:ASK"); c.Stage != StageReview || c.Next != NextPerson || c.Reason != "A result to check." || c.Verdict != "" {
@@ -360,6 +369,15 @@ func TestReviewAndVerdicts(t *testing.T) {
 	}
 	if c := cardOf(t, ans, "run:LIMIT"); c.Stage != StageStopped || c.Reason != "Stopped at its limit of steps." {
 		t.Fatalf("a run at a limit = %+v", c)
+	}
+	for id, want := range map[string]string{
+		"LIMITPASS": "Stopped at its limit of tool calls. Its checks passed.",
+		"LIMITFAIL": "Stopped at its limit of tool calls. Not done: the check the report is saved failed.",
+		"LIMITWEAK": "Stopped at its limit of tool calls.",
+	} {
+		if c := cardOf(t, ans, "run:"+id); c.Stage != StageStopped || c.Reason != want {
+			t.Errorf("the card %s = %s %q, want %q", id, c.Stage, c.Reason, want)
+		}
 	}
 	if !fleet.InReview(asked) || fleet.InReview(upped) || fleet.InReview(plain) {
 		t.Fatal("fleet.InReview")

@@ -850,10 +850,19 @@ func (b *board) runPart(r Run) part {
 	case fw.StateFailed:
 		p.stage = StageStopped
 		switch {
+		case strings.HasPrefix(r.Error, "budget exceeded"):
+			// A run that stops at a limit runs its checks of done after
+			// its final report, so the reason says the limit first and
+			// then what the checks found (the kernel, done at a limit).
+			p.reason = "Stopped at " + limitWords(r.Error) + "."
+			switch {
+			case r.Done != nil && r.Done.State == fw.DoneFailed:
+				p.reason += " Not done: " + notDone(r.Done)
+			case r.Done != nil && fw.CheckedDone(r.Done.State, r.Done.Weak):
+				p.reason += " Its checks passed."
+			}
 		case r.Done != nil && r.Done.State == fw.DoneFailed:
 			p.reason = "Not done: " + notDone(r.Done)
-		case strings.HasPrefix(r.Error, "budget exceeded"):
-			p.reason = "Stopped at " + limitWords(r.Error) + "."
 		case strings.TrimSpace(r.Error) != "":
 			p.reason = "Failed: " + oneLine(r.Error, 200)
 		default:
