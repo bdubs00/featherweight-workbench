@@ -4409,7 +4409,19 @@ Some proposals stay out:
 - a proposal with questions and no decider
 - a proposal that did not hold on a run that it did not see
 
-The journal says why with `stays-out`, once per reason of a Duty. A good proposal goes to the store of the routines as `proposed`, with its source. It is bound to its Duty (`duty`). Unless the switch is on, it moves to `rehearsing` at once. The journal records `proposed` with the verified runs, and `rehearsing`. A Duty whose routine exists in any standing gets no new proposal.
+The journal says why with `stays-out`, once per reason of a Duty.
+
+The answer of a pass names every other Duty with runs in the window in `staysOut`, with the reason why it got no proposal:
+
+- too few completed runs, with the count and `minRuns`
+- too few runs that can make a routine, with the counts, because a run that was sent back, failed its grader, got a thumbs down, or that a routine did does not count
+- too few verified runs, with the counts and `minVerified`
+- the routine that it has already, with its standing
+- a proposal that stayed out, as above
+
+The journal also says `stays-out` for too few verified runs, because a person can act on it with a thumbs up. It says it once, until the Duty gets its routine, so a new count writes no new entry. Too few runs is the state of every young Duty, and a routine that exists is in the journal already, so neither writes an entry.
+
+A good proposal goes to the store of the routines as `proposed`, with its source. It is bound to its Duty (`duty`). Unless the switch is on, it moves to `rehearsing` at once. The journal records `proposed` with the verified runs, and `rehearsing`. A Duty whose routine exists in any standing gets no new proposal.
 
 The package writes the journal for its own moves of a routine. So `RoutineMoved` writes nothing for such a move. A value of the context marks it.
 

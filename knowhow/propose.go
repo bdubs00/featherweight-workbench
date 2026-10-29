@@ -41,19 +41,27 @@ const (
 )
 
 // ProposeResult says what a pass did: the routines that it proposed, by
-// agent/name, and the Duties whose proposal stayed out, by agent/duty,
-// with the reason.
+// agent/name, and every other Duty with runs in the window, by agent/duty,
+// with the reason why it got no proposal: too few runs or too few
+// verified runs with the counts, a routine that it has already, or a
+// proposal that did not hold.
 type ProposeResult struct {
 	Proposed []string          `json:"proposed"`
 	StaysOut map[string]string `json:"staysOut"`
 }
 
 // proposal is the entry of the last reason why the proposal of a Duty
-// stayed out, so the journal says each reason once.
+// stayed out, so the journal says each reason once. Key names the kind of
+// a reason whose words hold counts, so a new count writes no new entry.
 type proposal struct {
 	Reason string    `json:"reason"`
+	Key    string    `json:"key,omitempty"`
 	At     time.Time `json:"at"`
 }
+
+// keyFewVerified is the key of the reason of a Duty with too few verified
+// runs.
+const keyFewVerified = "few-verified"
 
 func proposalKey(agent, duty string) string { return "prop." + agentKey(agent) + "." + token(duty) }
 
@@ -145,19 +153,23 @@ func (s *Service) propose(ctx context.Context, keep func(agent string) bool) (Pr
 }
 
 // proposeDuty proposes the routine of one Duty from its runs. It returns
-// the name of a routine that it proposed, or the reason why the proposal
-// stayed out, or neither when the Duty has too few runs or a routine
-// already.
+// the name of a routine that it proposed, or the reason why the Duty got
+// none. The journal says a reason when a person can act on it: too few
+// verified runs, once until the Duty gets its routine, and a proposal that
+// did not hold, once per reason. Too few runs is the state of every young
+// Duty, and a routine that exists is in the journal already, so neither
+// writes it.
 func (s *Service) proposeDuty(ctx context.Context, st *routines.Store, agent, duty string, entries []fleet.ArchiveEntry) (string, string, error) {
 	name := RoutineName(duty)
 	if routines.CheckName(name) != nil {
-		return "", "", nil
+		return "", fmt.Sprintf("The name of the Duty %s gives no name of a routine.", cut(duty, 200)), nil
 	}
-	if _, err := st.Get(ctx, agent, name); err == nil {
-		return "", "", nil
+	if rec, err := st.Get(ctx, agent, name); err == nil {
+		return "", fmt.Sprintf("The Duty %s has its routine %s already (%s), so the pass proposes no other.", duty, name, rec.Standing), nil
 	}
 	if len(entries) < s.cfg.Propose.MinRuns {
-		return "", "", nil
+		return "", fmt.Sprintf("The Duty %s has %d completed %s in the last %d days, and a proposal needs %d.",
+			duty, len(entries), plural(len(entries), "run", "runs"), s.cfg.Propose.Days, s.cfg.Propose.MinRuns), nil
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Run.CreatedAt.After(entries[j].Run.CreatedAt) })
 	if len(entries) > maxProposeRuns {
@@ -186,8 +198,14 @@ func (s *Service) proposeDuty(ctx context.Context, st *routines.Store, agent, du
 			to = e.Run.CreatedAt
 		}
 	}
-	if len(runs) < s.cfg.Propose.MinRuns || len(verified) < s.cfg.Propose.MinVerified {
-		return "", "", nil
+	switch {
+	case len(runs) < s.cfg.Propose.MinRuns:
+		return "", fmt.Sprintf("The Duty %s has %d completed runs in the last %d days, and %d of them can make a routine; a proposal needs %d. A run that was sent back, that failed its grader, that got a thumbs down, or that a routine did does not count.",
+			duty, len(entries), s.cfg.Propose.Days, len(runs), s.cfg.Propose.MinRuns), nil
+	case len(verified) < s.cfg.Propose.MinVerified:
+		why := fmt.Sprintf("The Duty %s has %d runs that can make a routine, and %d of them %s verified; a proposal needs %d verified runs. A receipt, a grader that passed, a definition of done that passed, or a thumbs up of a person verifies a run.",
+			duty, len(runs), len(verified), plural(len(verified), "is", "are"), s.cfg.Propose.MinVerified)
+		return "", s.staysOutOnce(ctx, agent, duty, name, why, keyFewVerified, used), nil
 	}
 	opts := routine.ProposeOptions{Name: name, Decider: s.cfg.Propose.Decider}
 	r, prop := routine.Propose(runs, opts)
@@ -276,12 +294,19 @@ func didNotHold(r routine.LeaveOneOutResult) string {
 // staysOut writes the journal when the reason of a Duty changed, and
 // returns the reason.
 func (s *Service) staysOut(ctx context.Context, agent, duty, name, why string, runs []string) string {
+	return s.staysOutOnce(ctx, agent, duty, name, why, "", runs)
+}
+
+// staysOutOnce is staysOut for a reason of the kind key: the journal says
+// it when the last reason of the Duty was of another kind. An empty key
+// takes the words of the reason as its kind.
+func (s *Service) staysOutOnce(ctx context.Context, agent, duty, name, why, key string, runs []string) string {
 	wrote, _, _, err := s.modify(ctx, proposalKey(agent, duty), func(value []byte, exists bool, _ uint64) ([]byte, error) {
 		var p proposal
-		if exists && json.Unmarshal(value, &p) == nil && p.Reason == why {
+		if exists && json.Unmarshal(value, &p) == nil && ((key != "" && p.Key == key) || (key == "" && p.Key == "" && p.Reason == why)) {
 			return nil, nil
 		}
-		return encode(proposal{Reason: why, At: s.now().UTC()})
+		return encode(proposal{Reason: why, Key: key, At: s.now().UTC()})
 	})
 	if err == nil && wrote {
 		if len(runs) > 10 {
@@ -299,4 +324,12 @@ func (s *Service) forget(ctx context.Context, agent, duty string) {
 	if got, err := s.b.Get(ctx, proposalKey(agent, duty)); err == nil {
 		_ = s.b.Delete(ctx, proposalKey(agent, duty), got.Revision)
 	}
+}
+
+// plural returns one for a count of 1, and many for any other count.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
