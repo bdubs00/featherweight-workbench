@@ -199,24 +199,54 @@ type Answer struct {
 	Done int `json:"done"`
 	// Waiting is the one count of the work that needs the caller.
 	Waiting Waiting `json:"waiting"`
+	// Failed lists the jobs of the caller that failed in the last day or
+	// paused themselves (FailedJob), which Waiting counts in Failed.
+	Failed []FailedJob `json:"failed,omitempty"`
 }
+
+// FailedJob is a job of the caller that needs the caller because it
+// failed: its newest start failed in the last FailedFor, or the job paused
+// itself after its runs failed. Card is the card of its newest failed
+// start, which a person lets go with POST /v1/work/letgo, and Failures
+// counts its failed starts in the last FailedFor. A person runs the job
+// again, pauses it, resumes it, or lets the card go; a let-go card takes
+// the job out.
+type FailedJob struct {
+	Duty         string    `json:"duty"`
+	Title        string    `json:"title"`
+	Agent        string    `json:"agent,omitempty"`
+	Card         string    `json:"card,omitempty"`
+	Run          string    `json:"run,omitempty"`
+	Reason       string    `json:"reason"`
+	Since        time.Time `json:"since"`
+	Failures     int       `json:"failures"`
+	Paused       bool      `json:"paused,omitempty"`
+	PausedReason string    `json:"pausedReason,omitempty"`
+}
+
+// FailedFor is how far back a failed start of a job makes the job a job
+// that failed.
+const FailedFor = 24 * time.Hour
 
 // Waiting is the one count of the work that needs the caller (plan A7):
 // the cards of the lane Needs you whose next move is the caller's
 // (NeedsYou), the cards of the lane To check whose next move is the
-// caller's (ToCheck), and the notes of Know-how that wait for the caller
-// under ask first (Notes). Count is their sum. The board, Activity, the
-// badge of the page, and Results read this one count, so they never
-// disagree. A stopped card is no wait on a person: it lets itself go.
+// caller's (ToCheck), the notes of Know-how that wait for the caller
+// under ask first (Notes), and the jobs of the caller that failed or
+// paused themselves (Failed, Answer.Failed). Count is their sum. The
+// board, Activity, the badge of the page, and Results read this one
+// count, so they never disagree. Any other stopped card is no wait on a
+// person: it lets itself go.
 type Waiting struct {
 	Count    int `json:"count"`
 	NeedsYou int `json:"needsYou"`
 	ToCheck  int `json:"toCheck"`
 	Notes    int `json:"notes"`
+	Failed   int `json:"failed"`
 }
 
 // Sum sets Count to the sum of the parts.
-func (w *Waiting) Sum() { w.Count = w.NeedsYou + w.ToCheck + w.Notes }
+func (w *Waiting) Sum() { w.Count = w.NeedsYou + w.ToCheck + w.Notes + w.Failed }
 
 // Run is a run that the caller can view, with the facts of its work
 // (fleet.Work). Lost is true for a run that never ended and that no member
@@ -260,9 +290,11 @@ type Input struct {
 	Names map[string]string
 	// Notes counts the notes of Know-how that wait for the caller under
 	// ask first (knowhow.Service.WaitingFor), for Answer.Waiting.
-	Notes  int
-	Now    time.Time
-	Window time.Duration
+	Notes int
+	// PausedBy holds the reason of each duty that paused itself, by name.
+	PausedBy map[string]string
+	Now      time.Time
+	Window   time.Duration
 }
 
 // DefaultDays is the window of the board in days, as the recent results of
@@ -1017,10 +1049,81 @@ func (b *board) answer() Answer {
 	for _, s := range Stages {
 		ans.Lanes = append(ans.Lanes, *lanes[s])
 	}
-	ans.Waiting = Waiting{NeedsYou: lanes[StageNeedsYou].Yours, ToCheck: lanes[StageReview].Yours, Notes: b.in.Notes}
+	ans.Failed = b.failedJobs(ans.Cards)
+	ans.Waiting = Waiting{NeedsYou: lanes[StageNeedsYou].Yours, ToCheck: lanes[StageReview].Yours, Notes: b.in.Notes, Failed: len(ans.Failed)}
 	ans.Waiting.Sum()
 	ans.Sentence = sentence(ans, b.in.Now)
 	return ans
+}
+
+// failedJobs lists the jobs of the caller that failed (FailedJob), from
+// the cards of the board: for each duty, its newest start card that
+// stopped in the last FailedFor and whose next move is the caller's, and
+// each duty of the caller that paused itself. A card that a person let go
+// is in Done, so its job is out; a duty that paused itself is out once a
+// person let its newest failed card go.
+func (b *board) failedJobs(cards []Card) []FailedJob {
+	byDuty := map[string]*FailedJob{}
+	newest := map[string]Card{}
+	for _, c := range cards {
+		if c.Kind != KindDuty || c.Links.Duty == "" {
+			continue
+		}
+		name := c.Links.Duty
+		failed := c.Stage == StageStopped || c.Stage == StageDone && c.Verdict == VerdictLetGo
+		if !failed {
+			continue
+		}
+		if old, ok := newest[name]; !ok || c.Since.After(old.Since) {
+			newest[name] = c
+		}
+		if c.Stage != StageStopped || c.Next != NextYou || b.in.Now.Sub(c.Since) > FailedFor {
+			continue
+		}
+		j := byDuty[name]
+		if j == nil {
+			j = &FailedJob{Duty: name}
+			byDuty[name] = j
+		}
+		j.Failures++
+		if j.Card == "" || c.Since.After(j.Since) {
+			j.Title, j.Card, j.Run, j.Reason, j.Since = c.Title, c.ID, c.Links.Run, c.Reason, c.Since
+			if len(c.Agents) > 0 {
+				j.Agent = c.Agents[0]
+			}
+		}
+	}
+	for name, reason := range b.in.PausedBy {
+		d, ok := b.dutyOf[name]
+		if !ok || reason == "" || !(d.Owner == b.in.Me && b.in.Me != "") {
+			continue
+		}
+		c, has := newest[name]
+		if has && c.Stage == StageDone {
+			// A person let the newest failed card go: the person knows.
+			continue
+		}
+		j := byDuty[name]
+		if j == nil {
+			j = &FailedJob{Duty: name, Title: cmp.Or(strings.TrimSpace(d.Title), name), Agent: d.Agent}
+			if has {
+				j.Card, j.Run, j.Reason, j.Since = c.ID, c.Links.Run, c.Reason, c.Since
+			}
+			byDuty[name] = j
+		}
+		j.Paused, j.PausedReason = true, reason
+	}
+	out := make([]FailedJob, 0, len(byDuty))
+	for _, j := range byDuty {
+		out = append(out, *j)
+	}
+	slices.SortFunc(out, func(x, y FailedJob) int {
+		if c := y.Since.Compare(x.Since); c != 0 {
+			return c
+		}
+		return strings.Compare(x.Duty, y.Duty)
+	})
+	return out
 }
 
 // completed reports whether a card is done and completed: it has a verdict

@@ -175,10 +175,15 @@ func TestInbox(t *testing.T) {
 	}
 	// The approval and the question begin to wait within a few
 	// microseconds, so either can come first.
-	if k := strings.Join(kinds, ","); k != "approval,question,failure,failure,failure,paused" && k != "question,approval,failure,failure,failure,paused" {
+	// The job that failed three times and paused itself is one item, the
+	// paused job, which counts in waiting (live walk N3).
+	if k := strings.Join(kinds, ","); k != "approval,question,paused" && k != "question,approval,paused" {
 		t.Fatalf("the kinds = %v\n%+v", kinds, ans.Items)
 	}
-	ap, q, fail, paused := ans.Items[0], ans.Items[1], ans.Items[2], ans.Items[5]
+	if w := ans.Waiting; w == nil || w.Failed != 1 || w.Count != 3 {
+		t.Fatalf("waiting = %+v", w)
+	}
+	ap, q, paused := ans.Items[0], ans.Items[1], ans.Items[2]
 	if ap.Kind == KindQuestion {
 		ap, q = q, ap
 	}
@@ -194,10 +199,8 @@ func TestInbox(t *testing.T) {
 	if q.Run != r2.ID || !strings.Contains(q.Text, "Which branch do I use?") {
 		t.Fatalf("the question = %+v", q)
 	}
-	if fail.Duty != "report" || !strings.Contains(fail.Text, "The queue did not take the run") {
-		t.Fatalf("the failure = %+v", fail)
-	}
-	if paused.Duty != "report" || !strings.Contains(paused.Text, "The job report paused itself: 3 runs failed in a row") {
+	if paused.Duty != "report" || !strings.Contains(paused.Text, "paused itself: 3 runs failed in a row") || !strings.Contains(paused.Summary, "The queue did not take the run") ||
+		!strings.HasPrefix(paused.Card, "duty:report@") || strings.Join(paused.Actions, " ") != "resume run-again let-go" {
 		t.Fatalf("the paused duty = %+v", paused)
 	}
 	saysChannelAndJob(t, ans.Items)
@@ -211,12 +214,12 @@ func TestInbox(t *testing.T) {
 	var routed struct {
 		Items []map[string]any `json:"items"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&routed); err != nil || resp.StatusCode != http.StatusOK || len(routed.Items) != 6 {
+	if err := json.NewDecoder(resp.Body).Decode(&routed); err != nil || resp.StatusCode != http.StatusOK || len(routed.Items) != 3 {
 		t.Fatalf("GET /v1/inbox = %d %+v %v", resp.StatusCode, routed, err)
 	}
 	for _, key := range []string{"kind", "run", "duty", "agent", "bridge", "approval", "text", "since"} {
-		if _, ok := routed.Items[5][key]; !ok {
-			t.Errorf("an item of the route lacks %s: %v", key, routed.Items[5])
+		if _, ok := routed.Items[2][key]; !ok {
+			t.Errorf("an item of the route lacks %s: %v", key, routed.Items[2])
 		}
 	}
 	resp.Body.Close()
@@ -226,14 +229,17 @@ func TestInbox(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("the tool = %+v, %v", res, err)
 	}
-	if txt := res.Content[0].(*sdk.TextContent).Text; !strings.HasPrefix(txt, "6 items need you:\n- ") || !strings.Contains(txt, "\n- approval: ") || !strings.Contains(txt, "(run "+r1.ID+")") {
+	// The text says what the page says: the count by kind, and each item
+	// with its age, its job or channel, and its agent (live walk N2).
+	if txt := res.Content[0].(*sdk.TextContent).Text; !strings.HasPrefix(txt, "3 things wait for the person, as Needs you on the page shows them: 2 decisions or questions, 1 job that failed. The oldest first:\n- ") ||
+		!strings.Contains(txt, "\n- A decision, waits less than a minute, the job report, agent triage: ") || !strings.Contains(txt, "run "+r1.ID) || !strings.Contains(txt, "\n- A job paused itself, waits") {
 		t.Fatalf("the text of the tool = %s", txt)
 	}
 	other, err := For(as("bob"), a, time.Now())
 	if err != nil || len(other.Items) != 0 {
 		t.Fatalf("the inbox of bob = %+v, %v", other, err)
 	}
-	if txt := text(other); txt != "Nothing needs you now." {
+	if txt := text(other, time.Now()); txt != "Nothing waits for the person now. Needs you on the page is empty." {
 		t.Fatalf("an empty inbox = %q", txt)
 	}
 }
@@ -553,11 +559,12 @@ func TestTeamAndNoteItems(t *testing.T) {
 		{ID: "bridge:B2", Kind: work.KindBridge, Title: "Theirs", Stage: work.StageReview, Next: work.NextPerson, Links: work.Links{Bridge: "B2"}},
 		{ID: "bridge:B3", Kind: work.KindBridge, Title: "Busy", Stage: work.StageWorking, Next: work.NextAgent, Links: work.Links{Bridge: "B3"}},
 		{ID: "duty:found@x", Kind: work.KindDuty, Title: "Found check", Stage: work.StageReview, Next: work.NextYou, Since: at, Reason: "Found: zebra", Summary: "zebra", Agents: []string{"pooled"}, Links: work.Links{Run: "R1", Duty: "found", Runs: []string{"R1"}}},
-	}, Waiting: work.Waiting{NeedsYou: 1, ToCheck: 2}}
+	}, Waiting: work.Waiting{NeedsYou: 1, ToCheck: 2, Failed: 1},
+		Failed: []work.FailedJob{{Duty: "nightly", Title: "Nightly report", Agent: "scribe", Card: "duty:nightly@y", Run: "R7", Reason: "Failed: the model refused.", Since: at, Failures: 2}}}
 	records := []Item{
 		{Kind: KindApproval, Run: "R0", Approval: "ap0", Agent: "ops", Text: "Deploy: the agent ops asks to run bash."},
 		{Kind: KindQuestion, Bridge: "B2", Run: "R9", Question: 3, Text: "writer asks in Theirs: Which port?"},
-		{Kind: KindFailure, Duty: "nightly", Text: "A run of the job nightly failed."},
+		{Kind: KindFailure, Duty: "older", Text: "A run of the job older failed."},
 	}
 	got := fromBoard(board, records)
 	saysChannelAndJob(t, got)
@@ -571,10 +578,13 @@ func TestTeamAndNoteItems(t *testing.T) {
 	if got[2].Kind != KindResult || got[2].Run != "R1" || got[2].Duty != "found" || got[2].Card != "duty:found@x" || got[2].Text != "Found check: it found something." || got[2].Summary != "zebra" {
 		t.Fatalf("the result of a duty = %+v", got[2])
 	}
-	if got[3].Kind != KindFailure {
-		t.Fatalf("the failure = %+v", got[3])
+	// A job that failed is an item from the board, with its ways out; a
+	// failure of a record that the board does not count goes.
+	if f := got[3]; f.Kind != KindFailure || f.Duty != "nightly" || f.Card != "duty:nightly@y" || f.Run != "R7" || f.Agent != "scribe" ||
+		f.Text != "2 runs of the job Nightly report failed in the last day. The last one: Failed: the model refused." || strings.Join(f.Actions, " ") != "run-again pause let-go" {
+		t.Fatalf("the failure = %+v", f)
 	}
-	if n := len(got) - 1; n != board.Waiting.NeedsYou+board.Waiting.ToCheck {
+	if n := len(got); n != board.Waiting.NeedsYou+board.Waiting.ToCheck+board.Waiting.Failed {
 		t.Fatalf("%d items, and the count is %+v", n, board.Waiting)
 	}
 	for w, want := range map[string]string{

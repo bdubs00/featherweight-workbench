@@ -205,9 +205,12 @@ func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, er
 		if err != nil {
 			return Answer{}, err
 		}
-		in.Next = map[string]time.Time{}
+		in.Next, in.PausedBy = map[string]time.Time{}, map[string]string{}
 		for _, v := range list.Duties {
 			in.Duties = append(in.Duties, v.Duty)
+			if v.Paused && v.State.PausedReason != "" {
+				in.PausedBy[v.Name] = v.State.PausedReason
+			}
 			if !list.Paused && !v.Paused && len(v.Next) > 0 {
 				in.Next[v.Name] = v.Next[0]
 			}

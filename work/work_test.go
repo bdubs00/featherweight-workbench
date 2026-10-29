@@ -775,3 +775,43 @@ func TestReworkingCard(t *testing.T) {
 		t.Fatalf("the merged run = %+v", got)
 	}
 }
+
+// A job of the caller that failed in the last day, or that paused itself,
+// waits for the caller: one per job, with the card of its newest failed
+// start, and it counts in waiting. An older failure, a job of another
+// person, and a job whose newest failed card a person let go do not wait
+// (live walk N3).
+func TestFailedJobs(t *testing.T) {
+	mk := func(name, owner string) duties.Duty {
+		return duties.Duty{Name: name, Title: "Job " + name, Agent: "ops", Owner: owner}
+	}
+	failed := func(d duties.Duty, at time.Time, reason string) Start {
+		return Start{Duty: d, Entry: duties.RunEntry{At: at, Slot: at, State: duties.StateFailed, Reason: reason, Start: duties.StartSchedule}}
+	}
+	nightly, weekly, quiet, theirs, gone := mk("nightly", "alice"), mk("weekly", "alice"), mk("quiet", "alice"), mk("theirs", "bob"), mk("gone", "alice")
+	in := Input{Me: "alice", Now: t0, Duties: []duties.Duty{nightly, weekly, quiet, theirs, gone},
+		Starts: []Start{
+			failed(nightly, ago(5*time.Hour), "The model refused."),
+			failed(nightly, ago(2*time.Hour), "The queue did not take the run."),
+			failed(weekly, ago(3*24*time.Hour), "Too old to wait."),
+			failed(theirs, ago(time.Hour), "Not mine."),
+			failed(gone, ago(time.Hour), "Let go."),
+		},
+		PausedBy: map[string]string{"quiet": "3 runs failed in a row, so the job paused itself.", "gone": "It failed."},
+		LetGo:    map[string]LetGo{dutyKey("gone", ago(time.Hour)): {Card: dutyKey("gone", ago(time.Hour)), By: "alice", At: ago(time.Minute)}},
+	}
+	ans := Assemble(in)
+	if ans.Waiting.Failed != 2 || len(ans.Failed) != 2 {
+		t.Fatalf("the failed jobs = %+v, waiting %+v", ans.Failed, ans.Waiting)
+	}
+	n, q := ans.Failed[0], ans.Failed[1]
+	if n.Duty != "nightly" || n.Failures != 2 || n.Card != dutyKey("nightly", ago(2*time.Hour)) || !strings.Contains(n.Reason, "The queue did not take the run") || n.Paused {
+		t.Fatalf("the failed job = %+v", n)
+	}
+	if q.Duty != "quiet" || !q.Paused || q.Card != "" || q.Title != "Job quiet" || q.PausedReason == "" {
+		t.Fatalf("the paused job = %+v", q)
+	}
+	if ans.Waiting.Count != ans.Waiting.NeedsYou+ans.Waiting.ToCheck+ans.Waiting.Notes+2 {
+		t.Fatalf("waiting = %+v", ans.Waiting)
+	}
+}

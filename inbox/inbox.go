@@ -21,6 +21,7 @@
 package inbox
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -117,8 +118,12 @@ type Item struct {
 //     of a seat, or a deny of the approval for a question of a run.
 //   - allow and deny: POST /v1/runs/{id}/approvals/{approval}.
 //   - keep and refuse: POST /v1/knowhow/waiting/{id}.
-//   - let-go: POST /v1/work/letgo with the card, for a paused job or a
-//     failure that nobody moves any more.
+//   - run-again: POST /v1/duties/{name}/run, for a job that failed or
+//     paused itself.
+//   - pause and resume: PATCH /v1/duties/{name} with paused true or false.
+//   - let-go: POST /v1/work/letgo with the card, the newest failed start
+//     of a job that failed or paused itself, so the job stops waiting for
+//     the person; a job that paused itself stays paused.
 const (
 	ActLooksRight = "looks-right"
 	ActNeedsWork  = "needs-work"
@@ -128,6 +133,10 @@ const (
 	ActDeny       = "deny"
 	ActKeep       = "keep"
 	ActRefuse     = "refuse"
+	ActRunAgain   = "run-again"
+	ActPause      = "pause"
+	ActResume     = "resume"
+	ActLetGo      = "let-go"
 )
 
 // Answer is the inbox of the caller: approvals and questions first, the
@@ -318,12 +327,37 @@ func fromBoard(board work.Answer, items []Item) []Item {
 		it.Actions = actionsOf(it)
 		out = append(out, it)
 	}
-	for _, it := range items {
-		if it.Kind == KindFailure || it.Kind == KindPaused {
-			out = append(out, it)
-		}
+	// The jobs that failed or paused themselves come from the board too,
+	// one item per job, so they count in waiting (work.FailedJob).
+	for _, j := range board.Failed {
+		out = append(out, jobItem(j))
 	}
 	return out
+}
+
+// jobItem is the item of a job that failed or paused itself, with its
+// ways out: run it again, pause it or resume it, and let its newest failed
+// start go.
+func jobItem(j work.FailedJob) Item {
+	it := Item{Kind: KindFailure, Run: j.Run, Duty: j.Duty, Agent: j.Agent, Card: j.Card, Since: j.Since, Summary: oneLine(j.Reason, 300)}
+	title := cmp.Or(j.Title, j.Duty)
+	switch {
+	case j.Paused:
+		it.Kind = KindPaused
+		it.Text = fmt.Sprintf("The job %s paused itself: %s", title, oneLine(j.PausedReason, 300))
+		it.Summary = oneLine(j.PausedReason, 300)
+		it.Actions = []string{ActResume, ActRunAgain}
+	case j.Failures > 1:
+		it.Text = fmt.Sprintf("%d runs of the job %s failed in the last day. The last one: %s", j.Failures, title, oneLine(j.Reason, 300))
+		it.Actions = []string{ActRunAgain, ActPause}
+	default:
+		it.Text = fmt.Sprintf("The job %s failed: %s", title, oneLine(j.Reason, 300))
+		it.Actions = []string{ActRunAgain, ActPause}
+	}
+	if j.Card != "" {
+		it.Actions = append(it.Actions, ActLetGo)
+	}
+	return it
 }
 
 // holder returns the index of the first unused item that holds the card
@@ -593,8 +627,8 @@ func tools(srv *mcp.Server) []mcp.Tool {
 	a := srv.Agent()
 	return []mcp.Tool{mcp.NewTool(&sdk.Tool{
 		Name:        ToolInbox,
-		Title:       "What needs me",
-		Description: "List what needs the person now, the items of Activity: each run that waits for an approval or an answer, each question of a seat of a bridge, each failed run of a duty of the person in the last day, each duty of the person that paused itself, each result that the person asked to check or that a duty found and tells the person of, in the last week, each team whose agents finished and whose result waits for a check (bridge set, no run), and each note of Know-how that waits for the person to keep it (note: the id for POST /v1/knowhow/waiting/{id}). Answer an approval with approve and a question with approve or send, and check a result with work_review. Each item has kind (approval, question, failure, paused, result, note), run, duty, agent, bridge, approval (the id of the approval that the run waits for), question and handle (the seq of the question of a seat, and the seat), note, text, and since. An item of the work that needs the person also has card (the card of the board), summary (the question, what a decision asks, or the first line of the result), channel, costUSD, and actions (its ways out: looks-right, needs-work, answer, decline, allow, deny, keep, refuse). waiting is the one count of the work that needs the person, the same count as the tool work: count, needsYou, toCheck, and notes. The items of the kinds approval, question, and result are the cards that needsYou and toCheck count.",
+		Title:       "What waits for the person",
+		Description: "List what waits for the person now: the same list as Needs you on the page, with the same count, so call it whenever the person asks what waits for them, what needs a sign-off, or what is left to do. It holds the decisions and questions, the results to check of channels and jobs (Ready to sign off), the jobs that failed or paused themselves, and the notes to keep, each with how long it waits, its channel, and its agent. The text lists them oldest first. The items: each run that waits for an approval or an answer, each question of a seat of a bridge, each failed run of a duty of the person in the last day, each duty of the person that paused itself, each result that the person asked to check or that a duty found and tells the person of, in the last week, each team whose agents finished and whose result waits for a check (bridge set, no run), and each note of Know-how that waits for the person to keep it (note: the id for POST /v1/knowhow/waiting/{id}). Answer an approval with approve and a question with approve or send, and check a result with work_review. Each item has kind (approval, question, failure, paused, result, note), run, duty, agent, bridge, approval (the id of the approval that the run waits for), question and handle (the seq of the question of a seat, and the seat), note, text, and since. An item of the work that needs the person also has card (the card of the board), summary (the question, what a decision asks, or the first line of the result), channel, costUSD, and actions (its ways out: looks-right, needs-work, answer, decline, allow, deny, keep, refuse, run-again, pause, resume, let-go). waiting is the one count of the work that needs the person, the same count as the tool work and the page: count, needsYou, toCheck, notes, and failed. The items of the kinds approval, question, and result are the cards that needsYou and toCheck count, and the items of the kinds failure and paused are the jobs that failed counts.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {
@@ -603,26 +637,84 @@ func tools(srv *mcp.Server) []mcp.Tool {
 		if err != nil {
 			return mcp.ErrorResult(mcp.Explain(err)), nil, nil
 		}
-		return mcp.Result(text(ans), ans), nil, nil
+		return mcp.Result(text(ans, time.Now()), ans), nil, nil
 	})}
 }
 
-// text words the inbox for the model.
-func text(ans Answer) string {
+// kindWords names the kind of an item for the text of the tool, in the
+// words of the page.
+var kindWords = map[string]string{
+	KindApproval: "A decision",
+	KindQuestion: "A question",
+	KindResult:   "Ready to sign off",
+	KindFailure:  "A job failed",
+	KindPaused:   "A job paused itself",
+	KindNote:     "A note to keep",
+}
+
+// text words the inbox for the model as the page shows it: the count,
+// then each item, the oldest first, with how long it waits, its channel
+// or job, its agent, and its summary. An id ends the line, for the tools
+// that act on the item; the person never reads an id.
+func text(ans Answer, now time.Time) string {
 	if len(ans.Items) == 0 {
-		return "Nothing needs you now."
+		return "Nothing waits for the person now. Needs you on the page is empty."
 	}
+	items := slices.Clone(ans.Items)
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Since.Before(items[j].Since) })
 	var b strings.Builder
-	if len(ans.Items) == 1 {
-		b.WriteString("1 item needs you:")
-	} else {
-		fmt.Fprintf(&b, "%d items need you:", len(ans.Items))
+	n := len(items)
+	if w := ans.Waiting; w != nil {
+		n = w.Count
 	}
-	for _, it := range ans.Items {
-		fmt.Fprintf(&b, "\n- %s: %s", it.Kind, it.Text)
-		if it.Run != "" {
-			b.WriteString(" (run " + it.Run + ")")
+	fmt.Fprintf(&b, "%s for the person, as Needs you on the page shows %s", plural(n, "thing waits", "things wait"), map[bool]string{true: "it", false: "them"}[n == 1])
+	if w := ans.Waiting; w != nil {
+		var parts []string
+		for _, x := range []struct {
+			n    int
+			one  string
+			many string
+		}{{w.NeedsYou, "decision or question", "decisions or questions"}, {w.ToCheck, "result to sign off", "results to sign off"}, {w.Failed, "job that failed", "jobs that failed"}, {w.Notes, "note to keep", "notes to keep"}} {
+			if x.n > 0 {
+				parts = append(parts, plural(x.n, x.one, x.many))
+			}
+		}
+		if len(parts) > 0 {
+			b.WriteString(": " + strings.Join(parts, ", "))
+		}
+	}
+	b.WriteString(". The oldest first:")
+	for _, it := range items {
+		b.WriteString("\n- " + kindWords[it.Kind])
+		if !it.Since.IsZero() {
+			b.WriteString(", waits " + work.Span(now.Sub(it.Since)))
+		}
+		if it.Channel != "" {
+			fmt.Fprintf(&b, ", in the channel %q", it.Channel)
+		} else if it.Duty != "" {
+			fmt.Fprintf(&b, ", the job %s", it.Duty)
+		}
+		if it.Agent != "" {
+			fmt.Fprintf(&b, ", agent %s", it.Agent)
+		}
+		b.WriteString(": " + oneLine(cmp.Or(it.Summary, it.Text), 240))
+		var ids []string
+		for _, x := range [][2]string{{"run", it.Run}, {"bridge", it.Bridge}, {"approval", it.Approval}, {"card", it.Card}, {"note", it.Note}} {
+			if x[1] != "" {
+				ids = append(ids, x[0]+" "+x[1])
+			}
+		}
+		if len(ids) > 0 {
+			b.WriteString(" (" + strings.Join(ids, ", ") + ")")
 		}
 	}
 	return b.String()
+}
+
+// plural words a count with its noun.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
