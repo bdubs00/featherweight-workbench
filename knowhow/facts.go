@@ -27,7 +27,9 @@ const maxFacts = 50000
 
 // runFacts is what one run tells. Verification is the newest receipt. Grade
 // is the verdict of its outcome grader. Checked is true when the newest end
-// of the run says that its definition of done passed (fw.DoneChecked).
+// of the run says that its definition of done passed and the pass was not
+// weak (fw.CheckedDone): a check that only reads a file that was there
+// before the run shows nothing about the run, so it verifies nothing.
 // Untrusted is true when its text came from a block found, event, or
 // source, or from a message of another principal. Trigger is a hash of what
 // started the run: its input and those blocks.
@@ -82,7 +84,7 @@ func factsFrom(e fleet.ArchiveEntry, events []fw.Event) runFacts {
 		f.Grade = r.Outcome.Verdict
 	}
 	f.Up, f.Down = r.Reactions[fw.ReactionUp] > 0, r.Reactions[fw.ReactionDown] > 0
-	f.Checked = r.Done != nil && r.Done.State == fw.DoneChecked
+	f.Checked = r.Done != nil && fw.CheckedDone(r.Done.State, r.Done.Weak)
 	trigger := sha256.New()
 	trigger.Write([]byte(r.Input))
 	for _, ev := range events {
@@ -95,7 +97,7 @@ func factsFrom(e fleet.ArchiveEntry, events []fw.Event) runFacts {
 			// A follow-up ends the run again, so the newest end tells.
 			var d fw.RunFinishedData
 			if ev.Decode(&d) == nil {
-				f.Checked = d.Done == fw.DoneChecked
+				f.Checked = fw.CheckedDone(d.Done, d.DoneWeak)
 			}
 		case fw.EvRoutineApplied:
 			f.ByRoutine = f.ByRoutine || fleet.AppliedOK(ev)

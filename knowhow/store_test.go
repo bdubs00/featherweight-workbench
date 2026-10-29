@@ -133,11 +133,24 @@ func TestOutOfDate(t *testing.T) {
 	if n := fr.note(t, duty, "issue.md"); n.State != StateOutOfDate || n.OutOfDate.Source != "item:gitea/issue/42" {
 		t.Fatalf("the note of the item = %+v", n)
 	}
-	// A recheck waits for the review for each note of a principal; the
-	// note of the agent changes by a person only, so it has none.
+	// A recheck waits for the review for each note that went out of date,
+	// in the scope of its note: the notes of the principal and the note of
+	// the agent. A note that a person wrote gets none.
+	fr.s.Write(ctx, WriteRequest{Agent: "triage", Scope: Scope{Kind: ScopeAgent}, Name: "person.md", Text: "Mine.", By: "person:alice",
+		Sources: []Source{{Ref: "page:agents/triage/labels.md", Version: Hash("v2")}}})
+	PageWritten(ctx, "agents/triage/labels.md", Hash("v3"))
 	open, err := fr.s.Candidates(ctx, "triage", func(c Candidate) bool { return c.Kind == KindRecheck })
-	if err != nil || len(open) != 2 || open[0].State != CandOpen || open[0].Note != "labels.md" || open[0].Sources[0].Version != Hash("v2") {
+	scopes := map[string]Scope{}
+	byNote := map[string]Candidate{}
+	for _, c := range open {
+		scopes[c.Note], byNote[c.Note] = c.Scope, c
+	}
+	if err != nil || len(open) != 4 || byNote["labels.md"].State != CandOpen || byNote["labels.md"].Sources[0].Version != Hash("v2") ||
+		scopes["shared.md"] != (Scope{Kind: ScopeAgent}) || scopes["issue.md"] != duty || scopes["fresh.md"] != duty || len(scopes) != 4 {
 		t.Fatalf("rechecks = %+v, %v", open, err)
+	}
+	if fr.note(t, Scope{Kind: ScopeAgent}, "person.md").State != StateChecked {
+		t.Fatal("automation marked a note of a person out of date")
 	}
 	// A new text replaces it, and the journal counts a correction.
 	res := fr.write(t, duty, "labels.md", "The label bug means broken for the requester.", Source{Ref: "page:agents/triage/labels.md", Version: Hash("v2")})
@@ -282,6 +295,92 @@ func TestAskFirst(t *testing.T) {
 	}
 	if left, _ := fr.s.WaitingList(ctx, "triage", nil); len(left) != 0 {
 		t.Fatalf("the waiting list = %+v", left)
+	}
+}
+
+// The undo of the keep of a note that waited puts the note away, as the
+// undo of a note that never waited does; it never leaves the note
+// waiting with no change on the list. An entry of an older build that
+// names the waiting revision does the same.
+func TestUndoOfAKeep(t *testing.T) {
+	fr := newFront(t, nil)
+	ctx := context.Background()
+	if _, err := fr.s.SetAskFirst(ctx, "triage", true, "person:alice"); err != nil {
+		t.Fatal(err)
+	}
+	res := fr.write(t, agentScope, "webinar.md", "The webinar is on Tuesday.")
+	kept, err := fr.s.Decide(ctx, res.Waiting.ID, true, "person:alice")
+	if err != nil || kept == nil || kept.Undo == nil || kept.Undo.Revision != 0 {
+		t.Fatalf("the keep = %+v, %v", kept, err)
+	}
+	if _, err := fr.s.TakeBack(ctx, kept.ID, "person:alice", true); err != nil {
+		t.Fatal(err)
+	}
+	if n := fr.note(t, agentScope, "webinar.md"); n.State != StatePutAway {
+		t.Fatalf("after the undo of the keep the note = %+v", n)
+	}
+	if left, _ := fr.s.WaitingList(ctx, "triage", nil); len(left) != 0 {
+		t.Fatalf("the waiting list = %+v", left)
+	}
+	// An entry that names the revision of the note that waited.
+	res = fr.write(t, agentScope, "team.md", "The team meets at ten.")
+	waiting := fr.note(t, agentScope, "team.md")
+	if _, err := fr.s.Decide(ctx, res.Waiting.ID, true, "person:alice"); err != nil {
+		t.Fatal(err)
+	}
+	old, err := fr.s.appendJournal(ctx, Entry{Agent: "triage", What: WhatLearned, Subject: noteSubject(agentScope, "team.md"), Why: "kept", By: "person:alice",
+		Undo: &Undo{Revision: waiting.Revision, After: fr.note(t, agentScope, "team.md").Revision}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fr.s.TakeBack(ctx, old.ID, "person:alice", true); err != nil {
+		t.Fatal(err)
+	}
+	if n := fr.note(t, agentScope, "team.md"); n.State != StatePutAway {
+		t.Fatalf("after the undo of an older keep the note = %+v", n)
+	}
+}
+
+// A note that went out of date has no undo of that move, and an undo of an
+// earlier change answers ErrOutOfDate, because either would make the
+// agent trust the note over its source. An owner corrects the note
+// instead: the source that changed takes its version of now, so the note
+// is checked against the page as it is, and the journal counts a
+// correction. A page that changes again moves the version that the note
+// waits for.
+func TestOutOfDateNoUndo(t *testing.T) {
+	fr := newFront(t, nil)
+	ctx := context.Background()
+	page := Source{Ref: "page:launch.md", Version: Hash("v1")}
+	fr.write(t, agentScope, "launch.md", "The launch is on the 3rd.", page)
+	PageWritten(ctx, "launch.md", Hash("v2"))
+	j := fr.journal(t)
+	if j[0].What != WhatOutOfDate || j[0].Undo != nil {
+		t.Fatalf("the entry of the move = %+v", j[0])
+	}
+	if _, err := fr.s.TakeBack(ctx, j[0].ID, "person:alice", true); !errors.Is(err, ErrOutOfDate) {
+		t.Fatalf("an undo of the move = %v", err)
+	}
+	if _, err := fr.s.TakeBack(ctx, j[1].ID, "person:alice", true); !errors.Is(err, ErrOutOfDate) {
+		t.Fatalf("an undo of the change before the move = %v", err)
+	}
+	PageWritten(ctx, "launch.md", Hash("v3"))
+	n := fr.note(t, agentScope, "launch.md")
+	if n.State != StateOutOfDate || n.OutOfDate.Version != Hash("v3") || len(fr.journal(t)) != 2 {
+		t.Fatalf("after a second change of the page = %+v", n)
+	}
+	res, err := fr.s.Write(ctx, WriteRequest{Agent: "triage", Scope: agentScope, Name: "launch.md", Text: "The launch is on the 10th.", IfHash: n.Hash,
+		Sources: n.Sources, By: "person:alice"})
+	if err != nil || res.Note.State != StateChecked || res.Note.Sources[0].Version != Hash("v3") || res.Entry == nil || !res.Entry.Corrects {
+		t.Fatalf("the correction = %+v, %v", res, err)
+	}
+	// A page that was removed leaves the sources of the correction.
+	fr.write(t, agentScope, "gone.md", "The old plan.", Source{Ref: "page:plan.md", Version: Hash("p1")}, Source{Ref: "run:01KRUN00000000000000000001"})
+	PageWritten(ctx, "plan.md", "")
+	n = fr.note(t, agentScope, "gone.md")
+	res, err = fr.s.Write(ctx, WriteRequest{Agent: "triage", Scope: agentScope, Name: "gone.md", Text: "No plan.", IfHash: n.Hash, Sources: n.Sources, By: "person:alice"})
+	if err != nil || len(res.Note.Sources) != 1 || res.Note.Sources[0].Ref != "run:01KRUN00000000000000000001" || res.Note.State != StateUnchecked {
+		t.Fatalf("the correction of a note of a removed page = %+v, %v", res, err)
 	}
 }
 

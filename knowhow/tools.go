@@ -9,17 +9,20 @@ package knowhow
 // of an agent with their evidence, and knowhow_keep decides one. The model
 // chooses among the candidates that code found, and it writes the text and
 // the reason. The front checks every keep: the text states a fact in at
-// most 600 characters, the note gets the sources of the candidate and no
-// other, it goes to the scope of the runs of the candidate, an untrusted
-// candidate needs two runs with different triggers, a supersede keeps the
-// old text for undo, and with the switch on, the change waits for a
-// person.
+// most 600 characters and holds no path of one machine, the note gets the
+// sources of the candidate and no other, it goes to the notes of the
+// agent, which every run of the agent reads (a recheck keeps the scope of
+// its note), an untrusted candidate needs two runs with different
+// triggers, a supersede keeps the old text for undo, and with the switch
+// on, the change waits for a person. An add without a name gets a name
+// that the front picks from the kind and the text.
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -60,8 +63,8 @@ const (
 	keepSchema = `{"type":"object","properties":{
 		"candidate":{"type":"string","minLength":1,"maxLength":64,"description":"The id of the candidate, from knowhow_candidates."},
 		"op":{"type":"string","enum":["add","supersede","skip"],"description":"add writes a new note. supersede replaces the note of the name; the old text stays for an undo. skip keeps nothing."},
-		"name":{"type":"string","maxLength":512,"description":"The name of the note, such as gotchas/gitea-labels.md. A recheck supersedes the note that it names."},
-		"text":{"type":"string","maxLength":2400,"description":"The note: at most 600 characters that state a fact, such as: Gitea refuses a label name with a space. No line starts with always, never, do not, don't, you must, or make sure."},
+		"name":{"type":"string","maxLength":512,"description":"The name of the note, a path such as gotchas/gitea-labels.md. Without it, an add gets a name from the kind and the text, which the answer gives. A recheck supersedes the note that it names."},
+		"text":{"type":"string","maxLength":2400,"description":"The note: at most 600 characters that state a fact, such as: Gitea refuses a label name with a space. No line starts with always, never, do not, don't, you must, or make sure. No path of one machine, such as /home/... or /tmp/...: write a path from the root of its tool."},
 		"why":{"type":"string","maxLength":300,"description":"One plain sentence for the journal that a person reads: why the agent keeps this."}
 	},"required":["candidate","op"]}`
 )
@@ -124,7 +127,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolKeep,
 			Title:       "Decide a candidate of the after-work review",
-			Description: "For the after-work review only. Decide one candidate: add a note, supersede a note, or skip. The note goes to the scope of the runs of the candidate, with the sources of the candidate. The text states a fact in at most 600 characters; a line that starts with always, never, do not, don't, you must, or make sure is refused. An untrusted candidate needs two runs with different triggers. With the switch \"Ask me before it keeps what it learns\" on, the change waits for a person.",
+			Description: "For the after-work review only. Decide one candidate: add a note, supersede a note, or skip. The note goes to the notes of the agent, which every run of the agent reads, with the sources of the candidate. The text states a fact in at most 600 characters; a line that starts with always, never, do not, don't, you must, or make sure is refused, and so is a path of one machine, such as /home/... or /tmp/.... An add without a name gets one from the kind and the text. An untrusted candidate needs two runs with different triggers. With the switch \"Ask me before it keeps what it learns\" on, the change waits for a person.",
 			InputSchema: json.RawMessage(keepSchema),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: ptr(false), IdempotentHint: true, OpenWorldHint: ptr(false)},
 		}, func(ctx context.Context, _ *sdk.CallToolRequest, in keepArgs) (*sdk.CallToolResult, any, error) {
@@ -205,8 +208,9 @@ func (s *Service) OpenCandidates(ctx context.Context, agent string, limit int) (
 	out := candidatesResult{Agent: agent, Candidates: []candidateView{}}
 	for _, c := range list {
 		v := candidateView{Candidate: c, Notes: []scopeNote{}}
+		sc := keepScope(c)
 		for _, n := range notes {
-			if n.Scope == c.Scope && len(v.Notes) < maxScopeNotes {
+			if n.Scope == sc && len(v.Notes) < maxScopeNotes {
 				v.Notes = append(v.Notes, scopeNote{Name: n.Name, Description: n.Description, State: n.State, ByPerson: n.ByPerson()})
 			}
 		}
@@ -240,8 +244,16 @@ type KeepRequest struct {
 	Candidate, Op, Name, Text, Why, Run string
 }
 
+// machinePath matches a path of one machine at the start of a word: a
+// home directory, a temporary directory, or a drive of Windows. The next
+// run can run on another machine, where such a path names nothing, so
+// the review keeps none (its own rules: a failure that came from the
+// environment never becomes a note).
+var machinePath = regexp.MustCompile(`(?i)(?:^|[\s"'(\[<=:,;\x60])((?:~/|/(?:home|Users)/[^/\s]+|/root\b|/(?:private/)?(?:var/)?tmp\b|/var/folders/|[a-z]:\\)\S*)`)
+
 // CheckFact checks the text of a note of the review: at most MaxKeepRunes
-// characters, and no line that starts with an order. The error says why.
+// characters, no line that starts with an order, and no path of one
+// machine. The error says why.
 func CheckFact(text string) error {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -258,7 +270,63 @@ func CheckFact(text string) error {
 			}
 		}
 	}
+	if m := machinePath.FindStringSubmatch(text); m != nil {
+		return fmt.Errorf("%w: a note holds no path of one machine, and %q is one; the next run can run on another machine. Write the path from the root of its tool, such as reports/stock.md, or leave the path out", ErrInvalid, cut(m[1], 120))
+	}
 	return nil
+}
+
+// keepScope is the scope where a keep of the candidate writes: the notes
+// of the agent, which every run of the agent reads, and for a recheck the
+// scope of its note.
+func keepScope(c Candidate) Scope {
+	if c.Kind == KindRecheck {
+		return c.Scope
+	}
+	return Scope{Kind: ScopeAgent}
+}
+
+// The folders of the names that the front picks, by kind.
+var nameFolders = map[string]string{KindGotcha: "gotchas", KindPlace: "places", KindOutcome: "outcomes"}
+
+// maxNameWords bounds the words of the text in a name that the front picks.
+const maxNameWords = 6
+
+// pickName picks the name of a new note from the kind of its candidate and
+// the first words of its text, such as gotchas/gitea-refuses-a-label-name-with.md.
+// A name that a live note of the scope has gets -2, -3, and so on.
+func (s *Service) pickName(ctx context.Context, c Candidate, sc Scope, text string) (string, error) {
+	var words []string
+	for _, w := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9') }) {
+		words = append(words, w)
+		if len(words) == maxNameWords {
+			break
+		}
+	}
+	base := strings.Join(words, "-")
+	if base == "" {
+		base, _, _ = strings.Cut(c.ID, "-")
+	}
+	folder := nameFolders[c.Kind]
+	if folder == "" {
+		folder = "notes"
+	}
+	for i := 1; i <= 9; i++ {
+		name := folder + "/" + base + ".md"
+		if i > 1 {
+			name = fmt.Sprintf("%s/%s-%d.md", folder, base, i)
+		}
+		cur, err := s.get(ctx, noteKey(c.Agent, sc, name))
+		switch {
+		case errors.Is(err, ErrNotFound):
+			return name, nil
+		case err != nil:
+			return "", err
+		case cur.State == StatePutAway:
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("%w: the names that the front picks for this text are taken; send a name of your own, a path such as %s/%s-other.md", ErrInvalid, folder, base)
 }
 
 // Keep decides one candidate for the review: it adds a note, supersedes
@@ -298,18 +366,26 @@ func (s *Service) Keep(ctx context.Context, req KeepRequest) (keepResult, error)
 	if why == "" || !oneLine(why) {
 		return keepResult{}, fmt.Errorf("%w: why is one plain sentence for the journal", ErrInvalid)
 	}
+	sc := keepScope(c)
 	name := strings.TrimSpace(req.Name)
-	if c.Kind == KindRecheck {
+	switch {
+	case c.Kind == KindRecheck:
 		if name != "" && name != c.Note {
 			return keepResult{}, fmt.Errorf("%w: a recheck supersedes the note %s, not %s", ErrInvalid, c.Note, name)
 		}
 		name = c.Note
+	case name == "" && op == OpAdd:
+		if name, err = s.pickName(ctx, c, sc, req.Text); err != nil {
+			return keepResult{}, err
+		}
+	case name == "":
+		return keepResult{}, fmt.Errorf("%w: a supersede names the note that it replaces in name, such as gotchas/gitea-labels.md; knowhow_candidates lists the notes of the scope", ErrInvalid)
 	}
 	if err := CheckName(name); err != nil {
-		return keepResult{}, err
+		return keepResult{}, fmt.Errorf("%w; name is the path of a note, such as gotchas/gitea-labels.md", err)
 	}
 	cond := IfAbsent
-	cur, err := s.get(ctx, noteKey(c.Agent, c.Scope, name))
+	cur, err := s.get(ctx, noteKey(c.Agent, sc, name))
 	live := err == nil && cur.State != StatePutAway
 	switch {
 	case err != nil && !errors.Is(err, ErrNotFound):
@@ -323,7 +399,7 @@ func (s *Service) Keep(ctx context.Context, req KeepRequest) (keepResult, error)
 	case op == OpSupersede:
 		cond = cur.Hash
 	}
-	res, err := s.Write(ctx, WriteRequest{Agent: c.Agent, Scope: c.Scope, Name: name, Text: strings.TrimSpace(req.Text), IfHash: cond, Sources: c.Sources,
+	res, err := s.Write(ctx, WriteRequest{Agent: c.Agent, Scope: sc, Name: name, Text: strings.TrimSpace(req.Text), IfHash: cond, Sources: c.Sources,
 		By: ByReview, Run: req.Run, Origin: originOf(c), Why: why, Runs: c.runIDs(), Hold: true, Candidate: c.ID})
 	if err != nil {
 		return keepResult{}, err

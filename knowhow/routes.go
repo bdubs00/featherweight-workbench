@@ -46,60 +46,49 @@ func mount(k *native.Kit) error {
 	k.Handle("GET /v1/knowhow/waiting", rt.on(rt.waiting))
 	k.Handle("POST /v1/knowhow/waiting/{id}", rt.on(rt.decide))
 	k.Handle("GET /v1/knowhow/summary", rt.on(rt.summary))
+	k.Handle("POST /v1/knowhow/review/{agent}", rt.on(rt.reviewNow))
 	k.Handle("POST /v1/knowhow/propose", rt.on(rt.propose))
+	k.Handle("POST /v1/knowhow/propose/{agent}", rt.on(rt.proposeNow))
 	return nil
 }
 
-// propose answers POST /v1/knowhow/propose?agent= with the result of the
-// pass that proposes routines from the runs of the Duties, which it runs
-// at once, so an owner does not wait for the pass of the next day
-// (docs/KNOWHOW.md section 6.5). With an agent, the caller needs the owner
-// role on it. Without one, the pass reads the agents on which the caller
-// has the owner role. With proposals off, or routines off, it answers
-// 409 with the reason.
+// propose answers POST /v1/knowhow/propose with the result of the pass
+// that proposes routines from the runs of the Duties, which it runs at
+// once over the agents on which the caller has the owner role, so an owner
+// does not wait for the pass of the next day (docs/KNOWHOW.md section
+// 6.5). The process and the static token read every agent. One agent has
+// its own route, POST /v1/knowhow/propose/{agent}, so a query agent gets
+// 400 instead of a pass over more agents than the caller named. With
+// proposals off, or routines off, it answers 409 with the reason.
 func (rt *routes) propose(w http.ResponseWriter, r *http.Request, s *Service) {
 	ctx := onBehalf(r)
-	switch {
-	case !s.cfg.Propose.On():
-		native.WriteProblem(w, r, http.StatusConflict, "Proposals of routines are off on this server. An admin turns them on with workbench.knowhow.propose.enabled.")
-		return
-	case s.routineStore() == nil:
-		native.WriteProblem(w, r, http.StatusConflict, "Routines are off on this server, so nothing can be proposed.")
+	if r.URL.Query().Has("agent") {
+		native.WriteProblem(w, r, http.StatusBadRequest, "Name one agent in the path: POST /v1/knowhow/propose/{agent}.")
 		return
 	}
-	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
-	owner := func(a string) error {
-		rg, err := s.rightsOn(ctx, a)
-		if err == nil && !rg.edit {
-			err = errors.Join(fw.ErrForbidden, errors.New("a proposal of routines needs the owner role on the agent"))
-		}
-		return err
+	if err := proposeOff(s); err != nil {
+		rt.fail(w, r, err)
+		return
 	}
 	var keep func(string) bool
-	switch {
-	case agent != "":
-		if err := owner(agent); err != nil {
-			rt.fail(w, r, err)
-			return
-		}
-		keep = func(a string) bool { return a == agent }
-	case !callerOf(ctx).trusted:
+	if !callerOf(ctx).trusted {
 		owned := map[string]bool{}
 		keep = func(a string) bool {
 			ok, seen := owned[a]
 			if !seen {
-				ok = owner(a) == nil
+				rg, err := s.rightsOn(ctx, a)
+				ok = err == nil && rg.edit
 				owned[a] = ok
 			}
 			return ok
 		}
 	}
-	res, err := s.ProposeFor(ctx, keep)
+	res, err := s.propose(ctx, keep)
 	if err != nil {
 		rt.fail(w, r, err)
 		return
 	}
-	s.log.Info("knowhow: the proposals of routines ran on request", "agent", agent, "by", callerOf(ctx).by(), "proposed", len(res.Proposed), "staysOut", len(res.StaysOut))
+	s.log.Info("knowhow: the proposals of routines ran on request", "by", callerOf(ctx).by(), "proposed", len(res.Proposed), "staysOut", len(res.StaysOut))
 	native.WriteJSON(w, http.StatusOK, res)
 }
 
@@ -123,6 +112,14 @@ type conflictProblem struct {
 	Hash string `json:"hash,omitempty"`
 }
 
+// outOfDateProblem is the 409 of an undo that would make the agent trust
+// a note that went out of date. OutOfDate tells the page to offer Edit and
+// Put away in place of the undo.
+type outOfDateProblem struct {
+	native.Problem
+	OutOfDate bool `json:"outOfDate"`
+}
+
 // fail maps an error of Know-how to a problem document.
 func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var ce *ConflictError
@@ -138,13 +135,21 @@ func (rt *routes) fail(w http.ResponseWriter, r *http.Request, err error) {
 			Problem: native.Problem{Type: "about:blank", Title: http.StatusText(http.StatusPreconditionFailed), Status: http.StatusPreconditionFailed, Detail: ce.Error(), Instance: r.URL.Path},
 			Hash:    ce.Hash,
 		})
+	case errors.Is(err, ErrOutOfDate):
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(outOfDateProblem{
+			Problem:   native.Problem{Type: "about:blank", Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict, Detail: reason(err), Instance: r.URL.Path},
+			OutOfDate: true,
+		})
 	case errors.Is(err, ErrHidden), errors.Is(err, ErrNotFound), errors.Is(err, routines.ErrNotFound):
 		native.WriteProblem(w, r, http.StatusNotFound, reason(err))
 	case errors.Is(err, ErrInvalid), errors.Is(err, routines.ErrInvalid):
 		native.WriteProblem(w, r, http.StatusBadRequest, reason(err))
 	case errors.Is(err, ErrPerson):
 		native.WriteProblem(w, r, http.StatusForbidden, reason(err))
-	case errors.As(err, &me), errors.Is(err, ErrLater), errors.Is(err, ErrBusy), errors.Is(err, routines.ErrConflict), errors.Is(err, routines.ErrRetired):
+	case errors.As(err, &me), errors.Is(err, ErrLater), errors.Is(err, ErrBusy), errors.Is(err, ErrReviewOff), errors.Is(err, errProposeOff), errors.Is(err, errRoutinesOff),
+		errors.Is(err, routines.ErrConflict), errors.Is(err, routines.ErrRetired):
 		native.WriteProblem(w, r, http.StatusConflict, reason(err))
 	default:
 		rt.k.Fail(w, r, err)
@@ -159,7 +164,7 @@ func reason(err error) string {
 		return hiddenReason
 	}
 	msg := err.Error()
-	for _, e := range []error{ErrInvalid, ErrNotFound, ErrLater, ErrBusy, fw.ErrInvalidRequest, fw.ErrForbidden, routines.ErrNotFound, routines.ErrInvalid} {
+	for _, e := range []error{ErrInvalid, ErrNotFound, ErrLater, ErrBusy, ErrOutOfDate, fw.ErrInvalidRequest, fw.ErrForbidden, routines.ErrNotFound, routines.ErrInvalid} {
 		msg = strings.TrimPrefix(msg, e.Error()+": ")
 	}
 	return strings.TrimPrefix(msg, "knowhow: ")
@@ -637,6 +642,84 @@ func (rt *routes) waitingAll(w http.ResponseWriter, r *http.Request, s *Service)
 		}
 	}
 	native.WriteJSON(w, http.StatusOK, map[string]any{"waiting": out})
+}
+
+// ownerOf returns the rights of an owner of the agent of the path, or
+// writes the problem: a start of a run or of a pass needs the owner role.
+func (rt *routes) ownerOf(w http.ResponseWriter, r *http.Request, s *Service, what string) (string, bool) {
+	agent := r.PathValue("agent")
+	rg, err := s.rightsOn(onBehalf(r), agent)
+	if err == nil && !rg.edit {
+		err = errors.Join(fw.ErrForbidden, fmt.Errorf("%s needs the owner role on the agent", what))
+	}
+	if err != nil {
+		rt.fail(w, r, err)
+		return "", false
+	}
+	return agent, true
+}
+
+// reviewNow answers POST /v1/knowhow/review/{agent}: it starts the
+// after-work review of the agent now, 202 with the run, or 200 with the
+// reason when the agent has no open candidate. Without a review profile it
+// refuses with 409 and the reason, because nothing picks a model or a
+// price by default. It needs the owner role.
+func (rt *routes) reviewNow(w http.ResponseWriter, r *http.Request, s *Service) {
+	agent, ok := rt.ownerOf(w, r, s, "a start of the after-work review")
+	if !ok {
+		return
+	}
+	out, err := s.ReviewAgent(onBehalf(r), agent)
+	if err != nil {
+		rt.fail(w, r, err)
+		return
+	}
+	status := http.StatusOK
+	if out.Started {
+		status = http.StatusAccepted
+	}
+	native.WriteJSON(w, status, out)
+}
+
+// errProposeOff means that the proposals of routines are off.
+var errProposeOff = errors.New("The proposals of routines are off: workbench.knowhow.propose.enabled is off.")
+
+// errRoutinesOff means that the process keeps no routines.
+var errRoutinesOff = errors.New("The routines are off in this process: workbench.routines.enabled is off.")
+
+// proposeOff returns why the pass that proposes routines cannot run now,
+// or nil.
+func proposeOff(s *Service) error {
+	switch {
+	case !s.cfg.Propose.On():
+		return errProposeOff
+	case s.routineStore() == nil:
+		return errRoutinesOff
+	}
+	return nil
+}
+
+// proposeNow answers POST /v1/knowhow/propose/{agent}: it runs the pass
+// that proposes routines over the runs of the agent now, as the daily pass
+// does, and answers what it proposed and why a Duty stayed out. It needs
+// the owner role. POST /v1/knowhow/propose runs the same pass over every
+// agent that the caller owns.
+func (rt *routes) proposeNow(w http.ResponseWriter, r *http.Request, s *Service) {
+	agent, ok := rt.ownerOf(w, r, s, "a start of the proposals of routines")
+	if !ok {
+		return
+	}
+	if err := proposeOff(s); err != nil {
+		rt.fail(w, r, err)
+		return
+	}
+	res, err := s.ProposeFor(onBehalf(r), agent)
+	if err != nil {
+		rt.fail(w, r, err)
+		return
+	}
+	s.log.Info("knowhow: the proposals of routines ran on request", "agent", agent, "by", callerOf(onBehalf(r)).by(), "proposed", len(res.Proposed), "staysOut", len(res.StaysOut))
+	native.WriteJSON(w, http.StatusOK, map[string]any{"agent": agent, "proposed": res.Proposed, "staysOut": res.StaysOut})
 }
 
 // decide answers POST /v1/knowhow/waiting/{id} with {"keep": true} or

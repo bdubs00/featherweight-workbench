@@ -310,6 +310,7 @@ workbench:
               How a note reads:
               - It states a fact and its fix in at most 600 characters, such as: Gitea refuses a label name with a space; needs-info works.
               - No line starts with always, never, do not, don't, you must, or make sure. The front refuses such a line.
+              - It holds no path of one machine, such as /home/... or /tmp/...: the next run can run on another machine. Write a path from the root of its tool. The front refuses such a path.
               - The why is one plain sentence for a person who reads the journal.
 
               What never becomes a note:

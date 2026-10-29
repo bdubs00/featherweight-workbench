@@ -185,6 +185,51 @@ func TestProposeNeedsVerifiedRuns(t *testing.T) {
 	}
 }
 
+// withDone sets the definition of done on the newest end of a run: a pass,
+// weak or not.
+func withDone(events []fw.Event, weak bool) []fw.Event {
+	out := slices.Clone(events)
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i].Type != fw.EvRunFinished {
+			continue
+		}
+		var d fw.RunFinishedData
+		if err := out[i].Decode(&d); err != nil {
+			panic(err)
+		}
+		d.Done, d.DoneWeak, d.Stop = fw.DoneChecked, weak, fw.RunStopChecked
+		if weak {
+			d.Stop = fw.RunStopAnswered
+		}
+		raw, err := json.Marshal(d)
+		if err != nil {
+			panic(err)
+		}
+		out[i].Data = raw
+		break
+	}
+	return out
+}
+
+// A weak pass of done verifies nothing, so it does not count toward
+// minVerified. Two checked runs that are not weak do.
+func TestProposeWeakPassVerifiesNothing(t *testing.T) {
+	runs := recordRuns(t, tickets(12))
+	runs[0] = withDone(runs[0], true)
+	runs[1] = withDone(runs[1], true)
+	fr := proposeFront(t, runs)
+	ctx := context.Background()
+	if res, err := fr.s.Propose(ctx); err != nil || len(res.Proposed) != 0 {
+		t.Fatalf("two weak passes = %+v, %v", res, err)
+	}
+	runs[0] = withDone(runs[0], false)
+	runs[1] = withDone(runs[1], false)
+	fr = proposeFront(t, runs)
+	if res, err := fr.s.Propose(ctx); err != nil || len(res.Proposed) != 1 {
+		t.Fatalf("two checked runs = %+v, %v", res, err)
+	}
+}
+
 // A proposal with a value that no run explains stays out, and the journal
 // says why once.
 func TestProposeStaysOut(t *testing.T) {
@@ -283,10 +328,11 @@ func TestRoutineMoved(t *testing.T) {
 	}
 }
 
-// An owner starts the pass at once with POST /v1/knowhow/propose, for one
-// agent or for the agents that the owner owns. A viewer and an operator
-// cannot, a person who cannot view the agent learns nothing, and with
-// proposals off the route says so.
+// An owner starts the pass at once: POST /v1/knowhow/propose for the
+// agents that the owner owns, and POST /v1/knowhow/propose/{agent} for one
+// agent. A viewer and an operator cannot, a person who cannot view the
+// agent learns nothing, a query agent gets 400 instead of a wider pass,
+// and with proposals off the route says so.
 func TestProposeRoute(t *testing.T) {
 	runs := recordRuns(t, tickets(12))
 	runs[0] = withReceipt(runs[0], "accepted")
@@ -294,11 +340,16 @@ func TestProposeRoute(t *testing.T) {
 	fr := proposeFront(t, runs)
 	url := fr.url + "/v1/knowhow/propose"
 	for who, want := range map[string]int{"carol": http.StatusForbidden, "bob": http.StatusForbidden, "dave": http.StatusNotFound, "": http.StatusUnauthorized} {
-		resp, body := send(t, http.MethodPost, url+"?agent=triage", who, "")
+		resp, body := send(t, http.MethodPost, url+"/triage", who, "")
 		mustStatus(t, resp, body, want)
 	}
+	resp, body := send(t, http.MethodPost, url+"?agent=triage", "alice", "")
+	mustStatus(t, resp, body, http.StatusBadRequest)
+	if _, err := routines.Of(fr.a).Get(context.Background(), "triage", "duty-nightly"); err == nil {
+		t.Fatal("a query agent ran the pass")
+	}
 	// dave owns only private, which has no Duty with runs.
-	resp, body := send(t, http.MethodPost, url, "dave", "")
+	resp, body = send(t, http.MethodPost, url, "dave", "")
 	mustStatus(t, resp, body, http.StatusOK)
 	var res ProposeResult
 	decodeJSON(t, body, &res)
@@ -308,10 +359,10 @@ func TestProposeRoute(t *testing.T) {
 	if _, err := routines.Of(fr.a).Get(context.Background(), "triage", "duty-nightly"); err == nil {
 		t.Fatal("the pass of dave proposed a routine of an agent that dave does not own")
 	}
-	resp, body = send(t, http.MethodPost, url+"?agent=triage", "alice", "")
+	resp, body = send(t, http.MethodPost, url+"/triage", "alice", "")
 	mustStatus(t, resp, body, http.StatusOK)
 	decodeJSON(t, body, &res)
-	if len(res.Proposed) != 1 || res.Proposed[0] != "triage/duty-nightly" {
+	if len(res.Proposed) != 1 || res.Proposed[0] != "triage/duty-nightly" || !strings.Contains(body, `"agent":"triage"`) {
 		t.Fatalf("the pass of alice = %s", body)
 	}
 	rec, err := routines.Of(fr.a).Get(context.Background(), "triage", "duty-nightly")
@@ -326,9 +377,11 @@ func TestProposeRoute(t *testing.T) {
 
 	off := false
 	fr = newFront(t, func(c *KnowhowConfig) { c.Propose.Enabled = &off })
-	resp, body = send(t, http.MethodPost, fr.url+"/v1/knowhow/propose?agent=triage", "alice", "")
-	mustStatus(t, resp, body, http.StatusConflict)
-	if !strings.Contains(body, "Proposals of routines are off") {
-		t.Fatalf("the answer with proposals off = %s", body)
+	for _, path := range []string{"/v1/knowhow/propose", "/v1/knowhow/propose/triage"} {
+		resp, body = send(t, http.MethodPost, fr.url+path, "alice", "")
+		mustStatus(t, resp, body, http.StatusConflict)
+		if !strings.Contains(body, "The proposals of routines are off") {
+			t.Fatalf("the answer of %s with proposals off = %s", path, body)
+		}
 	}
 }

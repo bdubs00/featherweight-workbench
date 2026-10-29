@@ -20,8 +20,11 @@ import (
 const EnvHeldBack = "FW_WORKBENCH_KNOWHOW_HELD_BACK"
 
 // DefaultHeldBack is the share of the runs of each duty that get none of
-// what the agent learned, for the comparison of Know-how.
-const DefaultHeldBack = 0.05
+// what the agent learned, for the comparison of Know-how. It is 0: the
+// comparison needs about 400 firings before it says anything, and a
+// held-back run does its work without what the agent learned. So no run
+// is held back until a person sets a share.
+const DefaultHeldBack = 0.0
 
 // KnowhowConfig is the block workbench.knowhow. HeldBack is the share of
 // the runs of each duty that the engine holds back from Know-how, with

@@ -656,7 +656,7 @@ func (b *board) newCard(d *draft, r Run) {
 		d.Links.Duty = name
 		d.mine = b.ownsDuty("duty:"+name) || b.notifies(b.dutyOf[name])
 	case strings.HasPrefix(d.ID, "job:"):
-		d.Kind, d.Title = KindJob, md[fw.MetaBatch]
+		d.Kind, d.Title = KindJob, cmp.Or(batchTitles[md[fw.MetaBatch]], md[fw.MetaBatch])
 		d.From = b.fromRun(r)
 		d.From.Via = "queue"
 		d.Links.Batch = md[fw.MetaBatch]
@@ -668,6 +668,16 @@ func (b *board) newCard(d *draft, r Run) {
 		d.Kind, d.Title = KindConversation, titleOf(r.Run)
 		d.From = b.fromRun(r)
 	}
+}
+
+// knowhowPrincipal starts the workload principal of the runs that the
+// package knowhow starts, such as knowhow:review.
+const knowhowPrincipal = "knowhow:"
+
+// batchTitles are the titles of the cards of the batches that the front
+// starts itself, by batch, in words for a person.
+var batchTitles = map[string]string{
+	"knowhow:review": "Review of what it learned",
 }
 
 // fromRun says who asked for a run.
@@ -704,6 +714,9 @@ func (b *board) fromSubject(subject, name, via string) From {
 		return From{Kind: "duty", Name: strings.TrimPrefix(subject, "duty:"), Via: via}
 	case strings.HasPrefix(subject, "source:"):
 		return From{Kind: "app", Name: strings.TrimPrefix(subject, "source:"), Via: via}
+	case strings.HasPrefix(subject, knowhowPrincipal):
+		// The after-work review of Know-how is no person.
+		return From{Kind: "app", Name: "Know-how", Via: via}
 	}
 	return From{Kind: "person", Name: cmp.Or(name, subject), Display: b.display(subject, name), Via: via}
 }

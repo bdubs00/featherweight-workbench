@@ -293,6 +293,9 @@ func (s *Service) TakeBack(ctx context.Context, public, by string, person bool) 
 	if e.UndoneBy != "" {
 		return UndoResult{}, fmt.Errorf("%w: this change was taken back already", ErrLater)
 	}
+	if e.What == WhatOutOfDate {
+		return UndoResult{}, fmt.Errorf("%w: an undo cannot make the agent trust the note %s over its source again; edit the note or put it away", ErrOutOfDate, e.Subject.Note)
+	}
 	if e.Undo == nil {
 		return UndoResult{}, fmt.Errorf("%w: this entry cannot be taken back", ErrInvalid)
 	}
@@ -321,15 +324,20 @@ func (s *Service) TakeBack(ctx context.Context, public, by string, person bool) 
 	return UndoResult{Entry: out, Undone: e}, nil
 }
 
-// undoNote puts back the revision of a note before the change of e.
+// undoNote puts back the revision of a note before the change of e. A
+// change that made the note puts it away, and so does a keep of a note
+// that waited for a person: the revision before it waited, so it has no
+// text that the agent kept. A note that went out of date after the change
+// stays as it is, because the undo would make the agent trust it again.
 func (s *Service) undoNote(ctx context.Context, e Entry, by string) (Entry, error) {
 	sc := e.Subject.scope()
 	if err := checkNote(e.Agent, sc, e.Subject.Note); err != nil {
 		return Entry{}, err
 	}
 	key := noteKey(e.Agent, sc, e.Subject.Note)
+	away := e.Undo.Revision == 0
 	var old Note
-	if e.Undo.Revision != 0 {
+	if !away {
 		got, err := s.b.At(ctx, key, e.Undo.Revision)
 		if errors.Is(err, bucket.ErrNotFound) {
 			return Entry{}, fmt.Errorf("%w: the text before this change is no longer kept", ErrLater)
@@ -340,12 +348,18 @@ func (s *Service) undoNote(ctx context.Context, e Entry, by string) (Entry, erro
 		if old, err = decodeNote(got.Value, got.Revision); err != nil {
 			return Entry{}, err
 		}
+		away = old.State == StateWaiting
 	}
 	wrote, before, after, err := s.modify(ctx, key, func(value []byte, exists bool, rev uint64) ([]byte, error) {
+		if exists && rev != e.Undo.After {
+			if cur, err := decodeNote(value, rev); err == nil && cur.OutOfDate != nil && cur.State != StatePutAway {
+				return nil, fmt.Errorf("%w: the note %s went out of date after this change; edit the note or put it away", ErrOutOfDate, e.Subject.Note)
+			}
+		}
 		if !exists || rev != e.Undo.After {
 			return nil, fmt.Errorf("%w: a later change touched the note %s; take back the later change first", ErrLater, e.Subject.Note)
 		}
-		if e.Undo.Revision == 0 {
+		if away {
 			cur, err := decodeNote(value, rev)
 			if err != nil {
 				return nil, err
@@ -632,7 +646,7 @@ func (s *Service) apply(ctx context.Context, w Waiting, by string) (*Entry, erro
 			return nil, fmt.Errorf("%w: the note %s changed since it waits", ErrLater, w.Subject.Note)
 		}
 		var n Note
-		wrote, before, after, err := s.modify(ctx, key, func(value []byte, exists bool, rev uint64) ([]byte, error) {
+		wrote, _, after, err := s.modify(ctx, key, func(value []byte, exists bool, rev uint64) ([]byte, error) {
 			if !exists {
 				return nil, fmt.Errorf("%w: the note %s is gone", ErrLater, w.Subject.Note)
 			}
@@ -649,8 +663,10 @@ func (s *Service) apply(ctx context.Context, w Waiting, by string) (*Entry, erro
 		if err != nil || !wrote {
 			return nil, err
 		}
+		// The revision before the keep is the note that waited, which the
+		// agent never had. So the undo of the keep puts the note away.
 		e, err := s.appendJournal(ctx, Entry{Agent: w.Agent, What: WhatLearned, Subject: w.Subject, Why: keptWhy(w), Runs: w.Runs, By: w.By,
-			Undo: &Undo{Revision: before, After: after}})
+			Undo: &Undo{Revision: 0, After: after}})
 		return &e, err
 	case WhatUpdated:
 		if cur.Hash != w.Pin || cur.State == StatePutAway {

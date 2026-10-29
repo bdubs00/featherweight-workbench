@@ -86,6 +86,9 @@ var (
 	// ErrBusy means that other writers changed an entry each time a write
 	// tried.
 	ErrBusy = errors.New("knowhow: other writers changed the entry")
+	// ErrOutOfDate means that an undo would make the agent trust a note
+	// that went out of date. A person edits the note or puts it away.
+	ErrOutOfDate = errors.New("knowhow: the note went out of date")
 )
 
 // ConflictError is a write whose condition did not hold. Hash is the hash
@@ -115,10 +118,13 @@ type Source struct {
 	Version string `json:"version,omitempty"`
 }
 
-// OutOfDate says since when a note is out of date and which source changed.
+// OutOfDate says since when a note is out of date, which source changed,
+// and the version of that source now: the hash of the page, the version
+// of the item, or empty for a page that was removed.
 type OutOfDate struct {
-	Since  time.Time `json:"since"`
-	Source string    `json:"source"`
+	Since   time.Time `json:"since"`
+	Source  string    `json:"source"`
+	Version string    `json:"version,omitempty"`
 }
 
 // Note is one note as the store keeps it. Uses and LastUsed come from the
@@ -652,6 +658,7 @@ func (s *Service) Write(ctx context.Context, req WriteRequest) (WriteResult, err
 	}
 	hold := req.Hold && !isPerson(req.By) && s.AskFirst(ctx, req.Agent)
 	key := noteKey(req.Agent, req.Scope, req.Name)
+	given := sources
 	var res WriteResult
 	var cur Note
 	var existed bool
@@ -673,6 +680,10 @@ func (s *Service) Write(ctx context.Context, req WriteRequest) (WriteResult, err
 		live := exists && cur.State != StatePutAway
 		if live && cur.ByPerson() && !isPerson(req.By) {
 			return nil, ErrPerson
+		}
+		sources = given
+		if live && cur.OutOfDate != nil && isPerson(req.By) {
+			sources = vouched(sources, *cur.OutOfDate)
 		}
 		hash := Hash(req.Text)
 		if live && cur.Hash == hash && slices.Equal(cur.Sources, sources) {
@@ -739,6 +750,25 @@ func (s *Service) Write(ctx context.Context, req WriteRequest) (WriteResult, err
 	}
 	emitChange(req.Agent)
 	return res, nil
+}
+
+// vouched returns the sources of a note that a person corrected after it
+// went out of date. The person read the source as it is now, so the
+// source that changed takes its new version, and a page that was removed
+// leaves the list. Without this, the note would say checked against the
+// old version of its source.
+func vouched(list []Source, ood OutOfDate) []Source {
+	out := make([]Source, 0, len(list))
+	for _, src := range list {
+		if src.Ref == ood.Source && src.Version != ood.Version {
+			if ood.Version == "" {
+				continue
+			}
+			src.Version = ood.Version
+		}
+		out = append(out, src)
+	}
+	return out
 }
 
 // writeWhy is the sentence of the journal for a write that the review did
@@ -872,8 +902,15 @@ func (s *Service) setState(ctx context.Context, key, what, why string, runs []st
 		return false, err
 	}
 	if what != "" {
+		// A note that went out of date has no undo: an undo would make the
+		// agent trust the note over its source again. A person edits the
+		// note or puts it away.
+		undo := &Undo{Revision: before, After: after}
+		if what == WhatOutOfDate {
+			undo = nil
+		}
 		if _, err := s.appendJournal(ctx, Entry{Agent: n.Agent, What: what, Subject: noteSubject(n.Scope, n.Name), Why: why, Runs: runs,
-			By: ByKnowhow, Undo: &Undo{Revision: before, After: after}}); err != nil {
+			By: ByKnowhow, Undo: undo}); err != nil {
 			s.log.Warn("knowhow: the journal did not take a change", "agent", n.Agent, "error", err)
 		}
 	}

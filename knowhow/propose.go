@@ -2,18 +2,18 @@ package knowhow
 
 // This file is the pass that proposes routines (docs/KNOWHOW.md section
 // 6.5). It runs once a day, and an owner starts it at once with the route
-// POST /v1/knowhow/propose. For each Duty of each agent, it takes the
-// completed runs of the archive of the last propose.days days. It needs
-// propose.minRuns runs, propose.minVerified of them verified, and it
-// leaves out every run that a receipt sent back, that its grader failed,
-// that a person gave a thumbs down, or that a routine did. It calls
-// routine.Propose and then routine.LeaveOneOut. A proposal with a free
-// hole or a problem, or one that did not hold on a run that it did not
-// see, stays out, and the journal says why once per reason. A good
-// proposal goes to the store of the routines bound to its Duty, as
-// proposed, and moves to rehearsing at once, unless the switch of the
-// agent is on: then the move waits for a person. The journal records each
-// step.
+// POST /v1/knowhow/propose, or POST /v1/knowhow/propose/{agent} for one
+// agent. For each Duty of each agent, it takes the completed runs of the
+// archive of the last propose.days days. It needs propose.minRuns runs,
+// propose.minVerified of them verified, and it leaves out every run that a
+// receipt sent back, that its grader failed, that a person gave a thumbs
+// down, or that a routine did. It calls routine.Propose and then
+// routine.LeaveOneOut. A proposal with a free hole or a problem, or one
+// that did not hold on a run that it did not see, stays out, and the
+// journal says why once per reason. A good proposal goes to the store of
+// the routines bound to its Duty, as proposed, and moves to rehearsing at
+// once, unless the switch of the agent is on: then the move waits for a
+// person. The journal records each step.
 
 import (
 	"context"
@@ -80,12 +80,22 @@ func RoutineName(duty string) string {
 }
 
 // Propose runs the pass over the archive.
-func (s *Service) Propose(ctx context.Context) (ProposeResult, error) { return s.ProposeFor(ctx, nil) }
+func (s *Service) Propose(ctx context.Context) (ProposeResult, error) { return s.propose(ctx, nil) }
 
-// ProposeFor runs the pass over the runs of the agents that keep takes,
-// or of every agent for a nil keep. The route POST /v1/knowhow/propose
-// runs it at once for the agents of an owner.
-func (s *Service) ProposeFor(ctx context.Context, keep func(agent string) bool) (ProposeResult, error) {
+// ProposeFor runs the pass over the runs of one agent, for a person who
+// does not want to wait for the daily pass. The route
+// POST /v1/knowhow/propose/{agent} runs it.
+func (s *Service) ProposeFor(ctx context.Context, agent string) (ProposeResult, error) {
+	if err := CheckAgent(agent); err != nil {
+		return ProposeResult{Proposed: []string{}, StaysOut: map[string]string{}}, err
+	}
+	return s.propose(ctx, func(a string) bool { return a == agent })
+}
+
+// propose runs the pass over the runs of the agents that keep takes, or of
+// every agent for a nil keep. The route POST /v1/knowhow/propose runs it
+// at once for the agents of an owner.
+func (s *Service) propose(ctx context.Context, keep func(agent string) bool) (ProposeResult, error) {
 	out := ProposeResult{Proposed: []string{}, StaysOut: map[string]string{}}
 	st := s.routineStore()
 	if st == nil {

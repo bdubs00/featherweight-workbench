@@ -95,7 +95,9 @@ var parityRoutes = map[string]parity{
 	"POST /v1/knowhow/journal/{id}/undo":                 {why: "no tool yet: a person takes a change back on the page, What it learned; an agent never takes back what it learned"},
 	"PUT /v1/knowhow/settings/{agent}":                   {why: "no tool yet: the owner of an agent turns Ask me before it keeps what it learns on or off on the page"},
 	"POST /v1/knowhow/waiting/{id}":                      {why: "a person decides a change that waits for them on the page, as the sign-off of a routine; the switch exists to keep agents out of that decision"},
-	"POST /v1/knowhow/propose":                           {why: "no tool yet: the owner of an agent starts the proposals of routines at once; the daily pass runs them anyway"},
+	"POST /v1/knowhow/propose":                           {why: "no tool yet: an owner starts the proposals of routines of every agent that it owns at once with the route; the daily pass starts them every day"},
+	"POST /v1/knowhow/review/{agent}":                    {why: "no tool yet: an owner starts the after-work review of an agent with Review now on the page, or the lab with the route; the schedule starts it every review.every"},
+	"POST /v1/knowhow/propose/{agent}":                   {why: "no tool yet: an owner or the lab starts the proposals of routines of an agent with the route; the daily pass starts them every day"},
 }
 
 // unreadable names the files whose calls of Handle or HandlePublic take a

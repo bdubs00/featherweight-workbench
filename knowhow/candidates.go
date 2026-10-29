@@ -19,7 +19,14 @@ package knowhow
 //     up or down
 //   - recheck: a note that went out of date
 //
-// A candidate belongs to the scope of the principal of its runs. The text
+// A candidate belongs to the scope of the agent, because the runs of the
+// agent read the notes of that scope: the review keeps its notes where
+// the next run finds them. So the same finding in runs of two principals
+// is one candidate. A recheck keeps the scope of its note. A candidate
+// gets the source run:<id> of each of its runs, and the source
+// page:<path> with the hash of each page of the wiki that the call of a
+// place read, or that a run of an outcome read, so its note goes out of
+// date when the page changes. The text
 // of a candidate is untrusted when it came from a block found, event, or
 // source, from a tool that reads the open world (an MCP tool or a peer,
 // bash, and http), or from a message of another principal. An untrusted
@@ -184,9 +191,12 @@ func (s *Service) add(ctx context.Context, c Candidate, run *CandidateRun, ev Ev
 	wrote, _, _, err := s.modify(ctx, candKey(c.Agent, c.ID), func(value []byte, exists bool, _ uint64) ([]byte, error) {
 		cur := c
 		if exists {
-			if err := json.Unmarshal(value, &cur); err != nil {
-				cur = c
+			// A fresh value, so the decode shares no slice with c.
+			var got Candidate
+			if err := json.Unmarshal(value, &got); err != nil {
 				exists = false
+			} else {
+				cur = got
 			}
 		}
 		if exists && (cur.State == CandKept || cur.State == CandSkipped) {
@@ -209,6 +219,9 @@ func (s *Service) add(ctx context.Context, c Candidate, run *CandidateRun, ev Ev
 		} else if exists {
 			return nil, nil
 		}
+		for _, src := range c.Sources {
+			cur.Sources = appendSource(cur.Sources, src)
+		}
 		if ev.Text != "" && len(cur.Evidence) < maxCandRuns {
 			cur.Evidence = append(cur.Evidence, ev)
 		}
@@ -230,8 +243,23 @@ func (s *Service) add(ctx context.Context, c Candidate, run *CandidateRun, ev Ev
 	return err
 }
 
+// appendSource adds a source to a list. A page that the list names already
+// takes the version of the newer run, so a note never names two versions
+// of one page.
 func appendSource(list []Source, src Source) []Source {
-	if slices.Contains(list, src) || len(list) >= MaxSources {
+	if slices.Contains(list, src) {
+		return list
+	}
+	if strings.HasPrefix(src.Ref, "page:") {
+		for i, old := range list {
+			if old.Ref == src.Ref {
+				out := slices.Clone(list)
+				out[i] = src
+				return out
+			}
+		}
+	}
+	if len(list) >= MaxSources {
 		return list
 	}
 	return append(list, src)
@@ -435,6 +463,56 @@ func untrustedTool(c call) bool {
 	return openWorld[name]
 }
 
+// pageHead matches the first line of a result of pages_read: the path, the
+// version, and the hash of the page that the call read.
+var pageHead = regexp.MustCompile(`^Page (\S.*?), version [0-9]+, hash ([0-9a-f]{64}),`)
+
+// maxPagesRead bounds the pages of one run that an outcome names.
+const maxPagesRead = 8
+
+// pageOf returns the source of a call that read the newest version of a
+// page of the wiki (pages_read of the front), with the hash that its
+// result names as the version. A call of an older version gives none,
+// because a note must name the page as it is.
+func pageOf(c call) (Source, bool) {
+	name := c.tool
+	if i := strings.LastIndexByte(name, '.'); i >= 0 {
+		name = name[i+1:]
+	}
+	if name != "pages_read" || c.isError {
+		return Source{}, false
+	}
+	var in struct {
+		Path    string          `json:"path"`
+		Version json.RawMessage `json:"version"`
+	}
+	if json.Unmarshal(c.input, &in) != nil || in.Path == "" || (len(in.Version) > 0 && string(in.Version) != "null") {
+		return Source{}, false
+	}
+	m := pageHead.FindStringSubmatch(c.result)
+	if m == nil || m[1] != in.Path {
+		return Source{}, false
+	}
+	return Source{Ref: "page:" + in.Path, Version: m[2]}, true
+}
+
+// pagesRead returns the sources of the pages of the wiki that the calls of
+// a run read, at most maxPagesRead, with the version of the newest read.
+func pagesRead(calls []call) []Source {
+	var out []Source
+	for _, c := range calls {
+		src, ok := pageOf(c)
+		if !ok {
+			continue
+		}
+		if !slices.ContainsFunc(out, func(x Source) bool { return x.Ref == src.Ref }) && len(out) >= maxPagesRead {
+			continue
+		}
+		out = appendSource(out, src)
+	}
+	return out
+}
+
 // readVerbs are the words that name a call that reads.
 var readVerbs = []string{"read", "get", "list", "search", "find", "view", "query", "show", "fetch", "lookup"}
 
@@ -503,10 +581,8 @@ func (s *Service) learnFrom(ctx context.Context, e fleet.ArchiveEntry) error {
 	if err != nil {
 		return err
 	}
-	sc := Scope{Kind: ScopePrincipal, Principal: r.Principal}
-	if CheckScope(sc) != nil {
-		return nil
-	}
+	// The candidate belongs to the agent, whose notes every run reads.
+	sc := Scope{Kind: ScopeAgent}
 	at := e.Ended
 	if at.IsZero() {
 		at = r.UpdatedAt
@@ -556,7 +632,7 @@ func (s *Service) learnFrom(ctx context.Context, e fleet.ArchiveEntry) error {
 		}
 		text := fmt.Sprintf("What was recorded: %s.\nThe input of the run was:\n%s\nThe answer of the run was:\n%s", what, cut(r.Input, evidenceCut), cut(r.Output, evidenceCut))
 		cand := Candidate{ID: candID(KindOutcome, r.Agent, sc, duty+"\x00"+polarity), Agent: r.Agent, Kind: KindOutcome, Scope: sc, Origin: origin(false),
-			Summary: fmt.Sprintf("%s that went %s", label, polarity)}
+			Summary: fmt.Sprintf("%s that went %s", label, polarity), Sources: pagesRead(calls)}
 		errs = append(errs, s.add(ctx, cand, &run, Evidence{Run: r.ID, Text: text}))
 	}
 	return errors.Join(errs...)
@@ -599,13 +675,14 @@ type placeSeen struct {
 	Tool      string         `json:"tool"`
 	Input     string         `json:"input"`
 	Result    string         `json:"result"`
+	Page      *Source        `json:"page,omitempty"`
 	Untrusted bool           `json:"untrusted,omitempty"`
 	Runs      []CandidateRun `json:"runs"`
 	Last      time.Time      `json:"last"`
 }
 
 func placesKey(agent string, sc Scope) string {
-	return "places." + agentKey(agent) + "." + principalKey(sc.Principal)
+	return "places." + agentKey(agent) + "." + scopeKey(sc)
 }
 
 // places keeps the read calls of a run in the entry of its scope, and
@@ -628,7 +705,11 @@ func (s *Service) places(ctx context.Context, agent string, sc Scope, run Candid
 			continue
 		}
 		got[sig] = true
-		reads = append(reads, read{sig: sig, seen: placeSeen{Tool: c.tool, Input: cut(in, inputCut), Result: cut(c.result, evidenceCut), Untrusted: untrustedTool(c) || f.Untrusted}})
+		seen := placeSeen{Tool: c.tool, Input: cut(in, inputCut), Result: cut(c.result, evidenceCut), Untrusted: untrustedTool(c) || f.Untrusted}
+		if src, ok := pageOf(c); ok {
+			seen.Page = &src
+		}
+		reads = append(reads, read{sig: sig, seen: seen})
 		if len(reads) >= readsPerRun {
 			break
 		}
@@ -697,6 +778,9 @@ func (s *Service) places(ctx context.Context, agent string, sc Scope, run Candid
 		text := fmt.Sprintf("The call %s with this input:\n%s\ngave the same result in %d runs:\n%s", p.Tool, p.Input, len(p.Runs), p.Result)
 		cand := Candidate{ID: candID(KindPlace, agent, sc, rd.sig), Agent: agent, Kind: KindPlace, Scope: sc, Origin: origin,
 			Summary: fmt.Sprintf("%s gave the same result in several runs", p.Tool)}
+		if p.Page != nil {
+			cand.Sources = []Source{*p.Page}
+		}
 		for i := range p.Runs {
 			ev := Evidence{}
 			if i == 0 {
@@ -708,12 +792,12 @@ func (s *Service) places(ctx context.Context, agent string, sc Scope, run Candid
 	return errors.Join(errs...)
 }
 
-// recheck opens a candidate recheck for a note of a principal that went
-// out of date, with the sources of the note at the new version of the
-// source that changed. The notes of the agent change only by a person,
-// so they get no candidate.
+// recheck opens a candidate recheck for a note that went out of date, with
+// the sources of the note at the new version of the source that changed.
+// The candidate keeps the scope of its note. A note that a person wrote
+// changes only by a person, so it gets no candidate.
 func (s *Service) recheck(ctx context.Context, n Note, ref, version string) error {
-	if n.Scope.Kind != ScopePrincipal || n.ByPerson() {
+	if n.ByPerson() {
 		return nil
 	}
 	full, err := s.get(ctx, noteKey(n.Agent, n.Scope, n.Name))
