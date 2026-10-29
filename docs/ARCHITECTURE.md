@@ -4305,6 +4305,7 @@ An entry holds `id`, `at`, `agent`, `what`, `subject`, and `why`. It also holds 
 - `what` is a word of the contract: `learned`, `updated`, `out-of-date`, `resting`, `put-away`, `proposed`, `rehearsing`, `live`, `stepped-back`, `retired`, or `undone`. This build adds two words. `paused` is a move of a routine to paused. `stays-out` is a proposal of a routine that did not hold, with the reason in `why`.
 - `subject` names a note with its scope, or a routine.
 - Code writes `why` from a fixed set of sentences. The review writes it for `learned` and `updated`.
+- `runs` names the runs that the change came from. A change of a note that one run made, such as a note that the memory tool of a kernel wrote or put away, names that run (`run` of the write, and `run` of the query of a `DELETE`).
 - `corrects` is true for a change that replaced or put away a note that was out of date. The summary counts these entries.
 
 An undo of a note puts back the revision before the change, which `undo.revision` names, as a new revision. An undo of a change that made a note puts the note away. So does an undo of the keep of a note that waited for a person (section 28.5), because the agent never had the note before the keep. The note must still be at the revision that the change wrote (`undo.after`). Otherwise the undo gives 409. An entry `out-of-date` has no `undo`. An undo of an earlier change of a note that is out of date now gives 409 with `outOfDate: true`, and the page offers Edit and Put away in its place (section 28.2).
