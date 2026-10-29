@@ -70,8 +70,8 @@ const (
 	postSchema = `{"type":"object","properties":{` + bridgeArg + `,
 		"text":{"type":"string","minLength":1,"description":"The message, in Markdown."},
 		"to":{"type":"array","items":{"type":"string"},"description":"The handles of the teammates that the message addresses, such as [\"reviewer\"]. Without it, the message goes to every active member."},
-		"ask":{"type":"boolean","description":"Ask the operator, the people of the bridge: the message is a question that waits for their answer. It goes to the operator alone unless to names teammates too. The answer reaches you as a message and starts your next turn, so end your turn after you ask."},
-		"choices":{"type":"array","items":{"type":"string","maxLength":60},"minItems":2,"maxItems":4,"description":"With ask, the answers that the operator picks from: two to four short strings, such as [\"Yes\", \"No\"]. Leave it out when the operator answers in words."},
+		"ask":{"type":"boolean","description":"Ask the person who asked for the work: the message is a question that waits for the answer. It goes to the people of the channel alone unless to names teammates too. The answer reaches you as a message and starts your next turn, so end your turn after you ask. Write the question to the person as you; never write @operator."},
+		"choices":{"type":"array","items":{"type":"string","maxLength":60},"minItems":2,"maxItems":4,"description":"With ask, the answers that the person picks from: two to four short strings, such as [\"Yes\", \"No\"]. Leave it out when the person answers in words."},
 		"replyTo":{"type":"integer","minimum":1,"description":"For a person: the seq of the entry that the message answers, such as a question of a seat."},
 		"pinned":{"type":"boolean","description":"For a person: pin the message, so it survives every compaction of the runs of the seats."},
 		"files":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","description":"The name of the file, such as notes.md."},"data":{"type":"string","contentEncoding":"base64","description":"The bytes of the file in base64."}},"required":["name","data"]},"description":"For a person: files that the message carries to the members, as the page sends them."}
@@ -516,16 +516,27 @@ func (s *Store) wholeEntry(ctx context.Context, rec *record, seq uint64) (m Mess
 }
 
 // senderName names the sender of an entry for an agent: the handle of an
-// agent, operator for a person, because the agents address the people of
-// a bridge as operator, and system for a system line.
+// agent, the display name of a person with the word person, such as
+// "Erin (person)", so an agent never takes the handle operator for the
+// name of the person and writes "@operator" to people (live walk), and
+// system for a system line.
 func senderName(f From) string {
 	switch f.Kind {
 	case KindAgent:
 		return f.Handle
 	case KindPerson:
-		return HandleOperator
+		return personWords(f.Display)
 	}
 	return "system"
+}
+
+// personWords names a person for an agent: the display name and the word
+// person, or "a person" without a name.
+func personWords(display string) string {
+	if display = strings.TrimSpace(display); display != "" && display != HandleOperator {
+		return display + " (person)"
+	}
+	return "a person"
 }
 
 // toText names the handles that an entry addresses.
@@ -555,7 +566,7 @@ func (t *toolSet) post(ctx context.Context, _ *sdk.CallToolRequest, in postArgs)
 		return toolError(err), nil, nil
 	}
 	if m.Ask != nil {
-		return mcp.Result(fmt.Sprintf("Asked the operator in message %d of the bridge %s. The answer reaches you as a message and starts your next turn: end this turn now with a one-line status.", m.Seq, c.rec.ID), m), nil, nil
+		return mcp.Result(fmt.Sprintf("Asked the person in message %d of the channel (bridge %s). The answer reaches you as a message and starts your next turn: end this turn now with a one-line status.", m.Seq, c.rec.ID), m), nil, nil
 	}
 	return mcp.Result(fmt.Sprintf("Posted message %d to the bridge %s as %s%s.", m.Seq, c.rec.ID, c.handle, toText(m.To)), m), nil, nil
 }

@@ -110,7 +110,7 @@ func TestSeatAsksTheOperator(t *testing.T) {
 	}
 	eventually(t, "the seat gets the answer", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-mig/messages")) == 1 })
 	got := fm.find(http.MethodPost, "/v1/runs/r-mig/messages")[0]
-	if content, _ := got.Body["content"].(string); !strings.Contains(content, fmt.Sprintf("from operator: Answer to your question in entry %d: Yes", q.Seq)) {
+	if content, _ := got.Body["content"].(string); !strings.Contains(content, fmt.Sprintf("from Alice (person): Answer to your question in entry %d: Yes", q.Seq)) {
 		t.Fatalf("delivery = %q", content)
 	}
 }

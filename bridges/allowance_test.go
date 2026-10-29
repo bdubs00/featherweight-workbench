@@ -363,7 +363,8 @@ func TestInstructionsKeepTheSandboxAndTheQuiet(t *testing.T) {
 	in := s.instructionsOf(context.Background(), rec, *rec.member("reviewer"))
 	for _, want := range []string{
 		"You work in your own sandbox on your own worker. No teammate and no person can read its files",
-		"in a page under bridges/" + it.ID + "/ with pages_write: each file as a fenced code block under a heading that names its path. Then name that page in your message.",
+		"in a page under bridges/" + it.ID + "/ with pages_write: each file as a fenced code block under a heading that names its path. Then name that page in your message by the part of its path after the id, such as roles.md",
+		"Never write the id of the channel.",
 		"A message that asks nothing of you gets no answer",
 		"Never answer a thanks, an acknowledgment, or a PASS that needs nothing from you.",
 		"Never address yourself: do not write @reviewer.",

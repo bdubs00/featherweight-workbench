@@ -238,9 +238,9 @@ func (s *Store) place(ctx context.Context, rec *record, seats []Member, inputs m
 		if sm := rec.Seats[m.Handle]; sm != nil && sm.Budget != nil && (sm.Budget.MaxTurns > 0 || sm.Budget.Deadline != "") {
 			budget = fmt.Sprintf(" Give it max_turns %d and deadline %q.", sm.Budget.MaxTurns, sm.Budget.Deadline)
 		}
-		text := fmt.Sprintf("Seat %s with spawn_task, with wait false: the agent %s, the input \"[seat %s] %s\", and the instructions between <<< and >>> word for word.%s Then end your turn with the run id of the child.\n<<<\n%s\n>>>",
+		text := fmt.Sprintf("Start the member %s with spawn_task, with wait false: the agent %s, the input \"[seat %s] %s\", and the instructions between <<< and >>> word for word.%s Then end your turn with the run id of the child.\n<<<\n%s\n>>>",
 			m.Handle, m.Agent, m.Handle, oneLine(inputOf(m, inputs), maxTaskBytes), budget, s.instructionsOf(ctx, rec, m))
-		content := header(rec, []string{HandleManager}, HandleOperator) + text
+		content := header(rec, []string{HandleManager}, personWords(s.knownName(rec.Operator, rec.OperatorName))) + text
 		handle := m.Handle
 		s.submit(&job{
 			name: "the seat " + handle + " of " + rec.ID + " to the manager",
@@ -554,7 +554,7 @@ func (s *Store) continueSeat(ctx context.Context, rec *record, m Member, r *fw.R
 	}
 	s.land(ctx, rec.ID, line...)
 	seq := line[0].Seq
-	snd := sender{subject: orOperator(subjectOfPrincipal(by))}
+	snd := sender{subject: orOperator(subjectOfPrincipal(by)), display: s.personDisplay(by)}
 	s.submit(s.deliveryJob(delivery{bridge: rec.ID, seq: seq, handle: m.Handle, run: r,
 		content: header(fresh, []string{m.Handle}, snd.name()) + continueText, from: snd.party(m.Handle)}))
 }
@@ -596,7 +596,7 @@ func (s *Store) giveTask(ctx context.Context, rec *record, m Member, by *fw.Prin
 	if !changed {
 		return
 	}
-	snd := sender{subject: orOperator(subjectOfPrincipal(by))}
+	snd := sender{subject: orOperator(subjectOfPrincipal(by)), display: s.personDisplay(by)}
 	s.submit(s.deliveryJob(delivery{bridge: rec.ID, seq: rec.LastSeq, handle: m.Handle, run: r,
 		content: header(rec, []string{m.Handle}, snd.name()) + "Your new task: " + m.Task, from: snd.party(m.Handle)}))
 }
@@ -741,11 +741,11 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 // posts the link when the page appears.
 func (s *Store) askReport(ctx context.Context, rec *record) {
 	op := orOperator(rec.Operator)
-	ask := fmt.Sprintf("The operator closed the bridge. Write the report of the bridge in the wiki page %s with pages_write: what each member did, what is done, what is open, and the runs that hold the work. Read the channel with bridge_read (bridge %s) first. Then end your turn.", reportPath(rec.ID), rec.ID)
+	ask := fmt.Sprintf("The person closed the channel. Write the report of the channel in the wiki page %s with pages_write: what each member did, what is done, and what is open, in plain words for the person, with no tool names and no ids of runs. Read the channel with bridge_read (bridge %s) first. Then end your turn.", reportPath(rec.ID), rec.ID)
 	// A manager run that stopped at a limit fails a follow-up at once, so
 	// a new manager run writes the report.
 	if mgr := s.runOf(s.asFront(ctx), managerRun(rec)); mgr != nil && !limited(mgr) {
-		content := header(rec, []string{HandleManager}, HandleOperator) + ask
+		content := header(rec, []string{HandleManager}, personWords(s.knownName(rec.Operator, rec.OperatorName))) + ask
 		s.submit(&job{
 			name: "the report of " + rec.ID,
 			do: func(ctx context.Context) error {
@@ -761,7 +761,7 @@ func (s *Store) askReport(ctx context.Context, rec *record) {
 		_ = s.postLines(ctx, rec.ID, system(EventChanged, "Nobody writes a report: the configuration names no manager"))
 		return
 	}
-	input := header(rec, []string{HandleManager}, HandleOperator) + ask
+	input := header(rec, []string{HandleManager}, personWords(s.knownName(rec.Operator, rec.OperatorName))) + ask
 	mgr, err := s.startManager(ctx, rec, input, fmt.Sprintf("bridge:%s:report:%d", rec.ID, rec.LastSeq))
 	if err != nil {
 		_ = s.postLines(ctx, rec.ID, system(EventFailed, "The server failed to ask the manager for the report: "+oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300)))

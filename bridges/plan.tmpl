@@ -1,16 +1,16 @@
-Seat the members of the bridge "{{.Title}}" (id {{.ID}}) for {{.Operator}}.
+Start the members of the channel "{{.Title}}" (bridge {{.ID}}) for {{.Operator}}.
 
-The goal of the bridge: {{.Goal}}
+The goal of the channel: {{.Goal}}
 
-Call spawn_task once for each seat below, with wait false, one call per seat. Give each call:
-- agent: the profile of the seat.
-- input: the first line "[seat <handle>]" and then the input of the seat, as the seat below shows it. The front finds the seat of a child by that line.
-- instructions: the instructions of the seat between <<< and >>>, word for word, without the two marks.
-- max_turns and deadline: the budget of the seat, when the seat has one.
+Call spawn_task once for each member below, with wait false, one call per member. Give each call:
+- agent: the profile of the member.
+- input: the first line "[seat <handle>]" and then the input of the member, as the member below shows it. The front finds the member of a child by that line.
+- instructions: the instructions of the member between <<< and >>>, word for word, without the two marks.
+- max_turns and deadline: the budget of the member, when the member has one.
 
-Do not do the work of a seat yourself. When every call returned, end your turn with the list of the children that you started: the handle, the run id, and the task of each.
+Do not do the work of a member yourself. When every call returned, end your turn with the list of the agents that you started: the handle and the task of each, in plain words for the person, with no ids of runs.
 {{range .Seats}}
-Seat {{.Handle}}
+Member {{.Handle}}
 - agent: {{.Agent}}
 - input:
 [seat {{.Handle}}] {{.Input}}

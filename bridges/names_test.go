@@ -81,17 +81,17 @@ func TestNoTextNamesAPersonByAnID(t *testing.T) {
 		t.Fatalf("list = %s", textOf(res))
 	}
 
-	// A message of erin reaches a seat from operator, and bridge_read
+	// A message of erin reaches a seat from Erin (person), and bridge_read
 	// names her operator.
 	v.put(workerRun("r-wri", second.ID, "writer", "helper", fw.StateCompleted))
 	s.poll(context.Background())
 	do(t, http.MethodPost, url+"/v1/bridges/"+second.ID+"/messages", "erin", `{"text":"Go on.","to":["writer"]}`)
 	eventually(t, "the writer gets the message", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-wri/messages")) == 1 })
-	if c, _ := fm.find(http.MethodPost, "/v1/runs/r-wri/messages")[0].Body["content"].(string); !strings.Contains(c, "] @writer from operator: Go on.") {
+	if c, _ := fm.find(http.MethodPost, "/v1/runs/r-wri/messages")[0].Body["content"].(string); !strings.Contains(c, "] @writer from Erin (person): Go on.") {
 		t.Fatalf("content = %q", c)
 	}
 	res = callTool(t, cs, ToolRead, map[string]any{}, metaOf("r-wri", "helper", erinSubject))
-	if strings.Contains(textOf(res), erinSubject) || !strings.Contains(textOf(res), "operator to @writer: Go on.") {
+	if strings.Contains(textOf(res), erinSubject) || !strings.Contains(textOf(res), "Erin (person) to @writer: Go on.") {
 		t.Fatalf("read = %s", textOf(res))
 	}
 

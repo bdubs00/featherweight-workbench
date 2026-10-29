@@ -211,3 +211,12 @@ func (s *Store) peopleOf(ctx context.Context, rec *record) []Person {
 	}
 	return out
 }
+
+// personDisplay is the display name of the person p for a line toward
+// the agents, or "" for no person.
+func (s *Store) personDisplay(p *fw.Principal) string {
+	if p == nil || p.Subject == "" {
+		return ""
+	}
+	return s.knownName(p.Subject, p.Name)
+}

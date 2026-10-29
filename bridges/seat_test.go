@@ -310,7 +310,7 @@ func (x *spawned) seatsOf(run string) map[string]string {
 	for _, f := range x.fm.find(http.MethodPost, "/v1/runs/"+run+"/messages") {
 		content, _ := f.Body["content"].(string)
 		for _, h := range []string{"migrator-1", "reviewer"} {
-			if strings.Contains(content, "Seat "+h+" with spawn_task") {
+			if strings.Contains(content, "Start the member "+h+" with spawn_task") {
 				out[h] = content
 			}
 		}
@@ -356,7 +356,7 @@ func TestMessageSeatsANotStartedSeat(t *testing.T) {
 	eventually(t, "a new manager run", func() bool { return len(x.fm.find(http.MethodPost, "/v1/runs")) == 2 })
 	st := x.fm.find(http.MethodPost, "/v1/runs")[1]
 	input, _ := st.Body["input"].(string)
-	if st.Idem != "bridge:"+x.id+":manager:1" || st.Body["agent"] != "manager" || st.Body["principal"] != "alice" || !strings.Contains(input, "\nSeat reviewer\n") || !strings.Contains(input, "[seat reviewer] Review cron") || strings.Contains(input, "Seat migrator-1") || strings.Contains(input, "[seat migrator-1]") {
+	if st.Idem != "bridge:"+x.id+":manager:1" || st.Body["agent"] != "manager" || st.Body["principal"] != "alice" || !strings.Contains(input, "\nMember reviewer\n") || !strings.Contains(input, "[seat reviewer] Review cron") || strings.Contains(input, "Member migrator-1") || strings.Contains(input, "[seat migrator-1]") {
 		t.Fatalf("the new manager run = %+v", st)
 	}
 	eventually(t, "the record names the new manager run", func() bool {
@@ -507,7 +507,7 @@ func TestInstructionsTeachTheChannel(t *testing.T) {
 	in := s.instructionsOf(context.Background(), rec, *rec.member("migrator-1"))
 	for _, want := range []string{
 		"You are migrator-1, a member of the channel \"Migrate logrotate\"",
-		"This work is for Alice, who reads the channel. The tools call the channel a bridge, and in the channel every person has the handle operator",
+		"This work is for Alice, who reads the channel. The tools call the channel a bridge. A message of a person reaches you from the name of the person, such as \"Alice (person)\"",
 		"Address Alice as you, or by the name Alice. Never write operator or @operator to a person.",
 		"Never write bridge or bridge channel to a person.",
 		"Never name a tool, an id of a run, or a setting in a message, such as bridge_post or pages_read.",

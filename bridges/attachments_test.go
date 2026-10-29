@@ -79,7 +79,7 @@ func TestAttachmentFanout(t *testing.T) {
 	if len(files) != 1 || files[0].Name != "sample.bin" || !bytes.Equal(files[0].Data, data) || got.Auth != "Bearer "+fleetToken {
 		t.Fatalf("the delivery changed its files or its credential: %d files, auth %q", len(files), got.Auth)
 	}
-	if content, _ := got.Body["content"].(string); !strings.HasPrefix(content, `[channel "Migrate logrotate" `+id+`] @reviewer from operator: `) {
+	if content, _ := got.Body["content"].(string); !strings.HasPrefix(content, `[channel "Migrate logrotate" `+id+`] @reviewer from Alice (person): `) {
 		t.Fatalf("content = %q", content)
 	}
 	if from, _ := got.Body["from"].(map[string]any); from["kind"] != fw.FromPerson || from["name"] != "alice" || from["member"] != "reviewer" {

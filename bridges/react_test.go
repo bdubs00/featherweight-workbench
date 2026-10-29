@@ -402,7 +402,7 @@ func TestPatchMember(t *testing.T) {
 		t.Fatalf("lines = %+v", msgs)
 	}
 	eventually(t, "the new task reaches the run", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-mig/messages")) == 1 })
-	if c, _ := fm.find(http.MethodPost, "/v1/runs/r-mig/messages")[0].Body["content"].(string); !strings.Contains(c, "] @migrator-1 from operator: Your new task: Migrate the cron module too") {
+	if c, _ := fm.find(http.MethodPost, "/v1/runs/r-mig/messages")[0].Body["content"].(string); !strings.Contains(c, "] @migrator-1 from Alice (person): Your new task: Migrate the cron module too") {
 		t.Fatalf("content = %q", c)
 	}
 	// The canceled reviewer gets a new run, with the next idempotency key.
