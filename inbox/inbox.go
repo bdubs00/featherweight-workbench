@@ -352,11 +352,22 @@ func holder(c work.Card, items []Item, used []bool) int {
 	return -1
 }
 
-// cardItem is the item of a card that no record of the inbox holds.
+// cardItem is the item of a card that no record of the inbox holds, in
+// the words of the items of the records: a result that found something, a
+// new answer after a note, a result to check, or a team whose agents
+// finished.
 func cardItem(c work.Card) Item {
 	it := Item{Kind: KindResult, Run: c.Links.Run, Duty: c.Links.Duty, Bridge: c.Links.Bridge, Approval: c.Links.Approval, Since: c.Since, Text: c.Title + ": " + lowerFirst(c.Reason)}
-	if c.Kind == work.KindBridge {
+	switch {
+	case c.Kind == work.KindBridge:
 		it.Run = ""
+	case c.Stage != work.StageReview:
+	case strings.HasPrefix(c.Reason, "Found: "):
+		it.Text = c.Title + ": it found something."
+	case strings.HasPrefix(c.Reason, "A new answer to check"):
+		it.Text = c.Title + ": a new answer to check, after your note."
+	default:
+		it.Text = c.Title + ": a result to check."
 	}
 	if c.Stage == work.StageNeedsYou {
 		it.Kind = KindApproval

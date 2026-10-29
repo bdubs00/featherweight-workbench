@@ -568,7 +568,7 @@ func TestTeamAndNoteItems(t *testing.T) {
 		strings.Join(got[1].Actions, " ") != "looks-right needs-work" {
 		t.Fatalf("the team = %+v", got[1])
 	}
-	if got[2].Kind != KindResult || got[2].Run != "R1" || got[2].Duty != "found" || got[2].Card != "duty:found@x" || got[2].Text != "Found check: found: zebra" || got[2].Summary != "zebra" {
+	if got[2].Kind != KindResult || got[2].Run != "R1" || got[2].Duty != "found" || got[2].Card != "duty:found@x" || got[2].Text != "Found check: it found something." || got[2].Summary != "zebra" {
 		t.Fatalf("the result of a duty = %+v", got[2])
 	}
 	if got[3].Kind != KindFailure {
