@@ -40,6 +40,7 @@ func TestFold(t *testing.T) {
 	branch := run("B1", "triage", fw.StateCompleted, 3*h, 0.40, map[string]string{"fw.forkOf": "A1"})
 	waiting := run("W1", "triage", fw.StateInputRequired, 5*h, 0.01, nil)
 	free := run("F1", "triage", fw.StateCompleted, 4*h, 0, nil) // tokens, no price
+	free.Usage.UnpricedTokens = 110
 	mgr := run("M1", "manager", fw.StateCompleted, 1*h, 0.50, nil)
 	old := run("O1", "triage", fw.StateCompleted, 9*h, 0.02, nil) // no facts
 	check := run("K1", "triage", fw.StateCompleted, 1*h, 0.01, map[string]string{fw.MetaKind: "check"})
@@ -105,12 +106,12 @@ func TestFold(t *testing.T) {
 		t.Fatalf("the periods = %+v", a.Periods)
 	}
 	for _, want := range []string{
-		"In the last 7 days, the agents finished 5 tasks, and 1 failed or stopped. 1 task was lost when a pool replaced the worker.",
+		"In the last 7 days, the agents finished 5 tasks, and 1 failed or stopped. 1 task stopped because the agent that held it was replaced.",
 		"People accepted 1 and sent back 1. 3 are unchecked.",
 		"3 of the 5 finished without an action of a person.",
 		"Work waited 2 h 30 min for people.",
 		"The work cost at least $1.69, $0.34 for each finished task.",
-		"1 run has tokens without a price.",
+		"The cost of 1 run is unknown, because its model has no price.",
 		"would take a person 1 h 30 min.",
 		"1 piece has no record of the actions of people.",
 	} {
@@ -310,5 +311,26 @@ func TestFoldTeams(t *testing.T) {
 	}
 	if !strings.HasPrefix(a.Sentence, "In the last 7 days, the agents finished 3 tasks.") {
 		t.Fatalf("the sentence = %q", a.Sentence)
+	}
+}
+
+// A run with tokens and a cost of zero ran on a model whose price is zero,
+// such as the local model of the lab: its cost is known, so the spend is
+// no lower bound. Only tokens without a price leave the cost unknown (live
+// walk M6).
+func TestFoldZeroPrice(t *testing.T) {
+	local := run("Z1", "triage", fw.StateCompleted, time.Hour, 0, nil)
+	a := Fold([]fleet.WorkRun{{Run: local, Work: facts(time.Hour, time.Minute, 0, "")}}, Options{Now: now, Days: 7})
+	if a.Spend.Unpriced != 0 || a.Spend.AtLeast || strings.Contains(a.Sentence, "unknown") {
+		t.Fatalf("a run of a model whose price is zero = %+v: %s", a.Spend, a.Sentence)
+	}
+	many := []fleet.WorkRun{}
+	for _, id := range []string{"U1", "U2"} {
+		r := run(id, "triage", fw.StateCompleted, time.Hour, 0, nil)
+		r.Usage.UnpricedTokens = 110
+		many = append(many, fleet.WorkRun{Run: r, Work: facts(time.Hour, time.Minute, 0, "")})
+	}
+	if a := Fold(many, Options{Now: now, Days: 7}); a.Spend.Unpriced != 2 || !strings.Contains(a.Sentence, "The cost of 2 runs is unknown, because their model has no price.") {
+		t.Fatalf("two runs without a price = %+v: %s", a.Spend, a.Sentence)
 	}
 }
