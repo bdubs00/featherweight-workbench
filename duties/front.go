@@ -223,14 +223,14 @@ func (s *Service) FireChain(ctx context.Context, name string, event json.RawMess
 	start := Trigger{Kind: StartEvent, Slot: now.UTC(), Event: string(event), Chain: chain}
 	why := ""
 	if chain > MaxChain {
-		why = fmt.Sprintf("An event of a run that a chain of %d duties started fired it, and a chain of duties that events start stops at a depth of %d, so it did not run.", chain-1, MaxChain)
+		why = fmt.Sprintf("An event of a run that a chain of %d jobs started set it off, and a chain of jobs that events start stops at a depth of %d, so it did not run.", chain-1, MaxChain)
 	} else {
 		days, _, err := s.recent(ctx, name, st.Duty.zone(), now)
 		if err != nil {
 			return Outcome{}, err
 		}
 		if n := eventRuns(days, now); n >= MaxEventStartsPerHour {
-			why = fmt.Sprintf("Events started the duty %d times in the last hour, the most, so it did not run.", n)
+			why = fmt.Sprintf("Events started the job %d times in the last hour, the most, so it did not run.", n)
 		}
 	}
 	if why == "" {

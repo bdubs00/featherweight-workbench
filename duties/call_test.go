@@ -33,7 +33,7 @@ func TestCallBearer(t *testing.T) {
 	// A person reads plain words, and the address and the credential are
 	// for a developer.
 	if v.Readback != "When another app sends an event with its key. Repeats of the same event within ten minutes are skipped." || len(v.Next) != 0 ||
-		v.ForDevelopers != "Another app calls POST /v1/duties/hook/call with the bearer token of the duty. A second call with the same body within ten minutes is a duplicate." {
+		v.ForDevelopers != "Another app calls POST /v1/duties/hook/call with the bearer token of the job. A second call with the same body within ten minutes is a duplicate." {
 		t.Fatalf("the duty = %q %q %v", v.Readback, v.ForDevelopers, v.Next)
 	}
 	url := f.url + "/v1/duties/hook/call"
@@ -74,7 +74,7 @@ func TestCallBearer(t *testing.T) {
 	if _, err := f.s.SetPaused(as("alice"), "hook", true); err != nil {
 		t.Fatal(err)
 	}
-	if resp, b := send(t, http.MethodPost, url, "tok", `{"id": 3}`); resp.StatusCode != http.StatusOK || !strings.Contains(b, "The duty is paused.") {
+	if resp, b := send(t, http.MethodPost, url, "tok", `{"id": 3}`); resp.StatusCode != http.StatusOK || !strings.Contains(b, "The job is paused.") {
 		t.Fatalf("a call of a paused duty = %d %s", resp.StatusCode, b)
 	}
 }

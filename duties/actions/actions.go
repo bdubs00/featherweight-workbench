@@ -58,7 +58,7 @@ func principalOf(req fw.RunRequest) *fw.Principal {
 }
 
 // SenderName names a duty as the sender of a post in a bridge.
-func SenderName(duty string) string { return "the duty " + duty }
+func SenderName(duty string) string { return "the job " + duty }
 
 // words returns the words of an error without the names of the packages
 // and the kinds of error in front.
@@ -118,7 +118,7 @@ func startPost(ctx context.Context, a *fw.Agent, d *duties.Duty, req fw.RunReque
 	if err != nil {
 		return duties.Started{}, fmt.Errorf("the post in the bridge %s: %s", p.Bridge, words(err))
 	}
-	return duties.Started{Note: fmt.Sprintf("Posted message %d in the bridge %s.", m.Seq, p.Bridge)}, nil
+	return duties.Started{Note: fmt.Sprintf("Posted message %d in the channel %s.", m.Seq, p.Bridge)}, nil
 }
 
 // checkOpen lists the problems of do.open for the person who writes the
@@ -224,7 +224,7 @@ func startOpen(ctx context.Context, a *fw.Agent, d *duties.Duty, req fw.RunReque
 	if err != nil {
 		return duties.Started{}, fmt.Errorf("the bridge from the playbook %s did not open: %s", name, words(err))
 	}
-	return duties.Started{Note: fmt.Sprintf("Opened the bridge %s %q from the playbook %s.", it.ID, it.Title, name)}, nil
+	return duties.Started{Note: fmt.Sprintf("Opened the channel %s %q from the playbook %s.", it.ID, it.Title, name)}, nil
 }
 
 // checkManager lists the problems of do.manager for the person who writes

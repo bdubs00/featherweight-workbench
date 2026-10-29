@@ -298,7 +298,7 @@ func (s *Service) open(ctx context.Context, svc *duties.Service, r *fw.Run) {
 	d, err := svc.Lookup(ctx, w.Duty)
 	switch {
 	case errors.Is(err, duties.ErrNotFound):
-		w.State, w.Outcome, w.Route = stateDone, "The duty is gone, so a person decides as for any run.", RoutePerson
+		w.State, w.Outcome, w.Route = stateDone, "The job is gone, so a person decides as for any run.", RoutePerson
 	case err != nil:
 		s.log.Warn("away: the duty of a run that waits did not read", "duty", w.Duty, "run", r.ID, "error", err)
 		return
@@ -335,7 +335,7 @@ func (s *Service) route(ctx context.Context, r *fw.Run, wa *duties.WhileAway) (s
 	case len(p.Schema) > 0:
 		return RoutePerson, "A question goes to a person, never to the manager."
 	case wa.Decider != duties.DeciderManager:
-		return RoutePerson, "The duty says that nobody decides while you are away."
+		return RoutePerson, "The job says that nobody decides while you are away."
 	case s.destructive(ctx, r):
 		return RoutePerson, fmt.Sprintf("The policy marks the tool %s destructive, so the manager does not decide it.", p.Tool)
 	case s.manager() == "":
@@ -389,7 +389,7 @@ func (s *Service) step(ctx context.Context, svc *duties.Service, key string, r *
 		switch {
 		case errors.Is(err, fw.ErrRunNotFound) && now.Sub(w.Updated) > managerLost:
 			act = func(ctx context.Context, w *wait) {
-				s.toPerson(ctx, svc, w, fmt.Sprintf("No worker of the manager took the question within %s.", managerLost))
+				s.toPerson(ctx, svc, w, fmt.Sprintf("The manager did not take the question within %s.", managerLost))
 			}
 		case err != nil || !finished(m):
 			return
@@ -487,11 +487,11 @@ func (s *Service) timeout(ctx context.Context, svc *duties.Service, w *wait, r *
 	if w.Question {
 		did = "declined it"
 	}
-	reason := fmt.Sprintf("Nobody decided within %s, so the server denied it, as whileAway of the duty %s says.", w.Timeout, w.Duty)
+	reason := fmt.Sprintf("Nobody decided within %s, so the server denied it, as the job %s says for the time its owner is away.", w.Timeout, w.Duty)
 	var err error
 	if w.Then == "cancel" {
 		verdict, did = "cancel", "canceled the run"
-		reason = fmt.Sprintf("Nobody decided within %s, so the server canceled the run, as whileAway of the duty %s says.", w.Timeout, w.Duty)
+		reason = fmt.Sprintf("Nobody decided within %s, so the server canceled the run, as the job %s says for the time its owner is away.", w.Timeout, w.Duty)
 		err = s.cancelRun(ctx, r)
 	} else {
 		err = s.decide(ctx, r, w.Approval, "deny", reason)

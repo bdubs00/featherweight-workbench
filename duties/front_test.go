@@ -46,7 +46,7 @@ func TestCapsAcrossDuties(t *testing.T) {
 	f.clock.Set(nine.Add(time.Hour + time.Second))
 	f.pass(t)
 	h := f.history(t, "second")
-	if len(h) != 1 || h[0].State != StateSkipped || !strings.Contains(h[0].Reason, "The duties of the agent triage spent $1.20 today, and the daily cap of an agent is $1.00") {
+	if len(h) != 1 || h[0].State != StateSkipped || !strings.Contains(h[0].Reason, "The jobs of the agent triage spent $1.20 today, and the daily cap of an agent is $1.00") {
 		t.Fatalf("the second duty at the cap of its agent = %+v", h)
 	}
 	if got := allNotices.kinds(f.a, "second"); !slices.Equal(got, []string{NoticeCap}) {
@@ -65,7 +65,7 @@ func TestCapsAcrossDuties(t *testing.T) {
 	g.pass(t)
 	g.clock.Set(nine.Add(time.Hour + time.Second))
 	g.pass(t)
-	if h := g.history(t, "other"); len(h) != 1 || h[0].State != StateSkipped || !strings.Contains(h[0].Reason, "The duties of the fleet spent $1.00 today, and the daily cap of the fleet is $1.00") {
+	if h := g.history(t, "other"); len(h) != 1 || h[0].State != StateSkipped || !strings.Contains(h[0].Reason, "The jobs of the fleet spent $1.00 today, and the daily cap of the fleet is $1.00") {
 		t.Fatalf("a duty of another agent at the cap of the fleet = %+v", h)
 	}
 	// The next day starts again.
@@ -106,7 +106,7 @@ func TestFireChain(t *testing.T) {
 	if err != nil || !strings.Contains(out.Skipped, "stops at a depth of 3") {
 		t.Fatalf("a start too deep = %+v, %v", out, err)
 	}
-	if h := f.history(t, "watch"); h[0].State != StateSkipped || h[0].Start != StartEvent || !strings.Contains(h[0].Reason, "a chain of duties that events start stops at a depth of 3") {
+	if h := f.history(t, "watch"); h[0].State != StateSkipped || h[0].Start != StartEvent || !strings.Contains(h[0].Reason, "a chain of jobs that events start stops at a depth of 3") {
 		t.Fatalf("the history of a start too deep = %+v", h[0])
 	}
 	if n := len(f.queue.list()); n != 1 {
@@ -128,7 +128,7 @@ func TestFireChain(t *testing.T) {
 		g.clock.Add(time.Second)
 	}
 	out, err = g.s.FireChain(ctx, "busy", json.RawMessage(`{}`), 1)
-	if err != nil || !strings.Contains(out.Skipped, "Events started the duty 60 times in the last hour") {
+	if err != nil || !strings.Contains(out.Skipped, "Events started the job 60 times in the last hour") {
 		t.Fatalf("the start past the hour = %+v, %v", out, err)
 	}
 	g.clock.Add(time.Hour)

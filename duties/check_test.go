@@ -147,7 +147,7 @@ func TestCheckFailuresPause(t *testing.T) {
 		t.Fatalf("history = %+v", h[0])
 	}
 	v, _ := f.s.Get(as("alice"), "incidents")
-	if !v.Paused || !strings.HasPrefix(v.State.PausedReason, "3 checks failed in a row, so the duty paused itself.") {
+	if !v.Paused || !strings.HasPrefix(v.State.PausedReason, "3 checks failed in a row, so the job paused itself.") {
 		t.Fatalf("after three failed checks = %v %q", v.Paused, v.State.PausedReason)
 	}
 	// A check that works between failures ends the row.

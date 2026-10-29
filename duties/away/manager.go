@@ -122,7 +122,7 @@ func (s *Service) askManager(ctx context.Context, svc *duties.Service, w *wait, 
 	rec, err := svc.RecordOf(ctx, w.Duty)
 	if err != nil {
 		w.Manager = ""
-		s.toPerson(ctx, svc, w, "The duty did not read, so the manager could not decide.")
+		s.toPerson(ctx, svc, w, "The job did not read, so the manager could not decide.")
 		return
 	}
 	d := rec.Duty
@@ -166,7 +166,7 @@ func (s *Service) verdict(ctx context.Context, svc *duties.Service, w *wait, r, 
 		s.toPerson(ctx, svc, w, "The answer of the manager did not read as a verdict: "+err.Error()+".")
 		return
 	}
-	note := fmt.Sprintf("The manager decided for the duty %s while its owner was away: %s", w.Duty, v.Reason)
+	note := fmt.Sprintf("The manager decided for the job %s while its owner was away: %s", w.Duty, v.Reason)
 	err = s.decide(ctx, r, w.Approval, v.Verdict, note)
 	if errors.Is(err, errGone) {
 		s.ended(ctx, svc, w)

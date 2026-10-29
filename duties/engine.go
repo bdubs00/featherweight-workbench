@@ -373,9 +373,9 @@ func (s *Service) newEntry(start Trigger, now time.Time) entry {
 func (s *Service) stopped(ctx context.Context, st *stored) (bool, string) {
 	if st.Duty.Paused {
 		if st.PausedReason != "" {
-			return true, "The duty is paused: " + st.PausedReason
+			return true, "The job is paused: " + st.PausedReason
 		}
-		return true, "The duty is paused."
+		return true, "The job is paused."
 	}
 	return s.switchedOff(ctx)
 }
@@ -386,9 +386,9 @@ func (s *Service) switchedOff(ctx context.Context) (bool, string) {
 	if err != nil || !sw.Paused {
 		return false, ""
 	}
-	why := "Every duty is paused."
+	why := "Every job is paused."
 	if sw.Reason != "" {
-		why = "Every duty is paused: " + sw.Reason
+		why = "Every job is paused: " + sw.Reason
 	}
 	return true, why
 }
@@ -410,16 +410,16 @@ func (s *Service) begin(ctx context.Context, st *stored, start Trigger) (Outcome
 		return Outcome{}, err
 	}
 	if n := countWorking(days); n >= maxWorking {
-		e.State, e.Reason = StateSkipped, fmt.Sprintf("%d runs of the duty work now, the most at one time.", n)
+		e.State, e.Reason = StateSkipped, fmt.Sprintf("%d runs of the job work now, the most at one time.", n)
 	} else if open := lastWorking(days); open != nil {
 		switch d.Limits.Overlap {
 		case OverlapSkip:
-			e.State, e.Reason = StateSkipped, fmt.Sprintf("The run of %s had not ended, and the overlap of the duty is skip.", slotWords(open.Slot, loc))
+			e.State, e.Reason = StateSkipped, fmt.Sprintf("The run of %s had not ended, and the overlap of the job is skip.", slotWords(open.Slot, loc))
 		case OverlapQueue:
 			if waits(days) {
-				e.State, e.Reason = StateSkipped, "A start already waits for the run that works, and the overlap of the duty is queue."
+				e.State, e.Reason = StateSkipped, "A start already waits for the run that works, and the overlap of the job is queue."
 			} else {
-				e.State, e.Reason = StateWaiting, fmt.Sprintf("It waits for the run of %s to end, as the overlap of the duty is queue.", slotWords(open.Slot, loc))
+				e.State, e.Reason = StateWaiting, fmt.Sprintf("It waits for the run of %s to end, as the overlap of the job is queue.", slotWords(open.Slot, loc))
 			}
 		}
 	}
@@ -509,7 +509,7 @@ func overCap(d *Duty, days map[string]day, now time.Time) (float64, bool) {
 
 // capWords says why a start skips at the daily cap.
 func capWords(d *Duty, spent float64) string {
-	return fmt.Sprintf("The duty spent $%.2f today, and its daily cap is $%.2f, so it skips until midnight, %s.", spent, d.Limits.PerDayUSD, schedule.ZoneWords(d.zone().String()))
+	return fmt.Sprintf("The job spent $%.2f today, and its daily cap is $%.2f, so it skips until midnight, %s.", spent, d.Limits.PerDayUSD, schedule.ZoneWords(d.zone().String()))
 }
 
 // overCaps says why a duty does not start now at a daily cap, or "": the
@@ -534,10 +534,10 @@ func (s *Service) overCaps(ctx context.Context, d *Duty, days map[string]day, no
 	}
 	zone := schedule.ZoneWords(loc.String())
 	if caps.PerAgentUSD > 0 && agent >= caps.PerAgentUSD {
-		return fmt.Sprintf("The duties of the agent %s spent $%.2f today, and the daily cap of an agent is $%.2f, so the duty skips until midnight, %s.", d.Agent, agent, caps.PerAgentUSD, zone), nil
+		return fmt.Sprintf("The jobs of the agent %s spent $%.2f today, and the daily cap of an agent is $%.2f, so the job skips until midnight, %s.", d.Agent, agent, caps.PerAgentUSD, zone), nil
 	}
 	if caps.FleetUSD > 0 && fleet >= caps.FleetUSD {
-		return fmt.Sprintf("The duties of the fleet spent $%.2f today, and the daily cap of the fleet is $%.2f, so the duty skips until midnight, %s.", fleet, caps.FleetUSD, zone), nil
+		return fmt.Sprintf("The jobs of the fleet spent $%.2f today, and the daily cap of the fleet is $%.2f, so the job skips until midnight, %s.", fleet, caps.FleetUSD, zone), nil
 	}
 	return "", nil
 }
@@ -671,7 +671,7 @@ func (s *Service) act(ctx context.Context, st *stored, date string, e entry) Out
 		return true
 	})
 	if err != nil {
-		return Outcome{Failed: "The history of the duty did not answer, so the run did not start: " + err.Error() + "."}
+		return Outcome{Failed: "The history of the job did not answer, so the run did not start: " + err.Error() + "."}
 	}
 	if !wrote {
 		return Outcome{Failed: "Another replica took the start over."}
@@ -905,7 +905,7 @@ func (s *Service) failed(ctx context.Context, st *stored, e entry, reason string
 	}
 	s.notify(ctx, st, Notice{Kind: NoticeFailed, Run: e.Run, Slot: e.Slot, Reason: reason})
 	if c.FailuresInRow >= breakerAfter {
-		s.pause(ctx, st, fmt.Sprintf("%d runs failed in a row, so the duty paused itself. The last one: %s", c.FailuresInRow, reason))
+		s.pause(ctx, st, fmt.Sprintf("%d runs failed in a row, so the job paused itself. The last one: %s", c.FailuresInRow, reason))
 	}
 }
 
@@ -921,7 +921,7 @@ func (s *Service) checkFailed(ctx context.Context, st *stored, reason string) {
 		return
 	}
 	if c.ChecksFailed >= breakerAfter {
-		s.pause(ctx, st, fmt.Sprintf("%d checks failed in a row, so the duty paused itself. The last one: %s", c.ChecksFailed, reason))
+		s.pause(ctx, st, fmt.Sprintf("%d checks failed in a row, so the job paused itself. The last one: %s", c.ChecksFailed, reason))
 	}
 }
 
@@ -1014,14 +1014,14 @@ func (s *Service) follow(ctx context.Context, st *stored, sw Switch, now time.Ti
 			switch e.State {
 			case StateWaiting:
 				if stopped {
-					s.endEntry(ctx, st, date, e, []string{StateWaiting}, StateSkipped, "The duty paused before the run that it waited for ended.")
+					s.endEntry(ctx, st, date, e, []string{StateWaiting}, StateSkipped, "The job paused before the run that it waited for ended.")
 					continue
 				}
 				waiting = append(waiting, place{date, e})
 			case StateRetrying:
 				switch {
 				case stopped:
-					s.endEntry(ctx, st, date, e, []string{StateRetrying}, StateFailed, "The duty paused before its retry.")
+					s.endEntry(ctx, st, date, e, []string{StateRetrying}, StateFailed, "The job paused before its retry.")
 				case !now.Before(e.RetryAt):
 					s.retry(ctx, st, date, e, now)
 				}
@@ -1070,7 +1070,7 @@ func (s *Service) follow(ctx context.Context, st *stored, sw Switch, now time.Ti
 
 // lostWords says why the front stopped waiting for a run.
 func lostWords(run string) string {
-	return fmt.Sprintf("No worker reported the run %s for %s, so the server stopped waiting for it.", run, durText(lostAfter))
+	return fmt.Sprintf("Nothing in the fleet reported the run %s for %s, so the server stopped waiting for it.", run, durText(lostAfter))
 }
 
 // resume starts a start that waited, once no run of the duty works. It
@@ -1247,7 +1247,7 @@ func (s *Service) settle(ctx context.Context, st *stored, date string, e entry, 
 	case after.State == string(fw.StateInputRequired) && !e.Asked && !awayHandled():
 		// A package that handles whileAway tells of each question itself,
 		// with its tool and its reason (SetAwayHandler).
-		s.notify(ctx, st, Notice{Kind: NoticeNeedsYou, Run: after.Run, Slot: after.Slot, Reason: "A run of the duty waits for a person."})
+		s.notify(ctx, st, Notice{Kind: NoticeNeedsYou, Run: after.Run, Slot: after.Slot, Reason: "A run of the job waits for a person."})
 	}
 }
 

@@ -216,7 +216,7 @@ func TestPostInABridge(t *testing.T) {
 	last := msgs[len(msgs)-1].(map[string]any)
 	from := last["from"].(map[string]any)
 	today := time.Now().UTC().Format(time.DateOnly)
-	if last["text"] != "Report the status of "+today+"." || from["name"] != "duty:status" || from["display"] != "the duty status" || len(last["to"].([]any)) != 1 {
+	if last["text"] != "Report the status of "+today+"." || from["name"] != "duty:status" || from["display"] != "the job status" || len(last["to"].([]any)) != 1 {
 		t.Fatalf("the post = %v", last)
 	}
 	start := f.lastStart(t, "status")
@@ -247,7 +247,7 @@ func TestPostInABridge(t *testing.T) {
 }
 
 // openedPattern finds the bridge in the note of a start of open.
-var openedPattern = regexp.MustCompile(`Opened the bridge (\S+) "([^"]+)" from the playbook (\S+)\.`)
+var openedPattern = regexp.MustCompile(`Opened the channel (\S+) "([^"]+)" from the playbook (\S+)\.`)
 
 // A duty that opens a bridge from a playbook opens it through the open of
 // a bridge, titled with the duty and the date of the start, as the duty,
