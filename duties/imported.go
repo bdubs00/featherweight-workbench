@@ -147,12 +147,12 @@ func dutyOfSource(src sources.Source) (*stored, error) {
 // sourceOf returns the entry of workbench.sources that the delivery of
 // the sources renders for a duty of the templates: the agent, the pool,
 // and the principal of the duty now, with the templates of the entry, the
-// name of the duty for workbench.duty, and the share of held-back runs.
-func (st *stored) sourceOf(heldBack float64) sources.Source {
+// name of the duty for workbench.duty, and the share of comparison runs.
+func (st *stored) sourceOf(comparisonRuns float64) sources.Source {
 	d, f := st.Duty, st.From
 	src := sources.Source{Name: d.Name, Agent: d.Agent, Pool: d.Pool, Input: f.Input, Title: f.Title, Metadata: f.Metadata, Key: f.Key,
 		Items: f.Items, DedupFor: f.DedupFor, Redrive: f.Redrive, RunAs: "duty:" + d.Name, RunAsKind: fw.KindWorkload,
-		Duty: d.Name, HeldBack: heldBack}
+		Duty: d.Name, ComparisonRuns: comparisonRuns}
 	if d.RunAs == RunAsOwner && d.Owner != "" {
 		src.RunAs, src.RunAsKind = d.Owner, st.OwnerKind
 		if src.RunAsKind == "" {
@@ -453,7 +453,7 @@ func (s *Service) pollOnce(ctx context.Context, st *stored) {
 		s.warnOnce(st.Duty.Name, "the poll failed: "+err.Error())
 		return
 	}
-	got, err := sources.DeliverDocument(ctx, s.a, st.sourceOf(s.heldBack), body)
+	got, err := sources.DeliverDocument(ctx, s.a, st.sourceOf(s.comparisonRuns), body)
 	if err != nil {
 		s.warnOnce(st.Duty.Name, "the poll did not deliver: "+err.Error())
 		return
@@ -526,7 +526,7 @@ func (s *Service) carryTemplated(ctx context.Context, st *stored, date string, e
 		return Outcome{Failed: reason}
 	}
 	s.checkPassed(ctx, d.Name)
-	got, err := sources.DeliverDocument(ctx, s.a, st.sourceOf(s.heldBack), body)
+	got, err := sources.DeliverDocument(ctx, s.a, st.sourceOf(s.comparisonRuns), body)
 	if err == nil && got.Err != nil && len(got.Runs) == 0 {
 		err = got.Err
 	}

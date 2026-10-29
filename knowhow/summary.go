@@ -2,13 +2,16 @@ package knowhow
 
 // This file serves GET /v1/knowhow/summary (docs/KNOWHOW.md sections 1
 // and 8.3): the four numbers of an agent over the last days, split into
-// normal and held-back runs. The runs come from the archive of the fleet,
-// so a run of a replaced worker counts too. A run is done well when it
-// completed and nothing that a system or a person recorded says
-// otherwise: no receipt sent it back, its grader did not fail it, and no
-// person gave it a thumbs down. The comparison takes the normal runs of
-// the Duties that had a held-back run, so both sides did the same work,
-// and it gives no percentage from fewer than MinHeldBack held-back runs.
+// normal runs and comparison runs. A comparison run goes without what the
+// agent learned, so a person can see what learning is worth. The runs
+// come from the archive of the fleet, so a run of a replaced worker
+// counts too. A run is done well when it completed and nothing that a
+// system or a person recorded says otherwise: no receipt sent it back,
+// its grader did not fail it, and no person gave it a thumbs down. The
+// comparison takes the normal runs of the Duties that had a comparison
+// run, so both sides did the same work, and it gives no percentage from
+// fewer than MinHeldBack comparison runs. The JSON keeps the old name
+// heldBack for the comparison runs, because the page reads it.
 
 import (
 	"context"
@@ -27,10 +30,10 @@ import (
 const (
 	DefaultSummaryDays = 7
 	MaxSummaryDays     = 30
-	// MinHeldBack is the fewest held-back runs that a comparison takes.
+	// MinHeldBack is the fewest comparison runs that a comparison takes.
 	MinHeldBack = 20
-	// NotEnough is the line of a comparison with fewer held-back runs.
-	NotEnough = "Not enough held-back runs yet."
+	// NotEnough is the line of a comparison with fewer comparison runs.
+	NotEnough = "Not enough comparison runs yet."
 )
 
 // Summary is the answer of GET /v1/knowhow/summary.
@@ -74,7 +77,8 @@ type Split struct {
 }
 
 // Compare is the line "with and without what it learned". The shares are
-// absent while fewer than MinHeldBack runs were held back.
+// absent while there are fewer than MinHeldBack comparison runs. HeldBack
+// counts the comparison runs.
 type Compare struct {
 	Enough   bool     `json:"enough"`
 	HeldBack int      `json:"heldBack"`
@@ -194,7 +198,7 @@ func compare(held, heldWell, normal, normalWell int) Compare {
 	with := float64(normalWell) / float64(normal)
 	c.Enough, c.Without, c.With = true, &without, &with
 	c.OneIn = int(math.Round(float64(held+normal) / float64(held)))
-	c.Line = fmt.Sprintf("Held back 1 in %d runs. Done well: %d%% without what it learned, %d%% with it.", c.OneIn, int(math.Round(without*100)), int(math.Round(with*100)))
+	c.Line = fmt.Sprintf("Comparison runs: 1 in %d. Done well: %d%% without what it learned, %d%% with it.", c.OneIn, int(math.Round(without*100)), int(math.Round(with*100)))
 	return c
 }
 

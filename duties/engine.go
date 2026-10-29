@@ -659,7 +659,7 @@ func (s *Service) act(ctx context.Context, st *stored, date string, e entry) Out
 	req := s.request(st, e, last)
 	if last != nil && last.Run != "" && req.Metadata[fw.MetaKnowhow] != fw.KnowhowOff {
 		// The output of the previous run, which an earlier run wrote,
-		// goes in a data block. A held-back run gets nothing that
+		// goes in a data block. A comparison run gets nothing that
 		// Know-how added, so it gets no such block.
 		if out := strings.TrimSpace(s.output(ctx, last.Run)); out != "" {
 			req.Context = append(req.Context, fw.RunContext{Source: ContextLast, Text: cut(out, MaxLastBytes)})
@@ -798,9 +798,9 @@ func (s *Service) request(st *stored, e entry, last *RunEntry) fw.RunRequest {
 		PrincipalKind:  kind,
 		IdempotencyKey: key,
 	}
-	// A share of the runs gets none of what the agent learned, for the
-	// comparison of Know-how.
-	heldback.Mark(&req, s.heldBack)
+	// A share of the runs are comparison runs: they get none of what the
+	// agent learned, so a person can see what learning is worth.
+	heldback.Mark(&req, s.comparisonRuns)
 	return req
 }
 

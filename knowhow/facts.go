@@ -63,7 +63,8 @@ func doneWell(r *fw.Run, f runFacts) bool {
 	return r.State == fw.StateCompleted && !f.rejected() && !f.Down && !f.failedGrade()
 }
 
-// heldBack reports whether the run was held back from Know-how.
+// heldBack reports whether the run was a comparison run, without what
+// the agent learned.
 func heldBack(r *fw.Run) bool { return r.Metadata[fw.MetaKnowhow] == fw.KnowhowOff }
 
 // dutyOf returns the Duty of a run, or "".

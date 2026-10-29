@@ -95,14 +95,14 @@ type Source struct {
 	RunAsKind string            `yaml:"runAsKind"`
 	Locked    bool              `yaml:"locked"`
 
-	// Duty and HeldBack come from a duty whose templates make the runs,
-	// never from the file. Duty names the duty in the metadata
+	// Duty and ComparisonRuns come from a duty whose templates make the
+	// runs, never from the file. Duty names the duty in the metadata
 	// workbench.duty of each run, so a routine bound to the duty finds the
-	// run. HeldBack is the share of the runs that the duty holds back from
-	// Know-how, with the metadata fw.knowhow: off (docs/KNOWHOW.md section
-	// 6.6).
-	Duty     string  `yaml:"-"`
-	HeldBack float64 `yaml:"-"`
+	// run. ComparisonRuns is the share of the runs of the duty that are
+	// comparison runs, with the metadata fw.knowhow: off: they go without
+	// what the agent learned (docs/KNOWHOW.md section 6.6).
+	Duty           string  `yaml:"-"`
+	ComparisonRuns float64 `yaml:"-"`
 }
 
 // Redrive lets an event whose job reached the dead letter run again

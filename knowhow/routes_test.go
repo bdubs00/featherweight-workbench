@@ -289,8 +289,8 @@ func TestRoutesRuns(t *testing.T) {
 	}
 }
 
-// The summary gives the four numbers, split into normal and held-back
-// runs, and no percentage from fewer than 20 held-back runs.
+// The summary gives the four numbers, split into normal and comparison
+// runs, and no percentage from fewer than 20 comparison runs.
 func TestSummary(t *testing.T) {
 	fr := newFront(t, nil)
 	fr.clk.add(7 * 24 * time.Hour)
@@ -316,7 +316,7 @@ func TestSummary(t *testing.T) {
 		put(100+i, false, true, false, now.Add(-10*24*time.Hour), 0.20)
 	}
 	// This week: 30 normal runs at 0.10, 27 done well, 6 by a routine,
-	// and 5 held-back runs at 0.30, 3 done well.
+	// and 5 comparison runs at 0.30, 3 done well.
 	for i := 0; i < 30; i++ {
 		put(i, false, i >= 3, i < 6, now.Add(-time.Duration(i)*time.Hour), 0.10)
 	}
@@ -339,9 +339,9 @@ func TestSummary(t *testing.T) {
 		t.Fatalf("numbers = %+v %+v %d", s.DoneByRoutines, s.CostPerJob, s.NotesCorrected)
 	}
 	if s.Compare.Enough || s.Compare.With != nil || s.Compare.Without != nil || s.Compare.Line != NotEnough || strings.Contains(body, "%") {
-		t.Fatalf("a comparison from 5 held-back runs = %+v", s.Compare)
+		t.Fatalf("a comparison from 5 comparison runs = %+v", s.Compare)
 	}
-	// With 20 held-back runs, the line gives the shares.
+	// With 20 comparison runs, the line gives the shares.
 	for i := 5; i < 20; i++ {
 		put(50+i, true, true, false, now.Add(-time.Duration(i)*time.Hour), 0.30)
 	}
@@ -349,7 +349,7 @@ func TestSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !out.Compare.Enough || out.Compare.Line != "Held back 1 in 3 runs. Done well: 90% without what it learned, 90% with it." {
+	if !out.Compare.Enough || out.Compare.Line != "Comparison runs: 1 in 3. Done well: 90% without what it learned, 90% with it." {
 		t.Fatalf("the comparison = %+v", out.Compare)
 	}
 	resp, body = send(t, "GET", fr.url+"/v1/knowhow/summary?agent=triage&days=99", "carol", "")

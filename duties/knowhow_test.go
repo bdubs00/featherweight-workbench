@@ -1,7 +1,9 @@
 package duties
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -11,37 +13,106 @@ import (
 	"github.com/bdubs00/featherweight-workbench/internal/heldback"
 )
 
-// workbench.knowhow.heldBack is 0 by default, so no run is held back
-// until a person sets a share. The file and the variable set it, and a
-// share outside 0 to 1 names the key.
+// workbench.knowhow.comparisonRuns is 0 by default, so no run is a
+// comparison run until a person sets a share. The file and the variable
+// set it, and a share outside 0 to 1 names the key.
 func TestLoadKnowhow(t *testing.T) {
+	t.Setenv(EnvComparisonRuns, "")
 	t.Setenv(EnvHeldBack, "")
 	cfg := fw.DefaultConfig()
-	if c, err := LoadKnowhow(cfg); err != nil || c.Share() != 0 || DefaultHeldBack != 0 {
+	if c, err := LoadKnowhow(cfg, quiet()); err != nil || c.Share() != 0 || DefaultComparisonRuns != 0 {
 		t.Fatalf("the default = %+v, %v", c, err)
 	}
-	cfg.Extensions = workbench(t, "knowhow: {heldBack: 0.05}\n")
-	if c, err := LoadKnowhow(cfg); err != nil || c.Share() != 0.05 {
+	cfg.Extensions = workbench(t, "knowhow: {comparisonRuns: 0.05}\n")
+	if c, err := LoadKnowhow(cfg, quiet()); err != nil || c.Share() != 0.05 {
 		t.Fatalf("0.05 = %+v, %v", c, err)
 	}
-	t.Setenv(EnvHeldBack, "0.1")
-	if c, err := LoadKnowhow(cfg); err != nil || c.Share() != 0.1 {
+	t.Setenv(EnvComparisonRuns, "0.1")
+	if c, err := LoadKnowhow(cfg, quiet()); err != nil || c.Share() != 0.1 {
 		t.Fatalf("the variable did not win: %+v, %v", c, err)
 	}
-	t.Setenv(EnvHeldBack, "1.5")
-	if _, err := LoadKnowhow(cfg); err == nil || !strings.Contains(err.Error(), "workbench.knowhow.heldBack") {
+	t.Setenv(EnvComparisonRuns, "1.5")
+	if _, err := LoadKnowhow(cfg, quiet()); err == nil || !strings.Contains(err.Error(), "workbench.knowhow.comparisonRuns") {
 		t.Fatalf("a share above 1 = %v", err)
+	}
+	t.Setenv(EnvComparisonRuns, "many")
+	if _, err := LoadKnowhow(cfg, quiet()); err == nil || !strings.Contains(err.Error(), EnvComparisonRuns) {
+		t.Fatalf("a share that is no number = %v", err)
 	}
 }
 
-// The engine marks a run held back with fw.knowhow: off when the stable
+// heldBack is the old name of comparisonRuns, in the file and in the
+// variable. The old name alone gives its value, and with both names the
+// new one wins. Each old name that is set logs one line that names the
+// new name, and no line comes without an old name.
+func TestLoadKnowhowOldName(t *testing.T) {
+	load := func(t *testing.T, block string) (KnowhowConfig, []string, error) {
+		t.Helper()
+		var buf bytes.Buffer
+		cfg := fw.DefaultConfig()
+		if block != "" {
+			cfg.Extensions = workbench(t, block)
+		}
+		c, err := LoadKnowhow(cfg, slog.New(slog.NewTextHandler(&buf, nil)))
+		var lines []string
+		for _, l := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+			if l != "" {
+				lines = append(lines, l)
+			}
+		}
+		return c, lines, err
+	}
+	t.Setenv(EnvComparisonRuns, "")
+	t.Setenv(EnvHeldBack, "")
+
+	c, lines, err := load(t, "knowhow: {heldBack: 0.05}\n")
+	if err != nil || c.Share() != 0.05 || len(lines) != 1 ||
+		!strings.Contains(lines[0], "workbench.knowhow.heldBack is the old name of workbench.knowhow.comparisonRuns") ||
+		!strings.Contains(lines[0], "Its value counts") {
+		t.Fatalf("the old key alone = %v, %v, %q", c.Share(), err, lines)
+	}
+	c, lines, err = load(t, "knowhow: {heldBack: 0.05, comparisonRuns: 0.2}\n")
+	if err != nil || c.Share() != 0.2 || len(lines) != 1 ||
+		!strings.Contains(lines[0], "workbench.knowhow.heldBack is the old name") ||
+		!strings.Contains(lines[0], "Both are set, so workbench.knowhow.comparisonRuns wins") {
+		t.Fatalf("both keys = %v, %v, %q", c.Share(), err, lines)
+	}
+	c, lines, err = load(t, "knowhow: {heldBack: 1.5}\n")
+	if err == nil || !strings.Contains(err.Error(), "workbench.knowhow.comparisonRuns") || len(lines) != 1 {
+		t.Fatalf("an old key above 1 = %v, %v, %q", c.Share(), err, lines)
+	}
+	if _, lines, _ = load(t, "knowhow: {comparisonRuns: 0.05}\n"); len(lines) != 0 {
+		t.Fatalf("the new key logged %q", lines)
+	}
+
+	t.Setenv(EnvHeldBack, "0.1")
+	c, lines, err = load(t, "knowhow: {comparisonRuns: 0.05}\n")
+	if err != nil || c.Share() != 0.1 || len(lines) != 1 ||
+		!strings.Contains(lines[0], EnvHeldBack+" is the old name of "+EnvComparisonRuns) ||
+		!strings.Contains(lines[0], "Its value counts") {
+		t.Fatalf("the old variable alone = %v, %v, %q", c.Share(), err, lines)
+	}
+	t.Setenv(EnvComparisonRuns, "0.3")
+	c, lines, err = load(t, "")
+	if err != nil || c.Share() != 0.3 || len(lines) != 1 ||
+		!strings.Contains(lines[0], "Both are set, so "+EnvComparisonRuns+" wins") {
+		t.Fatalf("both variables = %v, %v, %q", c.Share(), err, lines)
+	}
+	t.Setenv(EnvComparisonRuns, "")
+	t.Setenv(EnvHeldBack, "many")
+	if _, _, err = load(t, ""); err == nil || !strings.Contains(err.Error(), EnvHeldBack) {
+		t.Fatalf("an old variable that is no number = %v", err)
+	}
+}
+
+// The engine marks a comparison run with fw.knowhow: off when the stable
 // hash of its id falls below the share, and marks none at a share of 0.
 // The first start of the schedule goes through the engine; the request of
 // many more starts shows the share.
-func TestDutyRunsHeldBack(t *testing.T) {
+func TestDutyComparisonRuns(t *testing.T) {
 	f := newFront(t, "", nil)
 	f.put(t, "alice", daily("report"))
-	f.s.heldBack = 1
+	f.s.comparisonRuns = 1
 	f.clock.Set(nine.Add(2 * time.Second))
 	f.pass(t)
 	if list := f.queue.list(); len(list) != 1 || list[0].Metadata[fw.MetaKnowhow] != fw.KnowhowOff {
@@ -51,7 +122,7 @@ func TestDutyRunsHeldBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.s.heldBack = 0.5
+	f.s.comparisonRuns = 0.5
 	held := 0
 	for range 200 {
 		req := f.s.request(st, entry{Slot: nine}, nil)
@@ -64,22 +135,22 @@ func TestDutyRunsHeldBack(t *testing.T) {
 		}
 	}
 	if held < 70 || held > 130 {
-		t.Fatalf("a share of 0.5 held back %d of 200 runs", held)
+		t.Fatalf("a share of 0.5 made %d of 200 runs comparison runs", held)
 	}
-	f.s.heldBack = 0
+	f.s.comparisonRuns = 0
 	for range 50 {
 		if req := f.s.request(st, entry{Slot: nine}, nil); req.Metadata[fw.MetaKnowhow] != "" {
-			t.Fatalf("a share of 0 held a run back: %+v", req.Metadata)
+			t.Fatalf("a share of 0 made a comparison run: %+v", req.Metadata)
 		}
 	}
 }
 
 // A duty whose templates make the runs marks them too, and names itself
 // in workbench.duty, so a routine bound to the duty finds them.
-func TestTemplatedDutyRunsHeldBack(t *testing.T) {
+func TestTemplatedDutyComparisonRuns(t *testing.T) {
 	bus := fw.NewMemBus()
 	f := newFrontOn(t, bus, importBlock, nil)
-	f.s.heldBack = 1
+	f.s.comparisonRuns = 1
 	got := collect(t, bus, "fw.jobs.triage")
 	if resp, b := send(t, http.MethodPost, f.url+"/v1/duties/tickets/call", "", `{"id": 9, "title": "Printer"}`); resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("a call = %d %s", resp.StatusCode, b)
@@ -92,7 +163,7 @@ func TestTemplatedDutyRunsHeldBack(t *testing.T) {
 
 // A run of a duty gets the output of its previous run in the block last,
 // cut to 2 KB, and that output reaches neither its message nor its
-// instructions. A held-back run gets no block last.
+// instructions. A comparison run gets no block last.
 func TestDutyBlockLast(t *testing.T) {
 	f := newFront(t, "", nil)
 	d := daily("report")
@@ -127,8 +198,8 @@ func TestDutyBlockLast(t *testing.T) {
 		t.Fatalf("the second input = %q", second.Input)
 	}
 
-	// A held-back run gets no block last, and {last.*} stays.
-	f.s.heldBack = 1
+	// A comparison run gets no block last, and {last.*} stays.
+	f.s.comparisonRuns = 1
 	f.view.set(second.ID, fw.StateCompleted, 0, func(r *fw.Run) { r.Title = "Report of Sunday" })
 	f.s.output = func(context.Context, string) string { return output }
 	f.pass(t)
@@ -137,6 +208,6 @@ func TestDutyBlockLast(t *testing.T) {
 	third := f.queue.last(t)
 	if third.Metadata[fw.MetaKnowhow] != fw.KnowhowOff || len(third.Context) != 0 ||
 		third.Input != "Write the report of 2026-10-26. The last report is Report of Sunday." {
-		t.Fatalf("the held-back run = input %q, blocks %+v, metadata %v", third.Input, third.Context, third.Metadata)
+		t.Fatalf("the comparison run = input %q, blocks %+v, metadata %v", third.Input, third.Context, third.Metadata)
 	}
 }

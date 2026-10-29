@@ -148,7 +148,7 @@ func (s *Sources) renderAll(src *source, events []map[string]any, strict bool) (
 			continue
 		}
 		it.req.ID = fw.NewID()
-		heldback.Mark(&it.req, src.cfg.HeldBack)
+		heldback.Mark(&it.req, src.cfg.ComparisonRuns)
 		items = append(items, it)
 	}
 	return items, refused, nil

@@ -129,9 +129,10 @@ type Service struct {
 	seeded  map[string]bool            // per duty, whether this replica read its history once
 	warned  map[string]string          // per duty, the last problem of its schedule in the log
 
-	// heldBack is the share of the runs of each duty that the engine
-	// holds back from Know-how (workbench.knowhow.heldBack).
-	heldBack float64
+	// comparisonRuns is the share of the runs of each duty that the
+	// engine makes comparison runs, which go without what the agent
+	// learned (workbench.knowhow.comparisonRuns).
+	comparisonRuns float64
 
 	// passive is true on a replica that cannot put a job on a queue
 	// (fleet.CanEnqueue): it serves the routes and runs no engine, and a
@@ -163,7 +164,7 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 	if err != nil {
 		return nil, err
 	}
-	knowhow, err := LoadKnowhow(a.Config())
+	knowhow, err := LoadKnowhow(a.Config(), log)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +201,7 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 		return nil, fmt.Errorf("duties: %w", err)
 	}
 	s := newService(a, NewStore(duties, runs, seen, log), cfg, log)
-	s.heldBack = knowhow.Share()
+	s.comparisonRuns = knowhow.Share()
 	s.closers = closers
 	s.passive = !fleet.CanEnqueue(a.Config())
 	// The entries of workbench.sources become duties before the engine
@@ -215,7 +216,7 @@ func Start(ctx context.Context, a *fw.Agent) (io.Closer, error) {
 		return s, nil
 	}
 	s.start()
-	log.Info("duties: the duties are on", "store", where, "replica", s.replica, "heldBack", s.heldBack)
+	log.Info("duties: the duties are on", "store", where, "replica", s.replica, "comparisonRuns", s.comparisonRuns)
 	return s, nil
 }
 

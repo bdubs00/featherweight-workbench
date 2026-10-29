@@ -176,7 +176,7 @@ func (s *Sources) answerEvents(w http.ResponseWriter, r *http.Request, src *sour
 			return Delivered{Events: len(events), Refused: len(events)}
 		}
 		it.req.ID = fw.NewID()
-		heldback.Mark(&it.req, src.cfg.HeldBack)
+		heldback.Mark(&it.req, src.cfg.ComparisonRuns)
 		items = append(items, it)
 	}
 	// A caller that goes away does not stop the claims in the middle.
