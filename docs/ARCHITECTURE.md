@@ -4344,7 +4344,7 @@ A pass at each minute reads the finished runs of the archive behind a durable cu
 |---|---|
 | `gotcha` | A tool call that failed, and a later call of the same tool in the same run that passed with another input. Two runs with the same failure make one candidate. The numbers of the error do not count. |
 | `place` | The same read call, tool and canonical input, in two runs or more of the agent, with the same result. The entry `places.<agent>.agent._` keeps at most 500 read calls with their last three runs. |
-| `outcome` | A run with a receipt, a verdict of its grader, a definition of done that passed without a weak pass (section 25.1, `fw.CheckedDone`), or a thumbs up or down. The runs of one Duty that went well make one candidate, and those that went badly make another. |
+| `outcome` | A run with a receipt, a verdict of its grader, a definition of done that passed without a weak pass (section 25.1, `fw.CheckedDone`), or a thumbs up or down. The runs of one Duty that went well make one candidate, and those that went badly make another. The evidence holds what was recorded, the note that a person wrote with a thumb (`fw.run.reacted`, at most four notes of a run), the input, and the answer. |
 | `recheck` | A note that went out of date, with the sources of the note at the new version. A note that a person wrote gets none. |
 
 A candidate is the entry `cand.<agent>.<id>`. Its id is a hash of its kind, its scope, and what it found, then a dash and the agent in base64url. A candidate belongs to the scope of the agent, because the runs of the agent read the notes of that scope, the default of the kernel. So the same finding in the runs of two principals is one candidate. A recheck keeps the scope of its note. A candidate holds at most eight runs with their evidence, and it gets the source `run:<id>` of each run. It drops 14 days after the pass found it.
@@ -4386,7 +4386,7 @@ The front checks each keep:
 - `add` needs a name that no note has. Without a name, the front picks one from the kind and the first six words of the text, such as `gotchas/gitea-refuses-a-label-name-with.md`, with `-2` and up when a note has it. The answer names the note. `supersede` needs the name of a note that exists and that no person wrote. A recheck supersedes its own note.
 - The journal keeps the old revision for an undo. With the switch on, the change waits.
 
-A decided candidate stays decided until it drops.
+A decided candidate stays decided until it drops, with one exception. A new run with new evidence opens a decided outcome again when the run went badly or a person gave it a thumb, up or down. The candidate then holds that run alone, because the review decided on the runs before it, and its 14 days start again. A run that only a check of the system verified leaves a decided outcome as it is, so a Duty with checks does not start a review every day. A run that a candidate holds changes only the text of its evidence, such as a thumb with a note that came after the pass read the run.
 
 The profile `review` of `examples/bossmode/fw.yaml` calls the two tools and names no model. Its instructions carry the list of what never becomes a note:
 

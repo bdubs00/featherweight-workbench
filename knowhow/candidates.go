@@ -105,6 +105,10 @@ type Candidate struct {
 	First    time.Time      `json:"first"`
 	Updated  time.Time      `json:"updated"`
 	Decided  *Decision      `json:"decided,omitempty"`
+
+	// reopen makes a new run with new evidence open a decided candidate
+	// again (add). The store keeps no such field.
+	reopen bool
 }
 
 // CandidateRun is one run of a candidate, with its trigger.
@@ -184,8 +188,11 @@ func candAgent(id string) (string, error) {
 }
 
 // add adds one run and its evidence to the candidate c, or creates it. A
-// run that the candidate holds changes nothing. A decided candidate stays
-// decided.
+// run that the candidate holds changes only the text of its evidence, such
+// as a thumb with a note that came after the run was read. A decided
+// candidate stays decided, unless c.reopen: then a new run with new
+// evidence opens it again, with that run alone, because the review decided
+// on the runs before it.
 func (s *Service) add(ctx context.Context, c Candidate, run *CandidateRun, ev Evidence) error {
 	now := s.now().UTC()
 	wrote, _, _, err := s.modify(ctx, candKey(c.Agent, c.ID), func(value []byte, exists bool, _ uint64) ([]byte, error) {
@@ -200,16 +207,25 @@ func (s *Service) add(ctx context.Context, c Candidate, run *CandidateRun, ev Ev
 			}
 		}
 		if exists && (cur.State == CandKept || cur.State == CandSkipped) {
-			return nil, nil
+			if !c.reopen || run == nil || ev.Text == "" || cur.holds(run.Run, ev.Text) {
+				return nil, nil
+			}
+			// The 14 days of the candidate start again with this run.
+			exists = false
+			cur.Decided, cur.Origin, cur.Sources = nil, "", nil
 		}
 		if !exists {
 			cur.First, cur.Runs, cur.Evidence, cur.State = now, nil, nil, CandGathering
 		}
 		if run != nil {
-			for _, r := range cur.Runs {
-				if r.Run == run.Run {
+			if slices.ContainsFunc(cur.Runs, func(r CandidateRun) bool { return r.Run == run.Run }) {
+				i := slices.IndexFunc(cur.Evidence, func(e Evidence) bool { return e.Run == run.Run })
+				if ev.Text == "" || i < 0 || cur.Evidence[i].Text == ev.Text {
 					return nil, nil
 				}
+				cur.Evidence[i].Text = ev.Text
+				cur.Updated = now
+				return encode(cur)
 			}
 			if len(cur.Runs) >= maxCandRuns {
 				return nil, nil
@@ -241,6 +257,12 @@ func (s *Service) add(ctx context.Context, c Candidate, run *CandidateRun, ev Ev
 		emitChange(c.Agent)
 	}
 	return err
+}
+
+// holds reports whether the candidate holds the run with this text of
+// evidence.
+func (c Candidate) holds(run, text string) bool {
+	return slices.ContainsFunc(c.Evidence, func(e Evidence) bool { return e.Run == run && e.Text == text })
 }
 
 // appendSource adds a source to a list. A page that the list names already
@@ -630,12 +652,26 @@ func (s *Service) learnFrom(ctx context.Context, e fleet.ArchiveEntry) error {
 		if duty == "" {
 			label = "runs without a Duty"
 		}
-		text := fmt.Sprintf("What was recorded: %s.\nThe input of the run was:\n%s\nThe answer of the run was:\n%s", what, cut(r.Input, evidenceCut), cut(r.Output, evidenceCut))
+		text := fmt.Sprintf("What was recorded: %s.\n%sThe input of the run was:\n%s\nThe answer of the run was:\n%s", what, thumbsText(f.Thumbs), cut(r.Input, evidenceCut), cut(r.Output, evidenceCut))
+		// A new run that went badly, or that a person gave a thumb, opens a
+		// decided outcome again. A run that only a check of the system
+		// verified does not, so a Duty with checks does not start a review
+		// every day.
 		cand := Candidate{ID: candID(KindOutcome, r.Agent, sc, duty+"\x00"+polarity), Agent: r.Agent, Kind: KindOutcome, Scope: sc, Origin: origin(false),
-			Summary: fmt.Sprintf("%s that went %s", label, polarity), Sources: pagesRead(calls)}
+			Summary: fmt.Sprintf("%s that went %s", label, polarity), Sources: pagesRead(calls), reopen: polarity == "badly" || f.Up || f.Down}
 		errs = append(errs, s.add(ctx, cand, &run, Evidence{Run: r.ID, Text: text}))
 	}
 	return errors.Join(errs...)
+}
+
+// thumbsText words the notes that people wrote with a thumb on a run, for
+// the evidence of an outcome, each on lines of its own.
+func thumbsText(thumbs []thumbNote) string {
+	var b strings.Builder
+	for _, t := range thumbs {
+		fmt.Fprintf(&b, "A person wrote with a thumbs %s:\n%s\n", t.Reaction, cut(t.Note, evidenceCut))
+	}
+	return b.String()
 }
 
 // outcomeOf returns well or badly for a run that a system or a person
