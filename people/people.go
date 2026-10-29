@@ -7,7 +7,7 @@
 //  1. the name claim of the sign-in, when the issuer gives one;
 //  2. a name that the person set (PUT /v1/people/me);
 //  3. the part of the email before the @, in readable form, so
-//     brandon.winston.a@example.com reads as Brandon Winston A;
+//     jane.q.doe@example.com reads as Jane Q Doe;
 //  4. the subject, when it is no id that the issuer made;
 //  5. else "A person".
 //

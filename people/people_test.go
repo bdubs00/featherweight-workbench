@@ -18,7 +18,7 @@ import (
 // The part of an email before the @ reads as words with capitals.
 func TestReadable(t *testing.T) {
 	for in, want := range map[string]string{
-		"brandon.winston.a@example.com": "Brandon Winston A",
+		"jane.q.doe@example.com": "Jane Q Doe",
 		"erin@example.com":              "Erin",
 		"j_doe-smith+lab@example.org":   "J Doe Smith",
 		"1234@example.com":              "",
@@ -40,7 +40,7 @@ func TestDisplay(t *testing.T) {
 	if got := s.Display(ctx, uuid, ""); got != SomePerson {
 		t.Fatalf("an unknown id = %q", got)
 	}
-	if got := s.Display(ctx, uuid, "brandon.winston.a@example.com"); got != "Brandon Winston A" {
+	if got := s.Display(ctx, uuid, "jane.q.doe@example.com"); got != "Jane Q Doe" {
 		t.Fatalf("an id with the email of a record = %q", got)
 	}
 	s.learn(ctx, uuid, "", "erin@example.com")
