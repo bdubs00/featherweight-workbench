@@ -3095,9 +3095,11 @@ The workers of a pool whose profiles run a routine publish `fw.routine.decided`,
 
 The ready rule counts the runs of the current version since the last step back. A rehearsing routine is ready under three conditions:
 
-- `acted` is at least the bound of `readyAfter` for its risk. The bound is `read` for a routine whose risk is `read`, and `write` for every other routine.
+- `agreed` plus `disagreed`, the runs of `acted` whose comparison came, is at least the bound of `readyAfter` for its risk. The bound is `read` for a routine whose risk is `read`, and `write` for every other routine.
 - `agreed` is at least `readyAgreement` of `acted`.
 - `sentBack.agreed` is 0.
+
+The decision of a run comes at its start, and its comparison at its end. So a run that still works counts in `acted` but toward no bound, and against the agreement. The routine never gets ready on the decision of a run whose comparison has not come, and the note of a move to live counts each run with its comparison: "it would have acted on 20 runs, and 20 agreed". When `acted` holds a run without a comparison at that moment, the note names the runs that were compared apart.
 
 When `ready` changes, the projection writes it into the record. Then it makes the moves of section 21.2.1.
 
@@ -4261,7 +4263,7 @@ Every write reads the entry and writes at the revision that it read, as the othe
 
 `PageWritten(ctx, path, hash)` marks out of date every note that names `page:<path>` with another version than the hash. An empty hash is a removal of the page. `ItemChanged(ctx, source, key, version)` does the same for `item:<source>/<key>`. A source `run:<id>` never goes out of date. A note that a person wrote stays as it is. The mark `outOfDate` holds `since`, `source`, and `version`, the version of the source now. A later change of the same source moves `version`.
 
-The move to out of date has no undo, because an undo would make the agent trust the note over its source again. An owner of the agent corrects the note instead: a new text or a put-away. When a person writes a note that is out of date, the source that changed takes the version of `outOfDate`, because the person read the source as it is now. A page that was removed leaves the sources. So the corrected note is checked against the page as it is, and the journal counts a correction.
+The move to out of date has no undo, because an undo would make the agent trust the note over its source again. An owner of the agent corrects the note instead: a new text or a put-away. When a person writes a note, each page of its sources takes the hash of the page now, because the person read the page as it is. The page sends the sources of the note as they were, so the front reads the wiki. A page that was removed leaves the sources. When a person writes a note that is out of date, an item that changed takes the version of `outOfDate` too. So the corrected note is checked against the page as it is, and the journal counts a correction.
 
 Each move writes the journal entry `out-of-date` with the source that changed. The note also gets a candidate `recheck` for the after-work review, in the scope of the note (section 28.7).
 
@@ -4290,7 +4292,7 @@ The search of runs gives the newest runs first, 20 by default and 50 at most. An
 
 Who reads and who changes:
 
-- The process itself and the static token of the fleet read and change every note. A worker names the writer in `by`, which is `agent`, `person`, or `person:<subject>`, and the run in `run`. Any other `by` gives 400.
+- The process itself and the static token of the fleet read and change every note. A worker names the writer in `by`, which is `agent`, `person`, or `person:<subject>`, and the run in `run`. Any other `by` gives 400. The kernel always names it: `agent` with the run for the memory tool of a run and for its pull, and `person:<subject>` for a person that it acts for. The page names none. So a change of the static token without `by` is the change of the admin who holds the token, a person: `person:token`, without a run. Such a change never waits, and the agent and the review leave the note as it is. The switch, an undo, and a decision of the static token record `person:token` too.
 - A person needs the right to view the agent (`agent.view`). A caller who cannot view the agent or the scope gets 404.
 - A person reads the notes of the agent and the notes of their own principal. An operator of the agent (`agent.run`) also reads the notes of its workload principals, such as `duty:<name>`. The front takes a principal that starts with `duty:`, `spiffe://`, `knowhow:`, or `workload:` as a workload. No person reads the notes of another person.
 - A change of the notes of the agent or of a workload principal needs the owner role (`agent.edit`). A person changes their own notes with the operator role, because the runs of that person write those notes anyway. A person always writes as `person:<subject>`, without a run.
@@ -4347,8 +4349,8 @@ A pass at each minute reads the finished runs of the archive behind a durable cu
 |---|---|
 | `gotcha` | A tool call that failed, and a later call of the same tool in the same run that passed with another input. Two runs with the same failure make one candidate. The numbers of the error do not count. |
 | `place` | The same read call, tool and canonical input, in two runs or more of the agent, with the same result. The entry `places.<agent>.agent._` keeps at most 500 read calls with their last three runs. |
-| `outcome` | A run with a receipt, a verdict of its grader, a definition of done that passed without a weak pass (section 25.1, `fw.CheckedDone`), or a thumbs up or down. The runs of one Duty that went well make one candidate, and those that went badly make another. |
-| `recheck` | A note that went out of date, with the sources of the note at the new version. A note that a person wrote gets none. |
+| `outcome` | A run with a receipt, a verdict of its grader, a definition of done that passed without a weak pass (section 25.1, `fw.CheckedDone`), or a thumbs up or down. The runs of one Duty that went well make one candidate, and those that went badly make another. The evidence holds what was recorded, the note that a person wrote with a thumb (`fw.run.reacted`, at most four notes of a run), the input, and the answer. |
+| `recheck` | A note that went out of date, with the sources of the note at the new version. A note that a person wrote gets none. The evidence holds the text of the note now and, for a page of the wiki, the text of the page now, cut to 4 KB, or that the page was removed. The list of the review words it again each time, so a second change of the page shows. A recheck ends when its note is no longer out of date (a person or the agent corrected it), was put away, or a person wrote it: the next list or start of the review decides it with `by` knowhow and leaves it out, so no review starts for it. |
 
 A candidate is the entry `cand.<agent>.<id>`. Its id is a hash of its kind, its scope, and what it found, then a dash and the agent in base64url. A candidate belongs to the scope of the agent, because the runs of the agent read the notes of that scope, the default of the kernel. So the same finding in the runs of two principals is one candidate. A recheck keeps the scope of its note. A candidate holds at most eight runs with their evidence, and it gets the source `run:<id>` of each run. It drops 14 days after the pass found it.
 
@@ -4369,7 +4371,7 @@ The trigger of a run is a hash of its input and of its blocks `found`, `event`, 
 
 The review is a run of the profile that `workbench.knowhow.review.agent` names. Without it, no review runs. The schedule then starts no run and writes nothing, and the settings say "The after-work review is off: no agent is set." Nothing picks a model or a price. The profile names its own, and the kernel refuses a run without a model.
 
-An owner of an agent can start its review at once with `POST /v1/knowhow/review/{agent}`. The front first reads the finished runs, then starts one run if the agent has open candidates. A second start in the same minute is the same run.
+An owner of an agent can start its review at once with `POST /v1/knowhow/review/{agent}`. The front first reads the finished runs up to now: the pass behind the cursor until no run waits, and then the runs of the agent that changed within the last two minutes, which the pass leaves for later. It reads those without the cursor, because another replica may not know them yet, and the pass reads them again once they settle. So a run that ended a moment ago, or got a thumb a moment ago, counts at once. Then the front starts one run if the agent has open candidates. A second start in the same minute is the same run.
 
 At each slot of `review.every`, 24 hours by default, one replica claims the slot in the entry `mark.review`. It then puts one run of the profile on its queue for each agent with open candidates, at most 10. While the slot waits for its first candidate, a replica reads the candidates at most every ten minutes. The run has the principal `knowhow:review` of the kind workload and the metadata `workbench.knowhow.review` with the agent. Its input starts with "Review the finished work of the agent".
 
@@ -4386,10 +4388,10 @@ The front checks each keep:
 - The text holds no path of one machine: a home directory such as `/home/<name>/` or `/Users/<name>/`, `~/`, `/root`, a temporary directory such as `/tmp` or `/var/folders/`, or a drive of Windows. The next run can run on another machine. The error says to write the path from the root of its tool.
 - The note gets the sources of the candidate and no other. It goes to the scope of the agent, where every run of the agent reads it, with `by` review and the run of the review. A recheck writes to the scope of its note.
 - An untrusted candidate that waits for a second trigger is refused.
-- `add` needs a name that no note has. Without a name, the front picks one from the kind and the first six words of the text, such as `gotchas/gitea-refuses-a-label-name-with.md`, with `-2` and up when a note has it. The answer names the note. `supersede` needs the name of a note that exists and that no person wrote. A recheck supersedes its own note.
+- `add` needs a name that no note has. Without a name, the front picks one from the kind and the first six words of the text, such as `gotchas/gitea-refuses-a-label-name-with.md`, with `-2` and up when a note has it. The answer names the note. `supersede` needs the name of a note that exists and that no person wrote. A recheck supersedes its own note, and the note names the page at its version now (`outOfDate.version`), because the evidence showed the page as it is.
 - The journal keeps the old revision for an undo. With the switch on, the change waits.
 
-A decided candidate stays decided until it drops.
+A decided candidate stays decided until it drops, with one exception. A new run with new evidence opens a decided outcome again when the run went badly or a person gave it a thumb, up or down. The candidate then holds that run alone, because the review decided on the runs before it, and its 14 days start again. A run that only a check of the system verified leaves a decided outcome as it is, so a Duty with checks does not start a review every day. A run that a candidate holds changes only the text of its evidence, such as a thumb with a note that came after the pass read the run.
 
 The profile `review` of `examples/bossmode/fw.yaml` calls the two tools and names no model. Its instructions carry the list of what never becomes a note:
 
@@ -4412,7 +4414,19 @@ Some proposals stay out:
 - a proposal with questions and no decider
 - a proposal that did not hold on a run that it did not see
 
-The journal says why with `stays-out`, once per reason of a Duty. A good proposal goes to the store of the routines as `proposed`, with its source. It is bound to its Duty (`duty`). Unless the switch is on, it moves to `rehearsing` at once. The journal records `proposed` with the verified runs, and `rehearsing`. A Duty whose routine exists in any standing gets no new proposal.
+The journal says why with `stays-out`, once per reason of a Duty.
+
+The answer of a pass names every other Duty with runs in the window in `staysOut`, with the reason why it got no proposal:
+
+- too few completed runs, with the count and `minRuns`
+- too few runs that can make a routine, with the counts, because a run that was sent back, failed its grader, got a thumbs down, or that a routine did does not count
+- too few verified runs, with the counts and `minVerified`
+- the routine that it has already, with its standing
+- a proposal that stayed out, as above
+
+The journal also says `stays-out` for too few verified runs, because a person can act on it with a thumbs up. It says it once, until the Duty gets its routine, so a new count writes no new entry. Too few runs is the state of every young Duty, and a routine that exists is in the journal already, so neither writes an entry.
+
+A good proposal goes to the store of the routines as `proposed`, with its source. It is bound to its Duty (`duty`). Unless the switch is on, it moves to `rehearsing` at once. The journal records `proposed` with the verified runs, and `rehearsing`. A Duty whose routine exists in any standing gets no new proposal.
 
 The package writes the journal for its own moves of a routine. So `RoutineMoved` writes nothing for such a move. A value of the context marks it.
 

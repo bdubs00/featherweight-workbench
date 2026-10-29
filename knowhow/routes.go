@@ -337,8 +337,8 @@ type writeAnswer struct {
 // put answers PUT /v1/knowhow/notes/{agent}/{scope}/{name...}: 201 for a
 // new note, 200 for a change or no change, 202 for a change that waits for
 // a person, and 412 when ifHash does not match. A worker names the writer
-// in by, agent or person:<subject>, and the run; a person writes as
-// themselves.
+// in by, agent or person:<subject>, and the run; a person, and the static
+// token without by, write as a person (writer).
 func (rt *routes) put(w http.ResponseWriter, r *http.Request, s *Service) {
 	r = r.WithContext(onBehalf(r))
 	rg, agent, sc, name, ok := rt.noteParams(w, r, s)
@@ -385,16 +385,26 @@ func (rt *routes) put(w http.ResponseWriter, r *http.Request, s *Service) {
 	native.WriteJSON(w, status, writeAnswer{Note: res.Note.Brief(), Waiting: res.Waiting})
 }
 
-// writer returns the writer and the run of a change: a worker names them,
-// agent by default; a person is always person:<subject> without a run.
+// writer returns the writer and the run of a change. A person is always
+// person:<subject> without a run. The static token names the writer in by:
+// the kernel of a worker always names it, agent for the memory tool of a
+// run and person:<subject> for a person that it acts for (memory/front.go
+// of the kernel, byOf). The page names none, so a change of the static
+// token without by is the change of the admin who holds the token, a
+// person: person:token, without a run. The process itself, which has no
+// subject, writes as the agent.
 func writer(c caller, by, run string) (string, string, error) {
 	if !c.trusted {
 		return c.by(), "", nil
 	}
 	by, run = strings.TrimSpace(by), strings.TrimSpace(run)
 	switch {
-	case by == "", by == ByAgent:
-		by = ByAgent
+	case by == "":
+		by = c.by()
+		if isPerson(by) {
+			run = ""
+		}
+	case by == ByAgent:
 	case by == "person":
 		// The native API of a worker without a subject of the caller.
 		by = PersonPrefix + "unknown"
@@ -501,11 +511,8 @@ func (rt *routes) undo(w http.ResponseWriter, r *http.Request, s *Service) {
 		return
 	}
 	by := rg.c.by()
-	if rg.c.trusted {
+	if rg.c.trusted && rg.c.subject == "" {
 		by = "fw-workbench"
-		if p := fw.PrincipalFrom(ctx); p != nil {
-			by = p.Subject
-		}
 	}
 	res, err := s.TakeBack(ctx, e.ID, by, rg.c.person())
 	if err != nil {
@@ -555,7 +562,8 @@ func (rt *routes) settings(w http.ResponseWriter, r *http.Request, s *Service) {
 }
 
 // putSettings answers PUT /v1/knowhow/settings/{agent} with the body
-// {"askFirst": true}. It needs the right to edit the agent.
+// {"askFirst": true}. It needs the right to edit the agent, and it records
+// the person who changed the switch: person:token for the static token.
 func (rt *routes) putSettings(w http.ResponseWriter, r *http.Request, s *Service) {
 	ctx := onBehalf(r)
 	agent := r.PathValue("agent")

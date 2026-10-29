@@ -102,6 +102,75 @@ func TestCandidatePass(t *testing.T) {
 	}
 }
 
+// chatRun records a run of triage without a Duty that answers in one
+// line.
+func chatRun(run string, at time.Time, input string) *recorder {
+	return record(run, at).queued("triage", input, "alice", nil).started("").finished("Check the log of the job.", 0.01)
+}
+
+// The evidence of an outcome holds the note that a person wrote with a
+// thumb. A skip of the review does not close the outcome for good: a new
+// run with a thumb down opens it again with that run alone, and so does a
+// thumb up of a run that went well. A run that only a check of the system
+// verified leaves a decided outcome as it is.
+func TestOutcomeThumbNotes(t *testing.T) {
+	fr := newFront(t, func(c *KnowhowConfig) { c.Review.Agent = "review" })
+	ctx := context.Background()
+	// pass puts a finished run in the archive and reads it an hour later.
+	pass := func(rec *recorder) {
+		t.Helper()
+		fr.arch.put(rec.out, fr.clk.now())
+		fr.clk.add(time.Hour)
+		if _, err := fr.s.CandidatePass(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outcome := func(polarity string) Candidate {
+		t.Helper()
+		list, _ := fr.s.Candidates(ctx, "triage", func(c Candidate) bool { return c.Kind == KindOutcome && strings.HasSuffix(c.Summary, "went "+polarity) })
+		if len(list) != 1 {
+			t.Fatalf("the outcomes that went %s = %+v", polarity, list)
+		}
+		return list[0]
+	}
+	pass(chatRun("01KTHU00000000000000000001", fr.clk.now(), "What do I check first when the backup fails?").
+		thumb(fw.ReactionDown, "alice", "Wrong: the backup job logs to backup.log on the NAS, and that is the place to look."))
+	c := outcome("badly")
+	if c.State != CandOpen || len(c.Evidence) != 1 || !strings.Contains(c.Evidence[0].Text, "A person wrote with a thumbs down:\nWrong: the backup job logs to backup.log on the NAS") {
+		t.Fatalf("the outcome = %+v", c)
+	}
+	if _, err := fr.s.Keep(ctx, KeepRequest{Candidate: c.ID, Op: OpSkip, Run: fw.NewID()}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second thumb down on another run opens the outcome again.
+	pass(chatRun("01KTHU00000000000000000002", fr.clk.now(), "Where is the log of the backup?").thumb(fw.ReactionDown, "alice", "It is backup.log on the NAS."))
+	c = outcome("badly")
+	if c.State != CandOpen || c.Decided != nil || len(c.Runs) != 1 || c.Runs[0].Run != "01KTHU00000000000000000002" || len(c.Evidence) != 1 ||
+		!strings.Contains(c.Evidence[0].Text, "It is backup.log on the NAS.") || !c.First.Equal(fr.clk.now()) || slices.Contains(c.Sources, Source{Ref: "run:01KTHU00000000000000000001"}) {
+		t.Fatalf("the outcome after a new thumb down = %+v", c)
+	}
+	open, err := fr.s.OpenCandidates(ctx, "triage", 10)
+	if err != nil || len(open.Candidates) != 1 {
+		t.Fatalf("the open candidates = %+v, %v", open, err)
+	}
+
+	// A run that a receipt verified does not open a decided outcome that
+	// went well; a thumb up does.
+	pass(chatRun("01KTHU00000000000000000003", fr.clk.now(), "One").receipt("accepted"))
+	if _, err := fr.s.Keep(ctx, KeepRequest{Candidate: outcome("well").ID, Op: OpSkip, Run: fw.NewID()}); err != nil {
+		t.Fatal(err)
+	}
+	pass(chatRun("01KTHU00000000000000000004", fr.clk.now(), "Two").receipt("accepted"))
+	if c := outcome("well"); c.State != CandSkipped {
+		t.Fatalf("a receipt opened a decided outcome again: %+v", c)
+	}
+	pass(chatRun("01KTHU00000000000000000005", fr.clk.now(), "Three").thumb(fw.ReactionUp, "alice", ""))
+	if c := outcome("well"); c.State != CandOpen || len(c.Runs) != 1 || c.Runs[0].Run != "01KTHU00000000000000000005" {
+		t.Fatalf("a thumb up left the outcome decided: %+v", c)
+	}
+}
+
 // pageRun records a run of triage that reads a page of the wiki through
 // the front, at the hash of its version, and finishes with a receipt.
 func pageRun(run string, at time.Time, principal, hash string) *recorder {

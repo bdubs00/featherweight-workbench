@@ -2,9 +2,12 @@ package knowhow
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/memory"
@@ -167,5 +170,151 @@ func TestKernelNoteNamesItsRun(t *testing.T) {
 	}
 	if e := entryOf(WhatPutAway, "launch-dates.md"); len(e.Runs) != 1 || e.Runs[0] != id {
 		t.Fatalf("the entry of the put-away note = %+v", e)
+	}
+}
+
+// TestStaticTokenWritesAsAPerson drives the memory tool of a kernel and
+// the page against this front with the static token. The kernel names its
+// writer, so a note of its run stays a note of the agent. The page names
+// none, so an owner who corrects a note that went out of date, signed in
+// with the static token, writes as a person: the note names the page at
+// its version now, and the journal says that a person changed it. A later
+// edit takes the version of the page now as well, and so do a put-away
+// and the switch: each records the person.
+func TestStaticTokenWritesAsAPerson(t *testing.T) {
+	fr, wiki, store := kernelFront(t)
+	ctx := context.Background()
+	const path = "lab/backup.md"
+	page, err := wiki.Write(ctx, path, "# Backup\nThe backup server listens on port 7341.\n", "alice", "the port", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := fw.WithRunInfo(ctx, fw.RunInfo{RunID: fw.NewID(), Agent: "triage"})
+	scope := store.Scope(fw.RunInfoFrom(run))
+	if _, err := store.Remember(run, scope, fw.MemoryRecord{Ref: memory.NoteRef(scope, "port.md"), Body: "The backup server listens on port 7341.\nSource: page:" + path + "\n"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := fr.note(t, Scope{Kind: ScopeAgent}, "port.md"); n.By != ByAgent || n.Sources[0].Version != page.Hash {
+		t.Fatalf("the note of the run = %+v", n)
+	}
+	moved, err := wiki.Write(ctx, path, "# Backup\nThe backup server listens on port 7342.\n", "alice", "a new port", page.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := fr.note(t, Scope{Kind: ScopeAgent}, "port.md")
+	if n.State != StateOutOfDate {
+		t.Fatalf("the note after the page changed = %+v", n)
+	}
+
+	// The page sends the text, the hash, and the sources as they were.
+	base := fr.url + "/v1/knowhow/notes/triage/agent/port.md"
+	resp, body := send(t, "PUT", base, "fleet", fmt.Sprintf(`{"text": "The backup server listens on port 7342.\nSource: page:%s\n", "ifHash": %q, "sources": [{"ref": "page:%s", "version": %q}]}`, path, n.Hash, path, page.Hash))
+	mustStatus(t, resp, body, http.StatusOK)
+	n = fr.note(t, Scope{Kind: ScopeAgent}, "port.md")
+	if n.By != "person:token" || n.Run != "" || n.State != StateChecked || n.OutOfDate != nil || len(n.Sources) != 1 || n.Sources[0].Version != moved.Hash {
+		t.Fatalf("the note after the edit of the owner = %+v", n)
+	}
+	if e := fr.journal(t)[0]; e.What != WhatUpdated || e.By != "person:token" || e.Why != "A person changed this note." || !e.Corrects {
+		t.Fatalf("the entry of the edit = %+v", e)
+	}
+
+	// The note of a person never goes out of date, so a later edit takes
+	// the version of the page now, not the version that the note names.
+	again, err := wiki.Write(ctx, path, "# Backup\nThe backup server listens on port 7342. It runs at 02:00.\n", "alice", "the hour", moved.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n = fr.note(t, Scope{Kind: ScopeAgent}, "port.md")
+	resp, body = send(t, "PUT", base, "fleet", fmt.Sprintf(`{"text": "The backup server listens on port 7342 and runs at 02:00.\n", "ifHash": %q, "sources": [{"ref": "page:%s", "version": %q}]}`, n.Hash, path, moved.Hash))
+	mustStatus(t, resp, body, http.StatusOK)
+	if n = fr.note(t, Scope{Kind: ScopeAgent}, "port.md"); n.Sources[0].Version != again.Hash || n.State != StateChecked {
+		t.Fatalf("the note after the second edit = %+v", n)
+	}
+
+	// The switch records the person, and so does a put-away of the page.
+	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/settings/triage", "fleet", `{"askFirst": true}`)
+	mustStatus(t, resp, body, http.StatusOK)
+	if !strings.Contains(body, `"by":"person:token"`) {
+		t.Fatalf("the switch = %s", body)
+	}
+	resp, body = send(t, "DELETE", base+"?ifHash="+n.Hash, "fleet", "")
+	mustStatus(t, resp, body, http.StatusOK)
+	if e := fr.journal(t)[0]; e.What != WhatPutAway || e.By != "person:token" || e.Why != "A person put this note away." {
+		t.Fatalf("the entry of the put-away = %+v", e)
+	}
+
+	// The kernel still writes as the agent, and with the switch on its
+	// change waits for a person.
+	if _, err := store.Remember(run, scope, fw.MemoryRecord{Ref: memory.NoteRef(scope, "hour.md"), Body: "The backup runs at 02:00.\n"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := fr.note(t, Scope{Kind: ScopeAgent}, "hour.md"); n.By != ByAgent || n.State != StateWaiting {
+		t.Fatalf("the note of the run under the switch = %+v", n)
+	}
+}
+
+// TestRecheckEvidence drives a recheck with the wiki of this front. The
+// evidence of a recheck holds the note and the page as they are when the
+// review lists it: a second change of the page shows in it, and a long
+// page is cut. A supersede of the review names the page at its version
+// now. A note that an owner corrected ends its recheck, so the review
+// neither lists it nor starts for it.
+func TestRecheckEvidence(t *testing.T) {
+	fr, wiki, _ := kernelFront(t)
+	fr.s.cfg.Review = ReviewConfig{Agent: "review", Every: 24 * time.Hour}
+	var started int
+	fr.s.enqueue = func(_ context.Context, _ string, reqs []fw.RunRequest) (string, int, error) {
+		started += len(reqs)
+		return "q", len(reqs), nil
+	}
+	ctx := context.Background()
+	port, err := wiki.Write(ctx, "lab/backup.md", "# Backup\nThe backup server listens on port 7341.\n", "alice", "the port", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	printer, err := wiki.Write(ctx, "lab/printer.md", "# Printer\nThe printer is heron-2.\n", "alice", "the printer", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr.write(t, agentScope, "port.md", "The backup server listens on port 7341.\n", Source{Ref: "page:lab/backup.md", Version: port.Hash})
+	fr.write(t, agentScope, "printer.md", "The printer is heron-2.\n", Source{Ref: "page:lab/printer.md", Version: printer.Hash})
+	if _, err := wiki.Write(ctx, "lab/backup.md", "# Backup\nThe backup server listens on port 7342.\n", "alice", "a new port", port.Hash); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := wiki.Write(ctx, "lab/backup.md", "# Backup\nThe backup server listens on port 7343.\n"+strings.Repeat("Old ports: 7000 to 7340.\n", 400), "alice", "again", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wiki.Write(ctx, "lab/printer.md", "# Printer\nThe printer is heron-3.\n", "alice", "a new printer", printer.Hash); err != nil {
+		t.Fatal(err)
+	}
+
+	// The owner corrects the note of the printer.
+	n := fr.note(t, agentScope, "printer.md")
+	if _, err := fr.s.Write(ctx, WriteRequest{Agent: "triage", Scope: agentScope, Name: "printer.md", Text: "The printer is heron-3.\n", IfHash: n.Hash, Sources: n.Sources, By: "person:alice"}); err != nil {
+		t.Fatal(err)
+	}
+	open, err := fr.s.OpenCandidates(ctx, "triage", 10)
+	if err != nil || len(open.Candidates) != 1 || open.Candidates[0].Note != "port.md" || len(open.Candidates[0].Evidence) != 1 {
+		t.Fatalf("the open candidates = %+v, %v", open, err)
+	}
+	ev := open.Candidates[0].Evidence[0].Text
+	if !strings.Contains(ev, "The note port.md says now:\nThe backup server listens on port 7341.") || !strings.Contains(ev, "The page says now:\n# Backup\nThe backup server listens on port 7343.") ||
+		strings.Contains(ev, "7342") || len(ev) > pageCut+evidenceCut || !strings.HasSuffix(ev, "…") {
+		t.Fatalf("the evidence of the recheck = %q", ev)
+	}
+	re, _ := fr.s.Candidates(ctx, "triage", func(c Candidate) bool { return c.Note == "printer.md" })
+	if len(re) != 1 || re[0].State != CandSkipped || re[0].Decided == nil || re[0].Decided.By != ByKnowhow {
+		t.Fatalf("the recheck of the corrected note = %+v", re)
+	}
+
+	// The review supersedes the note from the evidence, against the page
+	// as it is now.
+	res, err := fr.s.Keep(ctx, KeepRequest{Candidate: open.Candidates[0].ID, Op: OpSupersede, Text: "The backup server listens on port 7343.", Why: "The page names a new port.", Run: fw.NewID()})
+	if err != nil || res.Note.State != StateChecked || len(res.Note.Sources) != 1 || res.Note.Sources[0].Version != moved.Hash {
+		t.Fatalf("the keep = %+v, %v", res, err)
+	}
+	if out, err := fr.s.ReviewAgent(ctx, "triage"); err != nil || out.Started || started != 0 {
+		t.Fatalf("the review after the rechecks = %+v, %v, %d runs", out, err, started)
 	}
 }

@@ -160,6 +160,12 @@ func (r *recorder) finished(output string, cost float64) *recorder {
 	return r.add(fw.EvRunFinished, fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: output, Totals: &fw.RunUsage{CostUSD: cost}})
 }
 
+// thumb records the thumb of a person, up or down, with a note, on the
+// last event of the run.
+func (r *recorder) thumb(reaction, by, note string) *recorder {
+	return r.add(fw.EvRunReacted, fw.ReactionData{Seq: r.seq, Reaction: reaction, By: by, Note: note})
+}
+
 func (r *recorder) receipt(verification string) *recorder {
 	return r.add(fw.EvRunAnnotated, fw.QualityAnnotatedData{Quality: &fw.QualityObservation{ID: "r-" + r.run, Completion: r.seq, Verification: verification}})
 }

@@ -249,6 +249,31 @@ func TestReadyByRisk(t *testing.T) {
 	}
 }
 
+// The decision of a run comes at its start and its comparison at its end.
+// A routine that only reads does not go live on the decision of its
+// twentieth run, while that run still works, and the note of the move
+// counts that run once its comparison came: 20 runs, and 20 agreed.
+func TestReadyWaitsForTheLastComparison(t *testing.T) {
+	movesOf(t)
+	s := memStore(Config{})
+	if _, _, err := s.Put(context.Background(), PutRequest{Agent: "triage", Routine: plain(), Standing: Rehearsing, By: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	st := newStream(t, s)
+	st.calls(19, fw.RiskRead, true)
+	run := "01R00020"
+	st.send(st.event(run, fw.EvRoutineDecided, fw.RoutineDecidedData{Routine: "acknowledge", Version: 1, Mode: fw.RoutineShadow, Applies: true, Risk: fw.RiskRead}))
+	if rec := get(t, s); rec.Standing != Rehearsing || rec.Ready {
+		t.Fatalf("on the decision of the twentieth run: %s, ready %v", rec.Standing, rec.Ready)
+	}
+	st.send(st.event(run, fw.EvRoutineCompared, fw.RoutineComparedData{Routine: "acknowledge", Version: 1, Mode: fw.RoutineShadow, Calls: true, Agree: true}))
+	rec := get(t, s)
+	last := rec.History[len(rec.History)-1]
+	if rec.Standing != Live || last.Note != "It only reads and is ready: it would have acted on 20 runs, and 20 agreed, so it went live by itself" {
+		t.Fatalf("on the comparison of the twentieth run: %s, last move %+v", rec.Standing, last)
+	}
+}
+
 // With AskFirst on for the agent, a ready routine that only reads waits
 // for a person.
 func TestReadyReadAsksFirst(t *testing.T) {
