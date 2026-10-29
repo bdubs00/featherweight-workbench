@@ -343,7 +343,9 @@ func TestProposeRoute(t *testing.T) {
 		resp, body := send(t, http.MethodPost, url+"/triage", who, "")
 		mustStatus(t, resp, body, want)
 	}
-	resp, body := send(t, http.MethodPost, url+"?agent=triage", "alice", "")
+	resp, body := send(t, http.MethodPost, url, "", "")
+	mustStatus(t, resp, body, http.StatusUnauthorized)
+	resp, body = send(t, http.MethodPost, url+"?agent=triage", "alice", "")
 	mustStatus(t, resp, body, http.StatusBadRequest)
 	if _, err := routines.Of(fr.a).Get(context.Background(), "triage", "duty-nightly"); err == nil {
 		t.Fatal("a query agent ran the pass")
