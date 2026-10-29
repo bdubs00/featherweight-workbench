@@ -326,7 +326,7 @@ func (s *Service) pickName(ctx context.Context, c Candidate, sc Scope, text stri
 			return name, nil
 		}
 	}
-	return "", fmt.Errorf("%w: the names that the front picks for this text are taken; send a name, a path such as %s/%s-%s.md", ErrInvalid, folder, base, "more")
+	return "", fmt.Errorf("%w: the names that the front picks for this text are taken; send a name of your own, a path such as %s/%s-other.md", ErrInvalid, folder, base)
 }
 
 // Keep decides one candidate for the review: it adds a note, supersedes
