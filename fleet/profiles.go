@@ -779,7 +779,7 @@ func (f *Fleet) poolAgents(ctx context.Context, base *pools.Pool, only string) (
 		// A runtime pool that waits for its profile runs none yet.
 		merged = base
 	case err != nil:
-		f.log.Warn("fleet: the profiles of a pool come from the last pass", "pool", base.Name, "error", err)
+		lastPass(ctx, f.log, "fleet: the profiles of a pool come from the last pass", "pool", base.Name, "error", err)
 		merged = f.platform.current(base)
 	}
 	profiles, given := merged.Profiles(), base.Profiles()

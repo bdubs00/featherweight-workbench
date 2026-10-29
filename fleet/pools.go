@@ -317,7 +317,7 @@ func (f *Fleet) Pools(ctx context.Context) ([]pools.Status, error) {
 	p.mu.Unlock()
 	entries, err := f.runtimeList(ctx)
 	if err != nil {
-		f.log.Warn("fleet: the runtime pools come from the last pass", "error", err)
+		lastPass(ctx, f.log, "fleet: the runtime pools come from the last pass", "error", err)
 		entries = nil
 		p.mu.Lock()
 		for _, rt := range p.rt {

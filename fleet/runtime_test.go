@@ -512,3 +512,20 @@ func TestRuntimePoolShipsTheSkills(t *testing.T) {
 		return hasGapWith(stateOf(front.f, "helper"), "the most that a pool ships")
 	})
 }
+
+// A read of the store of the pools for a caller that went away logs at
+// debug, because the answer goes nowhere: the front logged a burst of
+// warnings at each start, while the pages that reloaded canceled their
+// reads (tester finding 6). Another failure stays a warning.
+func TestLastPassOfACanceledRead(t *testing.T) {
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	lastPass(gone, log, "the pools come from the last pass", "error", context.Canceled)
+	lastPass(context.Background(), log, "the pools come from the last pass", "error", "the store did not answer")
+	out := buf.String()
+	if !strings.Contains(out, "level=DEBUG") || !strings.Contains(out, "level=WARN") || strings.Count(out, "\n") != 2 {
+		t.Fatalf("the log = %s", out)
+	}
+}

@@ -113,7 +113,7 @@ func (f *Fleet) poolsNow(ctx context.Context) []*pools.Pool {
 	}
 	entries, err := f.runtimeList(ctx)
 	if err != nil {
-		f.log.Warn("fleet: the runtime pools come from the last pass", "error", err)
+		lastPass(ctx, f.log, "fleet: the runtime pools come from the last pass", "error", err)
 		p := f.platform
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -682,4 +682,17 @@ func RuntimePools(ctx context.Context, cfg *fw.Config, files []*pools.Pool, temp
 		return merged, fmt.Errorf("fleet: %s", strings.Join(problems, "; "))
 	}
 	return merged, nil
+}
+
+// lastPass logs that a read of the store of the pools failed, so the pools
+// of the last pass stand in. A caller that went away, such as a page that
+// a person reloads while the front starts, cancels its context: the
+// answer goes nowhere, and the next read reads the store again, so that
+// is no warning, and the log says it at debug.
+func lastPass(ctx context.Context, log *slog.Logger, msg string, args ...any) {
+	if ctx.Err() != nil {
+		log.Debug(msg, args...)
+		return
+	}
+	log.Warn(msg, args...)
 }
