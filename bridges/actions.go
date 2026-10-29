@@ -129,6 +129,10 @@ func (s *Store) item(ctx context.Context, rec *record, subject string, members b
 	}
 	ms := s.members(fctx, rec, runs, s.taskStates(fctx))
 	it := Item{Bridge: rec.public(), Read: read, Unread: unread, UnreadMore: more, MemberCount: len(rec.Members), NeedsYou: needsYou(ms)}
+	if it.NeedsYou > 0 {
+		it.WaitsFor = s.waitsFor(rec, subject)
+	}
+	it.Summary = s.b.lastPost(fctx, rec)
 	it.Caps.MaxTurns = rec.Caps.turnCap()
 	if at, ok := s.b.lastAt(fctx, rec); ok {
 		it.LastAt = &at

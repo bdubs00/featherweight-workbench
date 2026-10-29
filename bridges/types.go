@@ -224,6 +224,14 @@ type Activity struct {
 // count reached past it. LastAt is the time of the newest entry of the
 // channel, for the freshness of a row of the list, and nil before the
 // first entry. Usage is set by GET /v1/bridges/{id} alone.
+//
+// NeedsYou counts the seats that wait for a person, and WaitsFor says for
+// whom when it is not 0: "you" when the caller is the person who asked for
+// the bridge, or the owner of the duty that opened it, else a name of that
+// person. Only that person counts the bridge in the one count of the work
+// that needs a person (work.Waiting), so a channel of another person says
+// whom it waits for instead. Summary is the first line of the newest
+// message of an agent in the channel, for a row of a list and a card.
 type Item struct {
 	Bridge
 	Read        uint64          `json:"read"`
@@ -231,6 +239,8 @@ type Item struct {
 	UnreadMore  bool            `json:"unreadMore"`
 	MemberCount int             `json:"memberCount"`
 	NeedsYou    int             `json:"needsYou"`
+	WaitsFor    string          `json:"waitsFor,omitempty"`
+	Summary     string          `json:"summary,omitempty"`
 	LastAt      *time.Time      `json:"lastAt,omitempty"`
 	Usage       *fleet.UsageSum `json:"usage,omitempty"`
 }

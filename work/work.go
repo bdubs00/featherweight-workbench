@@ -162,6 +162,11 @@ type Card struct {
 	// Lost is true when no worker holds a part of the card that had not
 	// ended: the pool replaced its worker, so the part cannot go on.
 	Lost bool `json:"lost,omitempty"`
+	// Summary says in one line what the card holds, for a person who
+	// scans a list: the question itself, what a decision asks, or the
+	// first line of the newest result. It is empty when the card has
+	// nothing more to say than its reason.
+	Summary string `json:"summary,omitempty"`
 }
 
 // Lane is one stage of the board: its cards, the cards whose next move is
@@ -319,12 +324,17 @@ type draft struct {
 	parts   []part
 	agents  map[string]bool
 	settled bool // the record of the card (a bridge or a start) gave the stage
+	// result is the first line of the newest message of an agent of a
+	// bridge, the summary of a team whose agents finished.
+	result string
 }
 
 // part is one seat or one run of a card: its stage, the reason in words,
 // since when, the run, and its approval.
 type part struct {
 	stage, reason string
+	// summary is the line of the part for Card.Summary.
+	summary       string
 	since         time.Time
 	run, approval string
 	verdict       string
@@ -350,6 +360,7 @@ func (b *board) bridge(it bridges.Item) {
 	d, _ := b.card("bridge:" + it.ID)
 	d.Kind, d.Title, d.Opened, d.settled = KindBridge, it.Title, it.CreatedAt, true
 	d.Links.Bridge, d.Links.Batch = it.ID, bridges.BatchOf(it.ID)
+	d.result = it.Summary
 	d.From = b.fromSubject(it.Operator, it.OperatorName, "bridge")
 	if it.Manager != nil && it.Manager.Run != "" && d.From.Kind == "person" {
 		if r, ok := b.byID[it.Manager.Run]; ok && r.Agent != "" && it.Placement == bridges.PlacementQueue {
@@ -397,11 +408,13 @@ func (b *board) bridge(it bridges.Item) {
 			lost = true
 		}
 		switch {
-		case (m.Presence == bridges.PresenceNeedsYou || m.Question > 0) && lost:
-			// The seat asked, and then its worker went: nobody can move
-			// the seat by an answer, so it stopped (walk finding L20).
+		case m.Presence == bridges.PresenceNeedsYou && m.Question == 0 && lost:
+			// The seat waits for a decision, and then its worker went:
+			// nobody can decide it any more, so it stopped (walk finding
+			// L20). A question still waits: an answer seats the member
+			// again on a new run, which reads the channel.
 			p.stage, p.lost = StageStopped, true
-			p.reason = m.Handle + " asked a question, but " + agentGone
+			p.reason = m.Handle + " waited for a decision, but " + agentGone
 			d.parts = append(d.parts, p)
 			continue
 		}
@@ -412,8 +425,12 @@ func (b *board) bridge(it bridges.Item) {
 				p.since, p.approval = w.At, w.Approval
 				if w.Question > 0 {
 					p.reason = m.Handle + " asks: " + oneLine(plainText(w.Text), 200)
+					p.summary = bridges.FirstLine(w.Text, 200)
 				} else {
 					p.reason = m.Handle + " waits for a decision."
+					if r, ok := b.byID[p.run]; ok && r.Pending != nil {
+						p.summary = pendingSummary(r.Run)
+					}
 				}
 			} else {
 				p.reason = m.Handle + " waits for you."
@@ -779,6 +796,7 @@ func (b *board) runPart(r Run) part {
 	case fw.StateInputRequired:
 		p.stage = StageNeedsYou
 		p.reason = pendingWords(r.Run)
+		p.summary = pendingSummary(r.Run)
 		if a := r.Pending; a != nil {
 			p.approval = a.ID
 			if !a.RequestedAt.IsZero() {
@@ -795,6 +813,13 @@ func (b *board) runPart(r Run) part {
 		}
 	case fw.StateCompleted:
 		p.stage = StageDone
+		p.summary = bridges.FirstLine(r.Output, 200)
+		if r.Work.Reworking {
+			// A person sent the answer back, and the note reached the
+			// agent: the view can still hold the end before it.
+			p.stage, p.reason, p.summary = StageWorking, "The agent works on your note.", ""
+			break
+		}
 		switch v := judged(r); {
 		case fleet.ToCheck(r.Run, r.Work) && fleet.Again(r.Work):
 			p.stage, p.reason = StageReview, "A new answer to check."
@@ -808,6 +833,7 @@ func (b *board) runPart(r Run) part {
 			p.stage, p.reason = StageReview, "A result to check."
 			if what, ok := fleet.Found(r.Run); ok {
 				p.reason = "Found: " + oneLine(plainText(what), 200)
+				p.summary = bridges.FirstLine(what, 200)
 			}
 		case v == VerdictAccepted:
 			p.verdict, p.reason = v, "Accepted."
@@ -883,6 +909,27 @@ func notDone(d *fw.RunDone) string {
 		return "its checks did not pass."
 	}
 	return "the check " + strings.Join(failed, ", ") + " failed."
+}
+
+// pendingSummary is the line of a run that waits for a person: the
+// question itself, or what a decision asks, with the reason of the agent.
+func pendingSummary(r *fw.Run) string {
+	a := r.Pending
+	if a == nil {
+		return ""
+	}
+	reason := oneLine(plainText(a.Reason), 200)
+	switch {
+	case a.Connect != nil, len(a.Schema) > 0:
+		return reason
+	case a.Tool != "":
+		s := "Asks before it " + toolWords(a.Tool)
+		if reason != "" {
+			return s + ": " + reason
+		}
+		return s + "."
+	}
+	return reason
 }
 
 // pendingWords says what a run that waits for a person asks.
@@ -1007,7 +1054,10 @@ func (b *board) settle(d *draft) {
 			}
 		}
 	}
-	d.Stage, d.Reason, d.Since = top.stage, top.reason, top.since
+	d.Stage, d.Reason, d.Since, d.Summary = top.stage, top.reason, top.since, top.summary
+	if d.Kind == KindBridge && (d.Stage == StageReview || d.Stage == StageDone) && d.result != "" {
+		d.Summary = d.result
+	}
 	switch {
 	case d.Kind == KindBridge && d.Stage == StageReview:
 		d.Reason = teamDone

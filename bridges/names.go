@@ -154,3 +154,27 @@ func (s *Store) nameOf(ctx context.Context, p *fw.Principal) string {
 	}
 	return s.personName(p.Subject, p.Name)
 }
+
+// Asker returns the subject of the person whom the questions of a bridge
+// wait for: the person who asked for the bridge, or the owner of the duty
+// that opened it. A question to operator goes to that person, and the
+// board counts it for that person alone.
+func Asker(operator, owner string) string {
+	if strings.HasPrefix(operator, "duty:") && owner != "" {
+		return owner
+	}
+	return operator
+}
+
+// waitsFor names the person whom the questions of a bridge wait for, for
+// the caller subject: "you" for that person, else a name of the person.
+func (s *Store) waitsFor(rec *record, subject string) string {
+	who := Asker(rec.Operator, rec.Owner)
+	if who == subject && subject != "" {
+		return "you"
+	}
+	if who == rec.Operator {
+		return s.personName(who, rec.OperatorName)
+	}
+	return s.personName(who, "")
+}

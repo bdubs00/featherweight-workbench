@@ -129,9 +129,11 @@ func decorate(rec *record, runs map[string]*fw.Run, states map[string]string) []
 		if p, ok := unseatedPresence(rec, *m, runs); ok {
 			m.Presence = p
 		}
-		// A question of the seat waits for a person (ask.go), unless the
-		// run of the seat is gone: then no answer moves it.
-		if m.Question > 0 && !m.Gone && m.Presence != PresenceFired && m.Presence != PresenceError {
+		// A question of the seat waits for a person (ask.go), also when
+		// the run of the seat is gone: an answer seats the member again on
+		// a new run, which reads the channel (wakeInput), and a person can
+		// settle the question without an answer.
+		if m.Question > 0 && m.Presence != PresenceFired && (m.Presence != PresenceError || m.Gone) {
 			m.Presence = PresenceNeedsYou
 		}
 	}
