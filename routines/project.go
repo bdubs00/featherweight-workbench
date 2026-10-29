@@ -337,8 +337,14 @@ func (s *Store) grow(ctx context.Context, rec Record, ev *Evidence) error {
 	case rec.SteppedBack && rec.SignedOff.holds(version):
 		note = fmt.Sprintf("It is ready again after it stepped back, and %s signed off version %d, so it went live again by itself", rec.SignedOff.By, version)
 	case ev.Risk == fw.RiskRead && !askFirst(ctx, rec.Agent):
+		// The counts of the ready rule: a run without its comparison yet
+		// is named apart, so the note never counts it as one that did not
+		// agree.
 		t, _ := ev.current()
 		note = fmt.Sprintf("It only reads and is ready: it would have acted on %d runs, and %d agreed, so it went live by itself", t.Acted, t.Agreed)
+		if n := t.compared(); n != t.Acted {
+			note = fmt.Sprintf("It only reads and is ready: it would have acted on %d runs, %d of them were compared with the agent, and %d agreed, so it went live by itself", t.Acted, n, t.Agreed)
+		}
 	default:
 		return nil
 	}

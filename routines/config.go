@@ -85,8 +85,9 @@ func (r ReadyAfter) For(risk string) int {
 // the pools. The profiles of a pool then keep the routines of their own
 // configuration. A rehearsing routine is ready when, over its current
 // version, it would have acted on at least the runs of ReadyAfter for its
-// risk, it agreed with the agent on at least ReadyAgreement of them, and
-// no run where it agreed came back. A zero value takes the default.
+// risk, each with its comparison, it agreed with the agent on at least
+// ReadyAgreement of them, and no run where it agreed came back. A zero
+// value takes the default.
 type Config struct {
 	Enabled        *bool      `yaml:"enabled"`
 	ReadyAfter     ReadyAfter `yaml:"readyAfter"`

@@ -3093,9 +3093,11 @@ The workers of a pool whose profiles run a routine publish `fw.routine.decided`,
 
 The ready rule counts the runs of the current version since the last step back. A rehearsing routine is ready under three conditions:
 
-- `acted` is at least the bound of `readyAfter` for its risk. The bound is `read` for a routine whose risk is `read`, and `write` for every other routine.
+- `agreed` plus `disagreed`, the runs of `acted` whose comparison came, is at least the bound of `readyAfter` for its risk. The bound is `read` for a routine whose risk is `read`, and `write` for every other routine.
 - `agreed` is at least `readyAgreement` of `acted`.
 - `sentBack.agreed` is 0.
+
+The decision of a run comes at its start, and its comparison at its end. So a run that still works counts in `acted` but toward no bound, and against the agreement. The routine never gets ready on the decision of a run whose comparison has not come, and the note of a move to live counts each run with its comparison: "it would have acted on 20 runs, and 20 agreed". When `acted` holds a run without a comparison at that moment, the note names the runs that were compared apart.
 
 When `ready` changes, the projection writes it into the record. Then it makes the moves of section 21.2.1.
 
