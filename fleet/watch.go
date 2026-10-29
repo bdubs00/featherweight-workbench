@@ -459,7 +459,7 @@ func (f *Fleet) toolInput(id, callID string) (json.RawMessage, bool) {
 }
 
 // ActivityPhrase words what a run of the fleet does now, such as
-// `Ran "go test ./..."` or "Thinking in turn 7", with view.ActivityPhrase.
+// `Ran "go test ./..."` or "Thinking", with view.ActivityPhrase.
 // The input of the call comes from the fleet view that holds the run: the
 // stream carries the inputs of the calls of the workers, cut to size, and
 // the view keeps the latest one of each run up to ActivityInputLimit. For a

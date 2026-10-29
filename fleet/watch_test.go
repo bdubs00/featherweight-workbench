@@ -75,7 +75,7 @@ func TestWatchCoalesces(t *testing.T) {
 	if got[1].Kind != ChangeRun || got[1].Run.ID != "01RUNA" || got[1].Run.Seq != 6 || got[1].Run.Member != "w1" {
 		t.Errorf("second change = %+v, want run A at seq 6 on w1", got[1])
 	}
-	if got[1].Activity != "Thinking in turn 4" {
+	if got[1].Activity != "Thinking" {
 		t.Errorf("activity of run A = %q", got[1].Activity)
 	}
 	if got[2].Kind != ChangeRun || got[2].Run.ID != "01RUNB" {
@@ -303,7 +303,7 @@ func TestWatchActivityPhrase(t *testing.T) {
 	for c.Run == nil || c.Run.Seq != 5 {
 		c = next(t, ch)
 	}
-	if c.Activity != "Thinking in turn 1" {
+	if c.Activity != "Thinking" {
 		t.Errorf("activity after the result = %q", c.Activity)
 	}
 	if _, kept := front.f.toolInput("01RUNA", "call-1"); kept {

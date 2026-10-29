@@ -86,7 +86,7 @@ func TestSystemLines(t *testing.T) {
 	if again := poll(); len(again) != 0 {
 		t.Fatalf("a second look posts %+v", again)
 	}
-	if ms := h.member("migrator-1"); len(ms) == 0 || ms[len(ms)-1].Presence != PresenceWorking || ms[len(ms)-1].Activity == nil || ms[len(ms)-1].Activity.Phrase != "Thinking in turn 2" {
+	if ms := h.member("migrator-1"); len(ms) == 0 || ms[len(ms)-1].Presence != PresenceWorking || ms[len(ms)-1].Activity == nil || ms[len(ms)-1].Activity.Phrase != "Thinking" {
 		t.Fatalf("member hooks = %+v", ms)
 	}
 
