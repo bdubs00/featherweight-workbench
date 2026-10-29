@@ -92,3 +92,20 @@ func TestPlanRouteOfAChannel(t *testing.T) {
 		t.Fatalf("a channel that is not there = %d %s", code, b)
 	}
 }
+
+// The message of a job of a channel starts with a capital, also when the
+// schedule came first in the words (tester finding 4).
+func TestJobMessage(t *testing.T) {
+	for words, want := range map[string]string{
+		"every day at 9, post one new tip about backups": "Post one new tip about backups",
+		"Draft the notes. Every Friday at 4pm":           "Draft the notes.",
+	} {
+		said := "every day at 9"
+		if strings.HasPrefix(want, "Draft") {
+			said = "every friday at 4pm"
+		}
+		if got := jobMessage(words, said); got != want {
+			t.Errorf("jobMessage(%q) = %q, want %q", words, got, want)
+		}
+	}
+}
