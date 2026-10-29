@@ -3426,7 +3426,7 @@ Each replica of the front runs the engine. A pass comes at the next time of a sc
 
 A start of a time goes through these steps:
 
-1. The overlap. With `skip`, a time does not start while a run of the duty works, and the history says so. With `queue`, one time waits for that run, and a later time skips. With `allow`, the time starts beside it. A duty never holds more than 40 starts that work at one time.
+1. The overlap. Before it decides, a start reads the runs of the starts that work in the history from the view (`duties.Service.settleOpen`): the engine learns the end of a run on its next pass, a few seconds after the end, so Run now right after an end would skip. With `skip`, a time does not start while a run of the duty works, and the history says so: "The run of <time> still works, and this job starts no second run while one works. Start it again when that run ends." With `queue`, one time waits for that run, and a later time skips. With `allow`, the time starts beside it. A duty never holds more than 40 starts that work at one time.
 2. The daily cap. When the runs of the duty since midnight in its time zone cost `perDayUSD` or more, the time skips. The history says so, and the owner hears of it once that day.
 3. The claim. The replica adds the time to the entry of its day with a compare-and-swap. Of two replicas that claim one time, one wins, and only the winner goes on.
 4. For a duty with a check, the check (section 22.6).
