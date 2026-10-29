@@ -225,10 +225,14 @@ func Transcript(events []fw.Event) []Item {
 			if e.Decode(&d) == nil {
 				it := at(ItemNote)
 				it.IsError = true
+				n := d.Max
+				if n <= 0 {
+					n = d.Value
+				}
 				if d.Scope == fw.ScopeTree {
-					it.setText("The run tree of run " + d.Run + " reached its limit of " + d.Limit + ", which the run shares with its child runs.")
+					it.setText("It stopped at " + LimitWords(d.Limit, n) + ", which it shares with the runs that it started.")
 				} else {
-					it.setText("The run reached its limit of " + d.Limit + ".")
+					it.setText("It stopped at " + LimitWords(d.Limit, n) + ".")
 				}
 				out = append(out, it)
 			}

@@ -23,6 +23,7 @@ import (
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/bridges"
+	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/duties"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/manager"
@@ -915,7 +916,7 @@ func (b *board) runPart(r Run) part {
 			// A run that stops at a limit runs its checks of done after
 			// its final report, so the reason says the limit first and
 			// then what the checks found (the kernel, done at a limit).
-			p.reason = "Stopped at " + limitWords(r.Error) + "."
+			p.reason = "It stopped at " + limitWords(r.Error, r.Usage) + "."
 			switch {
 			case r.Done != nil && r.Done.State == fw.DoneFailed:
 				p.reason += " Not done: " + notDone(r.Done)
@@ -1360,28 +1361,25 @@ func titleOf(r *fw.Run) string {
 	return r.Agent
 }
 
-// oneLine cuts a text to one line of at most n bytes.
-// limitWords names the limit of a run that stopped at its budget, from
-// its error "budget exceeded: <limit>", in words for a person, such as
-// "its limit of steps" for maxTurns. An unknown limit is "a limit of its
-// budget".
-func limitWords(err string) string {
+// limitWords names the limit of the budget at which a run stopped, from
+// the error of the run, with the amount from the usage of the run, which
+// reached the limit: "its limit of 1 turn", never the key of the budget
+// (dashboard.LimitWords).
+func limitWords(err string, u fw.RunUsage) string {
 	name, _, _ := strings.Cut(strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(err, "budget exceeded"), ":")), " ")
-	switch strings.TrimRight(name, ".,;") {
+	name = strings.TrimRight(name, ".,;")
+	var n float64
+	switch name {
 	case "maxTurns":
-		return "its limit of steps"
+		n = float64(u.Turns)
 	case "maxToolCalls":
-		return "its limit of tool calls"
-	case "maxCallsPerTurn":
-		return "its limit of tool calls in one step"
+		n = float64(u.ToolCalls)
 	case "maxTokens":
-		return "its limit of tokens"
+		n = float64(u.InputTokens + u.OutputTokens)
 	case "maxCostUSD":
-		return "its limit of cost"
-	case "deadline":
-		return "its time limit"
+		n = u.CostUSD
 	}
-	return "a limit of its budget"
+	return dashboard.LimitWords(name, n)
 }
 
 // markdownMarks are the marks of Markdown that a line of a card drops:

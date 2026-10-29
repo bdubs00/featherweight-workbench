@@ -247,7 +247,7 @@ func tools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolList,
 			Title:       "Bridges",
-			Description: "List the open bridges of the person of your run: each with its id, title, state, members, unread count, and the members that wait for the person. Call it before you propose or open work, so you build on a bridge that already does the work instead of opening a second one.",
+			Description: "List the open bridges, the channels, of the person of your run: each with its id, title, state, members, unread count, the questions and decisions of its agents that wait for the person, and the first line of its newest post. Call it before you propose or open work, so you build on a channel that already does the work instead of opening a second one. It does not say which results wait for a sign-off: for what waits for the person in all, call inbox.",
 			InputSchema: json.RawMessage(listSchema),
 			Annotations: readOnly,
 		}, t.list),
@@ -596,8 +596,12 @@ func (t *toolSet) list(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) 
 		if it.UnreadMore {
 			unread += "+"
 		}
-		fmt.Fprintf(&b, "\n- %s %q: %s, %s unread, %d wait for the person", it.ID, it.Title, plural(it.MemberCount, "member", "members"), unread, it.NeedsYou)
+		fmt.Fprintf(&b, "\n- %s %q: %s, %s unread, %s for the person", it.ID, it.Title, plural(it.MemberCount, "agent", "agents"), unread, plural(it.NeedsYou, "question or decision waits", "questions or decisions wait"))
+		if it.Summary != "" {
+			fmt.Fprintf(&b, "; newest post: %s", it.Summary)
+		}
 	}
+	b.WriteString("\nThe questions and decisions are not all that waits: a result to sign off waits too. Call inbox for the whole list that the page shows in Needs you.")
 	return mcp.Result(b.String(), listResult{Bridges: items}), nil, nil
 }
 

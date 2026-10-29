@@ -514,7 +514,7 @@ func (s *Service) recordDelivery(ctx context.Context, st *stored, kind string, g
 func (s *Service) carryTemplated(ctx context.Context, st *stored, date string, e entry) Outcome {
 	d := &st.Duty
 	if d.CheckFirst == nil {
-		reason := "This job starts on the calls of another app, so a run now has no event and starts nothing."
+		reason := "It waits for a call of the other app."
 		s.endEntry(ctx, st, date, e, []string{StateStarting}, StateSkipped, reason)
 		return Outcome{Skipped: reason}
 	}

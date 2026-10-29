@@ -341,6 +341,7 @@ func TestReviewAndVerdicts(t *testing.T) {
 	notDone := run("NOTDONE", "writer", fw.StateFailed, ago(time.Hour), ago(time.Hour), nil)
 	notDone.Done = &fw.RunDone{State: fw.DoneFailed, Checks: []fw.DoneResult{{Name: "tests", Tool: "bash"}, {Name: "lint", Tool: "bash", Passed: true}}}
 	limit := run("LIMIT", "writer", fw.StateFailed, ago(time.Hour), ago(time.Hour), nil)
+	limit.Usage.Turns = 1
 	limit.Error = "budget exceeded: maxTurns"
 	// A run at a limit runs its checks after its final report.
 	limitPassed := run("LIMITPASS", "writer", fw.StateFailed, ago(time.Hour), ago(time.Hour), nil)
@@ -367,13 +368,13 @@ func TestReviewAndVerdicts(t *testing.T) {
 	if c := cardOf(t, ans, "run:NOTDONE"); c.Stage != StageStopped || c.Reason != "Not done: the check tests failed." {
 		t.Fatalf("a run that is not done = %+v", c)
 	}
-	if c := cardOf(t, ans, "run:LIMIT"); c.Stage != StageStopped || c.Reason != "Stopped at its limit of steps." {
+	if c := cardOf(t, ans, "run:LIMIT"); c.Stage != StageStopped || c.Reason != "It stopped at its limit of 1 turn." {
 		t.Fatalf("a run at a limit = %+v", c)
 	}
 	for id, want := range map[string]string{
-		"LIMITPASS": "Stopped at its limit of tool calls. Its checks passed.",
-		"LIMITFAIL": "Stopped at its limit of tool calls. Not done: the check the report is saved failed.",
-		"LIMITWEAK": "Stopped at its limit of tool calls.",
+		"LIMITPASS": "It stopped at its limit of tool calls. Its checks passed.",
+		"LIMITFAIL": "It stopped at its limit of tool calls. Not done: the check the report is saved failed.",
+		"LIMITWEAK": "It stopped at its limit of tool calls.",
 	} {
 		if c := cardOf(t, ans, "run:"+id); c.Stage != StageStopped || c.Reason != want {
 			t.Errorf("the card %s = %s %q, want %q", id, c.Stage, c.Reason, want)
@@ -416,14 +417,16 @@ func TestDutyStartThatWorks(t *testing.T) {
 // A card says why a run stopped at its budget in words, never with the
 // name of a key, and shows a question without the marks of Markdown.
 func TestReasonWords(t *testing.T) {
+	used := fw.RunUsage{Usage: fw.Usage{InputTokens: 900, OutputTokens: 100}, Turns: 1, ToolCalls: 12, CostUSD: 0.1}
 	for err, want := range map[string]string{
-		"budget exceeded: maxTurns":     "its limit of steps",
-		"budget exceeded: maxToolCalls": "its limit of tool calls",
-		"budget exceeded: maxCostUSD":   "its limit of cost",
+		"budget exceeded: maxTurns":     "its limit of 1 turn",
+		"budget exceeded: maxToolCalls": "its limit of 12 tool calls",
+		"budget exceeded: maxCostUSD":   "its limit of $0.10",
+		"budget exceeded: maxTokens":    "its limit of 1000 tokens",
 		"budget exceeded: deadline":     "its time limit",
 		"budget exceeded":               "a limit of its budget",
 	} {
-		if got := limitWords(err); got != want {
+		if got := limitWords(err, used); got != want {
 			t.Errorf("limitWords(%q) = %q, want %q", err, got, want)
 		}
 	}
@@ -700,7 +703,7 @@ func TestPlainReasons(t *testing.T) {
 		"run:R-F":   "Works with files.",
 		"run:R-T":   "The agent works on it.",
 		"run:R-W":   "Asks before it writes a page of the wiki.",
-		"run:R-L":   "Stopped at its limit of tool calls in one step.",
+		"run:R-L":   "It stopped at its limit of tool calls in one turn.",
 		"bridge:B1": "The agents finished, and the result waits for a check.",
 		"bridge:B2": "writer works on its part.",
 		"bridge:B3": "The channel has no agent.",
@@ -712,7 +715,7 @@ func TestPlainReasons(t *testing.T) {
 	}
 	for _, c := range ans.Cards {
 		l := strings.ToLower(c.Reason)
-		if c.Reason == "Works." || strings.Contains(l, "seat") || strings.Contains(l, "turn") || strings.Contains(l, "front.") {
+		if c.Reason == "Works." || strings.Contains(l, "seat") || strings.Contains(l, "turn ") && !strings.Contains(l, "limit of") || strings.Contains(l, "front.") {
 			t.Errorf("the reason of %s = %q", c.ID, c.Reason)
 		}
 	}
