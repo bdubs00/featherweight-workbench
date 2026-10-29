@@ -431,6 +431,41 @@ func (s *Service) CandidatePass(ctx context.Context) (int, error) {
 	return len(todo), err
 }
 
+// maxPassRounds bounds the passes of a start of the review by a person,
+// each of at most passBatch runs.
+const maxPassRounds = 10
+
+// readUpToNow reads the finished runs of the archive up to now for a
+// person who starts the review of an agent: the pass behind the cursor
+// until no run waits, and then the runs of the agent that changed within
+// the last two minutes, which the pass leaves for later. Those it reads
+// without the cursor, which another replica can move only past runs that
+// it knows: the pass reads them again once they settle, and a candidate
+// counts each run once.
+func (s *Service) readUpToNow(ctx context.Context, agent string) error {
+	for range maxPassRounds {
+		n, err := s.CandidatePass(ctx)
+		if err != nil {
+			return err
+		}
+		if n < passBatch {
+			break
+		}
+	}
+	cutoff := s.now().UTC().Add(-settle)
+	var errs []error
+	for _, e := range s.archive(ctx) {
+		if ctx.Err() != nil {
+			break
+		}
+		if e.Run == nil || e.Run.Agent != agent || !e.Run.State.Terminal() || !e.Updated.After(cutoff) {
+			continue
+		}
+		errs = append(errs, s.learnFrom(ctx, e))
+	}
+	return errors.Join(errs...)
+}
+
 // call is one tool call of the agent in a run, with its result.
 type call struct {
 	tool    string

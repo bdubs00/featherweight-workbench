@@ -555,3 +555,37 @@ func TestRoutesStartNow(t *testing.T) {
 		t.Fatalf("a start of the proposals while they are off = %s", body)
 	}
 }
+
+// Review now reads the runs that ended a moment ago, which the pass of the
+// candidates leaves for two minutes, so a person who gives a thumb down
+// and starts the review at once gets a review of that run. It reads them
+// without the cursor: the pass reads them again once they settle, and the
+// candidate counts each run once.
+func TestReviewNowReadsUpToNow(t *testing.T) {
+	fr := newFront(t, func(c *KnowhowConfig) { c.Review.Agent = "review" })
+	var started int
+	fr.s.enqueue = func(_ context.Context, _ string, reqs []fw.RunRequest) (string, int, error) {
+		started += len(reqs)
+		return "q", len(reqs), nil
+	}
+	ctx := context.Background()
+	run := chatRun("01KNOW00000000000000000001", fr.clk.now().Add(-time.Minute), "What do I check first when the backup fails?").
+		thumb(fw.ReactionDown, "alice", "The backup job logs to backup.log on the NAS.")
+	fr.arch.put(run.out, fr.clk.now().Add(-30*time.Second))
+	resp, body := send(t, "POST", fr.url+"/v1/knowhow/review/triage", "alice", "")
+	mustStatus(t, resp, body, http.StatusAccepted)
+	if started != 1 {
+		t.Fatalf("the start = %s, %d runs", body, started)
+	}
+	if got, err := fr.s.b.Get(ctx, cursorKey); err == nil && strings.Contains(string(got.Value), "01KNOW00000000000000000001") {
+		t.Fatalf("Review now moved the cursor past a run that did not settle: %s", got.Value)
+	}
+	fr.clk.add(time.Hour)
+	if n, err := fr.s.CandidatePass(ctx); err != nil || n != 1 {
+		t.Fatalf("the pass after the run settled read %d runs, %v", n, err)
+	}
+	list, _ := fr.s.Candidates(ctx, "triage", func(c Candidate) bool { return c.Kind == KindOutcome })
+	if len(list) != 1 || len(list[0].Runs) != 1 || len(list[0].Evidence) != 1 {
+		t.Fatalf("the outcome = %+v", list)
+	}
+}
