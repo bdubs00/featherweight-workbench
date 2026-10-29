@@ -349,7 +349,7 @@ func TestInstructionsKeepTheSandboxAndTheQuiet(t *testing.T) {
 		"Never address yourself: do not write @reviewer.",
 		"ask with ask true and the choice [\"Done\"]",
 		"never start a new page such as name-v2 for a new version",
-		"A file that the operator attaches to a message for you is in your sandbox under attachments/",
+		"A file that the person attaches to a message for you is in your sandbox under attachments/",
 	} {
 		if !strings.Contains(in, want) {
 			t.Errorf("the instructions lack %q", want)

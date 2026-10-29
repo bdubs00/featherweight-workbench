@@ -55,7 +55,7 @@ func TestNoTextNamesAPersonByAnID(t *testing.T) {
 		t.Fatalf("opened = %+v", l)
 	}
 	rec, _, _ := s.b.get(context.Background(), first.ID)
-	if in := s.instructionsOf(context.Background(), rec, rec.Members[0]); strings.Contains(in, erinSubject) || !strings.Contains(in, "The operator runs this bridge.") {
+	if in := s.instructionsOf(context.Background(), rec, rec.Members[0]); strings.Contains(in, erinSubject) || !strings.Contains(in, "This work is for the person who asked, who reads the channel.") {
 		t.Fatalf("instructions = %s", in)
 	}
 
@@ -74,7 +74,7 @@ func TestNoTextNamesAPersonByAnID(t *testing.T) {
 		t.Fatalf("opened = %+v", l)
 	}
 	rec, _, _ = s.b.get(context.Background(), second.ID)
-	if in := s.instructionsOf(context.Background(), rec, rec.Members[0]); !strings.Contains(in, "Erin runs this bridge.") {
+	if in := s.instructionsOf(context.Background(), rec, rec.Members[0]); !strings.Contains(in, "This work is for Erin, who reads the channel.") {
 		t.Fatalf("instructions = %s", in)
 	}
 	if res := callTool(t, cs, ToolList, map[string]any{}, meta); !strings.Contains(textOf(res), "of Erin.") {

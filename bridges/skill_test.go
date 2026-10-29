@@ -57,7 +57,7 @@ func TestSlashCommandInABridge(t *testing.T) {
 	if got.Body["pinned"] != true || from["kind"] != fw.FromPerson || from["name"] != "alice" {
 		t.Fatalf("delivery = %+v", got.Body)
 	}
-	want := `[bridge "Migrate logrotate" ` + id + `] to everyone from operator: Skill: fix` + "\n\nFix issue 42 and test it.\n\nThen report."
+	want := `[channel "Migrate logrotate" ` + id + `] to everyone from operator: Skill: fix` + "\n\nFix issue 42 and test it.\n\nThen report."
 	if content != want {
 		t.Fatalf("content = %q, want %q", content, want)
 	}
