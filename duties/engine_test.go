@@ -202,7 +202,7 @@ func TestOverlap(t *testing.T) {
 	if s := f.states(t, OverlapSkip); !slices.Equal(s, []string{StateSkipped, StateSkipped, "running"}) {
 		t.Fatalf("skip = %v", s)
 	}
-	if h := f.history(t, OverlapSkip); !strings.Contains(h[0].Reason, "had not ended, and the overlap of the job is skip") {
+	if h := f.history(t, OverlapSkip); !strings.Contains(h[0].Reason, "still works, and this job starts no second run while one works. Start it again when that run ends.") {
 		t.Fatalf("the reason of a skip = %q", h[0].Reason)
 	}
 	if s := f.states(t, OverlapQueue); !slices.Equal(s, []string{StateSkipped, StateWaiting, "running"}) {
@@ -430,9 +430,18 @@ func TestRunNow(t *testing.T) {
 	}
 	// overlap skip holds for a run now too.
 	f.clock.Add(time.Second)
+	f.view.set(req.ID, fw.StateRunning, 0)
 	out, err = f.s.RunNow(as("alice"), "report")
-	if err != nil || !strings.Contains(out.Skipped, "had not ended") {
+	if err != nil || !strings.Contains(out.Skipped, "still works") {
 		t.Fatalf("a second run now = %+v, %v", out, err)
+	}
+	// A run now right after the end of the run starts, also before the
+	// engine took the end on its pass (tester finding 5).
+	f.clock.Add(time.Second)
+	f.view.set(req.ID, fw.StateCompleted, 0.01)
+	out, err = f.s.RunNow(as("alice"), "report")
+	if err != nil || out.Run == "" || out.Skipped != "" {
+		t.Fatalf("a run now after the end = %+v, %v", out, err)
 	}
 }
 
