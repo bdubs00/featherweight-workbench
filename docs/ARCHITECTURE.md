@@ -4206,7 +4206,7 @@ The front keeps the card, the subject and the name of the person, and the time i
 
 ## 27. The plan of a task
 
-A newcomer says what they need done in words. The front reads the words back before anything starts. `POST /v1/work/plan` with the body `{"words", "agent", "tell"}` and the header `X-Time-Zone`, and the MCP tool `work_plan` with `timeZone`, call `work.PlanFor`. It starts and saves nothing, and it calls no model: the same words always give the same plan.
+A newcomer says what they need done in words. The front reads the words back before anything starts. `POST /v1/work/plan` with the body `{"words", "agent", "tell", "bridge", "handle"}` and the header `X-Time-Zone`, and the MCP tool `work_plan` with `timeZone`, call `work.PlanFor`. It starts and saves nothing, and it calls no model: the same words always give the same plan.
 
 `work.MakePlan` is a pure function with fixed rules:
 
@@ -4224,6 +4224,8 @@ A newcomer says what they need done in words. The front reads the words back bef
 | `start` | One of `duty` (for `PUT /v1/duties/{name}`), `bridge` (for `POST /v1/bridges`), or `run` (`{"member", "body"}` for `POST /v1/runs?member=`). A duty that the plan makes takes the default of every duty while away (section 23.4): nobody decides, and after 2 hours the answer is no. It takes a free name. The page adds the limit of the person: `limits.budget.maxCostUSD`, `caps.maxCostUSD`, or `budget.maxCostUSD`. |
 
 The page refuses Start until the person types a limit (no silent cost defaults). With these routes, `GET /v1/bossmode` says `"work": true`, and the page shows the places Work and Results.
+
+Make this a job. A body with `bridge`, the id of a channel that the caller can see, and `handle`, the agent of that channel that runs the job, reads the work of the channel as a job that repeats (`work.channelPlan`). The answer holds `members`, the agents of the channel that are not taken off, each with `handle`, `agent`, `name`, and the first line of its task, so the page lets the person pick one. Without `handle`, the first agent runs it. `who` names the agent with its `handle`. The words must say how often. The rest of the words is the message of each run. `start.duty` posts that message in the channel to the picked agent (`do.post` with `bridge` and `to`), so the agent does the work where it did it before, and its answer, the result, is a post in that channel. A job that posts spends nothing of its own: the agent spends from its budget in the channel, so `cost.per` is `channel` and the duty keeps no budget. A closed channel, a handle that is no agent of the channel, and words without a schedule are problems. A channel that the caller cannot see answers 400. The tool `work_plan` takes no channel.
 
 ## 28. Know-how
 

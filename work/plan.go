@@ -54,11 +54,15 @@ const MaxWords = 4000
 
 // PlanRequest is what a person asks for in words. Agent names the agent
 // that the person picked, and Tell when the person hears of a task that
-// repeats.
+// repeats. Bridge names a channel whose work repeats as a job, Make this a
+// job on the page (channelplan.go), and Handle the agent of the channel
+// that runs it.
 type PlanRequest struct {
-	Words string `json:"words"`
-	Agent string `json:"agent,omitempty"`
-	Tell  string `json:"tell,omitempty"`
+	Words  string `json:"words"`
+	Agent  string `json:"agent,omitempty"`
+	Tell   string `json:"tell,omitempty"`
+	Bridge string `json:"bridge,omitempty"`
+	Handle string `json:"handle,omitempty"`
 }
 
 // Plan is the readback of a task. Who names the agents that do it, and
@@ -89,6 +93,9 @@ type Plan struct {
 	Start    PlanStart   `json:"start"`
 	Open     string      `json:"open"`
 	Same     *PlanSame   `json:"same,omitempty"`
+	// Members are the agents of the channel of a plan with a bridge, which
+	// the person picks from (channelplan.go).
+	Members []PlanMember `json:"members,omitempty"`
 }
 
 // PlanSame is a duty of the person that does the work of a plan already:
@@ -105,6 +112,8 @@ type PlanWho struct {
 	Name  string `json:"name"`
 	Does  string `json:"does"`
 	Count int    `json:"count,omitempty"`
+	// Handle names the agent in the channel of a plan with a bridge.
+	Handle string `json:"handle,omitempty"`
 }
 
 // PlanAgent is an agent that the person can pick.
@@ -183,6 +192,8 @@ type PlanInput struct {
 	ChatMember string
 	Taken      map[string]bool
 	Own        []duties.Duty
+	// Channel is the channel of a request with a bridge, or nil.
+	Channel *PlanChannel
 }
 
 // The patterns of the words. They read plain English and no syntax.
@@ -215,6 +226,9 @@ var stopWords = map[string]bool{
 
 // MakePlan reads the words into a plan.
 func MakePlan(in PlanInput) Plan {
+	if in.Channel != nil {
+		return channelPlan(in)
+	}
 	words := strings.Join(strings.Fields(in.Words), " ")
 	w := strings.ToLower(words)
 	p := Plan{Words: words, Who: []PlanWho{}, Others: []PlanAgent{}, Asks: []string{}, Quiet: []string{}, Gaps: []string{}, Problems: []string{}}
@@ -1081,6 +1095,11 @@ func PlanFor(ctx context.Context, a *fw.Agent, now time.Time, zone string, req P
 			if me != "" && r.Duty.Owner == me {
 				in.Own = append(in.Own, r.Duty)
 			}
+		}
+	}
+	if req.Bridge != "" {
+		if in.Channel, err = planChannelOf(ctx, a, req.Bridge, in.Agents); err != nil {
+			return Plan{}, err
 		}
 	}
 	return MakePlan(in), nil
