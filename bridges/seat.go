@@ -606,7 +606,7 @@ func (s *Store) startManager(ctx context.Context, rec *record, input, idem strin
 	body := map[string]any{
 		"agent":    s.cfg.Manager,
 		"input":    input,
-		"title":    oneLine("Bridge: "+rec.Title, maxTitleRunes),
+		"title":    oneLine("Channel: "+rec.Title, maxTitleRunes),
 		"metadata": map[string]string{fw.MetaBatch: BatchOf(rec.ID)},
 		"wait":     false,
 	}
