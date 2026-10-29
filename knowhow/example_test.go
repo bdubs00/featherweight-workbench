@@ -64,7 +64,9 @@ func TestTheExampleReview(t *testing.T) {
 		if p.FW.Model != "" || prof.Model != "" || prof.Budget.MaxCostUSD != 0 {
 			t.Fatalf("the review names a model or a price: %q %q %v", p.FW.Model, prof.Model, prof.Budget.MaxCostUSD)
 		}
-		if !slices.Equal(prof.Tools, []string{"front." + ToolCandidates, "front." + ToolKeep}) {
+		// The review reads a page of the wiki for a recheck whose evidence
+		// of the page is cut.
+		if !slices.Equal(prof.Tools, []string{"front." + ToolCandidates, "front." + ToolKeep, "front.pages_read"}) {
 			t.Fatalf("tools = %v", prof.Tools)
 		}
 		for _, line := range []string{

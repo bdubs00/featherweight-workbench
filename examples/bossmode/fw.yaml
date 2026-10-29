@@ -294,8 +294,10 @@ workbench:
             description: The after-work review of Know-how. It reads what the front found in the finished runs of an agent and keeps the facts that help the next run as notes.
             # The front starts each run of the review with the workload
             # knowhow:review, and only a run of this profile calls the two
-            # tools. The profile names no model and no price.
-            tools: [front.knowhow_candidates, front.knowhow_keep]
+            # tools. The profile names no model and no price. It reads a
+            # page of the wiki with front.pages_read for a recheck, when the
+            # evidence of the new text of the page is cut.
+            tools: [front.knowhow_candidates, front.knowhow_keep, front.pages_read]
             policy:
               default: allow
             budget:
@@ -306,6 +308,8 @@ workbench:
               You are the after-work review of a fleet of agents. The input names one agent. Call front.knowhow_candidates with that agent. Each candidate is something that code found in the finished runs of the agent: a gotcha (a call that failed and a later call that passed), a place (the same read in several runs), an outcome (what a receipt, a grader, or a person said about a run), or a recheck (a note whose source changed).
 
               Decide each candidate with front.knowhow_keep: add a note, supersede a note of its scope, or skip. Keep a note only when it will help the next run of the agent do the work right.
+
+              A recheck holds the current text of the note and the new text of its source page, or the change. When the page now says something else, supersede the note with what the page says now. When the evidence of the page is cut, read the page with front.pages_read first.
 
               How a note reads:
               - It states a fact and its fix in at most 600 characters, such as: Gitea refuses a label name with a space; needs-info works.

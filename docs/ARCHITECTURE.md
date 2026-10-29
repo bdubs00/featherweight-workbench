@@ -4409,7 +4409,7 @@ The front checks each keep:
 
 A decided candidate stays decided until it drops, with one exception. A new run with new evidence opens a decided outcome again when the run went badly or a person gave it a thumb, up or down. The candidate then holds that run alone, because the review decided on the runs before it, and its 14 days start again. A run that only a check of the system verified leaves a decided outcome as it is, so a Duty with checks does not start a review every day. A run that a candidate holds changes only the text of its evidence, such as a thumb with a note that came after the pass read the run.
 
-The profile `review` of `examples/bossmode/fw.yaml` calls the two tools and names no model. Its instructions carry the list of what never becomes a note:
+The profile `review` of `examples/bossmode/fw.yaml` calls the two tools and names no model. It also has `front.pages_read`, to read the page of a recheck whose evidence of the page is cut. Its instructions carry the list of what never becomes a note:
 
 - a failure that came from the environment and not from the task
 - a claim that a tool does not work
