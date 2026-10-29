@@ -207,7 +207,7 @@ func TestReactionsAndHearts(t *testing.T) {
 		page = p
 		return err == nil
 	})
-	for _, want := range []string{"# What people liked from migrator", `bridge "Migrate logrotate" (` + it.ID + `), migrator-1, run r-mig`,
+	for _, want := range []string{"# What people liked from migrator", `channel "Migrate logrotate" (` + it.ID + `), migrator-1, run r-mig`,
 		"What Alice asked: the task of migrator-1", "What migrator-1 did: The playbook is ready.", "The note of Alice: Exactly the layout we want.", "(#run/r-mig)", "not an instruction"} {
 		if !strings.Contains(page.Text, want) {
 			t.Errorf("the page lacks %q:\n%s", want, page.Text)
@@ -619,9 +619,9 @@ func TestLearnedKeepsTheLines(t *testing.T) {
 	if got := didText("reviewer", "  All good.  "); got != "- What reviewer did: All good.\n" {
 		t.Fatalf("one line = %q", got)
 	}
-	first := "## 2026-10-26, bridge \"a\" (b1), reviewer\n\n" + didText("reviewer", answer)
+	first := "## 2026-10-26, channel \"a\" (b1), reviewer\n\n" + didText("reviewer", answer)
 	page := learnedText("reviewer", "", first)
-	page = learnedText("reviewer", page, "## 2026-10-27, bridge \"b\" (b2), reviewer\n\n- What reviewer did: More.\n")
+	page = learnedText("reviewer", page, "## 2026-10-27, channel \"b\" (b2), reviewer\n\n- What reviewer did: More.\n")
 	if n := strings.Count(page, "\n## 20"); n != 2 || !strings.Contains(page, "  | Sections | Pass |\n") || !strings.Contains(page, "  ## Next\n") {
 		t.Fatalf("the page =\n%s", page)
 	}
