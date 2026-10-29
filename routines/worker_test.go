@@ -2,6 +2,7 @@ package routines
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -29,9 +30,9 @@ func (sureDecider) Decide(_ context.Context, _ string, qs map[string]fw.Question
 }
 
 // A worker kernel runs the routines that the store gives its profile: the
-// rehearsing routine decides beside the agent, the kernel compares it
-// with what the model answered, and the events reach the evidence of the
-// front over the egress stream.
+// rehearsing routine decides beside the agent, the kernel compares its
+// answer and its calls with what the model did, and the events reach the
+// evidence of the front over the egress stream.
 func TestWorkerRehearsalReachesTheEvidence(t *testing.T) {
 	fr := newFront(t, withClef)
 	ctx := context.Background()
@@ -49,10 +50,24 @@ func TestWorkerRehearsalReachesTheEvidence(t *testing.T) {
 	cfg.Bus.EgressTypes = append(slices.Clone(fleet.EgressTypes), pools.RoutineEventTypes...)
 	withClef(cfg)
 	cfg.Agents = map[string]fw.AgentProfile{"triage": {Routines: reach["triage"]}}
-	model := fw.ModelFunc{GenerateFn: func(context.Context, *fw.Request) (*fw.Response, error) {
+	// The model makes the calls of the routine, then answers.
+	model := fw.ModelFunc{GenerateFn: func(_ context.Context, req *fw.Request) (*fw.Response, error) {
+		call := func(id, tool, input string) (*fw.Response, error) {
+			return &fw.Response{Content: []fw.Block{{Type: fw.BlockToolUse, ID: id, Name: tool, Input: json.RawMessage(input)}}, StopReason: fw.StopToolUse}, nil
+		}
+		switch len(req.Messages) {
+		case 1:
+			return call("c1", "gitea.label_read", `{"method": "list", "owner": "lab", "repo": "helpdesk"}`)
+		case 3:
+			return call("c2", "gitea.issue_write", `{"method": "add_labels", "issue_number": 42}`)
+		}
 		return &fw.Response{Content: []fw.Block{fw.Text(`TRIAGE {"type": "type/bug"}`)}, StopReason: fw.StopEndTurn}, nil
 	}}
-	worker, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(fw.NoAuthn{}), fw.WithModel(model),
+	tool := func(name, text string) fw.Tool {
+		return fw.NewTool(fw.ToolSpec{Name: name}, func(context.Context, json.RawMessage) (fw.ToolResult, error) { return fw.TextResult(text), nil })
+	}
+	tools := []fw.Tool{tool("gitea.label_read", `[{"id":11,"name":"type/bug"}]`), tool("gitea.issue_write", "ok"), tool("gitea.issue_read", "status/triaged")}
+	worker, err := fw.New(fw.WithConfig(cfg), fw.WithoutDefaults(), fw.WithAuthn(fw.NoAuthn{}), fw.WithModel(model), fw.WithTools(tools...),
 		fw.WithLedger(fw.NewMemLedger()), fw.WithBus(fr.bus), fw.WithLogger(quiet()), fw.WithDecider("clef", sureDecider{}))
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +98,8 @@ func TestWorkerRehearsalReachesTheEvidence(t *testing.T) {
 			types = append(types, e.Type+" "+string(e.Data))
 		}
 	}
-	if len(types) != 2 || !strings.HasPrefix(types[0], fw.EvRoutineDecided) || !strings.HasPrefix(types[1], fw.EvRoutineCompared) {
+	if len(types) != 3 || !strings.HasPrefix(types[0], fw.EvRoutineDecided) || !strings.HasPrefix(types[1], fw.EvRoutineCompared) ||
+		!strings.Contains(types[2], `"calls":true`) || !strings.Contains(types[2], `"agree":true`) {
 		t.Fatalf("the worker recorded %v", types)
 	}
 	ev := waitEvidence(t, fr.s, "triage", "acknowledge", func(ev *Evidence) bool { return ev.Totals.Agreed == 1 })
