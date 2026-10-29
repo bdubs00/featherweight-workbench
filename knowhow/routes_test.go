@@ -26,7 +26,7 @@ func TestRoutesWorkerPush(t *testing.T) {
 	if w.Note.Hash != Hash("Gitea refuses a label with a space.") || w.Note.State != StateChecked || resp.Header.Get("ETag") != `"`+w.Note.Hash+`"` || w.Note.Text != "" {
 		t.Fatalf("the answer = %+v, %v", w, resp.Header)
 	}
-	resp, body = send(t, "PUT", base, "fleet", `{"text": "two", "ifHash": "`+Hash("old")+`"}`)
+	resp, body = send(t, "PUT", base, "fleet", `{"text": "two", "ifHash": "`+Hash("old")+`", "by": "agent"}`)
 	mustStatus(t, resp, body, http.StatusPreconditionFailed)
 	var p struct {
 		Hash string `json:"hash"`
@@ -37,7 +37,7 @@ func TestRoutesWorkerPush(t *testing.T) {
 	}
 	resp, body = send(t, "PUT", base, "fleet", `{"text": "two", "ifHash": "`+w.Note.Hash+`", "by": "boss"}`)
 	mustStatus(t, resp, body, http.StatusBadRequest)
-	resp, body = send(t, "PUT", base, "fleet", `{"text": "two", "ifHash": "`+w.Note.Hash+`"}`)
+	resp, body = send(t, "PUT", base, "fleet", `{"text": "two", "ifHash": "`+w.Note.Hash+`", "by": "agent"}`)
 	mustStatus(t, resp, body, http.StatusOK)
 	// The pull lists the scope with its states and hashes, without text.
 	resp, body = send(t, "GET", fr.url+"/v1/knowhow/notes?agent=triage&scope=principal&principal=duty:nightly", "fleet", "")
@@ -56,7 +56,7 @@ func TestRoutesWorkerPush(t *testing.T) {
 	}
 	// The kernel deletes the note: the front puts it away, and the list
 	// leaves it out unless putAway is true.
-	resp, body = send(t, "DELETE", base+"&ifHash="+Hash("two"), "fleet", "")
+	resp, body = send(t, "DELETE", base+"&ifHash="+Hash("two")+"&by=agent", "fleet", "")
 	mustStatus(t, resp, body, http.StatusOK)
 	_, body = send(t, "GET", fr.url+"/v1/knowhow/notes?agent=triage&scope=principal&principal=duty:nightly", "fleet", "")
 	if strings.Contains(body, "labels.md") {
@@ -70,7 +70,7 @@ func TestRoutesWorkerPush(t *testing.T) {
 	if _, err := fr.s.SetAskFirst(context.Background(), "triage", true, "person:alice"); err != nil {
 		t.Fatal(err)
 	}
-	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/principal/new.md?principal=duty:nightly", "fleet", `{"text": "new", "ifHash": "absent"}`)
+	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/principal/new.md?principal=duty:nightly", "fleet", `{"text": "new", "ifHash": "absent", "by": "agent"}`)
 	mustStatus(t, resp, body, http.StatusAccepted)
 	if !strings.Contains(body, `"waiting"`) || !strings.Contains(body, `"state":"waiting"`) {
 		t.Fatalf("202 = %s", body)
@@ -134,7 +134,7 @@ func TestRoutesPeople(t *testing.T) {
 	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/agent/agent.md", "alice", `{"text": "by alice"}`)
 	mustStatus(t, resp, body, http.StatusOK)
 	// Now the agent cannot change the note of a person.
-	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/agent/agent.md", "fleet", `{"text": "by the agent"}`)
+	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/agent/agent.md", "fleet", `{"text": "by the agent", "by": "agent"}`)
 	mustStatus(t, resp, body, http.StatusForbidden)
 	// A bad scope and a bad name answer 400.
 	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/notes/triage/shared/a.md", "fleet", `{"text": "x"}`)
@@ -418,13 +418,13 @@ func TestKernelWireShapes(t *testing.T) {
 
 	// DELETE: 412 for another hash, 2xx with the hash, 404 for a note that
 	// the front does not have.
-	resp, body = send(t, "DELETE", base+"?ifHash="+Hash("other"), "fleet", "")
+	resp, body = send(t, "DELETE", base+"?ifHash="+Hash("other")+"&by=agent", "fleet", "")
 	mustStatus(t, resp, body, http.StatusPreconditionFailed)
-	resp, body = send(t, "DELETE", base+"?ifHash="+Hash("two"), "fleet", "")
+	resp, body = send(t, "DELETE", base+"?ifHash="+Hash("two")+"&by=agent", "fleet", "")
 	if resp.StatusCode/100 != 2 {
 		t.Fatalf("DELETE = %d %s", resp.StatusCode, body)
 	}
-	resp, body = send(t, "DELETE", fr.url+"/v1/knowhow/notes/triage/agent/never.md?ifHash="+Hash("x"), "fleet", "")
+	resp, body = send(t, "DELETE", fr.url+"/v1/knowhow/notes/triage/agent/never.md?ifHash="+Hash("x")+"&by=agent", "fleet", "")
 	mustStatus(t, resp, body, http.StatusNotFound)
 	resp, body = send(t, "GET", base, "fleet", "")
 	if resp.StatusCode != http.StatusNotFound && !strings.Contains(body, `"state":"put-away"`) {

@@ -2,6 +2,8 @@ package knowhow
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -167,5 +169,85 @@ func TestKernelNoteNamesItsRun(t *testing.T) {
 	}
 	if e := entryOf(WhatPutAway, "launch-dates.md"); len(e.Runs) != 1 || e.Runs[0] != id {
 		t.Fatalf("the entry of the put-away note = %+v", e)
+	}
+}
+
+// TestStaticTokenWritesAsAPerson drives the memory tool of a kernel and
+// the page against this front with the static token. The kernel names its
+// writer, so a note of its run stays a note of the agent. The page names
+// none, so an owner who corrects a note that went out of date, signed in
+// with the static token, writes as a person: the note names the page at
+// its version now, and the journal says that a person changed it. A later
+// edit takes the version of the page now as well, and so do a put-away
+// and the switch: each records the person.
+func TestStaticTokenWritesAsAPerson(t *testing.T) {
+	fr, wiki, store := kernelFront(t)
+	ctx := context.Background()
+	const path = "lab/backup.md"
+	page, err := wiki.Write(ctx, path, "# Backup\nThe backup server listens on port 7341.\n", "alice", "the port", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := fw.WithRunInfo(ctx, fw.RunInfo{RunID: fw.NewID(), Agent: "triage"})
+	scope := store.Scope(fw.RunInfoFrom(run))
+	if _, err := store.Remember(run, scope, fw.MemoryRecord{Ref: memory.NoteRef(scope, "port.md"), Body: "The backup server listens on port 7341.\nSource: page:" + path + "\n"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := fr.note(t, Scope{Kind: ScopeAgent}, "port.md"); n.By != ByAgent || n.Sources[0].Version != page.Hash {
+		t.Fatalf("the note of the run = %+v", n)
+	}
+	moved, err := wiki.Write(ctx, path, "# Backup\nThe backup server listens on port 7342.\n", "alice", "a new port", page.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := fr.note(t, Scope{Kind: ScopeAgent}, "port.md")
+	if n.State != StateOutOfDate {
+		t.Fatalf("the note after the page changed = %+v", n)
+	}
+
+	// The page sends the text, the hash, and the sources as they were.
+	base := fr.url + "/v1/knowhow/notes/triage/agent/port.md"
+	resp, body := send(t, "PUT", base, "fleet", fmt.Sprintf(`{"text": "The backup server listens on port 7342.\nSource: page:%s\n", "ifHash": %q, "sources": [{"ref": "page:%s", "version": %q}]}`, path, n.Hash, path, page.Hash))
+	mustStatus(t, resp, body, http.StatusOK)
+	n = fr.note(t, Scope{Kind: ScopeAgent}, "port.md")
+	if n.By != "person:token" || n.Run != "" || n.State != StateChecked || n.OutOfDate != nil || len(n.Sources) != 1 || n.Sources[0].Version != moved.Hash {
+		t.Fatalf("the note after the edit of the owner = %+v", n)
+	}
+	if e := fr.journal(t)[0]; e.What != WhatUpdated || e.By != "person:token" || e.Why != "A person changed this note." || !e.Corrects {
+		t.Fatalf("the entry of the edit = %+v", e)
+	}
+
+	// The note of a person never goes out of date, so a later edit takes
+	// the version of the page now, not the version that the note names.
+	again, err := wiki.Write(ctx, path, "# Backup\nThe backup server listens on port 7342. It runs at 02:00.\n", "alice", "the hour", moved.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n = fr.note(t, Scope{Kind: ScopeAgent}, "port.md")
+	resp, body = send(t, "PUT", base, "fleet", fmt.Sprintf(`{"text": "The backup server listens on port 7342 and runs at 02:00.\n", "ifHash": %q, "sources": [{"ref": "page:%s", "version": %q}]}`, n.Hash, path, moved.Hash))
+	mustStatus(t, resp, body, http.StatusOK)
+	if n = fr.note(t, Scope{Kind: ScopeAgent}, "port.md"); n.Sources[0].Version != again.Hash || n.State != StateChecked {
+		t.Fatalf("the note after the second edit = %+v", n)
+	}
+
+	// The switch records the person, and so does a put-away of the page.
+	resp, body = send(t, "PUT", fr.url+"/v1/knowhow/settings/triage", "fleet", `{"askFirst": true}`)
+	mustStatus(t, resp, body, http.StatusOK)
+	if !strings.Contains(body, `"by":"person:token"`) {
+		t.Fatalf("the switch = %s", body)
+	}
+	resp, body = send(t, "DELETE", base+"?ifHash="+n.Hash, "fleet", "")
+	mustStatus(t, resp, body, http.StatusOK)
+	if e := fr.journal(t)[0]; e.What != WhatPutAway || e.By != "person:token" || e.Why != "A person put this note away." {
+		t.Fatalf("the entry of the put-away = %+v", e)
+	}
+
+	// The kernel still writes as the agent, and with the switch on its
+	// change waits for a person.
+	if _, err := store.Remember(run, scope, fw.MemoryRecord{Ref: memory.NoteRef(scope, "hour.md"), Body: "The backup runs at 02:00.\n"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := fr.note(t, Scope{Kind: ScopeAgent}, "hour.md"); n.By != ByAgent || n.State != StateWaiting {
+		t.Fatalf("the note of the run under the switch = %+v", n)
 	}
 }

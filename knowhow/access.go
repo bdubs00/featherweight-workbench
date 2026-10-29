@@ -28,7 +28,9 @@ import (
 var ErrHidden = errors.New("knowhow: nothing that you can view has the name")
 
 // caller is who calls: trusted for the process itself and the static
-// token, else the subject and the kind of the principal.
+// token, else the subject and the kind of the principal. The static token
+// keeps its subject, because an admin holds it: a change that it makes
+// without the name of another writer is the change of a person.
 type caller struct {
 	trusted bool
 	subject string
@@ -37,15 +39,20 @@ type caller struct {
 
 func callerOf(ctx context.Context) caller {
 	p := fw.PrincipalFrom(ctx)
-	if p == nil || p.Kind == fw.KindToken {
+	switch {
+	case p == nil:
 		return caller{trusted: true}
+	case p.Kind == fw.KindToken:
+		return caller{trusted: true, subject: p.Subject, kind: p.Kind}
 	}
 	return caller{subject: p.Subject, kind: p.Kind}
 }
 
-// by is the writer of a change of the caller.
+// by is the writer of a change of the caller: person:<subject> for a
+// person and for the static token, and agent for the process itself,
+// which has no subject.
 func (c caller) by() string {
-	if c.trusted {
+	if c.subject == "" {
 		return ByAgent
 	}
 	return PersonPrefix + c.subject
