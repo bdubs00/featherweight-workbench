@@ -133,8 +133,8 @@ func TestFold(t *testing.T) {
 
 // A done piece whose definition of done passed in the kernel counts as
 // checked, from the facts of its work or from the run object of a newer
-// kernel. A verdict of a person wins over the checks, and a piece whose
-// checks failed is no done piece.
+// kernel. A verdict of a person wins over the checks, a piece whose
+// checks failed is no done piece, and a weak pass is unchecked.
 func TestFoldChecked(t *testing.T) {
 	h := time.Hour
 	checked := facts(2*h, 5*time.Minute, 0, "")
@@ -145,7 +145,14 @@ func TestFoldChecked(t *testing.T) {
 	fromRun.Done = &fw.RunDone{State: fw.DoneChecked}
 	notDone := facts(5*h, 5*time.Minute, 0, "")
 	notDone.Done = fw.DoneFailed
+	// A weak pass, such as a check that only reads a file, is no check.
+	weak := facts(6*h, 5*time.Minute, 0, "")
+	weak.Done, weak.DoneWeak = fw.DoneChecked, true
+	weakRun := run("R7", "fixer", fw.StateCompleted, 6*h, 0.01, nil)
+	weakRun.Done = &fw.RunDone{State: fw.DoneChecked, Weak: true}
 	runs := []fleet.WorkRun{
+		{Run: run("R6", "fixer", fw.StateCompleted, 6*h, 0.01, nil), Work: weak},
+		{Run: weakRun, Work: facts(6*h, 5*time.Minute, 0, "")},
 		{Run: run("R1", "fixer", fw.StateCompleted, 2*h, 0.01, nil), Work: checked},
 		{Run: run("R2", "fixer", fw.StateCompleted, 3*h, 0.01, nil), Work: overruled},
 		{Run: fromRun, Work: facts(4*h, 5*time.Minute, 0, "")},
@@ -153,14 +160,54 @@ func TestFoldChecked(t *testing.T) {
 		{Run: run("R5", "fixer", fw.StateCompleted, 6*h, 0.01, nil), Work: facts(6*h, 5*time.Minute, 0, "")},
 	}
 	a := Fold(runs, Options{Now: now, Days: 7})
-	if a.Checks != (Checks{Checked: 2, SentBack: 1, Unchecked: 1}) || a.Work.Failed != 1 {
+	if a.Checks != (Checks{Checked: 2, SentBack: 1, Unchecked: 3}) || a.Work.Failed != 1 {
 		t.Fatalf("the checks = %+v, the work = %+v", a.Checks, a.Work)
 	}
 	if a.Lines[0].Checks.Checked != 2 || a.Periods[6].Checked != 2 {
 		t.Fatalf("the line = %+v, the period = %+v", a.Lines[0].Checks, a.Periods[6])
 	}
-	if want := "People accepted 0 and sent back 1. The checks of the agents passed for 2 more. 1 is unchecked."; !strings.Contains(a.Sentence, want) {
+	if want := "People accepted 0 and sent back 1. The checks of the agents passed for 2 more. 3 are unchecked."; !strings.Contains(a.Sentence, want) {
 		t.Fatalf("the sentence lacks %q:\n%s", want, a.Sentence)
+	}
+}
+
+// The board and Results count done work the same way (plan A13). A run
+// that continues a conversation is a part of its task, not a task of its
+// own: the newest run says where the task stands and its verdict, and the
+// cost of every run is the cost of the task. The newest verdict counts, so
+// a result that a person sent back and then accepted is accepted.
+func TestFoldCountsTasksAsTheBoard(t *testing.T) {
+	h := time.Hour
+	first := run("R1", "writer", fw.StateCompleted, 5*h, 0.01, nil)
+	cont := map[string]string{fleet.MetaContinues: "R1"}
+	second := run("R2", "writer", fw.StateCompleted, 4*h, 0.02, cont)
+	third := run("R3", "writer", fw.StateCompleted, 3*h, 0.03, map[string]string{fleet.MetaContinues: "R2"})
+	lastFacts := facts(3*h, time.Minute, 1, fleet.VerdictRejected)
+	lastFacts.LastVerdict = fleet.VerdictAccepted
+	// A run that continues a conversation of before the window is a task.
+	alone := run("R4", "writer", fw.StateCompleted, 2*h, 0.01, map[string]string{fleet.MetaContinues: "R-OLD"})
+	runs := []fleet.WorkRun{
+		{Run: first, Work: facts(5*h, time.Minute, 0, fleet.VerdictRejected)},
+		{Run: second, Work: facts(4*h, time.Minute, 1, "")},
+		{Run: third, Work: lastFacts},
+		{Run: alone, Work: facts(2*h, time.Minute, 0, "")},
+	}
+	a := Fold(runs, Options{Now: now, Days: 7})
+	if a.Work.Pieces != 2 || a.Work.Done != 2 {
+		t.Fatalf("the work = %+v, want 2 tasks", a.Work)
+	}
+	if a.Checks != (Checks{Accepted: 1, Unchecked: 1}) {
+		t.Fatalf("the checks = %+v, want the newest verdict of the conversation", a.Checks)
+	}
+	if a.Spend.USD != 0.07 || a.Lines[0].USD != 0.07 || a.People.Actions != 2 {
+		t.Fatalf("the spend = %+v, the line = %+v, the actions = %d", a.Spend, a.Lines[0], a.People.Actions)
+	}
+
+	// A conversation whose newest run works is open.
+	working := run("R5", "writer", fw.StateRunning, time.Hour, 0, map[string]string{fleet.MetaContinues: "R1"})
+	b := Fold(append(runs, fleet.WorkRun{Run: working, Work: facts(time.Hour, 0, 0, "")}), Options{Now: now, Days: 7})
+	if b.Work.Open != 1 || b.Work.Done != 1 {
+		t.Fatalf("a conversation that works again = %+v", b.Work)
 	}
 }
 

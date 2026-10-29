@@ -3,7 +3,11 @@
 // questions of the seats of the bridges, the failed runs of the duties of
 // the caller in the last day, the duties of the caller that paused
 // themselves, the results that the caller asked to check, and the results
-// of the duties that found something and tell the caller of them. It mounts
+// of the duties that found something and tell the caller of them, the
+// teams whose agents finished and whose result waits for the caller, and
+// the notes of Know-how that wait for the caller under ask first. It
+// answers the one count of the work that needs the caller beside the
+// items (work.Waiting). It mounts
 // GET /v1/inbox on the native surface and adds the MCP tool inbox, which
 // calls the same Go function, so a client of a person reads the items of
 // Activity and answers them with approve, send, and work_review.
@@ -11,7 +15,9 @@
 // The package keeps no truth of its own. The runs that wait come from the
 // home of the dashboard (dashboard.HomeOf, its list needsYou), the
 // questions of the seats from the bridges (bridges.Store.Waiting, the
-// count needsYou of a bridge), and the duties from their store.
+// count needsYou of a bridge), and the duties from their store. The one
+// count and the teams to check come from the board of the caller
+// (work.Fresh), and the notes from the store of Know-how.
 package inbox
 
 import (
@@ -30,9 +36,11 @@ import (
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/duties"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/knowhow"
 	"github.com/bdubs00/featherweight-workbench/manager"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 	"github.com/bdubs00/featherweight-workbench/teams"
+	"github.com/bdubs00/featherweight-workbench/work"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -47,7 +55,8 @@ const (
 	KindQuestion = "question" // a run or a seat waits for an answer
 	KindFailure  = "failure"  // a run of a duty of the caller failed in the last day
 	KindPaused   = "paused"   // a duty of the caller paused itself
-	KindResult   = "result"   // a result that the caller asked to check waits for the check
+	KindResult   = "result"   // a result that the caller asked to check waits for the check, also of a team
+	KindNote     = "note"     // a note of Know-how waits for the caller to keep it, under ask first
 )
 
 // ResultsFor is how far back the results to check reach.
@@ -68,19 +77,26 @@ type Item struct {
 	// Approval is the id of the approval that the run waits for, so a
 	// surface decides it without a read of the run. A question of a seat
 	// of a bridge has none.
-	Approval string    `json:"approval"`
-	Text     string    `json:"text"`
-	Since    time.Time `json:"since"`
+	Approval string `json:"approval"`
+	// Note is the id of the waiting change of a note (KindNote), which
+	// POST /v1/knowhow/waiting/{id} keeps or refuses.
+	Note  string    `json:"note,omitempty"`
+	Text  string    `json:"text"`
+	Since time.Time `json:"since"`
 }
 
 // Answer is the inbox of the caller: approvals and questions first, the
-// oldest first, then the failures and the paused duties.
+// oldest first, then the failures, the paused duties, the results, and the
+// notes. Waiting is the one count of the work that needs the caller, from
+// the lanes of the board and the notes of Know-how (work.Waiting). It is
+// nil when the board does not read, and a client then counts the items.
 type Answer struct {
-	Items []Item `json:"items"`
+	Items   []Item        `json:"items"`
+	Waiting *work.Waiting `json:"waiting,omitempty"`
 }
 
 // rank orders the kinds of an item.
-var rank = map[string]int{KindApproval: 0, KindQuestion: 0, KindFailure: 1, KindPaused: 2, KindResult: 3}
+var rank = map[string]int{KindApproval: 0, KindQuestion: 0, KindFailure: 1, KindPaused: 2, KindResult: 3, KindNote: 3}
 
 // For returns the inbox of the caller in ctx at the time now.
 func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
@@ -180,13 +196,72 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 		}
 		items = append(items, it)
 	}
+	// The one count of the work that needs the caller comes from the lanes
+	// of the board, read now, so the badge of the page and Activity say
+	// what Work says. A team whose agents finished waits in To check of the
+	// board, and it is an item here, which Looks right and Needs work end.
+	var count *work.Waiting
+	board, err := work.Fresh(ctx, a, now)
+	if err != nil {
+		a.Logger().Warn("inbox: the board does not read, so the inbox answers no count", "error", err)
+	} else {
+		w := board.Waiting
+		count = &w
+		items = append(items, teamItems(board)...)
+	}
+	// A note that waits for the caller under ask first is an item too, so
+	// a person who never opens Know-how sees it.
+	notes, err := knowhow.Of(a).WaitingFor(ctx)
+	if err != nil {
+		a.Logger().Warn("inbox: the notes that wait for a person do not read", "error", err)
+	}
+	for _, n := range notes {
+		items = append(items, noteItem(n))
+	}
+	if count != nil && err == nil {
+		count.Notes = len(notes)
+		count.Sum()
+	}
 	sort.SliceStable(items, func(i, j int) bool {
 		if rank[items[i].Kind] != rank[items[j].Kind] {
 			return rank[items[i].Kind] < rank[items[j].Kind]
 		}
 		return items[i].Since.Before(items[j].Since)
 	})
-	return Answer{Items: items}, nil
+	return Answer{Items: items, Waiting: count}, nil
+}
+
+// teamItems are the teams of the board whose agents finished and whose
+// result waits for a check of the caller: a card of a bridge in To check
+// whose next move is the caller's.
+func teamItems(board work.Answer) []Item {
+	var out []Item
+	for _, c := range board.Cards {
+		if c.Kind != work.KindBridge || c.Stage != work.StageReview || c.Next != work.NextYou || c.Links.Bridge == "" {
+			continue
+		}
+		it := Item{Kind: KindResult, Bridge: c.Links.Bridge, Since: c.Since, Text: c.Title + ": the agents finished, and the result waits for a check."}
+		if len(c.Agents) > 0 {
+			it.Agent = c.Agents[0]
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+// noteItem is a note of Know-how that waits for the caller under ask
+// first, in words that ask the person to keep it.
+func noteItem(w knowhow.Waiting) Item {
+	it := Item{Kind: KindNote, Agent: w.Agent, Run: w.Run, Note: w.ID, Since: w.At}
+	switch w.What {
+	case knowhow.WhatUpdated:
+		it.Text = fmt.Sprintf("%s changed its note %s. Keep the change?", w.Agent, w.Subject.Note)
+	case knowhow.WhatPutAway:
+		it.Text = fmt.Sprintf("%s wants to put its note %s away. Put it away?", w.Agent, w.Subject.Note)
+	default:
+		it.Text = fmt.Sprintf("%s wrote a note, %s. Keep it?", w.Agent, w.Subject.Note)
+	}
+	return it
 }
 
 // runItem is a run that waits for a person.
@@ -356,7 +431,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 	return []mcp.Tool{mcp.NewTool(&sdk.Tool{
 		Name:        ToolInbox,
 		Title:       "What needs me",
-		Description: "List what needs the person now, the items of Activity: each run that waits for an approval or an answer, each question of a seat of a bridge, each failed run of a duty of the person in the last day, each duty of the person that paused itself, and each result that the person asked to check or that a duty found and tells the person of, in the last week. Answer an approval with approve and a question with approve or send, and check a result with work_review. Each item has kind (approval, question, failure, paused, result), run, duty, agent, bridge, approval (the id of the approval that the run waits for), text, and since.",
+		Description: "List what needs the person now, the items of Activity: each run that waits for an approval or an answer, each question of a seat of a bridge, each failed run of a duty of the person in the last day, each duty of the person that paused itself, each result that the person asked to check or that a duty found and tells the person of, in the last week, each team whose agents finished and whose result waits for a check (bridge set, no run), and each note of Know-how that waits for the person to keep it (note: the id for POST /v1/knowhow/waiting/{id}). Answer an approval with approve and a question with approve or send, and check a result with work_review. Each item has kind (approval, question, failure, paused, result, note), run, duty, agent, bridge, approval (the id of the approval that the run waits for), note, text, and since. waiting is the one count of the work that needs the person, the same count as the tool work: count, needsYou, toCheck, and notes.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {

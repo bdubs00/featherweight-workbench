@@ -9,6 +9,7 @@ package fleet
 // this process come from its ledger.
 
 import (
+	"cmp"
 	"context"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 
 // Verdicts of the work of a run (Work.Verdict).
 const (
-	VerdictAccepted = "accepted" // a person gave a thumb up or a heart, or a receipt accepted or satisfied the result
+	VerdictAccepted = "accepted" // a person gave a thumb up, or a receipt accepted or satisfied the result
 	VerdictRejected = "rejected" // a person gave a thumb down, or a receipt rejected the result
 )
 
@@ -39,13 +40,17 @@ const (
 //   - WaitMS sums the time from each approval request to its decision by a
 //     person, and Waits counts those decisions. Asked is the time of the
 //     request that waits now, or zero.
-//   - Verdict is the first verdict on a result of the run: a thumb or a
-//     heart of a person, or a quality receipt (VerdictAccepted or
-//     VerdictRejected). A grade of a model is no verdict.
+//   - Verdict is the first verdict on a result of the run: a thumb of a
+//     person, or a quality receipt (VerdictAccepted or VerdictRejected). A
+//     grade of a model is no verdict, and neither is a heart: a heart keeps
+//     a result on the wiki of the agent, and it says nothing of whether the
+//     result is right.
 //   - Done is the field done of the newest fw.run.finished: fw.DoneChecked
 //     when the definition of done of the agent passed, fw.DoneFailed when
 //     its checks ended the run, and empty for a run without one or of an
-//     older kernel. It is no verdict of a person.
+//     older kernel. It is no verdict of a person. DoneWeak is the field
+//     doneWeak of the same event: the pass showed nothing about the work
+//     of the run, so the run is not checked (Checked).
 //   - Ends counts the ends of the run that completed, and Reviewed is the
 //     value of Ends at the newest reaction of a person. A follow-up after
 //     Needs work ends the run again, so Ends passes Reviewed, and the run
@@ -71,6 +76,7 @@ type Work struct {
 	Asked        time.Time `json:"asked,omitzero"`
 	Verdict      string    `json:"verdict,omitempty"`
 	Done         string    `json:"done,omitempty"`
+	DoneWeak     bool      `json:"doneWeak,omitempty"`
 	CanceledBy   string    `json:"canceledBy,omitempty"`
 	Backfilled   bool      `json:"backfilled,omitempty"`
 	Ends         int       `json:"ends,omitempty"`
@@ -102,7 +108,7 @@ func (w *Work) Apply(e fw.Event) {
 		if d.Outcome == string(fw.StateCompleted) {
 			w.Ends++
 		}
-		w.Done = d.Done
+		w.Done, w.DoneWeak = d.Done, d.DoneWeak
 		w.Asked = time.Time{}
 	case fw.EvApprovalRequested:
 		if w.Asked.IsZero() {
@@ -139,7 +145,7 @@ func (w *Work) Apply(e fw.Event) {
 		}
 		var v string
 		switch d.Reaction {
-		case fw.ReactionUp, fw.ReactionHeart:
+		case fw.ReactionUp:
 			v = VerdictAccepted
 		case fw.ReactionDown:
 			v = VerdictRejected
@@ -178,6 +184,25 @@ func (w *Work) Apply(e fw.Event) {
 			w.Verdict = v
 		}
 	}
+}
+
+// Judged is the newest verdict on the result of a run: the newest thumb of
+// a person or receipt, else the first one. The board and Results both read
+// it, so they count a result that a person sent back and then accepted the
+// same way (plan A13).
+func (w Work) Judged() string { return cmp.Or(w.LastVerdict, w.Verdict) }
+
+// Checked reports whether the definition of done of a run passed in the
+// kernel with a pass that shows the work of the run (fw.CheckedDone): the
+// facts of its work say so, else the run object of a newer kernel does. A
+// weak pass, such as a check that only reads a file that was there before
+// the run, is no check. Results, the board, and Know-how count only such a
+// run as checked.
+func Checked(r *fw.Run, w Work) bool {
+	if w.Done != "" {
+		return fw.CheckedDone(w.Done, w.DoneWeak)
+	}
+	return r != nil && r.Done != nil && fw.CheckedDone(r.Done.State, r.Done.Weak)
 }
 
 // DecidedByPerson reports whether a person decided an approval: the kind

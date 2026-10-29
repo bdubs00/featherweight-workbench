@@ -16,7 +16,9 @@ import (
 	"github.com/bdubs00/featherweight-workbench/bridges"
 	"github.com/bdubs00/featherweight-workbench/duties"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/knowhow"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
+	"github.com/bdubs00/featherweight-workbench/work"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -290,11 +292,16 @@ func TestInboxResult(t *testing.T) {
 	if len(ans.Items) != 1 || ans.Items[0].Kind != KindResult || ans.Items[0].Run != mine || ans.Items[0].Agent != "writer" || !strings.HasSuffix(ans.Items[0].Text, ": a result to check.") {
 		t.Fatalf("the inbox of alice = %+v", ans.Items)
 	}
+	// The one count comes from the lanes of the board: the result waits in
+	// To check, and the badge and Activity say 1 (plan A7).
+	if ans.Waiting == nil || *ans.Waiting != (work.Waiting{Count: 1, ToCheck: 1}) {
+		t.Fatalf("the one count of alice = %+v", ans.Waiting)
+	}
 	if err := a.React(as("alice"), mine, fw.ReactionData{Reaction: fw.ReactionUp}); err != nil {
 		t.Fatal(err)
 	}
-	if ans, err := For(as("alice"), a, time.Now()); err != nil || len(ans.Items) != 0 {
-		t.Fatalf("the inbox after a thumb up = %+v, %v", ans.Items, err)
+	if ans, err := For(as("alice"), a, time.Now()); err != nil || len(ans.Items) != 0 || ans.Waiting == nil || ans.Waiting.Count != 0 {
+		t.Fatalf("the inbox after a thumb up = %+v, %+v, %v", ans.Items, ans.Waiting, err)
 	}
 }
 
@@ -506,5 +513,34 @@ func TestSeatItems(t *testing.T) {
 	got := seatItems(waiting, seen, map[string]bool{"r3": true})
 	if len(got) != 2 || got[0].Kind != KindQuestion || got[0].Text != "writer asks in Exporter: Which port?" || got[1].Kind != KindApproval || got[1].Approval != "ap4" || !seen["r4"] {
 		t.Fatalf("the items of the seats = %+v", got)
+	}
+}
+
+// A team whose agents finished and whose next move is the caller's is an
+// item to check, as the board shows it in To check, and Looks right and
+// Needs work end it (plan A10). A team of another person, a team that
+// works, and a run are no such item. A note that waits under ask first is
+// an item that asks the person to keep it (plan A17).
+func TestTeamAndNoteItems(t *testing.T) {
+	at := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
+	board := work.Answer{Cards: []work.Card{
+		{ID: "bridge:B1", Kind: work.KindBridge, Title: "Release notes", Stage: work.StageReview, Next: work.NextYou, Since: at, Agents: []string{"writer", "reviewer"}, Links: work.Links{Bridge: "B1"}},
+		{ID: "bridge:B2", Kind: work.KindBridge, Title: "Theirs", Stage: work.StageReview, Next: work.NextPerson, Links: work.Links{Bridge: "B2"}},
+		{ID: "bridge:B3", Kind: work.KindBridge, Title: "Busy", Stage: work.StageWorking, Next: work.NextAgent, Links: work.Links{Bridge: "B3"}},
+		{ID: "run:R1", Kind: work.KindConversation, Title: "A draft", Stage: work.StageReview, Next: work.NextYou, Links: work.Links{Run: "R1"}},
+	}}
+	got := teamItems(board)
+	if len(got) != 1 || got[0] != (Item{Kind: KindResult, Bridge: "B1", Agent: "writer", Since: at, Text: "Release notes: the agents finished, and the result waits for a check."}) {
+		t.Fatalf("the teams to check = %+v", got)
+	}
+	for w, want := range map[string]string{
+		knowhow.WhatLearned: "triage wrote a note, ports.md. Keep it?",
+		knowhow.WhatUpdated: "triage changed its note ports.md. Keep the change?",
+		knowhow.WhatPutAway: "triage wants to put its note ports.md away. Put it away?",
+	} {
+		it := noteItem(knowhow.Waiting{ID: "triage.01", At: at, Agent: "triage", What: w, Run: "R9", Subject: knowhow.Subject{Note: "ports.md"}})
+		if it.Kind != KindNote || it.Note != "triage.01" || it.Run != "R9" || it.Agent != "triage" || it.Text != want || !it.Since.Equal(at) {
+			t.Errorf("the item of a note that waits (%s) = %+v", w, it)
+		}
 	}
 }

@@ -3283,7 +3283,7 @@ The page and the MCP tools write the same record. The contract of the build, `re
 | `limits.overlap` | `skip`, `queue`, or `allow`. The default is `skip`. |
 | `limits.catchUp` | A span from `0` to `24h`. A missed time younger than this span runs once. The default is `1h`. |
 | `limits.retries` | 0 to 3. A failed run goes again this many times. The default is 1. |
-| `whileAway` | Who decides a question of a run while nobody watches. The default is `{"decider": "manager", "timeout": "2h", "then": "deny"}`. The front keeps it, and a later part of the build applies it. |
+| `whileAway` | Who decides a question of a run while nobody watches. The default is `{"decider": "nobody", "timeout": "2h", "then": "deny"}`: the question waits for a person, and after 2 hours the answer is no. The manager decides only when the owner picks it. A duty of the door and a duty of New duty take the same default, and every readback says it in the row While you are away (`duties.AwayWords`). The front applies it (section 23.4). |
 | `notify` | Who hears of a failed run (`failure`), of a question (`needsYou`), and of a result (`result`): `owner`, the subject of a person, or `channel:<name>`, a shared channel of the operator that the notification reaches without a person (section 23.1). The default names the owner for a failure and a question, and nobody for a result. `resultWhen` is `always` or `found`, and a list of `result` without it takes `always` (section 22.12). |
 | `review` | True asks the owner to check each result. Each start carries the metadata `workbench.review` with `1`, and the run waits in the review stage of the work until its first reaction. A duty that posts or opens a bridge starts no run of its own, so `review` is a problem there. |
 | `runAs` | `duty`, the principal `duty:<name>` of the kind `workload`, or `owner`. Only the owner sets `owner`. When another person changes the duty, `runAs` goes back to `duty`. |
@@ -3735,8 +3735,11 @@ A test goes also during the quiet hours, and whatever the switches of the channe
 `GET /v1/inbox` and the MCP tool `inbox` answer what needs the caller now, the items of Activity:
 
 ```json
-{"items": [{"kind": "approval", "run": "01K...", "duty": "daily-report", "agent": "triage", "bridge": "", "approval": "ap-1", "text": "Daily report: the agent triage asks to run git.push. Rule: ask git.*.", "since": "2026-10-23T13:05:00Z"}]}
+{"items": [{"kind": "approval", "run": "01K...", "duty": "daily-report", "agent": "triage", "bridge": "", "approval": "ap-1", "text": "Daily report: the agent triage asks to run git.push. Rule: ask git.*.", "since": "2026-10-23T13:05:00Z"}],
+ "waiting": {"count": 3, "needsYou": 1, "toCheck": 1, "notes": 1}}
 ```
+
+`waiting` is the one count of the work that needs the caller (section 26.3). Activity, the badge of the app bar, Work, and Results read it, so one person never sees three counts. It is absent when the board does not read, and a client then counts the items.
 
 | Kind | Source |
 |---|---|
@@ -3744,7 +3747,8 @@ A test goes also during the quiet hours, and whatever the switches of the channe
 | `question` | A run that waits for an answer, or a seat of a bridge that asked the people of the bridge |
 | `failure` | A failed run of a duty in the last day, of a duty that the caller owns or whose `notify.failure` names the caller |
 | `paused` | A duty that the caller owns and that paused itself |
-| `result` | A run that completed with the metadata `workbench.review` and that nobody reacted to after its newest end, of the caller, of a team of the caller, or of a duty whose questions or results go to the caller, in the last week. A run of a duty that found something (section 22.12) is an item of the people of its `notify.result` alone, with the text `<title>: it found something.`. A reaction takes it out, and a new answer after Needs work brings it back. The tool `work_review` checks it (section 26.4). |
+| `result` | A team whose agents finished and whose result waits for a check of the caller, as the board shows it in To check: `bridge` names it and `run` is empty. Looks right and Needs work end it (section 26.4). Also a run that completed with the metadata `workbench.review` and that nobody reacted to after its newest end, of the caller, of a team of the caller, or of a duty whose questions or results go to the caller, in the last week. A run of a duty that found something (section 22.12) is an item of the people of its `notify.result` alone, with the text `<title>: it found something.`. A thumb takes it out, and a new answer after Needs work brings it back. A heart is no check. The tool `work_review` checks it (section 26.4). |
+| `note` | A note of Know-how that waits for the caller under ask first (section 28.5), which the caller can keep: `agent` names the agent, `run` the run that wrote it, and `note` the id of the waiting change for `POST /v1/knowhow/waiting/{id}`. The text asks, such as "triage wrote a note, ports.md. Keep it?". A change of a routine waits in Know-how alone. |
 
 The inbox keeps no truth of its own. The runs come from the list `needsYou` of the home of the dashboard (`dashboard.HomeOf`), which every surface shows. A run of a duty acts as the duty, so the home of the owner does not hold it: the inbox adds each run of a duty that waits to the inbox of the people of its `notify.needsYou` and of its owner. The questions of the seats come from `bridges.Store.Waiting`, the seats whose presence is `needs-you`, as the count `needsYou` of a bridge counts them. A seat whose newest run no worker holds is no item: the channel called it gone (`gone` of the seat), or the archive holds its run as lost. Nobody can move such a seat by an answer, and the board shows it as stopped and lost (section 26.2). The duties come from their store. A duty that a person paused does not need the person, so it is no item. Approvals and questions come first, the oldest first, then the failures, and then the paused duties. The existing tools `approve` and `send` answer the items. `approval` is the id of the approval that the run waits for, so a surface decides it without a read of the run. A question of a seat of a bridge has no such id, and its `approval` is `""`.
 
@@ -4094,22 +4098,22 @@ The archive (section 4.18) applies each event to the summary of its run. It also
 | `rework` | Each message of a person after the first end |
 | `handled` | Each decision that no person made: the kind of the decider is token, workload, parent, or kernel |
 | `waitMs`, `waits`, `asked` | The time from each `fw.approval.requested` to its decision by a person, and the request that waits now |
-| `verdict` | The first thumb or heart (`fw.run.reacted`), or the first quality receipt (`fw.run.annotated`): `accepted` or `rejected`. A grade of a model is no verdict. |
-| `done` | The field `done` of the newest `fw.run.finished`: `checked` when the definition of done of the agent passed (the kernel architecture, section 24), `failed` when its checks ended the run, and empty without one |
+| `verdict` | The first thumb (`fw.run.reacted`), or the first quality receipt (`fw.run.annotated`): `accepted` or `rejected`. A grade of a model is no verdict. A heart is none either: it keeps a result on the wiki of the agent (section 18.8), and it says nothing of whether the result is right. |
+| `done`, `doneWeak` | The fields `done` and `doneWeak` of the newest `fw.run.finished`: `checked` when the definition of done of the agent passed (the kernel architecture, section 24), `failed` when its checks ended the run, and empty without one. `doneWeak` is true when the pass showed nothing about the work of the run, such as a check that only reads a file. Such a run is not checked (`fleet.Checked`, the rule `fw.CheckedDone` of the kernel). |
 | `canceledBy` | The person of a cancel |
 
 A summary that a server before this section wrote has no facts. The archive keeps every event of the run. So after each start, the front reads them again in the background and writes the facts, once per run (`fleet/backfill.go`). It pauses 20 milliseconds between two runs, so a large archive does not flood the server of the bus. An event that arrives during the read makes the summary count more events than the read found, and the read starts again. A run whose start the stream no longer holds gets the mark `backfilled` and no facts, so the next start does not read it again. Every replica runs the backfill, and a replica that finds the facts there writes nothing. Until the backfill reaches a run, the value counts it as unknown and says so.
 
 ### 25.2 The answer
 
-`GET /v1/value?days=7|30|90` and the MCP tool `value` call `value.For` with the access rules of the runs (`fleet.WorkSince`). A piece of work is a run without a parent. A branch, a check run, a run of the manager or of the quick chat, and a run of the after-work review of Know-how (section 28.8) are no pieces. The cost of a review run is in the spend.
+`GET /v1/value?days=7|30|90` and the MCP tool `value` call `value.For` with the access rules of the runs (`fleet.WorkSince`). A piece of work is a run without a parent. A run that continues a conversation of the window (`workbench.continues`, section 4.19) is a part of the task of that conversation, as on the board: one task, not one per run. Its newest run says where the task stands, its verdict, and its checks, and the cost of every run is the cost of the task. A branch, a check run, a run of the manager or of the quick chat, and a run of the after-work review of Know-how (section 28.8) are no pieces. The cost of a review run is in the spend.
 
 A bridge is one piece too, as it is one card on the board. The runs of its seats are its parts and no pieces: a run with the batch `bridge:<id>`, or a child of the manager run of a spawn bridge. A helper of a seat and a branch add their cost to the bridge. The bridge is done at its close, with the verdict `accepted` when a person closed it with Looks right (section 26.4), else unchecked, and open before. Its cost is the sum of its seats and of their helpers, and the runs of its manager stay coordination. Its lead is the time from the open to the close, and its actions and waits are those of its seats. A bridge that a duty opened is in the line of the duty, else in the line of the agent of its first seat. A bridge that opened before the window is no piece of it. The fold reads the state of each bridge from `bridges.Store.Briefs`, which names no title and no seat. A bridge without a record is done once its seats ended.
 
 The answer counts the pieces that people, duties, sources, jobs, and bridges asked for in the window:
 
 - `work`: done, failed, stopped, open, and lost. A lost piece is a run of the archive that never ended and that no member holds: a pool replaced its worker while it worked or waited. It counts as failed work in the spend, and its wait does not grow.
-- `checks`: the done pieces by verdict: accepted, checked, sent back, and unchecked. Accepted and sent back are the first verdict of a person or of a receipt. Checked is a piece that no person judged and whose definition of done passed in the kernel. A verdict of a person wins over the checks. Unchecked is a piece that nobody and nothing judged. A worker of an older kernel sends no `done`, so its pieces are never checked.
+- `checks`: the done pieces by verdict: accepted, checked, sent back, and unchecked. Accepted and sent back are the newest verdict of a person or of a receipt (`fleet.Work.Judged`), as on the board, so a result that a person sent back and then accepted is accepted. Checked is a piece that no person judged and whose definition of done passed in the kernel with a pass that was not weak (`fleet.Checked`). A weak pass, such as a check that only reads a file that was there before the run, is unchecked. A verdict of a person wins over the checks. Unchecked is a piece that nobody and nothing judged. A worker of an older kernel sends no `done`, so its pieces are never checked.
 - `people`: the actions of people, and the done pieces that needed none. Also the pieces that a person wrote to after the end. Also the time that work waited for a decision of a person, and the pieces that wait now.
 - `lead`: the median time from the ask to the first end, and the part of all such time that waited for people. The time that a job waited in its queue is not in it.
 - `spend`: the cost of every run of the window at the prices of the workers, and the cost per done piece. Also the cost of failed work and of coordination. The runs with tokens without a price make the spend a lower bound.
@@ -4151,29 +4155,31 @@ The backend decides the stage, and the page only shows it. The stage of a card i
 
 A done card carries its verdict:
 
-- `accepted`: a thumb up, a heart, or a receipt that accepted it
-- `checked`: the kernel recorded `done: checked`, so the checks of the definition of done of the agent passed
+- `accepted`: a thumb up, or a receipt that accepted it. A heart is no verdict.
+- `checked`: the kernel recorded `done: checked` without `weak`, so the checks of the definition of done of the agent passed and showed the work of the run (`fleet.Checked`). A weak pass is `unchecked`.
 - `sent-back`: a thumb down
 - `unchecked`: nothing and nobody checked it
-- `let-go`: a person let the stopped card go (section 26.5). It is a word of the board only, and Results does not count it.
+- `let-go`: a person let the stopped card go (section 26.5), or it let itself go after seven days. It is a word of the board only, and Results does not count it.
 
 A bridge that a person closed with Looks right is `accepted`, with the reason "Accepted.". Another closed bridge is `unchecked`.
 
-A canceled card has none. The first verdict of the facts of the work (section 25.1) wins over the counts of the reactions.
+A canceled card has none. The newest verdict of the facts of the work (section 25.1, `fleet.Work.Judged`) wins over the counts of the reactions. Results reads the same verdict.
 
 `next` names who moves a card: `worker`, `agent`, `you`, `person`, or `manager`. A start of a duty whose decider while away is the manager names the manager for a plain approval. A card of the caller names `you`, and a card of another person names `person`.
 
-A card leaves the board only through done. A card that did not end stays however old it is, so work that stopped never drops out of sight. A done card stays for the window of the query. A run in review that is older than the window drops out, but an open bridge stays until a person closes it.
+A card leaves the board only through done. A card that waits or works stays however old it is. A card that stopped stays for seven days (`work.StoppedFor`), so work that stopped never drops out of sight unseen. Then it lets itself go: it moves to done with the verdict `let-go` at the end of those seven days, with the one line "It stopped 7 days ago and nobody moved it, so it let itself go.", and it leaves Done with the window. So the stopped runs of a script or of last week do not make the owner their janitor. A done card stays for the window of the query. A run in review that is older than the window drops out, but an open bridge stays until a person closes it.
+
+The cards of a stage come in the order of the wait, the card that waits longest first. To check and Done show the newest card first, so a fresh result never sinks under older results.
 
 A lane names in `oldest` the card that waits longest. A start that comes next waits for no one yet, so it does not count there.
 
-A lost run is a run of the archive that never ended and that no member holds. The pool replaced its worker, so it cannot go on. Its card is stopped with `lost: true`, and its reason says so.
+A lost run is a run of the archive that never ended and that no member holds. The pool replaced its worker, so it cannot go on. Its card is stopped with `lost: true`, and its reason says "The agent that held it is gone.". No reason says worker.
 
 A reason says what happens in plain words. No card says "Works." alone, and none names the seats or the turns of a team. A run that works says "The agent works on it.", or what its tool does now, such as "Works with files." (`work.toolWords`). A run that waits says "Asks before it writes a page of the wiki.", never the name of the tool. A seat says "writer works on its part.", and an open bridge whose seats ended says "The agents finished, and the result waits for a check.". A limit of turns is "its limit of steps". A start of a duty takes the title of the duty, and so does each new run of a duty with a title.
 
 ### 26.3 The route, the tool, and the read
 
-`GET /v1/work?days=7&all=0` and the MCP tool `work` call `work.For`. `days` is 7, 30, or 90. `all` is 0 or 1, also `false` or `true`. With 1, the board holds every card that the caller can view. With 0, it holds the cards of the caller and of the teams of the caller. Those are the runs of the caller and of its teams, and the duties that the caller owns or that tell the caller. The bridges that the caller operates count too. The answer is `{sentence, lanes, cards, days}`. A lane is `{stage, count, yours, oldest}`. The sentence speaks of tasks, such as "3 tasks are open. 1 needs you, the oldest for 2 hours." The tool adds a text with one line per card.
+`GET /v1/work?days=7&all=0` and the MCP tool `work` call `work.For`. `days` is 7, 30, or 90. `all` is 0 or 1, also `false` or `true`. With 1, the board holds every card that the caller can view. With 0, it holds the cards of the caller and of the teams of the caller. Those are the runs of the caller and of its teams, and the duties that the caller owns or that tell the caller. The bridges that the caller operates count too. The answer is `{sentence, lanes, cards, days, done, waiting}`. A lane is `{stage, count, yours, oldest}`. `waiting` is the one count of the work that needs the caller: `needsYou`, the cards of the lane needs-you whose `next` is `you`, `toCheck`, the cards of the lane review whose `next` is `you`, and `notes`, the notes of Know-how that wait for the caller under ask first (`knowhow.Service.WaitingFor`: a note that the caller reads and can keep). `count` is their sum. A stopped card is no wait on a person: it lets itself go. The inbox answers the same count, from a board that it reads now (`work.Fresh`), so the badge never lags the board. `done` counts the done cards that completed: the lane done without the canceled cards and the cards that were let go. Results counts done tasks the same way, so the two agree but for the edge of the window: the board counts a task by its end, and Results by its ask. The sentence speaks of tasks, such as "3 tasks are open. 1 needs you, the oldest for 2 hours." The tool adds a text with one line per card.
 
 The runs come from the view (`dashboard.Runs`) and from one read of the archive through `fleet.WorkWhere`: the runs that did not end, however old, and the runs that changed in the window, with the facts of their work. The view gives the run as it is now, with its activity, and the archive adds the facts. The value of the work reads the archive through the same function. The board of one caller and one query stays for ten seconds (`work.CacheFor`). The page reads the board every 30 seconds and after the events of its stream, so many reads come close together. A check of a result (section 26.4) and a let-go (section 26.5) clear the boards.
 
@@ -4207,9 +4213,10 @@ A newcomer says what they need done in words. The front reads the words back bef
 | `cost` | What the top-level runs of the agent cost in the last 30 days that the caller can view, in words, and how many runs a month the schedule starts. `low` and `high` are the least and the most for the whole task, in dollars: one run of the agent, or one run of each seat of a team together. Both are absent when no run of the agents has a price. `per` is `bridge` for a team. The plan never names a limit. |
 | `asks` | The patterns of the policy of the agent and of the policy of its workers that ask a person, in words: "Before it runs git push" for `bash: git push*`, and "Before a step that changes or deletes something" for `destructive`. A pattern of a tool that the agent cannot call is left out: the tools are those of the profile, or those of its workers for a profile that names none. A tool reads as what its call does, never by its name: "Before it writes a page of the wiki" for `front.pages_write`, and "Before it calls playbook in ansible, with check=false" for a tool of another server with an argument. Words that ask to see the result first add "Before it goes out". Every plan adds that a question waits for the person. |
 | `quiet`, `tell` | `tell` is `each`, `found`, or `failures`. For words that watch for a change, `tell` is `found`. |
+| `away` | For a task that repeats, who decides a question of a run while the person is away, in words (`duties.AwayWords`): "Nobody decides a question for you. After 2 hours without an answer, the answer is no." The page shows it as the row While you are away. |
 | `gaps` | If no tool of the agent sends mail, a send of an email is a gap. A host in the words that the egress of the pool of the agent does not reach is a gap too (`fleet.PoolEgress`). |
 | `same` | For a task that repeats, `{"duty", "title"}` of a duty that the caller owns and that does the same work: the same agent, and a title and a message that share most of the words of the task without the words of a schedule. The page offers Open it beside Start. Absent when no duty fits. |
-| `start` | One of `duty` (for `PUT /v1/duties/{name}`), `bridge` (for `POST /v1/bridges`), or `run` (`{"member", "body"}` for `POST /v1/runs?member=`). A duty that the plan makes asks the person while away (`whileAway.decider: nobody`), never the manager, and it takes a free name. The page adds the limit of the person: `limits.budget.maxCostUSD`, `caps.maxCostUSD`, or `budget.maxCostUSD`. |
+| `start` | One of `duty` (for `PUT /v1/duties/{name}`), `bridge` (for `POST /v1/bridges`), or `run` (`{"member", "body"}` for `POST /v1/runs?member=`). A duty that the plan makes takes the default of every duty while away (section 23.4): nobody decides, and after 2 hours the answer is no. It takes a free name. The page adds the limit of the person: `limits.budget.maxCostUSD`, `caps.maxCostUSD`, or `budget.maxCostUSD`. |
 
 The page refuses Start until the person types a limit (no silent cost defaults). With these routes, `GET /v1/bossmode` says `"work": true`, and the page shows the places Work and Results.
 
@@ -4305,6 +4312,8 @@ With the switch on, a change of the agent, of the review, or of a pass waits for
 - A proposal of a routine stays `proposed`, and its move to `rehearsing` waits, pinned to the version of the routine.
 
 A keep of a target that changed since gives 409. The change stays on the list until a person drops it. The list keeps at most 200 changes per agent, and the daily pass drops a change older than 30 days.
+
+A note that waits is work that needs a person. It counts in the one count of the board (section 26.3) for each person who reads it and can keep it, and it is an item of the inbox (section 23.3). So Work, Activity, the badge of the page, and Results show it, also to a person who never opens Know-how.
 
 ### 28.6 Uses, resting, and put away
 

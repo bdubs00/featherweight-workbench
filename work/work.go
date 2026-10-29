@@ -51,8 +51,8 @@ var weight = map[string]int{StageNeedsYou: 6, StageWorking: 5, StageWaiting: 4, 
 
 // Verdicts of a done card: who or what checked its result.
 const (
-	VerdictAccepted  = "accepted"  // a person gave a thumb up or a heart, or a receipt accepted it
-	VerdictChecked   = "checked"   // the checks of the definition of done of the agent passed
+	VerdictAccepted  = "accepted"  // a person gave a thumb up, or a receipt accepted it
+	VerdictChecked   = "checked"   // the checks of the definition of done of the agent passed, and the pass was not weak (fleet.Checked)
 	VerdictSentBack  = "sent-back" // a person gave a thumb down
 	VerdictUnchecked = "unchecked" // nothing and nobody checked it
 )
@@ -175,8 +175,10 @@ type Lane struct {
 }
 
 // Answer is the board of the caller: the lanes in the order of the flow,
-// the cards in that order with the longest wait first in each stage, and
-// a sentence for a host that shows only text.
+// the cards in that order, and a sentence for a host that shows only
+// text. In each stage the card that waits longest comes first, but To
+// check and Done show the newest card first, so fresh work never sinks
+// under old results.
 type Answer struct {
 	Sentence string `json:"sentence"`
 	Lanes    []Lane `json:"lanes"`
@@ -184,7 +186,30 @@ type Answer struct {
 	// Days is the window of the board: the cards that ended or changed
 	// in the last Days days. A card that did not end stays, however old.
 	Days int `json:"days"`
+	// Done counts the done cards that completed: the lane Done without
+	// the canceled cards and the cards that were let go. Results counts
+	// done tasks the same way (plan A13).
+	Done int `json:"done"`
+	// Waiting is the one count of the work that needs the caller.
+	Waiting Waiting `json:"waiting"`
 }
+
+// Waiting is the one count of the work that needs the caller (plan A7):
+// the cards of the lane Needs you whose next move is the caller's
+// (NeedsYou), the cards of the lane To check whose next move is the
+// caller's (ToCheck), and the notes of Know-how that wait for the caller
+// under ask first (Notes). Count is their sum. The board, Activity, the
+// badge of the page, and Results read this one count, so they never
+// disagree. A stopped card is no wait on a person: it lets itself go.
+type Waiting struct {
+	Count    int `json:"count"`
+	NeedsYou int `json:"needsYou"`
+	ToCheck  int `json:"toCheck"`
+	Notes    int `json:"notes"`
+}
+
+// Sum sets Count to the sum of the parts.
+func (w *Waiting) Sum() { w.Count = w.NeedsYou + w.ToCheck + w.Notes }
 
 // Run is a run that the caller can view, with the facts of its work
 // (fleet.Work). Lost is true for a run that never ended and that no member
@@ -225,7 +250,10 @@ type Input struct {
 	LetGo map[string]LetGo
 	// Names holds a name of a person that people read, by subject, for
 	// the subjects that the records name alone (From.Display).
-	Names  map[string]string
+	Names map[string]string
+	// Notes counts the notes of Know-how that wait for the caller under
+	// ask first (knowhow.Service.WaitingFor), for Answer.Waiting.
+	Notes  int
 	Now    time.Time
 	Window time.Duration
 }
@@ -373,7 +401,7 @@ func (b *board) bridge(it bridges.Item) {
 			// The seat asked, and then its worker went: nobody can move
 			// the seat by an answer, so it stopped (walk finding L20).
 			p.stage, p.lost = StageStopped, true
-			p.reason = m.Handle + " lost its worker while its question waited, so it cannot go on."
+			p.reason = m.Handle + " asked a question, but " + agentGone
 			d.parts = append(d.parts, p)
 			continue
 		}
@@ -393,11 +421,11 @@ func (b *board) bridge(it bridges.Item) {
 		case bridges.PresenceWorking:
 			p.stage, p.reason = StageWorking, m.Handle+" works on its part."
 		case bridges.PresenceWaiting:
-			p.stage, p.reason = StageWaiting, m.Handle+" waits for a worker."
+			p.stage, p.reason = StageWaiting, m.Handle+" waits to start."
 		case bridges.PresenceError:
 			p.stage, p.reason = StageStopped, m.Handle+" stopped with an error."
 			if m.Gone {
-				p.reason, p.lost = m.Handle+" lost its worker before it ended.", true
+				p.reason, p.lost = m.Handle+" stopped: "+agentGone, true
 			}
 		case bridges.PresenceLimit:
 			p.stage, p.reason = StageStopped, m.Handle+" stopped at a limit."
@@ -449,7 +477,7 @@ func (b *board) start(s Start) {
 	case duties.StateStarting, duties.StateQueued:
 		p.stage = StageWaiting
 		if p.reason == "" {
-			p.reason = "Waits for a worker."
+			p.reason = "Waits to start."
 		}
 	case duties.StateWaiting:
 		p.stage = StageWaiting
@@ -478,7 +506,7 @@ func (b *board) start(s Start) {
 	case duties.StateLost:
 		p.stage, p.lost = StageStopped, true
 		if p.reason == "" {
-			p.reason = "No worker reported its run."
+			p.reason = capital(agentGone)
 		}
 	default:
 		// failed, missed, check-failed, and a state of a newer front.
@@ -727,11 +755,11 @@ func (b *board) runPart(r Run) part {
 	p := part{run: r.ID, since: r.UpdatedAt}
 	if r.Lost {
 		p.stage, p.lost = StageStopped, true
-		p.reason = "Its worker was replaced before it ended, so it cannot go on."
+		p.reason = capital(agentGone)
 		return p
 	}
 	if r.Blocked != "" {
-		p.stage, p.reason = StageStopped, "Its worker is blocked: "+oneLine(r.Blocked, 160)
+		p.stage, p.reason = StageStopped, "Its agent cannot work: "+oneLine(r.Blocked, 160)
 		return p
 	}
 	switch r.State {
@@ -745,7 +773,7 @@ func (b *board) runPart(r Run) part {
 			}
 		}
 	case fw.StateQueued:
-		p.stage, p.reason, p.since = StageWaiting, "Waits for a worker.", r.CreatedAt
+		p.stage, p.reason, p.since = StageWaiting, "Waits to start.", r.CreatedAt
 	case fw.StateRunning, fw.StateSuspended:
 		p.stage, p.since = StageWorking, r.CreatedAt
 		p.reason = agentWorks
@@ -772,7 +800,7 @@ func (b *board) runPart(r Run) part {
 			p.verdict, p.reason = v, "Accepted."
 		case v == VerdictSentBack:
 			p.verdict, p.reason = v, "Sent back."
-		case r.Done != nil && r.Done.State == fw.DoneChecked:
+		case fleet.Checked(r.Run, r.Work):
 			p.verdict, p.reason = VerdictChecked, "Its checks passed."
 		case strings.TrimSpace(r.Output) == "":
 			p.verdict, p.reason = VerdictUnchecked, "Ended with nothing to read."
@@ -799,18 +827,22 @@ func (b *board) runPart(r Run) part {
 	return p
 }
 
-// Reasons of a card in plain words: no card says "Works." alone, and none
-// names the seats or the turns of a team (walk finding L8).
+// Reasons of a card in plain words: no card says "Works." alone, none
+// names the seats or the turns of a team (walk finding L8), and none says
+// worker (plan A11). agentGone ends the reason of a part whose worker the
+// pool replaced before it ended.
 const (
 	agentWorks = "The agent works on it."
 	teamDone   = "The agents finished, and the result waits for a check."
+	agentGone  = "the agent that held it is gone."
 )
 
 // judged is the verdict of a person, or of a receipt, on the result of a
-// run: the first verdict of its facts, else its reactions. A thumb down
-// sends the result back, and a thumb up or a heart accepts it.
+// run: the newest verdict of its facts, else its reactions. A thumb down
+// sends the result back, and a thumb up accepts it. A heart keeps the
+// result on the wiki, and it is no verdict.
 func judged(r Run) string {
-	switch cmp.Or(r.Work.LastVerdict, r.Work.Verdict) {
+	switch r.Work.Judged() {
 	case fleet.VerdictAccepted:
 		return VerdictAccepted
 	case fleet.VerdictRejected:
@@ -819,7 +851,7 @@ func judged(r Run) string {
 	switch {
 	case r.Reactions[fw.ReactionDown] > 0:
 		return VerdictSentBack
-	case r.Reactions[fw.ReactionUp] > 0 || r.Reactions[fw.ReactionHeart] > 0:
+	case r.Reactions[fw.ReactionUp] > 0:
 		return VerdictAccepted
 	}
 	return ""
@@ -876,6 +908,7 @@ func (b *board) answer() Answer {
 		}
 		b.settle(d)
 		b.letGo(d)
+		b.letItself(d)
 		if d.Stage == StageDone && d.Since.Before(b.in.Now.Add(-b.in.Window)) {
 			continue
 		}
@@ -885,6 +918,9 @@ func (b *board) answer() Answer {
 			continue
 		}
 		ans.Cards = append(ans.Cards, d.Card)
+		if completed(d.Card) {
+			ans.Done++
+		}
 		l := lanes[d.Stage]
 		l.Count++
 		if d.Next == NextYou {
@@ -903,7 +939,7 @@ func (b *board) answer() Answer {
 		if c := cmp.Compare(rank[x.Stage], rank[y.Stage]); c != 0 {
 			return c
 		}
-		if x.Stage == StageDone {
+		if x.Stage == StageDone || x.Stage == StageReview {
 			return y.Since.Compare(x.Since)
 		}
 		return x.Since.Compare(y.Since)
@@ -911,8 +947,20 @@ func (b *board) answer() Answer {
 	for _, s := range Stages {
 		ans.Lanes = append(ans.Lanes, *lanes[s])
 	}
+	ans.Waiting = Waiting{NeedsYou: lanes[StageNeedsYou].Yours, ToCheck: lanes[StageReview].Yours, Notes: b.in.Notes}
+	ans.Waiting.Sum()
 	ans.Sentence = sentence(ans, b.in.Now)
 	return ans
+}
+
+// completed reports whether a card is done and completed: it has a verdict
+// of a result, so it is no canceled card and no card that was let go.
+func completed(c Card) bool {
+	switch c.Verdict {
+	case VerdictAccepted, VerdictChecked, VerdictSentBack, VerdictUnchecked:
+		return c.Stage == StageDone
+	}
+	return false
 }
 
 // settle gives a draft its stage from its parts, and its next move.
@@ -942,7 +990,7 @@ func (b *board) settle(d *draft) {
 			d.Parts.Waiting += n
 			d.Parts.Total += n
 			if weight[StageWaiting] > weight[top.stage] {
-				top = part{stage: StageWaiting, reason: plural(n, "item waits", "items wait") + " for a worker.", since: d.Opened}
+				top = part{stage: StageWaiting, reason: plural(n, "item waits", "items wait") + " to start.", since: d.Opened}
 			}
 		}
 	}
@@ -1060,9 +1108,14 @@ func sentence(ans Answer, now time.Time) string {
 		parts = append(parts, s+".")
 	}
 	for _, l := range ans.Lanes {
-		if l.Stage == StageDone && l.Count > 0 {
-			parts = append(parts, fmt.Sprintf("%d done in the last %s.", l.Count, plural(ans.Days, "day", "days")))
+		if l.Stage != StageDone || l.Count == 0 {
+			continue
 		}
+		s := fmt.Sprintf("%d done in the last %s", ans.Done, plural(ans.Days, "day", "days"))
+		if n := l.Count - ans.Done; n > 0 {
+			s += fmt.Sprintf(", and %d canceled or let go", n)
+		}
+		parts = append(parts, s+".")
 	}
 	return strings.Join(parts, " ")
 }

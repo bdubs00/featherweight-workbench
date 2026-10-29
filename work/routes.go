@@ -23,6 +23,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/duties"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/knowhow"
 	"github.com/bdubs00/featherweight-workbench/manager"
 	"github.com/bdubs00/featherweight-workbench/sources"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
@@ -76,6 +77,20 @@ func For(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, erro
 		return Answer{}, err
 	}
 	c.put(key, ans, now)
+	return ans, nil
+}
+
+// Fresh returns the board of the caller in ctx for the default query, read
+// now and not from the cache, and keeps it in the cache. The inbox reads
+// the one count of the work that needs the caller from it (Waiting) after
+// each change that the page sees, so the badge never lags the board.
+func Fresh(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
+	q := Query{Days: DefaultDays}
+	ans, err := build(ctx, a, now, q)
+	if err != nil {
+		return Answer{}, err
+	}
+	cacheOf(a).put(cacheKey(ctx, q), ans, now)
 	return ans, nil
 }
 
@@ -193,6 +208,14 @@ func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, er
 				in.Starts = append(in.Starts, Start{Duty: v.Duty, Entry: e})
 			}
 		}
+	}
+	// The notes of Know-how that wait for the caller count in the one count
+	// of the work that needs the caller. A store that does not read counts
+	// none, and the board still answers.
+	if notes, err := knowhow.Of(a).WaitingFor(ctx); err != nil {
+		a.Logger().Warn("work: the notes that wait for a person do not read", "error", err)
+	} else {
+		in.Notes = len(notes)
 	}
 	if bv, ok := fleet.Of(a).(fleet.BatchView); ok {
 		for _, batch := range jobBatches(in) {
@@ -364,7 +387,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 		Title: "Where the work stands",
 		Description: "Show the board of the work of the person: one card per task, from the request to its end. A task is a bridge, a start of a duty, a job of many items, an event of a source, or a conversation with an agent. " +
 			"Each card has a stage (waiting: coming up, working, needs-you, stopped, review: a result to check, done), the reason in words, since when, who moves it next (worker, agent, you, person, manager), who asked for it, and its links: the run to open, the approval to decide with approve, the bridge, the duty, and the batch. " +
-			"A done card has a verdict: accepted, checked, sent-back, or unchecked, or let-go for a stopped card that a person let go with work_letgo. A card that did not end stays on the board however old it is, so work that stopped never drops out of sight; lost means that the worker of the task was replaced. from.display is a name of the person that people read. " +
+			"A done card has a verdict: accepted, checked, sent-back, or unchecked, or let-go for a stopped card that a person let go with work_letgo. A card that waits or works stays on the board however old it is. A stopped card stays for 7 days, then lets itself go to done with the verdict let-go. To check and done show the newest card first. lost means that the agent that held the task is gone. from.display is a name of the person that people read. " +
 			"days is the window for the cards that ended: 7, 30, or 90, 7 by default. all true shows every card that the person can view, not only the cards of the person and of the teams of the person.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"days":{"type":"integer","enum":[7,30,90]},"all":{"type":"boolean"}}}`),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
@@ -380,7 +403,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 		Name:  ToolPlan,
 		Title: "Read a task back before it starts",
 		Description: "Read back what the person needs done, in their words, before anything starts. It starts and saves nothing, and it calls no model. " +
-			"The answer says the kind (once, repeat, or team), who does it, when (the schedule in words and the next three times), what runs of the agent cost (never a limit), when it asks the person, when it stays quiet, where the result lands, what no agent here can do (gaps), and problems that stop a start. " +
+			"The answer says the kind (once, repeat, or team), who does it, when (the schedule in words and the next three times), what runs of the agent cost (never a limit), when it asks the person, when it stays quiet, who decides a question of a task that repeats while the person is away (away), where the result lands, what no agent here can do (gaps), and problems that stop a start. " +
 			"start holds the record to send: duty to PUT /v1/duties/{name} (duty_put), bridge to POST /v1/bridges (bridge_open), or run to POST /v1/runs?member= (run). The person sets the most it can cost before the start: limits.budget.maxCostUSD, caps.maxCostUSD, or budget.maxCostUSD. " +
 			"agent picks the agent, and tell picks when the person hears of a task that repeats: each, found, or failures. timeZone is an IANA name, UTC by default.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"words":{"type":"string","maxLength":4000},"agent":{"type":"string"},"tell":{"type":"string","enum":["each","found","failures"]},"timeZone":{"type":"string"}},"required":["words"]}`),
@@ -474,6 +497,9 @@ func PlanText(p Plan) string {
 	}
 	if len(p.Quiet) > 0 {
 		b.WriteString("\nIt stays quiet: " + strings.Join(p.Quiet, "; ") + ".")
+	}
+	if p.Away != "" {
+		b.WriteString("\nWhile you are away: " + p.Away)
 	}
 	b.WriteString("\nThe result: " + p.Result + ".")
 	for _, g := range p.Gaps {

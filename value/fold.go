@@ -102,9 +102,11 @@ type Counts struct {
 }
 
 // Checks splits the done pieces by the verdict on their result. Accepted
-// and SentBack are the first verdict of a person or of a receipt. Checked
+// and SentBack are the newest verdict of a person or of a receipt
+// (fleet.Work.Judged), as on the board. Checked
 // is a piece that no person judged and whose definition of done passed in
-// the kernel (fw.run.finished with done checked). Unchecked is a piece
+// the kernel (fw.run.finished with done checked) with a pass that was not
+// weak (fleet.Checked). Unchecked is a piece
 // that nobody and nothing judged. The verdict of a person wins over the
 // checks of the kernel.
 type Checks struct {
@@ -240,7 +242,8 @@ func LineOf(r *fw.Run) (key, kind, name string) {
 
 // piece is one piece of work while the fold runs. A piece of a bridge has
 // team true, a run that stands for the bridge, the facts of its seats
-// together, and the wait of its seats that wait now.
+// together, and the wait of its seats that wait now. more holds the runs
+// that continue the conversation of the piece (fleet.MetaContinues).
 type piece struct {
 	r       *fleet.WorkRun
 	line    *Line
@@ -248,6 +251,7 @@ type piece struct {
 	team    bool
 	waitNow int64
 	waiting bool
+	more    []*fleet.WorkRun
 }
 
 // Fold folds the runs of a window into the answer. The runs are those
@@ -267,13 +271,16 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 			byID[runs[i].Run.ID] = &runs[i]
 		}
 	}
-	// rootOf follows the parents and the sources of branches to the run
-	// that holds the cost of a run.
+	// rootOf follows the parents, the sources of branches, and the earlier
+	// runs of a conversation to the run that holds the cost of a run.
 	rootOf := func(r *fw.Run) *fw.Run {
 		for range 64 {
 			up := r.Parent
 			if up == "" {
 				up = r.Metadata[metaForkOf]
+			}
+			if up == "" {
+				up = r.Metadata[fleet.MetaContinues]
 			}
 			next, ok := byID[up]
 			if up == "" || !ok {
@@ -316,6 +323,7 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 	}
 	pieces := map[string]*piece{}
 	seats := map[string][]*fleet.WorkRun{}
+	var continues []*fleet.WorkRun
 	for i := range runs {
 		w := &runs[i]
 		r := w.Run
@@ -335,8 +343,28 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 		if r.Parent != "" || r.Metadata[metaForkOf] != "" {
 			continue
 		}
+		if c := r.Metadata[fleet.MetaContinues]; c != "" && c != r.ID && byID[c] != nil {
+			// A run that continues a conversation of the window is a part of
+			// the task of that conversation, as on the board: a task, not a
+			// conversation of many runs.
+			continues = append(continues, w)
+			continue
+		}
 		key, kind, name := LineOf(r)
 		pieces[r.ID] = &piece{r: w, line: lineOf(key, kind, name, r.Agent, r.CreatedAt)}
+	}
+	for _, w := range continues {
+		if p := pieces[rootOf(w.Run).ID]; p != nil {
+			p.more = append(p.more, w)
+			continue
+		}
+		key, kind, name := LineOf(w.Run)
+		pieces[w.Run.ID] = &piece{r: w, line: lineOf(key, kind, name, w.Run.Agent, w.Run.CreatedAt)}
+	}
+	for _, p := range pieces {
+		if len(p.more) > 0 {
+			p.r = conversation(p.r, p.more)
+		}
 	}
 	teams := map[string]*piece{}
 	for t, list := range seats {
@@ -442,7 +470,7 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 			if per != nil {
 				per.Done++
 			}
-			switch wk.Verdict {
+			switch wk.Judged() {
 			case fleet.VerdictAccepted:
 				ans.Checks.Accepted++
 				ln.Checks.Accepted++
@@ -456,7 +484,7 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 					per.SentBack++
 				}
 			case "":
-				if doneChecked(r, wk) {
+				if fleet.Checked(r, wk) {
 					ans.Checks.Checked++
 					ln.Checks.Checked++
 					if per != nil {
@@ -553,6 +581,36 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 	return ans
 }
 
+// conversation makes the run that stands for a task of one conversation:
+// first, the run asked for it, and more, the runs that continue it. The
+// newest run says where the task stands, its verdict, and its checks, as
+// the newest run speaks for the card of the board. The time of the ask and
+// of the first end are those of first, and the actions, the waits, and the
+// rework of all the runs add up.
+func conversation(first *fleet.WorkRun, more []*fleet.WorkRun) *fleet.WorkRun {
+	last := first
+	for _, x := range more {
+		if x.Run.CreatedAt.After(last.Run.CreatedAt) {
+			last = x
+		}
+	}
+	stand := *first.Run
+	stand.State, stand.Done, stand.Reactions, stand.UpdatedAt = last.Run.State, last.Run.Done, last.Run.Reactions, last.Run.UpdatedAt
+	w := first.Work
+	for _, x := range more {
+		f := x.Work
+		w.Facts = w.Facts && f.Facts
+		w.Acts += f.Acts
+		w.Rework += f.Rework
+		w.Handled += f.Handled
+		w.WaitMS += f.WaitMS
+		w.Waits += f.Waits
+	}
+	l := last.Work
+	w.Asked, w.Verdict, w.LastVerdict, w.Done, w.DoneWeak, w.Ends, w.Reviewed = l.Asked, l.Verdict, l.LastVerdict, l.Done, l.DoneWeak, l.Ends, l.Reviewed
+	return &fleet.WorkRun{Run: &stand, Work: w, Lost: last.Lost}
+}
+
 // teamPiece makes the piece of the bridge t from the runs of its seats:
 // a run that stands for the bridge, with the facts of the seats together.
 // The bridge opened at the time of its record, else at its first run. It
@@ -611,16 +669,6 @@ func teamPiece(t string, list []*fleet.WorkRun, known map[string]bridges.Brief, 
 	stand.UpdatedAt = last
 	p.r = &fleet.WorkRun{Run: stand, Work: w}
 	return p
-}
-
-// doneChecked reports whether the definition of done of a run passed in
-// the kernel: the facts of its work say so, else the run object of a newer
-// kernel does.
-func doneChecked(r *fw.Run, w fleet.Work) bool {
-	if w.Done != "" {
-		return w.Done == fw.DoneChecked
-	}
-	return r.Done != nil && r.Done.State == fw.DoneChecked
 }
 
 // periods returns the parts of a window: a day each for a window of a

@@ -222,6 +222,10 @@ func as(who string) context.Context {
 
 // duty writes a duty of triage owned by alice that starts on a call, with
 // whileAway, and starts it now. It returns the run of the start.
+// byManager lets the manager decide while the owner is away. Nobody is the
+// default, so a test of the manager names it.
+var byManager = &duties.WhileAway{Decider: duties.DeciderManager, Timeout: "2h", Then: "deny"}
+
 func (f *front) duty(t *testing.T, name string, away *duties.WhileAway) string {
 	t.Helper()
 	d := duties.Duty{

@@ -305,7 +305,7 @@ func (s *Service) open(ctx context.Context, svc *duties.Service, r *fw.Run) {
 	default:
 		wa := d.WhileAway
 		if wa == nil {
-			wa = &duties.WhileAway{Decider: duties.DefaultDecider, Timeout: "2h", Then: duties.DefaultThen}
+			wa = &duties.WhileAway{Decider: duties.DefaultDecider, Timeout: duties.AwayFor(), Then: duties.DefaultThen}
 		}
 		timeout, err := time.ParseDuration(wa.Timeout)
 		if err != nil || timeout <= 0 {
@@ -334,7 +334,7 @@ func (s *Service) route(ctx context.Context, r *fw.Run, wa *duties.WhileAway) (s
 		return RoutePerson, "The run waits for a person to connect a service."
 	case len(p.Schema) > 0:
 		return RoutePerson, "A question goes to a person, never to the manager."
-	case wa.Decider != duties.DefaultDecider:
+	case wa.Decider != duties.DeciderManager:
 		return RoutePerson, "The duty says that nobody decides while you are away."
 	case s.destructive(ctx, r):
 		return RoutePerson, fmt.Sprintf("The policy marks the tool %s destructive, so the manager does not decide it.", p.Tool)

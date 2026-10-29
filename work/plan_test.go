@@ -60,8 +60,13 @@ func TestPlanRepeat(t *testing.T) {
 	if s := d["when"].(map[string]any)["schedule"].(schedule.Schedule); s.Repeat != "daily" || s.Times[0] != "02:00" || s.TimeZone != "America/New_York" {
 		t.Fatalf("the schedule = %+v", s)
 	}
-	if wa := d["whileAway"].(map[string]any); wa["decider"] != "nobody" {
+	// One default while the person is away, as New duty has it, and a row
+	// in the readback that says it (plan A9).
+	if wa := d["whileAway"].(map[string]any); wa["decider"] != "nobody" || wa["timeout"] != "2h" || wa["then"] != "deny" {
 		t.Fatalf("the decider while away = %v", wa)
+	}
+	if p.Away != "Nobody decides a question for you. After 2 hours without an answer, the answer is no." {
+		t.Fatalf("the row while you are away = %q", p.Away)
 	}
 	if n := d["notify"].(map[string]any); n["resultWhen"] != TellFound || strings.Join(n["result"].([]string), ",") != "owner" {
 		t.Fatalf("notify = %v", n)
