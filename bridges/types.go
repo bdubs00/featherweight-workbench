@@ -234,15 +234,19 @@ type Activity struct {
 // message of an agent in the channel, for a row of a list and a card.
 type Item struct {
 	Bridge
-	Read        uint64          `json:"read"`
-	Unread      int             `json:"unread"`
-	UnreadMore  bool            `json:"unreadMore"`
-	MemberCount int             `json:"memberCount"`
-	NeedsYou    int             `json:"needsYou"`
-	WaitsFor    string          `json:"waitsFor,omitempty"`
-	Summary     string          `json:"summary,omitempty"`
-	LastAt      *time.Time      `json:"lastAt,omitempty"`
-	Usage       *fleet.UsageSum `json:"usage,omitempty"`
+	Read        uint64 `json:"read"`
+	Unread      int    `json:"unread"`
+	UnreadMore  bool   `json:"unreadMore"`
+	MemberCount int    `json:"memberCount"`
+	NeedsYou    int    `json:"needsYou"`
+	WaitsFor    string `json:"waitsFor,omitempty"`
+	Summary     string `json:"summary,omitempty"`
+	// People are the people of the channel, each with the display name
+	// that a page shows: the person who asked for it first, then the owner
+	// of the duty that opened it, then the people who posted lately.
+	People []Person        `json:"people,omitempty"`
+	LastAt *time.Time      `json:"lastAt,omitempty"`
+	Usage  *fleet.UsageSum `json:"usage,omitempty"`
 }
 
 // Message is one entry of the channel of a bridge. Page names the page of
@@ -293,6 +297,24 @@ type From struct {
 	Name    string `json:"name,omitempty"`
 	Display string `json:"display,omitempty"`
 }
+
+// Person is a person of a channel: the subject of the sign-in, the
+// display name that a page shows (people.Display), never the subject when
+// it is an id of the issuer, and the role: asked for the person who asked
+// for the bridge, owner for the owner of the duty that opened it, and
+// posted for a person who posted in it.
+type Person struct {
+	Subject string `json:"subject"`
+	Display string `json:"display"`
+	Role    string `json:"role"`
+}
+
+// Roles of a person of a channel (Person.Role).
+const (
+	RoleAsked  = "asked"
+	RoleOwner  = "owner"
+	RolePosted = "posted"
+)
 
 // Mirror names the run event that an entry mirrors, so a reaction on the
 // entry reaches the run.

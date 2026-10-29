@@ -61,6 +61,9 @@ type buckets struct {
 	// an entry once per process.
 	mu        sync.Mutex
 	summaries map[string]summary
+	// display names the sender of an entry of a person, from its subject
+	// and the name that the entry kept (Store.displayOf), or nil.
+	display func(subject, hint string) string
 }
 
 // summary is what never changes of an entry: the kind and the name of the
@@ -131,6 +134,27 @@ func FirstLine(text string, n int) string {
 	}
 	return ""
 }
+
+// posters returns the subjects of the people who posted in the last
+// postersScan entries of a channel, newest first, each once.
+func (b *buckets) posters(ctx context.Context, rec *record) []string {
+	var out []string
+	seen := map[string]bool{}
+	for seq, n := rec.LastSeq, 0; seq > 0 && n < postersScan; seq, n = seq-1, n+1 {
+		s, ok, err := b.summaryOf(ctx, rec.ID, seq)
+		if err != nil {
+			return out
+		}
+		if ok && s.kind == KindPerson && s.name != "" && !seen[s.name] {
+			seen[s.name] = true
+			out = append(out, s.name)
+		}
+	}
+	return out
+}
+
+// postersScan bounds the entries that posters reads back.
+const postersScan = 50
 
 // lastPostScan bounds the entries that lastPost reads back from the newest
 // one.
@@ -297,6 +321,9 @@ func (b *buckets) entry(ctx context.Context, id string, seq uint64) (Message, ui
 	}
 	if m.To == nil {
 		m.To = []string{}
+	}
+	if m.From.Kind == KindPerson && b.display != nil {
+		m.From.Display = b.display(m.From.Name, m.From.Display)
 	}
 	b.remember(e.Key, m)
 	return m, e.Revision, nil

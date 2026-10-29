@@ -133,6 +133,7 @@ func (s *Store) item(ctx context.Context, rec *record, subject string, members b
 		it.WaitsFor = s.waitsFor(rec, subject)
 	}
 	it.Summary = s.b.lastPost(fctx, rec)
+	it.People = s.peopleOf(fctx, rec)
 	it.Caps.MaxTurns = rec.Caps.turnCap()
 	if at, ok := s.b.lastAt(fctx, rec); ok {
 		it.LastAt = &at

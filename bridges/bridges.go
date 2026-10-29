@@ -177,7 +177,7 @@ func New(a *fw.Agent, records, channels bucket.Bucket, cfg Config, log *slog.Log
 		log = slog.New(slog.DiscardHandler)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Store{
+	s := &Store{
 		a:           a,
 		log:         log,
 		cfg:         cfg,
@@ -207,6 +207,10 @@ func New(a *fw.Agent, records, channels bucket.Bucket, cfg Config, log *slog.Log
 		missing:     map[string]missing{},
 		feeds:       feeds{by: map[string]*feedMark{}},
 	}
+	// An entry of a person names its sender by the display name that
+	// people read, also an entry that a front before people wrote.
+	s.b.display = func(subject, hint string) string { return s.displayOf(subject, hint) }
+	return s
 }
 
 // run starts the workers of the fan-out, the watch of the view, and the

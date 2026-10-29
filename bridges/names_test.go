@@ -32,8 +32,8 @@ func TestOpaque(t *testing.T) {
 // manager opens a bridge for erin, whose subject is a UUID: before the
 // front knows her name, the line, the instructions, and the result of the
 // tool say a person or the operator; once erin called a route, they name
-// her by her email, and the record keeps it. Toward the agents, a person
-// is operator.
+// her by her display name, the part of her email before the @ in readable
+// form, and the record keeps it. Toward the agents, a person is operator.
 func TestNoTextNamesAPersonByAnID(t *testing.T) {
 	a := newAgentWith(t, nil, fw.WithProfile(fw.AgentProfile{Name: "helper", Access: &fw.Access{Operators: []string{"*"}}}))
 	s := newStore(t, a, nil)
@@ -67,17 +67,17 @@ func TestNoTextNamesAPersonByAnID(t *testing.T) {
 	res = callTool(t, cs, ToolOpen, plan, meta)
 	var second Item
 	structured(t, res, &second)
-	if res.IsError || !strings.Contains(textOf(res), "for erin@example.com") || second.OperatorName != "erin@example.com" || second.Operator != erinSubject {
+	if res.IsError || !strings.Contains(textOf(res), "for Erin") || second.OperatorName != "Erin" || second.Operator != erinSubject {
 		t.Fatalf("open after the list = %s %+v", textOf(res), second.Bridge)
 	}
-	if l := withEvent(channel(t, s, second.ID), EventOpened); len(l) != 1 || l[0].Text != "the manager for erin@example.com opened the channel with 2 members" {
+	if l := withEvent(channel(t, s, second.ID), EventOpened); len(l) != 1 || l[0].Text != "the manager for Erin opened the channel with 2 members" {
 		t.Fatalf("opened = %+v", l)
 	}
 	rec, _, _ = s.b.get(context.Background(), second.ID)
-	if in := s.instructionsOf(context.Background(), rec, rec.Members[0]); !strings.Contains(in, "erin@example.com runs this bridge.") {
+	if in := s.instructionsOf(context.Background(), rec, rec.Members[0]); !strings.Contains(in, "Erin runs this bridge.") {
 		t.Fatalf("instructions = %s", in)
 	}
-	if res := callTool(t, cs, ToolList, map[string]any{}, meta); !strings.Contains(textOf(res), "of erin@example.com.") {
+	if res := callTool(t, cs, ToolList, map[string]any{}, meta); !strings.Contains(textOf(res), "of Erin.") {
 		t.Fatalf("list = %s", textOf(res))
 	}
 
@@ -99,7 +99,7 @@ func TestNoTextNamesAPersonByAnID(t *testing.T) {
 	if got := s.deciderName("0f6a3c2e-1b7d-4e2a-9c1f-2a3b4c5d6e7f"); got != "a person" {
 		t.Fatalf("decider = %q", got)
 	}
-	if got := s.deciderName(erinSubject); got != "erin@example.com" {
+	if got := s.deciderName(erinSubject); got != "Erin" {
 		t.Fatalf("decider erin = %q", got)
 	}
 }

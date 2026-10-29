@@ -24,6 +24,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/faces"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
+	persons "github.com/bdubs00/featherweight-workbench/people"
 )
 
 // VerdictLetGo is the verdict of a card that a person let go.
@@ -235,7 +236,8 @@ func letGoName(l LetGo, me string) string {
 	case me != "" && l.By == me:
 		return "you"
 	case strings.TrimSpace(l.Name) != "":
-		return strings.TrimSpace(l.Name)
+		var none *persons.Store
+		return none.Display(context.Background(), l.By, strings.TrimSpace(l.Name))
 	case l.By != "" && !opaqueID(l.By):
 		return l.By
 	}
@@ -280,7 +282,7 @@ func LetGoCard(ctx context.Context, a *fw.Agent, now time.Time, req LetGoRequest
 	if c.Next != NextYou && !ownsAnAgent(ctx, a, c.Agents) {
 		return Card{}, fmt.Errorf("%w: only a person whose move the card is, or an owner of its agent, lets it go", fw.ErrForbidden)
 	}
-	l, err := s.keep(ctx, LetGo{Card: id, By: p.Subject, Name: personName(p.Name), At: now.UTC().Truncate(time.Second)})
+	l, err := s.keep(ctx, LetGo{Card: id, By: p.Subject, Name: personName(persons.Display(ctx, a, p.Subject, p.Name)), At: now.UTC().Truncate(time.Second)})
 	if err != nil {
 		return Card{}, err
 	}

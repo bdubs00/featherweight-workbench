@@ -111,8 +111,8 @@ func TestWaitingGone(t *testing.T) {
 // bridge carries the first line of the newest message of an agent.
 func TestFirstLine(t *testing.T) {
 	for in, want := range map[string]string{
-		"## Done\n\nThe role passes.":           "Done",
-		"\n---\n**The table is in** `x.md`.":    "The table is in x.md.",
+		"## Done\n\nThe role passes.":          "Done",
+		"\n---\n**The table is in** `x.md`.":   "The table is in x.md.",
 		"@reviewer The role is ready for you.": "The role is ready for you.",
 		"@reviewer\n- Ready.":                  "Ready.",
 		"   ":                                  "",
@@ -143,5 +143,41 @@ func TestFirstLine(t *testing.T) {
 	it, err := s.item(ctx, rec, "alice", false)
 	if err != nil || it.Summary != "The notes of 2.4 are in the wiki." {
 		t.Fatalf("the summary = %q, %v", it.Summary, err)
+	}
+}
+
+// The people of a channel carry a display name, never the UUID of a
+// sign-in: the person who asked for it first, then the people who posted.
+// An entry of a person that kept an email reads as the display name, and
+// the static token is Admin token (live walk M3).
+func TestPeopleOfAChannel(t *testing.T) {
+	a := newAgent(t, nil)
+	s := newStore(t, a, nil)
+	const frank = "0c1d2e3f-1b7d-4e2a-9c1f-2a3b4c5d6e7f"
+	rec := &record{Bridge: Bridge{ID: "ppl-1", Title: "Miners", Operator: frank, OperatorName: "frank.miller@example.com", State: StateOpen, Placement: PlacementQueue, Members: []Member{
+		{Handle: "writer", Agent: "migrator", Task: "Write", Runs: []string{"r1"}},
+	}}}
+	if err := s.b.create(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+	ctx := fw.WithPrincipal(context.Background(), callers["alice"])
+	for _, snd := range []sender{{subject: "token"}, {subject: frank, display: "frank.miller@example.com"}} {
+		if _, err := s.post(ctx, rec.ID, snd, PostSpec{Text: "Go on."}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec, _, _ = s.b.get(context.Background(), rec.ID)
+	it, err := s.item(ctx, rec, "alice", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Person{{Subject: frank, Display: "Frank Miller", Role: RoleAsked}, {Subject: "token", Display: "Admin token", Role: RolePosted}}
+	if len(it.People) != 2 || it.People[0] != want[0] || it.People[1] != want[1] {
+		t.Fatalf("the people = %+v", it.People)
+	}
+	for _, m := range channel(t, s, rec.ID) {
+		if m.From.Kind == KindPerson && (strings.Contains(m.From.Display, "@") || strings.Contains(m.From.Display, frank)) {
+			t.Fatalf("an entry names a person by %q", m.From.Display)
+		}
 	}
 }

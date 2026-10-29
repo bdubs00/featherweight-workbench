@@ -564,7 +564,7 @@ func TestTeamAndNoteItems(t *testing.T) {
 	if len(got) != 4 || got[0].Card != "run:R0" || got[0].Approval != "ap0" || got[0].Agent != "ops" || strings.Join(got[0].Actions, " ") != "allow deny" {
 		t.Fatalf("the decision = %+v", got)
 	}
-	if got[1] .Kind != KindResult || got[1].Bridge != "B1" || got[1].Agent != "writer" || got[1].Channel != "Release notes" || got[1].Summary != "The notes are in the wiki." || got[1].CostUSD != 0.12 ||
+	if got[1].Kind != KindResult || got[1].Bridge != "B1" || got[1].Agent != "writer" || got[1].Channel != "Release notes" || got[1].Summary != "The notes are in the wiki." || got[1].CostUSD != 0.12 ||
 		strings.Join(got[1].Actions, " ") != "looks-right needs-work" {
 		t.Fatalf("the team = %+v", got[1])
 	}

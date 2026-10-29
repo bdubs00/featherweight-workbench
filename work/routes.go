@@ -25,6 +25,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/knowhow"
 	"github.com/bdubs00/featherweight-workbench/manager"
+	persons "github.com/bdubs00/featherweight-workbench/people"
 	"github.com/bdubs00/featherweight-workbench/sources"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 	"github.com/bdubs00/featherweight-workbench/teams"
@@ -139,11 +140,13 @@ func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, er
 	st := bridges.Of(a)
 	if p := fw.PrincipalFrom(ctx); p != nil {
 		in.Me = p.Subject
-		if n := personName(p.Name); n != "" && p.Subject != "" {
-			in.Names[p.Subject] = n
-		}
 		if st != nil {
 			st.Learn(p)
+		} else {
+			persons.Learn(ctx, a, p)
+		}
+		if p.Subject != "" {
+			in.Names[p.Subject] = persons.Display(ctx, a, p.Subject, p.Name)
 		}
 	}
 	letGo, err := Of(a).All(ctx)
@@ -183,17 +186,18 @@ func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, er
 		if in.Waiting, err = st.Waiting(ctx); err != nil {
 			return Answer{}, err
 		}
-		// The names of the people that the bridges learned, for the
-		// subjects of the runs and of the bridges.
-		for _, r := range in.Runs {
-			if _, ok := in.Names[r.Principal]; !ok && r.Principal != "" {
-				in.Names[r.Principal] = st.KnownName(r.Principal, "")
-			}
-		}
+		// The display names of the people of the bridges, from the names
+		// that the front keeps (persons.Display).
 		for _, it := range in.Bridges {
 			if _, ok := in.Names[it.Operator]; !ok && it.Operator != "" {
 				in.Names[it.Operator] = st.KnownName(it.Operator, it.OperatorName)
 			}
+		}
+	}
+	// The display names of the people of the runs.
+	for _, r := range in.Runs {
+		if _, ok := in.Names[r.Principal]; !ok && r.Principal != "" {
+			in.Names[r.Principal] = persons.Display(ctx, a, r.Principal, "")
 		}
 	}
 	if svc := duties.Of(a); svc != nil {

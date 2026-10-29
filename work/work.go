@@ -14,6 +14,7 @@ package work
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"regexp"
 	"slices"
@@ -25,6 +26,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/duties"
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/manager"
+	persons "github.com/bdubs00/featherweight-workbench/people"
 	"github.com/bdubs00/featherweight-workbench/sources"
 )
 
@@ -738,20 +740,19 @@ func (b *board) fromSubject(subject, name, via string) From {
 	return From{Kind: "person", Name: cmp.Or(name, subject), Display: b.display(subject, name), Via: via}
 }
 
-// display is a name of a person that people read: the name that the
-// record keeps, else the name that the front knows for the subject, else
-// the subject when it is no id that the issuer made, else "".
+// display is the display name of a person (persons.Display): the name that
+// the front keeps for the subject, else the name that the record keeps in
+// readable form, else the subject when it is no id that the issuer made,
+// else "A person". The static token is "Admin token".
 func (b *board) display(subject, name string) string {
-	if n := personName(name); n != "" {
+	if persons.IsToken(subject) {
+		return persons.AdminToken
+	}
+	if n := personName(b.in.Names[subject]); n != "" && n != persons.SomePerson {
 		return n
 	}
-	if n := personName(b.in.Names[subject]); n != "" {
-		return n
-	}
-	if subject != "" && !opaqueID(subject) {
-		return subject
-	}
-	return ""
+	var none *persons.Store
+	return none.Display(context.Background(), subject, name)
 }
 
 // ownsDuty reports whether the caller owns the duty of a principal
