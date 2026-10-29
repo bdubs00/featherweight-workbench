@@ -4058,6 +4058,7 @@ The test `TestParity` of `cmd/fw-workbench` reads the source of the workbench wi
 | `PUT` and `DELETE /v1/knowhow/notes/{agent}/{scope}/{name...}` | The kernel of a worker keeps the notes of its memory tool here with the static token. A person changes a note on the page. |
 | `POST /v1/knowhow/journal/{id}/undo`, `PUT /v1/knowhow/settings/{agent}` | No tool yet. A person takes a change back and turns the switch on or off on the page. |
 | `POST /v1/knowhow/waiting/{id}` | A person decides a change that waits for them on the page. The switch keeps agents out of that decision. |
+| `POST /v1/knowhow/propose` | No tool yet. The owner of an agent starts the proposals of routines at once. The daily pass runs them anyway. |
 
 ### 24.6 The runs that the lists leave out
 
