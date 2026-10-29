@@ -2,15 +2,20 @@ package fleet
 
 // This file brings the routines of the agents to the runs
 // (docs/ARCHITECTURE.md section 21.3). The package routines keeps them in a
-// store of its own and sets Routines here. Each pass of the pools reads
-// them once and merges them into the overlay of each pool (mergedPool),
-// so every Task of a pool runs the routines that the store holds, and the
-// hash of the pool covers them. The other readers of a pool, such as
-// agent_put, the views, and the approval rules, take the routines of the
-// last pass, so a store that does not answer for a moment breaks none of
-// them. A run request that the front puts on a queue carries the routines
-// in its inline profile too (Enqueue), so a Task that the pool did not
-// replace yet runs them as well.
+// store of its own and sets Routines here. A pool whose workers reach the
+// front gets routines.front, and each run reads the routines of its agent
+// from the front at its start (docs/ROUTINES.md section 3.1), through the
+// route of the package routines. Its overlay and its hash leave the
+// routines out, so a move of a routine replaces no Task and erases no
+// /workspace. For a pool that does not reach the front, each pass of the
+// pools reads the routines once and merges them into the overlay of the
+// pool (mergedPool), so every Task of it runs the routines that the store
+// holds, and the hash of the pool covers them. The other readers of a
+// pool, such as agent_put, the views, and the approval rules, take the
+// routines of the last pass, so a store that does not answer for a moment
+// breaks none of them. A run request that the front puts on a queue
+// carries the routines in its inline profile too (Enqueue), so a Task that
+// reads no routines from the front runs them as well.
 
 import (
 	"context"
@@ -105,7 +110,9 @@ func CheckRoutines(ctx context.Context, a *fw.Agent, agent string, list []fw.Rou
 			next[k] = v
 		}
 		next[agent] = list
-		o.Routines = next
+		// The merge checks the routines as the workers load them, also
+		// for a pool whose runs read them from the front.
+		o.Routines, o.RoutinesFront = next, false
 		if _, err := base.WithOverlay(o); err != nil {
 			return true, fmt.Errorf("%w: the pool %s does not accept the routines of %s: %s", fw.ErrInvalidRequest, base.Name, agent, strings.TrimPrefix(err.Error(), "pools: "))
 		}
@@ -113,10 +120,12 @@ func CheckRoutines(ctx context.Context, a *fw.Agent, agent string, list []fw.Rou
 	return pooled, nil
 }
 
-// withRoutines returns the overlay with the routines.
+// withRoutines returns the overlay with the routines. Routines that the
+// front keeps, also none yet, go to a pool that reaches the front through
+// routines.front instead (pools.Overlay.RoutinesFront).
 func withRoutines(o pools.Overlay, routines map[string][]fw.Routine) pools.Overlay {
 	if routines != nil {
-		o.Routines = routines
+		o.Routines, o.RoutinesFront = routines, true
 	}
 	return o
 }

@@ -341,8 +341,11 @@ func Write(w io.Writer, list []*Pool) error {
 		for _, r := range p.overlay.Allow {
 			fmt.Fprintf(&b, "The overlay of the server adds the rule %q to fw.policy.allow%s.\n", r.Rule, written(r.By, r.At, r.Run))
 		}
+		if p.routinesFront {
+			b.WriteString("The workers read the routines of the server at the start of each run (routines.front), so a move of a routine replaces no Task.\n")
+		}
 		for _, name := range slices.Sorted(maps.Keys(p.overlay.Routines)) {
-			if _, runs := p.Profiles()[name]; !runs {
+			if _, runs := p.Profiles()[name]; !runs || p.routinesFront {
 				continue
 			}
 			var words []string

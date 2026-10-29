@@ -136,3 +136,73 @@ func TestRoutinesSurviveTheWorkerLoad(t *testing.T) {
 		t.Fatal("taking the routines away kept the hash")
 	}
 }
+
+// A pool whose workers reach the front reads the routines of the store at
+// the start of each run: the overlay sets routines.front, the profiles get
+// no routine of the store, and the hash stays the same through every move
+// of a routine, so no Task is replaced and no /workspace is erased. The
+// events of the routines go out, because any run can get one. The
+// routines of the configuration of the pool stay in its profile. A pool
+// that does not reach the front merges the routines as before.
+func TestRoutinesFromTheFrontKeepTheHash(t *testing.T) {
+	own := "          routines:\n            - {name: own-close, version: 1, standing: live, steps: [{tool: files, input: '{}'}]}\n"
+	desc := "          description: Sorts new tickets.\n"
+	base := loadFixture(t, strings.Replace(frontEntry(""), desc, desc+own, 1))[0]
+	if r := workerOf(t, base).Agents["triage"].Routines; len(r) != 1 || r[0].Name != "own-close" {
+		t.Fatalf("the routines of the configuration = %+v", r)
+	}
+	shadow := fw.Routine{Name: "close", Version: 1, Standing: fw.RoutineShadow, Steps: []fw.RoutineStep{{Tool: "files", Input: "{}"}}}
+	live := shadow
+	live.Standing = fw.RoutineLive
+	next := shadow
+	next.Version = 2
+	var hash string
+	for i, routines := range []map[string][]fw.Routine{
+		{},
+		{"triage": {shadow}},
+		{"triage": {live}},
+		{"triage": {next}},
+		{"triage": {}},
+	} {
+		merged, err := base.WithOverlay(Overlay{Routines: routines, RoutinesFront: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			hash = merged.Hash()
+		}
+		if merged.Hash() != hash {
+			t.Fatalf("move %d changed the hash of the pool", i)
+		}
+		wc := workerOf(t, merged)
+		if f := wc.Routines.Front; f == nil || f.URL != "http://fw-front.fw-fleet.svc.cluster.local:8080" || f.TokenEnv != "FW_API_TOKEN" {
+			t.Fatalf("routines.front = %+v", f)
+		}
+		if r := wc.Agents["triage"].Routines; len(r) != 1 || r[0].Name != "own-close" {
+			t.Fatalf("move %d: the profile runs %+v", i, r)
+		}
+		if !slices.Contains(wc.Bus.EgressTypes, fw.EvRoutineApplied) {
+			t.Fatalf("the events of the routines do not go out: %v", wc.Bus.EgressTypes)
+		}
+		var dry strings.Builder
+		if err := Write(&dry, []*Pool{merged}); err != nil || !strings.Contains(dry.String(), "read the routines of the server at the start of each run") ||
+			strings.Contains(dry.String(), "give the profile triage") {
+			t.Fatalf("the dry run: %v\n%s", err, dry.String())
+		}
+	}
+
+	// A pool without the entry front merges the routines, and a move
+	// changes its hash.
+	plain := loadFixture(t, fixture)[0]
+	a, err := plain.WithOverlay(Overlay{Routines: map[string][]fw.Routine{"triage": {shadow}}, RoutinesFront: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := plain.WithOverlay(Overlay{Routines: map[string][]fw.Routine{"triage": {live}}, RoutinesFront: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Hash() == b.Hash() || workerOf(t, a).Routines.Front != nil || len(workerOf(t, b).Agents["triage"].Routines) != 1 {
+		t.Fatal("a pool that does not reach the front lost the routines of the store")
+	}
+}
