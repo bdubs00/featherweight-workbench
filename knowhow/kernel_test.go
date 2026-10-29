@@ -19,43 +19,13 @@ import (
 // what it learns" on, the front holds the next note of the agent, and the
 // kernel records the change as waiting and tells the model so.
 func TestKernelNoteWithAPage(t *testing.T) {
-	fr := newFront(t, nil)
+	fr, wiki, store := kernelFront(t)
 	ctx := context.Background()
-	wiki, closeWiki, err := pages.Open(ctx, fr.a.Config(), quiet())
-	if err != nil {
-		t.Fatal(err)
-	}
-	pages.Attach(fr.a, wiki)
-	t.Cleanup(func() {
-		pages.Attach(fr.a, nil)
-		if closeWiki != nil {
-			closeWiki()
-		}
-	})
-	// The routes of the wiki mount when the handler is built, so this
-	// front serves a handler built after the wiki is attached.
-	h, err := fr.a.Handler()
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := httptest.NewServer(h)
-	t.Cleanup(srv.Close)
 	const path = "launch/quillwork-3.md"
 	page, err := wiki.Write(ctx, path, "# Quillwork 3\nLaunch day: 2026-11-12\n", "alice", "the launch", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// A kernel whose notes this front keeps, with the static token.
-	t.Setenv("FW_TEST_FRONT_TOKEN", "fleet")
-	cfg := fw.DefaultConfig()
-	cfg.Home = t.TempDir()
-	cfg.Tools.Memory.Front = &fw.MemoryFrontConfig{URL: srv.URL, TokenEnv: "FW_TEST_FRONT_TOKEN"}
-	store, err := memory.New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
 	var changes []fw.MemoryChangedData
 	run := fw.WithRunInfo(ctx, fw.RunInfo{RunID: fw.NewID(), Agent: "triage"})
 	run = fw.WithMemoryRecorder(run, func(d fw.MemoryChangedData) { changes = append(changes, d) })
@@ -93,5 +63,109 @@ func TestKernelNoteWithAPage(t *testing.T) {
 	}
 	if n := fr.note(t, Scope{Kind: ScopeAgent}, "webinar.md"); n.State != StateWaiting {
 		t.Fatalf("the note under ask first = %+v", n)
+	}
+}
+
+// kernelFront returns this front with a wiki, and the memory store of a
+// kernel whose notes the front keeps, with the static token.
+func kernelFront(t *testing.T) (*front, *pages.Store, *memory.Store) {
+	t.Helper()
+	fr := newFront(t, nil)
+	wiki, closeWiki, err := pages.Open(context.Background(), fr.a.Config(), quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages.Attach(fr.a, wiki)
+	t.Cleanup(func() {
+		pages.Attach(fr.a, nil)
+		if closeWiki != nil {
+			closeWiki()
+		}
+	})
+	// The routes of the wiki mount when the handler is built, so this
+	// front serves a handler built after the wiki is attached.
+	h, err := fr.a.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	t.Setenv("FW_TEST_FRONT_TOKEN", "fleet")
+	cfg := fw.DefaultConfig()
+	cfg.Home = t.TempDir()
+	cfg.Tools.Memory.Front = &fw.MemoryFrontConfig{URL: srv.URL, TokenEnv: "FW_TEST_FRONT_TOKEN"}
+	store, err := memory.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return fr, wiki, store
+}
+
+// TestKernelNoteNamesItsRun drives the memory tool of a kernel against
+// this front with the note that Haiku wrote on the stack. Its line
+// "Source: wiki page <path>" names the page in a loose form, and the note
+// reaches the front with the page and its hash, because the wiki has the
+// page. Each entry of the journal that the run caused links the run: the
+// new note, a note that waited for a person and that a person kept, and a
+// note that the agent put away.
+func TestKernelNoteNamesItsRun(t *testing.T) {
+	fr, wiki, store := kernelFront(t)
+	ctx := context.Background()
+	const path = "launch/quillwork-3.md"
+	page, err := wiki.Write(ctx, path, "# Quillwork 3\nLaunch day: 2026-11-12\n", "alice", "the launch", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := fw.NewID()
+	run := fw.WithRunInfo(ctx, fw.RunInfo{RunID: id, Agent: "triage"})
+	scope := store.Scope(fw.RunInfoFrom(run))
+	haiku := "Quillwork 3.0 launch day and webinar date (from wiki page).\nLaunch day: 2026-11-12. Webinar: 2026-11-19.\nSource: wiki page launch/quillwork-3.md\n"
+	if _, err := store.Remember(run, scope, fw.MemoryRecord{Ref: memory.NoteRef(scope, "launch-dates.md"), Body: haiku}, ""); err != nil {
+		t.Fatal(err)
+	}
+	n := fr.note(t, Scope{Kind: ScopeAgent}, "launch-dates.md")
+	if n.State != StateChecked || n.Run != id || len(n.Sources) != 1 || n.Sources[0] != (Source{Ref: "page:" + path, Version: page.Hash}) {
+		t.Fatalf("the note at the front = %+v", n)
+	}
+	entryOf := func(what, note string) Entry {
+		t.Helper()
+		for _, e := range fr.journal(t) {
+			if e.What == what && e.Subject.Note == note {
+				return e
+			}
+		}
+		t.Fatalf("no entry %s of %s in %+v", what, note, fr.journal(t))
+		return Entry{}
+	}
+	if e := entryOf(WhatLearned, "launch-dates.md"); len(e.Runs) != 1 || e.Runs[0] != id {
+		t.Fatalf("the entry of the new note = %+v", e)
+	}
+
+	// A note that waits for a person, and that a person keeps.
+	if _, err := fr.s.SetAskFirst(ctx, "triage", true, "person:alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Remember(run, scope, fw.MemoryRecord{Ref: memory.NoteRef(scope, "webinar.md"), Body: "The webinar is on 2026-11-19.\n"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	list, err := fr.s.WaitingList(ctx, "triage", nil)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("waiting = %+v, %v", list, err)
+	}
+	kept, err := fr.s.Decide(ctx, list[0].ID, true, "person:alice")
+	if err != nil || kept == nil || len(kept.Runs) != 1 || kept.Runs[0] != id {
+		t.Fatalf("the entry of the keep = %+v, %v", kept, err)
+	}
+
+	// The agent puts a note away.
+	if _, err := fr.s.SetAskFirst(ctx, "triage", false, "person:alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Forget(run, scope, memory.NoteRef(scope, "launch-dates.md")); err != nil {
+		t.Fatal(err)
+	}
+	if e := entryOf(WhatPutAway, "launch-dates.md"); len(e.Runs) != 1 || e.Runs[0] != id {
+		t.Fatalf("the entry of the put-away note = %+v", e)
 	}
 }

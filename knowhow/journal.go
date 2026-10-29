@@ -665,7 +665,7 @@ func (s *Service) apply(ctx context.Context, w Waiting, by string) (*Entry, erro
 		}
 		// The revision before the keep is the note that waited, which the
 		// agent never had. So the undo of the keep puts the note away.
-		e, err := s.appendJournal(ctx, Entry{Agent: w.Agent, What: WhatLearned, Subject: w.Subject, Why: keptWhy(w), Runs: w.Runs, By: w.By,
+		e, err := s.appendJournal(ctx, Entry{Agent: w.Agent, What: WhatLearned, Subject: w.Subject, Why: keptWhy(w), Runs: runsOf(w.Runs, w.Run), By: w.By,
 			Undo: &Undo{Revision: 0, After: after}})
 		return &e, err
 	case WhatUpdated:

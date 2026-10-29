@@ -603,9 +603,11 @@ func holds(cond string, n Note, ok bool) bool {
 }
 
 // WriteRequest is a write of the text of a note. By is agent, review,
-// knowhow, or person:<subject>. Why, Runs, and Corrects go to the
-// journal. Hold makes the change wait for a person while the switch of
-// the agent is on. Candidate names the candidate of a write of the review.
+// knowhow, or person:<subject>. Run is the run that wrote it, such as the
+// run of the memory tool of a kernel. Why, Runs, and Corrects go to the
+// journal, and without Runs the entry names Run (runsOf). Hold makes the
+// change wait for a person while the switch of the agent is on. Candidate
+// names the candidate of a write of the review.
 type WriteRequest struct {
 	Agent   string
 	Scope   Scope
@@ -742,7 +744,7 @@ func (s *Service) Write(ctx context.Context, req WriteRequest) (WriteResult, err
 		return res, nil
 	}
 	e, err := s.appendJournal(ctx, Entry{Agent: req.Agent, What: what, Subject: noteSubject(req.Scope, req.Name), Why: why,
-		Runs: req.Runs, By: req.By, Undo: &Undo{Revision: before, After: after}, Corrects: live && cur.State == StateOutOfDate})
+		Runs: runsOf(req.Runs, req.Run), By: req.By, Undo: &Undo{Revision: before, After: after}, Corrects: live && cur.State == StateOutOfDate})
 	if err != nil {
 		s.log.Warn("knowhow: the journal did not take a change", "agent", req.Agent, "error", err)
 	} else {
@@ -750,6 +752,16 @@ func (s *Service) Write(ctx context.Context, req WriteRequest) (WriteResult, err
 	}
 	emitChange(req.Agent)
 	return res, nil
+}
+
+// runsOf returns the runs of a journal entry: runs, or else the one run
+// that made the change, so the entry of a note that the memory tool of a
+// kernel wrote links its run too.
+func runsOf(runs []string, run string) []string {
+	if len(runs) == 0 && run != "" {
+		return []string{run}
+	}
+	return runs
 }
 
 // vouched returns the sources of a note that a person corrected after it
@@ -871,7 +883,7 @@ func (s *Service) PutAway(ctx context.Context, req PutAwayRequest) (WriteResult,
 	}
 	res := WriteResult{Note: cur, Changed: true}
 	e, err := s.appendJournal(ctx, Entry{Agent: req.Agent, What: WhatPutAway, Subject: noteSubject(req.Scope, req.Name), Why: why,
-		By: req.By, Undo: &Undo{Revision: before, After: after}, Corrects: cur.OutOfDate != nil})
+		Runs: runsOf(nil, req.Run), By: req.By, Undo: &Undo{Revision: before, After: after}, Corrects: cur.OutOfDate != nil})
 	if err == nil {
 		res.Entry = &e
 	}
