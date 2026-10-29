@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	axk "github.com/bdubs00/featherweight-kernel/ax"
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/internal/bucket"
@@ -496,6 +497,7 @@ func TestWakeFollowsTheIntakeOfThePool(t *testing.T) {
 	// a Task of a person belongs to no pool.
 	child := ax.get("team", "manager-0")
 	child.Metadata.Name = "manager-0-01m5gvzyj4x8z8pw1gbxjryyb7"
+	child.Spec.Env = append(slices.Clone(child.Spec.Env), &v1alpha1.EnvVar{Name: axk.EnvParentMember, Value: "ax:team/manager-0"})
 	ax.put(child, "Running")
 	ax.put(&v1alpha1.Task{Metadata: &v1alpha1.ObjectMeta{Name: "loner", Atespace: "team"}, Spec: &v1alpha1.TaskSpec{Image: "x"}}, "Running")
 	names := []string{"team/crew-reviewer-0", "team/manager-0", "team/manager-0-01m5gvzyj4x8z8pw1gbxjryyb7", "team/loner"}
@@ -508,7 +510,8 @@ func TestWakeFollowsTheIntakeOfThePool(t *testing.T) {
 				return false
 			}
 		}
-		return p.members["team/crew-reviewer-0"].pool == "crew-reviewer" && p.members["team/manager-0-01m5gvzyj4x8z8pw1gbxjryyb7"].pool == "manager" && p.members["team/loner"].pool == ""
+		return p.members["team/crew-reviewer-0"].pool == "crew-reviewer" && p.members["team/manager-0-01m5gvzyj4x8z8pw1gbxjryyb7"].pool == "manager" && p.members["team/loner"].pool == "" &&
+			p.members["team/manager-0-01m5gvzyj4x8z8pw1gbxjryyb7"].parent == "ax:team/manager-0"
 	})
 	sleep := func(names ...string) {
 		t.Helper()
@@ -527,12 +530,17 @@ func TestWakeFollowsTheIntakeOfThePool(t *testing.T) {
 			return true
 		})
 	}
-	// An idle awake manager and its child have room for the queue of the
-	// manager, not for the queue of reviewer nor for the intake of the pool
-	// crew-reviewer.
+	// An idle awake manager has room for the queue of the manager, not for
+	// the queue of reviewer nor for the intake of the pool crew-reviewer.
 	sleep("team/crew-reviewer-0", "team/loner")
 	if room := front.f.platform.roomFor(time.Now(), front.f.interval, "fw.jobs"); !room["fw.jobs.manager"] || room["fw.jobs.reviewer"] || room["fw.jobs.crew-reviewer"] {
 		t.Fatalf("the room of the awake manager = %v", room)
+	}
+	// Its child copied the pool of its parent, but it is no room for the
+	// jobs of the pool: the front never counts on a child for new work.
+	sleep("team/manager-0")
+	if room := front.f.platform.roomFor(time.Now(), front.f.interval, "fw.jobs"); room["fw.jobs.manager"] {
+		t.Fatalf("the awake child is room for the jobs of the pool: %v", room)
 	}
 	sleep(names...)
 	reads := func() map[string]int {
@@ -600,4 +608,19 @@ func TestWakeFollowsTheIntakeOfThePool(t *testing.T) {
 	q.set(func(q *fakeQueues) { q.pending = nil })
 	waitReads(t, q, 3)
 	woke("the wake on the queue of the profile", before, "team/loner")
+
+	// A job of the pool of the manager wakes the Task of the pool, never
+	// its child, which copied the pool of its parent (live walk: an orphan
+	// child of an old manager woke for a job and its old kernel took it).
+	sleep(names...)
+	time.Sleep(holdIntervals * front.f.interval)
+	before = reads()
+	if n := front.f.wakeFor("fw.jobs.manager", "review", wakeEnqueue, 0); n != 1 {
+		t.Fatalf("the wake for the manager woke %d Tasks", n)
+	}
+	eventually(t, "the Task of the pool of the manager wakes", func() bool {
+		return tasks.count("team/manager-0") > before["team/manager-0"]
+	})
+	time.Sleep(200 * time.Millisecond)
+	woke("the wake for the pool of the manager", before, "team/manager-0")
 }

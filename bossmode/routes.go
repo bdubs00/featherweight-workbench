@@ -258,9 +258,9 @@ func managerMember(ctx context.Context, v fleet.View, agent string) (string, err
 	if err != nil {
 		return "", err
 	}
-	// The Tasks of a pool come first. A Task outside every pool, such as a
-	// child Task that a manager spawned, lists the profiles of its parent,
-	// and after a roll it can sort before the new Task of the pool.
+	// The Tasks of a pool come first. A Task outside every pool lists the
+	// profiles that it serves; a child Task that a manager spawned lists
+	// the profiles of its parent, and it never takes the run.
 	sort.Slice(members, func(i, j int) bool {
 		if pooled[members[i].Name] != pooled[members[j].Name] {
 			return pooled[members[i].Name]
@@ -269,6 +269,12 @@ func managerMember(ctx context.Context, v fleet.View, agent string) (string, err
 	})
 	self := ""
 	for _, m := range members {
+		if m.Parent != "" {
+			// A child Task of spawn_task, also an orphan whose parent a
+			// pool replaced, takes no new work: it holds the runs that its
+			// parent gave it.
+			continue
+		}
 		for _, ag := range m.Agents {
 			if ag.Name != agent {
 				continue

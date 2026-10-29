@@ -192,6 +192,12 @@ type platformMember struct {
 	// for a queue reaches a Task of a pool for the intake of its pool alone
 	// (suspend.go).
 	pool string
+	// parent is FW_PARENT_MEMBER of the Task, "ax:<atespace>/<task>", for a
+	// child Task of spawn_task, and "" for a Task of a pool or of no pool.
+	// A child holds the runs that its parent gave it; it never takes the
+	// jobs of a queue for the front (suspend.go), whatever the intake of the
+	// configuration that it copied from its parent.
+	parent string
 	// blocked is the reason from the status of the Task when the suspend
 	// controller found it blocked by a storage failure, and empty
 	// otherwise. statusAt is when the controller last read the status of
@@ -436,6 +442,7 @@ func (p *platform) poll(ctx context.Context) {
 			was, wasPhase := m.state, m.phase
 			m.phase = t.GetStatus().GetPhase()
 			m.pool = taskVar(t, pools.EnvPool)
+			m.parent = taskVar(t, ax.EnvParentMember)
 			m.state, m.seen = stateOfPhase(m.phase), now
 			if m.state == MemberLive && was != MemberLive {
 				m.liveSince, m.filled = now, false
@@ -1315,6 +1322,7 @@ func (p *platform) record(m *platformMember, runs []*fw.Run, all bool) remote {
 		Runs:          kept,
 		Omitted:       omitted,
 		State:         m.state,
+		Parent:        m.parent,
 		BlockedReason: m.blocked,
 		UpdatedAt:     m.seen,
 	}

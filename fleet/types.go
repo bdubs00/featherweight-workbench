@@ -92,6 +92,11 @@ type Record struct {
 	// State is the state of the member when a platform says it, such as the
 	// phase of an ax Task. A member that only the stream knows has none.
 	State string `json:"state,omitempty"`
+	// Parent is the parent member of a child Task of spawn_task, such as
+	// "ax:default/manager-0", and "" for any other member. A child serves
+	// the profiles of its parent, but it takes no new work of a person:
+	// the front sends no job and no start to it (suspend.go).
+	Parent string `json:"parent,omitempty"`
 	// BlockedReason says why the status of the Task said blocked when the
 	// suspend controller last read it: a storage failure stopped the
 	// process, so the front suspended the Task to restart it (suspend.go).
@@ -130,6 +135,7 @@ type Member struct {
 	Name          string        `json:"name"`
 	URL           string        `json:"url,omitempty"`
 	Self          bool          `json:"self,omitempty"`
+	Parent        string        `json:"parent,omitempty"`
 	State         string        `json:"state"`
 	LastSeen      time.Time     `json:"lastSeen"`
 	CanForward    bool          `json:"canForward"`

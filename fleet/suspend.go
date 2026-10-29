@@ -229,7 +229,13 @@ func (f *Fleet) wakeFor(queue, agent, cause string, hold time.Duration) int {
 	intakes := p.intakes()
 	var sleeping, unknown []*platformMember
 	for _, m := range p.members {
-		if m.atespace == "" || m.state != MemberQuiet {
+		if m.atespace == "" || m.state != MemberQuiet || m.parent != "" {
+			// A child Task of spawn_task takes no job of a queue: it holds
+			// the runs that its parent gave it. It copied the variables of
+			// its parent, the pool too, so without this the front woke a
+			// child of an old manager, or an orphan whose parent a pool
+			// replaced, for the jobs of the pool, and its old kernel took
+			// them (live walk).
 			continue
 		}
 		switch serves, known := m.servesQueue(queue, agent, f.intake, intakes); {

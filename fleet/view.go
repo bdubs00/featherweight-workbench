@@ -72,6 +72,7 @@ func (f *Fleet) Members(ctx context.Context) ([]Member, error) {
 			LastSeen:   r.seen,
 			CanForward: f.canForward(r.rec.URL),
 			AccessMode: r.rec.Access.Mode,
+			Parent:     r.rec.Parent,
 			Agents:     []RecordAgent{},
 			// The reason comes from the status of the Task, which the
 			// worker redacts, and the front redacts it again (suspend.go).

@@ -131,6 +131,12 @@ func TestChatMemberPrefersTheTaskOfAPool(t *testing.T) {
 	if got, err := managerMember(t.Context(), v, "chat"); err != nil || got != "team/manager-0-01child" {
 		t.Errorf("the member without pools = %q, %v; want team/manager-0-01child", got, err)
 	}
+	// A child Task of spawn_task, such as an orphan of an old manager,
+	// never takes new work (live walk).
+	v.members[1].Parent = "ax:team/manager-0"
+	if got, err := managerMember(t.Context(), v, "chat"); err != nil || got != "team/manager-1" {
+		t.Errorf("the member beside a child = %q, %v; want team/manager-1", got, err)
+	}
 }
 
 // chatPools is a fleet block with the pool manager, whose workers run the

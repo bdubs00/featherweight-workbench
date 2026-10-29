@@ -58,10 +58,12 @@ func ran(t *v1alpha1.Task) *v1alpha1.Task {
 	return t
 }
 
-// The sweep removes an orphan that slept for orphansAfter or that failed
-// before it ran, each Task before the Task above it. An orphan that slept
-// less, that works, that failed after it ran, or that holds a run that has
-// not ended stays, and so does every orphan above it.
+// The sweep removes an orphan that sleeps and that ax created
+// orphansAfter ago or earlier, also when a wake put its last sleep
+// forward, or that failed before it ran, each Task before the Task above
+// it. An orphan that is younger, that works, that failed after it ran, or
+// that holds a run that has not ended stays, and so does every orphan
+// above it.
 func TestSweepOrphans(t *testing.T) {
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	long, short := now.Add(-30*time.Hour), now.Add(-time.Hour)
@@ -70,11 +72,13 @@ func TestSweepOrphans(t *testing.T) {
 		// A tree that slept long: the child goes before its parent.
 		asleepSince(ran(childTask("old", "ax:default/manager-0", "Suspended", long)), long),
 		asleepSince(ran(childTask("old-x", "ax:default/old", "Suspended", long)), long),
-		// A parent that slept long stays above a child that slept less.
+		// A parent that is old stays above a child that is young.
 		asleepSince(ran(childTask("held", "ax:default/manager-0", "Suspended", long)), long),
-		asleepSince(ran(childTask("held-x", "ax:default/held", "Suspended", long)), short),
-		// It slept less, it works, it holds an open run, it failed after it ran.
-		asleepSince(ran(childTask("napping", "ax:default/manager-0", "Suspended", long)), short),
+		asleepSince(ran(childTask("held-x", "ax:default/held", "Suspended", short)), short),
+		// It is old and a wake put its sleep forward: it goes all the same.
+		asleepSince(ran(childTask("woken", "ax:default/manager-0", "Suspended", long)), short),
+		// It is young, it works, it holds an open run, it failed after it ran.
+		asleepSince(ran(childTask("napping", "ax:default/manager-0", "Suspended", short)), short),
 		ran(childTask("working", "ax:default/manager-0", "Running", long)),
 		asleepSince(ran(childTask("busy", "ax:default/manager-0", "Suspended", long)), long),
 		ran(childTask("broke", "ax:default/manager-0", "Failed", long)),
@@ -89,7 +93,7 @@ func TestSweepOrphans(t *testing.T) {
 		"r1": {run: &fw.Run{ID: "r1", State: fw.StateInputRequired}, member: "default/busy"},
 	}}
 	got := p.sweepOrphans(context.Background(), now)
-	want := []string{"default/old-x", "default/old", "default/stillborn", "default/unmarked"}
+	want := []string{"default/old-x", "default/old", "default/stillborn", "default/unmarked", "default/woken"}
 	if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(client.deleted, want) {
 		t.Fatalf("swept %v and deleted %v, want %v", got, client.deleted, want)
 	}

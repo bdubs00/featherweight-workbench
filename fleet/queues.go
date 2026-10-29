@@ -556,7 +556,9 @@ func (p *platform) roomFor(now time.Time, interval time.Duration, prefix string)
 	out := map[string]bool{}
 	for _, m := range p.members {
 		awake := m.state == MemberLive || (m.state == "" && now.Sub(m.seen) <= QuietAfter*interval)
-		if !awake || busy[m.name] {
+		if !awake || busy[m.name] || m.parent != "" {
+			// A child Task of spawn_task is no room for the jobs of a
+			// queue: the front never counts on it to take them (wakeFor).
 			continue
 		}
 		if intake, ok := intakes[m.pool]; ok && m.pool != "" {

@@ -7,7 +7,8 @@ package fleet
 // Task under another name leaves the child Tasks of the old Task behind,
 // and no kernel removes them. The front lists them for an admin, who
 // removes them from the page at once, and a sweep of the front removes
-// each one that slept for workbench.fleet.orphansAfter.
+// each one that sleeps, holds no open run, and is older than
+// workbench.fleet.orphansAfter.
 
 import (
 	"context"
@@ -230,10 +231,13 @@ func (p *platform) sweepOrphans(ctx context.Context, now time.Time) []string {
 }
 
 // orphanDue reports whether the sweep removes the orphan Task t: the view
-// holds no run of it that has not ended (open), and it sleeps since after
-// ago, or it failed before it ran. The time of the sleep is the time of the
-// condition Ready with the reason TaskSuspended; a Task without that
-// condition counts from its creation.
+// holds no run of it that has not ended (open), it sleeps, and ax created
+// it after ago or earlier, or it failed before it ran. The time counts
+// from the creation of the Task, not from its last sleep: a wake of the
+// Task, such as a read of one of its runs that goes through the router,
+// or a wake of the front for a job before children took none, put its
+// last sleep forward each time, so an orphan of six days stayed (live
+// walk). An orphan that works stays until it sleeps.
 func orphanDue(t *v1alpha1.Task, open int, after time.Duration, now time.Time) bool {
 	if open > 0 {
 		return false
@@ -243,8 +247,12 @@ func orphanDue(t *v1alpha1.Task, open int, after time.Duration, now time.Time) b
 		return taskCondition(t, condWorkspaceReady) == nil
 	case phaseSuspended:
 		since := createdOf(t)
-		if c := taskCondition(t, condReady); c != nil && c.GetReason() == reasonSuspended && c.GetUpdateTime() != nil {
-			since = c.GetUpdateTime().AsTime()
+		if since.IsZero() {
+			// A Task whose creation the list does not say counts from
+			// its last sleep.
+			if c := taskCondition(t, condReady); c != nil && c.GetReason() == reasonSuspended && c.GetUpdateTime() != nil {
+				since = c.GetUpdateTime().AsTime()
+			}
 		}
 		return !since.IsZero() && now.Sub(since) >= after
 	}
