@@ -25,6 +25,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/fleet"
 	"github.com/bdubs00/featherweight-workbench/knowhow"
 	"github.com/bdubs00/featherweight-workbench/manager"
+	persons "github.com/bdubs00/featherweight-workbench/people"
 	"github.com/bdubs00/featherweight-workbench/sources"
 	"github.com/bdubs00/featherweight-workbench/surface/mcp"
 	"github.com/bdubs00/featherweight-workbench/teams"
@@ -36,6 +37,10 @@ func init() {
 	fw.RegisterService(Service)
 	native.Extend(mount)
 	mcp.RegisterTools(tools)
+	// A thumb on a run through the route of the kernel is a verdict too,
+	// and the end of a run moves its card, such as the new answer after
+	// Needs work, so the board of every caller reads it at once.
+	fleet.OnChange(func(a *fw.Agent) { cacheOf(a).clear() })
 }
 
 // maxJobs bounds the jobs whose queues one board reads.
@@ -100,7 +105,10 @@ func Fresh(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 // run of the archive when the archive saw its end: after a start of the
 // front, the view knows the run of a Task that sleeps from the index of the
 // runs alone, without its title, its output, its metadata, or its done,
-// and the card then lost its title and its verdict.
+// and the card then lost its title and its verdict. A run whose archive
+// saw later events than the view keeps the run of the archive too: the
+// stream carries an event at once, and the view reads its members every
+// few seconds, so after Needs work the view still holds the end before.
 func mergeRuns(facts []fleet.WorkRun, live []*fw.Run) []Run {
 	var out []Run
 	byID := map[string]int{}
@@ -117,7 +125,7 @@ func mergeRuns(facts []fleet.WorkRun, live []*fw.Run) []Run {
 		case !ok:
 			byID[r.ID] = len(out)
 			out = append(out, Run{Run: r})
-		case r.State.Terminal() && out[i].Run.State.Terminal() && out[i].Run.Seq >= r.Seq:
+		case r.State.Terminal() && out[i].Run.State.Terminal() && out[i].Run.Seq >= r.Seq, out[i].Run.Seq > r.Seq:
 			out[i].Lost = false
 		default:
 			out[i].Run, out[i].Lost = r, false
@@ -132,11 +140,13 @@ func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, er
 	st := bridges.Of(a)
 	if p := fw.PrincipalFrom(ctx); p != nil {
 		in.Me = p.Subject
-		if n := personName(p.Name); n != "" && p.Subject != "" {
-			in.Names[p.Subject] = n
-		}
 		if st != nil {
 			st.Learn(p)
+		} else {
+			persons.Learn(ctx, a, p)
+		}
+		if p.Subject != "" {
+			in.Names[p.Subject] = persons.Display(ctx, a, p.Subject, p.Name)
 		}
 	}
 	letGo, err := Of(a).All(ctx)
@@ -176,17 +186,18 @@ func build(ctx context.Context, a *fw.Agent, now time.Time, q Query) (Answer, er
 		if in.Waiting, err = st.Waiting(ctx); err != nil {
 			return Answer{}, err
 		}
-		// The names of the people that the bridges learned, for the
-		// subjects of the runs and of the bridges.
-		for _, r := range in.Runs {
-			if _, ok := in.Names[r.Principal]; !ok && r.Principal != "" {
-				in.Names[r.Principal] = st.KnownName(r.Principal, "")
-			}
-		}
+		// The display names of the people of the bridges, from the names
+		// that the front keeps (persons.Display).
 		for _, it := range in.Bridges {
 			if _, ok := in.Names[it.Operator]; !ok && it.Operator != "" {
 				in.Names[it.Operator] = st.KnownName(it.Operator, it.OperatorName)
 			}
+		}
+	}
+	// The display names of the people of the runs.
+	for _, r := range in.Runs {
+		if _, ok := in.Names[r.Principal]; !ok && r.Principal != "" {
+			in.Names[r.Principal] = persons.Display(ctx, a, r.Principal, "")
 		}
 	}
 	if svc := duties.Of(a); svc != nil {

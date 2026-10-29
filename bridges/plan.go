@@ -45,6 +45,9 @@ func checkPlan(spec OpenSpec, cfg Config, needTitle bool) []PlanProblem {
 	case utf8.RuneCountInString(title) > maxTitleRunes:
 		add("title", "the title of a bridge holds at most %d characters", maxTitleRunes)
 	}
+	if utf8.RuneCountInString(strings.TrimSpace(spec.Topic)) > maxTopicRunes {
+		add("topic", "the topic of a bridge holds at most %d characters", maxTopicRunes)
+	}
 	if len(spec.Goal) > maxGoalBytes {
 		add("goal", "the goal of a bridge holds at most %d bytes", maxGoalBytes)
 	}

@@ -246,7 +246,7 @@ func TestToolsOfTheManager(t *testing.T) {
 	v.state("default/crew-0", fleet.MemberLive)
 	url := serve(t, a)
 	cs := connectMCP(t, a, "fleet")
-	plan := map[string]any{"title": "Migrate nginx", "goal": "Migrate it.", "members": []map[string]any{
+	plan := map[string]any{"title": "Migrate nginx", "topic": "Please migrate the nginx module of the Puppet tree to an Ansible role, and have it reviewed.", "goal": "Migrate it.", "members": []map[string]any{
 		{"handle": "migrator-1", "agent": "migrator", "task": "Migrate nginx"},
 		{"handle": "reviewer", "agent": "reviewer", "task": "Review nginx"},
 	}}
@@ -258,11 +258,14 @@ func TestToolsOfTheManager(t *testing.T) {
 		t.Fatalf("open = %s", textOf(res))
 	}
 	// The result sends the person to the bridge and promises nothing.
-	if !strings.Contains(textOf(res), `follow the work in the bridge "Migrate nginx" on the page of bossmode`) || !strings.Contains(textOf(res), "do not promise a later report") {
+	if !strings.Contains(textOf(res), `the work goes on in the channel "Migrate nginx"`) || strings.Contains(textOf(res), "bossmode") || !strings.Contains(textOf(res), "do not promise a later report") {
 		t.Fatalf("open = %s", textOf(res))
 	}
 	var it Item
 	structured(t, res, &it)
+	if it.Topic != plan["topic"] || strings.Contains(textOf(res), "words") {
+		t.Fatalf("the topic = %q, the text = %s", it.Topic, textOf(res))
+	}
 	if it.Operator != "alice" || it.Manager == nil || it.Manager.Run != "mgr-conv" || it.Manager.Member != "default/crew-0" || len(it.Members) != 2 {
 		t.Fatalf("opened = %+v", it.Bridge)
 	}

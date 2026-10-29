@@ -134,9 +134,10 @@ func TestInbox(t *testing.T) {
 		defer cancel()
 		a.Close(ctx)
 	})
-	// A run of the duty acts as the duty, not as alice.
+	// A run of the duty acts as the duty, not as alice. Its card is the
+	// start of the duty, which alice owns.
 	r1, err := a.Start(context.Background(), "", fw.WithRequest(fw.RunRequest{Agent: "triage", Input: "deploy the site", Principal: "duty:report", PrincipalKind: fw.KindWorkload,
-		Metadata: map[string]string{duties.MetaDuty: "report", fw.MetaBatch: "bridge:B1"}}))
+		Metadata: map[string]string{duties.MetaDuty: "report", duties.MetaSlot: time.Now().UTC().Format(time.RFC3339Nano)}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +188,7 @@ func TestInbox(t *testing.T) {
 	if q.Approval == "" {
 		t.Fatalf("the question has no approval id: %+v", q)
 	}
-	if ap.Run != r1.ID || ap.Duty != "report" || ap.Bridge != "B1" || ap.Agent != "triage" || !strings.Contains(ap.Text, "the agent triage asks to run deploy. Rule: ask destructive.") || ap.Since.IsZero() {
+	if ap.Run != r1.ID || ap.Duty != "report" || ap.Agent != "triage" || ap.Card == "" || strings.Join(ap.Actions, " ") != "allow deny" || !strings.Contains(ap.Text, "the agent triage asks to run deploy. Rule: ask destructive.") || ap.Since.IsZero() {
 		t.Fatalf("the approval = %+v", ap)
 	}
 	if q.Run != r2.ID || !strings.Contains(q.Text, "Which branch do I use?") {
@@ -360,7 +361,7 @@ func TestInboxResultOfDuty(t *testing.T) {
 	t.Setenv(fleet.EnvIntake, "")
 	// A start of the duty acts as the duty, as the engine starts it.
 	r, err := a.Start(context.Background(), "", fw.WithRequest(fw.RunRequest{Agent: "writer", Input: "Sum up the week.", Principal: "duty:summary", PrincipalKind: fw.KindWorkload,
-		Metadata: map[string]string{duties.MetaDuty: "summary", fleet.MetaReview: "1"}}))
+		Metadata: map[string]string{duties.MetaDuty: "summary", duties.MetaSlot: time.Now().UTC().Format(time.RFC3339Nano), fleet.MetaReview: "1"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +477,7 @@ func TestInboxFound(t *testing.T) {
 	start := func(input string) string {
 		t.Helper()
 		r, err := a.Start(context.Background(), "", fw.WithRequest(fw.RunRequest{Agent: "ops", Input: input, Principal: "duty:drift", PrincipalKind: fw.KindWorkload,
-			Metadata: map[string]string{duties.MetaDuty: "drift", fleet.MetaFound: "1", fw.MetaTitle: "Drift check"}}))
+			Metadata: map[string]string{duties.MetaDuty: "drift", duties.MetaSlot: time.Now().UTC().Format(time.RFC3339Nano), fleet.MetaFound: "1", fw.MetaTitle: "Drift check"}}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -515,42 +516,66 @@ func TestInboxFound(t *testing.T) {
 	}
 }
 
-// A question of a seat whose run no worker holds, gone in the channel or
-// lost in the archive, is no item, and an approval that an item of its
-// run holds already is no second item.
+// A question of a seat is an item, also when no worker holds its run, gone
+// in the channel or lost in the archive: an answer seats the member again.
+// A decision of such a seat is no item, and an approval that an item of
+// its run holds already is no second item.
 func TestSeatItems(t *testing.T) {
 	waiting := []bridges.Waiting{
 		{Bridge: "b1", Title: "Exporter", Handle: "writer", Run: "r1", Question: 4, Text: "Which port?"},
 		{Bridge: "b1", Title: "Exporter", Handle: "gone", Run: "r2", Question: 5, Text: "Which host?", Gone: true},
-		{Bridge: "b1", Title: "Exporter", Handle: "lost", Run: "r3", Question: 6, Text: "Which role?"},
+		{Bridge: "b1", Title: "Exporter", Handle: "lost", Run: "r3", Approval: "ap3"},
 		{Bridge: "b1", Title: "Exporter", Handle: "asks", Run: "r4", Approval: "ap4"},
 		{Bridge: "b1", Title: "Exporter", Handle: "twice", Run: "r5", Approval: "ap5"},
 	}
 	seen := map[string]bool{"r5": true}
 	got := seatItems(waiting, seen, map[string]bool{"r3": true})
 	saysChannelAndJob(t, got)
-	if len(got) != 2 || got[0].Kind != KindQuestion || got[0].Text != "writer asks in Exporter: Which port?" || got[1].Kind != KindApproval || got[1].Approval != "ap4" || !seen["r4"] {
+	if len(got) != 3 || got[0].Kind != KindQuestion || got[0].Text != "writer asks in Exporter: Which port?" || got[0].Question != 4 || got[0].Handle != "writer" ||
+		got[1].Question != 5 || got[2].Kind != KindApproval || got[2].Approval != "ap4" || !seen["r4"] {
 		t.Fatalf("the items of the seats = %+v", got)
 	}
 }
 
-// A team whose agents finished and whose next move is the caller's is an
-// item to check, as the board shows it in To check, and Looks right and
-// Needs work end it (plan A10). A team of another person, a team that
-// works, and a run are no such item. A note that waits under ask first is
+// The items of the work that needs the caller are the cards that the count
+// counts, one item per card: a team whose agents finished and whose next
+// move is the caller's is an item to check, a result of a run whose
+// worker is gone is an item from its card, and a decision keeps the item
+// of its record. A team of another person, a team that works, and an item
+// of a record whose card does not wait for the caller are no item, so the
+// items and the count always agree. A note that waits under ask first is
 // an item that asks the person to keep it (plan A17).
 func TestTeamAndNoteItems(t *testing.T) {
 	at := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
 	board := work.Answer{Cards: []work.Card{
-		{ID: "bridge:B1", Kind: work.KindBridge, Title: "Release notes", Stage: work.StageReview, Next: work.NextYou, Since: at, Agents: []string{"writer", "reviewer"}, Links: work.Links{Bridge: "B1"}},
+		{ID: "run:R0", Kind: work.KindConversation, Title: "Deploy", Stage: work.StageNeedsYou, Next: work.NextYou, Since: at, Summary: "Asks before it runs a shell command.", Links: work.Links{Run: "R0", Approval: "ap0", Runs: []string{"R0"}}},
+		{ID: "bridge:B1", Kind: work.KindBridge, Title: "Release notes", Stage: work.StageReview, Next: work.NextYou, Since: at, Agents: []string{"writer", "reviewer"}, Summary: "The notes are in the wiki.", CostUSD: 0.12, Links: work.Links{Bridge: "B1"}},
 		{ID: "bridge:B2", Kind: work.KindBridge, Title: "Theirs", Stage: work.StageReview, Next: work.NextPerson, Links: work.Links{Bridge: "B2"}},
 		{ID: "bridge:B3", Kind: work.KindBridge, Title: "Busy", Stage: work.StageWorking, Next: work.NextAgent, Links: work.Links{Bridge: "B3"}},
-		{ID: "run:R1", Kind: work.KindConversation, Title: "A draft", Stage: work.StageReview, Next: work.NextYou, Links: work.Links{Run: "R1"}},
-	}}
-	got := teamItems(board)
+		{ID: "duty:found@x", Kind: work.KindDuty, Title: "Found check", Stage: work.StageReview, Next: work.NextYou, Since: at, Reason: "Found: zebra", Summary: "zebra", Agents: []string{"pooled"}, Links: work.Links{Run: "R1", Duty: "found", Runs: []string{"R1"}}},
+	}, Waiting: work.Waiting{NeedsYou: 1, ToCheck: 2}}
+	records := []Item{
+		{Kind: KindApproval, Run: "R0", Approval: "ap0", Agent: "ops", Text: "Deploy: the agent ops asks to run bash."},
+		{Kind: KindQuestion, Bridge: "B2", Run: "R9", Question: 3, Text: "writer asks in Theirs: Which port?"},
+		{Kind: KindFailure, Duty: "nightly", Text: "A run of the job nightly failed."},
+	}
+	got := fromBoard(board, records)
 	saysChannelAndJob(t, got)
-	if len(got) != 1 || got[0] != (Item{Kind: KindResult, Bridge: "B1", Agent: "writer", Since: at, Text: "Release notes: the agents finished, and the result waits for a check."}) {
-		t.Fatalf("the teams to check = %+v", got)
+	if len(got) != 4 || got[0].Card != "run:R0" || got[0].Approval != "ap0" || got[0].Agent != "ops" || strings.Join(got[0].Actions, " ") != "allow deny" {
+		t.Fatalf("the decision = %+v", got)
+	}
+	if got[1].Kind != KindResult || got[1].Bridge != "B1" || got[1].Agent != "writer" || got[1].Channel != "Release notes" || got[1].Summary != "The notes are in the wiki." || got[1].CostUSD != 0.12 ||
+		strings.Join(got[1].Actions, " ") != "looks-right needs-work" {
+		t.Fatalf("the team = %+v", got[1])
+	}
+	if got[2].Kind != KindResult || got[2].Run != "R1" || got[2].Duty != "found" || got[2].Card != "duty:found@x" || got[2].Text != "Found check: it found something." || got[2].Summary != "zebra" {
+		t.Fatalf("the result of a duty = %+v", got[2])
+	}
+	if got[3].Kind != KindFailure {
+		t.Fatalf("the failure = %+v", got[3])
+	}
+	if n := len(got) - 1; n != board.Waiting.NeedsYou+board.Waiting.ToCheck {
+		t.Fatalf("%d items, and the count is %+v", n, board.Waiting)
 	}
 	for w, want := range map[string]string{
 		knowhow.WhatLearned: "triage wrote a note, ports.md. Keep it?",

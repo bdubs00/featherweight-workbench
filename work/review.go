@@ -50,13 +50,16 @@ type ReviewRequest struct {
 // ReviewAnswer says what the check did: the reaction on the run, and
 // whether the note went to the agent as a follow-up. For a bridge, Bridge
 // names it, Closed says that Looks right closed it, and FollowUp that the
-// note went in its channel.
+// note went in its channel. Kept is true for a run whose worker the pool
+// replaced: the front keeps the verdict, and the note of Needs work stays
+// with the result, because no agent holds the run any more.
 type ReviewAnswer struct {
 	Run      string `json:"run,omitempty"`
 	Bridge   string `json:"bridge,omitempty"`
 	Reaction string `json:"reaction"`
 	FollowUp bool   `json:"followUp"`
 	Closed   bool   `json:"closed,omitempty"`
+	Kept     bool   `json:"kept,omitempty"`
 }
 
 // ErrNotPerson refuses a check that a run of an agent asks for: only a
@@ -65,8 +68,10 @@ var ErrNotPerson = errors.New("work: only a person checks a result")
 
 // Review checks the result of a run for the caller in ctx. The caller
 // needs the operator role on the run, as for a reaction and a message. A
-// run that only the archive holds is read-only, and a run that no process
-// holds is fw.ErrRunNotFound.
+// verdict on a run that only the archive holds lands in the archive
+// (fleet.ReactArchived): it is a verdict that the front keeps, and no
+// follow-up goes out, because no agent holds the run. A run that no
+// process holds is fw.ErrRunNotFound.
 func Review(ctx context.Context, a *fw.Agent, req ReviewRequest) (ReviewAnswer, error) {
 	id := strings.TrimSpace(req.Run)
 	bridge := strings.TrimSpace(req.Bridge)
@@ -112,7 +117,11 @@ func Review(ctx context.Context, a *fw.Agent, req ReviewRequest) (ReviewAnswer, 
 		return ReviewAnswer{}, err
 	}
 	if fleet.IsArchived(ctx, a, id) {
-		return ReviewAnswer{}, fmt.Errorf("%w: %s", fw.ErrInvalidRequest, fleet.ReadOnlyRun)
+		if _, err := fleet.ReactArchived(ctx, a, id, fw.ReactionData{Reaction: ans.Reaction, Note: note}); err != nil {
+			return ReviewAnswer{}, err
+		}
+		ans.Kept = true
+		return ans, nil
 	}
 	mctx, err := fleet.ForRun(ctx, a, id, fw.ActionRunOperate)
 	if err != nil {

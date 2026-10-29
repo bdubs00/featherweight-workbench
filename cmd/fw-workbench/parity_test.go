@@ -53,6 +53,7 @@ var parityRoutes = map[string]parity{
 	"POST /v1/duties/{name}/write-check":             {tool: "duty_write_check"},
 	"POST /v1/duties/{name}/call":                    {why: "another app calls it with the credential of the webhook of the duty; a person or an agent uses duty_run_now"},
 	"PUT /v1/notifications":                          {tool: "notifications_put"},
+	"PUT /v1/people/me":                              {why: "a person names itself on the page of its account; an agent never sets the name of a person"},
 	"POST /v1/notifications/test":                    {tool: "notification_test"},
 	"PUT /v1/playbooks/{name}":                       {tool: "playbook_put"},
 	"DELETE /v1/playbooks/{name}":                    {tool: "playbook_delete"},

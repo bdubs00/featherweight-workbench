@@ -367,7 +367,7 @@ func (s *Store) postAs(ctx context.Context, id string, spec PostSpec) (Message, 
 	p := fw.PrincipalFrom(ctx)
 	snd := sender{subject: subjectOfPrincipal(p)}
 	if p != nil {
-		snd.display = p.Name
+		snd.display = s.displayOf(p.Subject, p.Name)
 	}
 	return s.post(ctx, id, snd, spec)
 }

@@ -68,6 +68,15 @@ const FailuresFor = 24 * time.Hour
 // Item is one thing that needs the caller: its kind, the run, the duty,
 // the agent, and the bridge that it concerns, each "" when it does not
 // apply, a text in words, and since when it waits.
+//
+// An item of the work that needs the caller stands for one card of the
+// board (work.Card) whose next move is the caller's: Card names it, and
+// the items of the kinds approval, question, and result are exactly the
+// cards that the count waiting counts. Summary says in one line what the
+// item holds: the question itself, what a decision asks, or the first
+// line of the result (Card.Summary). Channel is the title of the channel
+// of a team, and CostUSD what the work of the card cost so far. Actions
+// names the ways out of the item for a page (Ways out).
 type Item struct {
 	Kind   string `json:"kind"`
 	Run    string `json:"run"`
@@ -78,12 +87,48 @@ type Item struct {
 	// surface decides it without a read of the run. A question of a seat
 	// of a bridge has none.
 	Approval string `json:"approval"`
+	// Question is the seq of the question of a seat in the channel of a
+	// bridge, and Handle the seat that asks, so a page answers it with a
+	// message to the seat or settles it without an answer.
+	Question uint64 `json:"question,omitempty"`
+	Handle   string `json:"handle,omitempty"`
 	// Note is the id of the waiting change of a note (KindNote), which
 	// POST /v1/knowhow/waiting/{id} keeps or refuses.
-	Note  string    `json:"note,omitempty"`
-	Text  string    `json:"text"`
-	Since time.Time `json:"since"`
+	Note    string    `json:"note,omitempty"`
+	Text    string    `json:"text"`
+	Since   time.Time `json:"since"`
+	Card    string    `json:"card,omitempty"`
+	Summary string    `json:"summary,omitempty"`
+	Channel string    `json:"channel,omitempty"`
+	CostUSD float64   `json:"costUSD,omitempty"`
+	Actions []string  `json:"actions,omitempty"`
 }
+
+// Ways out of an item (Item.Actions), each with the route that takes it:
+//
+//   - looks-right and needs-work: POST /v1/work/review with the run or the
+//     bridge, verdict up or down, and a note for down. A run whose worker
+//     the pool replaced takes the verdict too.
+//   - answer: a message of the person to the seat (POST
+//     /v1/bridges/{id}/messages with to the handle, or a reply to the
+//     question), or for a question of a run, POST
+//     /v1/runs/{id}/approvals/{approval} with the answer.
+//   - decline: POST /v1/bridges/{id}/questions/{seq}/settle for a question
+//     of a seat, or a deny of the approval for a question of a run.
+//   - allow and deny: POST /v1/runs/{id}/approvals/{approval}.
+//   - keep and refuse: POST /v1/knowhow/waiting/{id}.
+//   - let-go: POST /v1/work/letgo with the card, for a paused job or a
+//     failure that nobody moves any more.
+const (
+	ActLooksRight = "looks-right"
+	ActNeedsWork  = "needs-work"
+	ActAnswer     = "answer"
+	ActDecline    = "decline"
+	ActAllow      = "allow"
+	ActDeny       = "deny"
+	ActKeep       = "keep"
+	ActRefuse     = "refuse"
+)
 
 // Answer is the inbox of the caller: approvals and questions first, the
 // oldest first, then the failures, the paused duties, the results, and the
@@ -198,8 +243,11 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 	}
 	// The one count of the work that needs the caller comes from the lanes
 	// of the board, read now, so the badge of the page and Activity say
-	// what Work says. A team whose agents finished waits in To check of the
-	// board, and it is an item here, which Looks right and Needs work end.
+	// what Work says. The items of that work come from the same cards: one
+	// item per card that the count counts, with the details of the
+	// records above where they hold the card (fromBoard). A team whose
+	// agents finished waits in To check of the board, and it is an item
+	// here, which Looks right and Needs work end.
 	var count *work.Waiting
 	board, err := work.Fresh(ctx, a, now)
 	if err != nil {
@@ -207,7 +255,7 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 	} else {
 		w := board.Waiting
 		count = &w
-		items = append(items, teamItems(board)...)
+		items = fromBoard(board, items)
 	}
 	// A note that waits for the caller under ask first is an item too, so
 	// a person who never opens Know-how sees it.
@@ -216,7 +264,9 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 		a.Logger().Warn("inbox: the notes that wait for a person do not read", "error", err)
 	}
 	for _, n := range notes {
-		items = append(items, noteItem(n))
+		it := noteItem(n)
+		it.Actions = actionsOf(it)
+		items = append(items, it)
 	}
 	if count != nil && err == nil {
 		count.Notes = len(notes)
@@ -231,22 +281,134 @@ func For(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 	return Answer{Items: items, Waiting: count}, nil
 }
 
-// teamItems are the teams of the board whose agents finished and whose
-// result waits for a check of the caller: a card of a bridge in To check
-// whose next move is the caller's.
-func teamItems(board work.Answer) []Item {
+// fromBoard returns the items of the inbox for the board: one item for
+// each card that the count waiting counts, a card of Needs you or of To
+// check whose next move is the caller's, and then the failures and the
+// paused duties of items, which the count leaves out. The item of a card
+// is the first item of items that holds the card, a decision or a
+// question for Needs you and a result for To check, so it keeps the
+// details of its record, such as the id of the approval. A card that no
+// item holds, such as a result of a run whose worker the pool replaced,
+// gets an item from the card. An item of items that holds no counted card
+// goes: its work does not wait for the caller, as the board says.
+func fromBoard(board work.Answer, items []Item) []Item {
 	var out []Item
+	used := make([]bool, len(items))
 	for _, c := range board.Cards {
-		if c.Kind != work.KindBridge || c.Stage != work.StageReview || c.Next != work.NextYou || c.Links.Bridge == "" {
+		if c.Next != work.NextYou || (c.Stage != work.StageNeedsYou && c.Stage != work.StageReview) {
 			continue
 		}
-		it := Item{Kind: KindResult, Bridge: c.Links.Bridge, Since: c.Since, Text: c.Title + ": the agents finished, and the result waits for a check."}
-		if len(c.Agents) > 0 {
+		var it Item
+		if i := holder(c, items, used); i >= 0 {
+			it, used[i] = items[i], true
+		} else {
+			it = cardItem(c)
+		}
+		it.Card, it.CostUSD = c.ID, c.CostUSD
+		it.Summary = c.Summary
+		if it.Summary == "" && it.Kind == KindQuestion {
+			it.Summary = bridges.FirstLine(questionText(it.Text), 200)
+		}
+		if c.Kind == work.KindBridge {
+			it.Channel = c.Title
+		}
+		if it.Agent == "" && len(c.Agents) > 0 {
 			it.Agent = c.Agents[0]
 		}
+		it.Actions = actionsOf(it)
 		out = append(out, it)
 	}
+	for _, it := range items {
+		if it.Kind == KindFailure || it.Kind == KindPaused {
+			out = append(out, it)
+		}
+	}
 	return out
+}
+
+// holder returns the index of the first unused item that holds the card
+// c, or -1: an item of the kind of the stage of the card whose run is the
+// run of the card first, then one whose run or bridge is of the card.
+func holder(c work.Card, items []Item, used []bool) int {
+	fits := func(it Item) bool {
+		if c.Stage == work.StageReview {
+			return it.Kind == KindResult
+		}
+		return it.Kind == KindApproval || it.Kind == KindQuestion
+	}
+	for i, it := range items {
+		if !used[i] && fits(it) && it.Run != "" && it.Run == c.Links.Run && (c.Kind != work.KindBridge || it.Bridge == c.Links.Bridge) {
+			return i
+		}
+	}
+	for i, it := range items {
+		if used[i] || !fits(it) {
+			continue
+		}
+		if c.Links.Bridge != "" && it.Bridge == c.Links.Bridge || c.Kind != work.KindBridge && it.Run != "" && slices.Contains(c.Links.Runs, it.Run) {
+			return i
+		}
+	}
+	return -1
+}
+
+// cardItem is the item of a card that no record of the inbox holds, in
+// the words of the items of the records: a result that found something, a
+// new answer after a note, a result to check, or a team whose agents
+// finished.
+func cardItem(c work.Card) Item {
+	it := Item{Kind: KindResult, Run: c.Links.Run, Duty: c.Links.Duty, Bridge: c.Links.Bridge, Approval: c.Links.Approval, Since: c.Since, Text: c.Title + ": " + lowerFirst(c.Reason)}
+	switch {
+	case c.Kind == work.KindBridge:
+		it.Run = ""
+	case c.Stage != work.StageReview:
+	case strings.HasPrefix(c.Reason, "Found: "):
+		it.Text = c.Title + ": it found something."
+	case strings.HasPrefix(c.Reason, "A new answer to check"):
+		it.Text = c.Title + ": a new answer to check, after your note."
+	default:
+		it.Text = c.Title + ": a result to check."
+	}
+	if c.Stage == work.StageNeedsYou {
+		it.Kind = KindApproval
+		if strings.HasPrefix(c.Reason, "Asks") || strings.Contains(c.Reason, " asks: ") {
+			it.Kind = KindQuestion
+		}
+	}
+	return it
+}
+
+// actionsOf names the ways out of an item.
+func actionsOf(it Item) []string {
+	switch it.Kind {
+	case KindResult:
+		return []string{ActLooksRight, ActNeedsWork}
+	case KindQuestion:
+		return []string{ActAnswer, ActDecline}
+	case KindApproval:
+		return []string{ActAllow, ActDeny}
+	case KindNote:
+		return []string{ActKeep, ActRefuse}
+	}
+	return nil
+}
+
+// questionText is the question of the text of a question item: the words
+// after "asks in <channel>: ", or the text.
+func questionText(text string) string {
+	if i := strings.Index(text, ": "); i >= 0 {
+		return text[i+2:]
+	}
+	return text
+}
+
+// lowerFirst writes the first letter of a reason in lower case, for a
+// text after a title and a colon, unless the word is a name in capitals.
+func lowerFirst(s string) string {
+	if len(s) < 2 || s[1] >= 'A' && s[1] <= 'Z' {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
 }
 
 // noteItem is a note of Know-how that waits for the caller under ask
@@ -297,17 +459,18 @@ func runItem(r *fw.Run) Item {
 
 // seatItems are the items of the seats of the bridges that need a person.
 // A seat whose run waits for an approval that an item of the run holds
-// already is no second item. A seat whose newest run no worker holds, gone
-// in the channel or lost in the archive, is no item: nobody can move it
-// by an answer, and the board shows it as stopped and lost. seen gets the
-// runs of the items.
+// already is no second item. A decision of a seat whose newest run no
+// worker holds, gone in the channel or lost in the archive, is no item:
+// nobody can decide it, and the board shows it as stopped and lost. A
+// question of such a seat is an item: an answer seats the member again
+// on a new run. seen gets the runs of the items.
 func seatItems(waiting []bridges.Waiting, seen, lost map[string]bool) []Item {
 	var out []Item
 	for _, w := range waiting {
 		if w.Question == 0 && (w.Run == "" || seen[w.Run]) {
 			continue
 		}
-		if w.Gone || lost[w.Run] {
+		if w.Question == 0 && (w.Gone || lost[w.Run]) {
 			continue
 		}
 		out = append(out, seatItem(w))
@@ -320,9 +483,9 @@ func seatItems(waiting []bridges.Waiting, seen, lost map[string]bool) []Item {
 
 // seatItem is a seat of a bridge that needs a person.
 func seatItem(w bridges.Waiting) Item {
-	it := Item{Kind: KindApproval, Run: w.Run, Agent: w.Agent, Bridge: w.Bridge, Since: w.At}
+	it := Item{Kind: KindApproval, Run: w.Run, Agent: w.Agent, Bridge: w.Bridge, Handle: w.Handle, Since: w.At}
 	if w.Question > 0 {
-		it.Kind = KindQuestion
+		it.Kind, it.Question = KindQuestion, w.Question
 		it.Text = fmt.Sprintf("%s asks in %s: %s", w.Handle, w.Title, oneLine(w.Text, 300))
 		return it
 	}
@@ -431,7 +594,7 @@ func tools(srv *mcp.Server) []mcp.Tool {
 	return []mcp.Tool{mcp.NewTool(&sdk.Tool{
 		Name:        ToolInbox,
 		Title:       "What needs me",
-		Description: "List what needs the person now, the items of Activity: each run that waits for an approval or an answer, each question of a seat of a bridge, each failed run of a duty of the person in the last day, each duty of the person that paused itself, each result that the person asked to check or that a duty found and tells the person of, in the last week, each team whose agents finished and whose result waits for a check (bridge set, no run), and each note of Know-how that waits for the person to keep it (note: the id for POST /v1/knowhow/waiting/{id}). Answer an approval with approve and a question with approve or send, and check a result with work_review. Each item has kind (approval, question, failure, paused, result, note), run, duty, agent, bridge, approval (the id of the approval that the run waits for), note, text, and since. waiting is the one count of the work that needs the person, the same count as the tool work: count, needsYou, toCheck, and notes.",
+		Description: "List what needs the person now, the items of Activity: each run that waits for an approval or an answer, each question of a seat of a bridge, each failed run of a duty of the person in the last day, each duty of the person that paused itself, each result that the person asked to check or that a duty found and tells the person of, in the last week, each team whose agents finished and whose result waits for a check (bridge set, no run), and each note of Know-how that waits for the person to keep it (note: the id for POST /v1/knowhow/waiting/{id}). Answer an approval with approve and a question with approve or send, and check a result with work_review. Each item has kind (approval, question, failure, paused, result, note), run, duty, agent, bridge, approval (the id of the approval that the run waits for), question and handle (the seq of the question of a seat, and the seat), note, text, and since. An item of the work that needs the person also has card (the card of the board), summary (the question, what a decision asks, or the first line of the result), channel, costUSD, and actions (its ways out: looks-right, needs-work, answer, decline, allow, deny, keep, refuse). waiting is the one count of the work that needs the person, the same count as the tool work: count, needsYou, toCheck, and notes. The items of the kinds approval, question, and result are the cards that needsYou and toCheck count.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)},
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, any, error) {

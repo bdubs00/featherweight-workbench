@@ -984,7 +984,7 @@ func goneLines(rec *record, runs map[string]*fw.Run, gone map[string]string) []M
 			continue
 		}
 		sm.Gone = id
-		out = append(out, system(EventLost, fmt.Sprintf("%s lost its run %s: the fleet no longer holds it", m.Handle, id)))
+		out = append(out, system(EventLost, fmt.Sprintf("%s stopped: the agent that held its work was replaced. A message to %s starts it again.", m.Handle, m.Handle)))
 	}
 	return out
 }

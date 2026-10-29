@@ -157,6 +157,11 @@ type RestView interface {
 // A body of POST /v1/runs with continues gets the summary of the earlier
 // conversation first, wherever the run starts (continues.go).
 func (rl *Relay) Take(w http.ResponseWriter, r *http.Request) bool {
+	if r.Pattern == routeReactions && r.Method == http.MethodPost {
+		// A reaction can be a verdict on a result, so the views that
+		// keep a copy of the board forget it (OnChange).
+		defer changed(rl.a)
+	}
 	if r.Method == http.MethodPost && r.URL.Path == "/v1/runs" && !rl.takeContinues(w, r) {
 		return true // the problem of a body with continues (continues.go)
 	}
@@ -403,9 +408,11 @@ func (rl *Relay) owned(w http.ResponseWriter, r *http.Request, id string) (*fw.R
 // answerArchived answers a run route for a run that only the archive holds
 // (archive.go), and reports whether it answered. GET /v1/runs/{id} answers
 // the run with "archived": true, and GET /v1/runs/{id}/events its events
-// from the archive. Every write answers 409 with ReadOnlyRun, because the
-// worker of the run is gone. Another read, such as the live text or the
-// files, answers 404.
+// from the archive. POST /v1/runs/{id}/reactions keeps the reaction in the
+// archive (archiveverdict.go), because a verdict on a result must land
+// after its worker went. Every other write answers 409 with ReadOnlyRun,
+// because the worker of the run is gone. Another read, such as the live
+// text or the files, answers 404.
 func (rl *Relay) answerArchived(w http.ResponseWriter, r *http.Request, id string) bool {
 	run, ok, err := ArchivedRun(r.Context(), rl.a, id)
 	switch {
@@ -424,13 +431,46 @@ func (rl *Relay) answerArchived(w http.ResponseWriter, r *http.Request, id strin
 		native.WriteJSON(w, http.StatusOK, runAnswer{Run: run, Can: can, Archived: true, EndedAt: rl.archivedEnd(r.Context(), run)})
 	case r.Pattern == "GET /v1/runs/{id}/events":
 		rl.archivedEvents(w, r, run)
+	case r.Pattern == routeReactions && r.Method == http.MethodPost:
+		rl.archivedReaction(w, r, run)
 	case r.Method != http.MethodGet && r.Method != http.MethodHead:
 		native.WriteProblem(w, r, http.StatusConflict, ReadOnlyRun)
 	default:
-		native.WriteProblem(w, r, http.StatusNotFound, "The worker of the run "+id+" was replaced, so its live view and its files are gone. Its conversation stays readable.")
+		native.WriteProblem(w, r, http.StatusNotFound, GoneRun)
 	}
 	return true
 }
+
+// archivedReaction answers POST /v1/runs/{id}/reactions for a run of the
+// archive, with the body of the kernel route: the reaction, an optional
+// note, seq, by, and remove. It keeps the reaction in the archive and
+// answers the run with "archived": true, as the kernel answers the run
+// after a reaction.
+func (rl *Relay) archivedReaction(w http.ResponseWriter, r *http.Request, run *fw.Run) {
+	var body thumb
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxReactionBody))
+	if err != nil || json.Unmarshal(raw, &body) != nil {
+		native.WriteProblem(w, r, http.StatusBadRequest, "the body of a reaction is a JSON object with reaction, and optionally note, seq, and remove")
+		return
+	}
+	d := fw.ReactionData{Reaction: body.Reaction, Note: body.Note, By: strings.TrimSpace(body.By), Removed: body.Remove}
+	if body.Seq != nil {
+		d.Seq = *body.Seq
+	}
+	got, err := ReactArchived(r.Context(), rl.a, run.ID, d)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	var can *Can
+	if IsPerson(fw.PrincipalFrom(r.Context())) {
+		can = &Can{View: true}
+	}
+	native.WriteJSON(w, http.StatusOK, runAnswer{Run: got, Can: can, Archived: true, EndedAt: rl.archivedEnd(r.Context(), got)})
+}
+
+// maxReactionBody bounds the body of a reaction on a run of the archive.
+const maxReactionBody = 16 << 10
 
 // archivedEvents answers GET /v1/runs/{id}/events for a run of the
 // archive, as the kernel answers it: a page of {"run", "events", "lines"}

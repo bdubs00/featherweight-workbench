@@ -405,7 +405,11 @@ func Fold(runs []fleet.WorkRun, o Options) Answer {
 		}
 		u := r.Usage
 		p := pieceOf(r)
-		if u.UnpricedTokens > 0 || (u.CostUSD == 0 && u.InputTokens+u.OutputTokens+u.CacheReadTokens+u.CacheWriteTokens > 0) {
+		// A run with tokens and a cost of zero ran on a model whose price
+		// is zero, such as a local model: its cost is known. Only the
+		// tokens of a model without a price leave the cost unknown, and the
+		// kernel counts them in UnpricedTokens.
+		if u.UnpricedTokens > 0 {
 			ans.Spend.Unpriced++
 			if p != nil {
 				p.line.Unpriced++
@@ -744,7 +748,11 @@ func sentence(a Answer) string {
 	}
 	b.WriteString(".")
 	if a.Work.Lost > 0 {
-		fmt.Fprintf(&b, " %s lost when a pool replaced the worker.", plural(a.Work.Lost, "task was", "tasks were"))
+		if a.Work.Lost == 1 {
+			b.WriteString(" 1 task stopped because the agent that held it was replaced.")
+		} else {
+			fmt.Fprintf(&b, " %d tasks stopped because the agents that held them were replaced.", a.Work.Lost)
+		}
 	}
 	if a.Work.Done > 0 {
 		fmt.Fprintf(&b, " People accepted %d and sent back %d.", a.Checks.Accepted, a.Checks.SentBack)
@@ -766,8 +774,10 @@ func sentence(a Answer) string {
 		fmt.Fprintf(&b, ", %s for each finished task", Dollars(a.Spend.PerDone))
 	}
 	b.WriteString(".")
-	if a.Spend.Unpriced > 0 {
-		fmt.Fprintf(&b, " %s tokens without a price.", plural(a.Spend.Unpriced, "run has", "runs have"))
+	if a.Spend.Unpriced == 1 {
+		b.WriteString(" The cost of 1 run is unknown, because its model has no price.")
+	} else if a.Spend.Unpriced > 1 {
+		fmt.Fprintf(&b, " The cost of %d runs is unknown, because their model has no price.", a.Spend.Unpriced)
 	}
 	if a.Estimated != nil {
 		fmt.Fprintf(&b, " At the estimates of people, the finished work of %s would take a person %s.", plural(a.Estimated.Lines, "line", "lines"), Duration(a.Estimated.Minutes*60))

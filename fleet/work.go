@@ -57,6 +57,10 @@ const (
 //     waits for a check of its new answer (ToCheck). LastVerdict is the
 //     newest verdict of a person, where Verdict keeps the first. Note is
 //     the note of the newest thumb down.
+//   - Reworking is true from a message of a person that follows a thumb
+//     down on the newest answer, such as the note of Needs work, until
+//     the next end: the agent works on the note, and the board shows the
+//     card as working, not as sent back.
 //   - CanceledBy names the person who canceled the run, when one did.
 //   - Backfilled is true once the backfill of the archive (backfill.go)
 //     read the events of the run again for these facts.
@@ -83,6 +87,7 @@ type Work struct {
 	Reviewed     int       `json:"reviewed,omitempty"`
 	LastVerdict  string    `json:"lastVerdict,omitempty"`
 	Note         string    `json:"note,omitempty"`
+	Reworking    bool      `json:"reworking,omitempty"`
 }
 
 // Apply folds one event of the run into the facts. The events of a run
@@ -109,7 +114,7 @@ func (w *Work) Apply(e fw.Event) {
 			w.Ends++
 		}
 		w.Done, w.DoneWeak = d.Done, d.DoneWeak
-		w.Asked = time.Time{}
+		w.Asked, w.Reworking = time.Time{}, false
 	case fw.EvApprovalRequested:
 		if w.Asked.IsZero() {
 			w.Asked = e.Time
@@ -137,6 +142,9 @@ func (w *Work) Apply(e fw.Event) {
 		w.Acts++
 		if !w.FirstEnd.IsZero() {
 			w.Rework++
+		}
+		if w.Ends > 0 && w.Reviewed == w.Ends && w.LastVerdict == VerdictRejected {
+			w.Reworking = true
 		}
 	case fw.EvRunReacted:
 		var d fw.ReactionData

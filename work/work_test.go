@@ -595,10 +595,12 @@ func TestFoundCard(t *testing.T) {
 	}
 }
 
-// A card names the person who asked by a name that people read beside
-// the subject: the name that a bridge keeps, the name that the front knows
-// for the subject, or the subject when it is no id. A subject that the
-// issuer made as an id, with no name known, has no display.
+// A card names the person who asked by a display name beside the subject
+// (people.Display): the name that the front keeps for the subject, else
+// the name that a bridge keeps in readable form, else the subject when it
+// is no id. A subject that the issuer made as an id, with no name known,
+// reads as "A person", and the static token as "Admin token" (live walk
+// M3).
 func TestFromDisplay(t *testing.T) {
 	const erin = "fd1e8a14-ac12-5a00-b4d6-bb6e50d15c10"
 	mine := run("R-A", "helper", fw.StateCompleted, ago(time.Hour), ago(time.Hour), nil)
@@ -606,24 +608,27 @@ func TestFromDisplay(t *testing.T) {
 	known.Principal = erin
 	stranger := run("R-X", "helper", fw.StateCompleted, ago(time.Hour), ago(time.Hour), nil)
 	stranger.Principal = "0b6e1f7c-4d1a-4a8e-9a63-2f0d61c5a9e1"
-	in := Input{Me: "alice", All: true, Now: t0, Runs: []Run{{Run: mine}, {Run: known}, {Run: stranger}},
-		Names:   map[string]string{erin: "erin@example.com"},
-		Bridges: []bridges.Item{{Bridge: bridges.Bridge{ID: "B1", Title: "Miners", Operator: erin, OperatorName: "Erin Example", State: bridges.StateClosed, CreatedAt: ago(time.Hour)}}}}
+	admin := run("R-T", "helper", fw.StateCompleted, ago(time.Hour), ago(time.Hour), nil)
+	admin.Principal = "token"
+	in := Input{Me: "alice", All: true, Now: t0, Runs: []Run{{Run: mine}, {Run: known}, {Run: stranger}, {Run: admin}},
+		Names: map[string]string{erin: "Erin"},
+		Bridges: []bridges.Item{
+			{Bridge: bridges.Bridge{ID: "B1", Title: "Miners", Operator: erin, OperatorName: "erin@example.com", State: bridges.StateClosed, CreatedAt: ago(time.Hour)}},
+			{Bridge: bridges.Bridge{ID: "B2", Title: "Backups", Operator: "0c1d2e3f-1b7d-4e2a-9c1f-2a3b4c5d6e7f", OperatorName: "frank.miller@example.com", State: bridges.StateClosed, CreatedAt: ago(time.Hour)}},
+		}}
 	ans := Assemble(in)
-	for id, want := range map[string]string{"run:R-A": "alice", "run:R-E": "erin@example.com", "run:R-X": "", "bridge:B1": "Erin Example"} {
+	for id, want := range map[string]string{"run:R-A": "alice", "run:R-E": "Erin", "run:R-X": "A person", "run:R-T": "Admin token", "bridge:B1": "Erin", "bridge:B2": "Frank Miller"} {
 		if c := cardOf(t, ans, id); c.From.Display != want || c.From.Kind != "person" {
 			t.Errorf("the from of %s = %+v, want the display %q", id, c.From, want)
 		}
 	}
-	raw, _ := json.Marshal(cardOf(t, ans, "run:R-X").From)
-	if strings.Contains(string(raw), "display") {
-		t.Fatalf("a from without a name = %s", raw)
-	}
 }
 
-// A question of a seat whose run no worker holds is no move of a person:
-// the seat that the channel called gone and the seat whose run the
-// archive holds as lost stop the card, which is lost.
+// A question of a seat whose run no worker holds still waits for the
+// person who asked for the bridge: an answer seats the member again, so
+// the card needs the person, with the question as its summary (live walk
+// m1). A decision of a seat whose run the archive holds as lost stops the
+// card, which is lost: nobody can decide it any more.
 func TestLostQuestion(t *testing.T) {
 	lostRun := run("R-L", "writer", fw.StateInputRequired, ago(4*24*time.Hour), ago(4*24*time.Hour), map[string]string{fw.MetaBatch: "bridge:B2"})
 	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: lostRun, Lost: true}},
@@ -641,14 +646,14 @@ func TestLostQuestion(t *testing.T) {
 	in.Mine = mineAll(in.Runs...)
 	ans := Assemble(in)
 	b1 := cardOf(t, ans, "bridge:B1")
-	if b1.Stage != StageStopped || !b1.Lost || b1.Reason != "ops asked a question, but the agent that held it is gone." || b1.Parts.NeedsYou != 0 {
+	if b1.Stage != StageNeedsYou || b1.Next != NextYou || b1.Lost || b1.Reason != "ops asks: Which port?" || b1.Summary != "Which port?" || b1.Parts.NeedsYou != 1 {
 		t.Fatalf("a bridge whose seat asked and went = %+v", b1)
 	}
 	if b2 := cardOf(t, ans, "bridge:B2"); b2.Stage != StageStopped || !b2.Lost || b2.Links.Approval != "" {
 		t.Fatalf("a bridge whose seat run is lost = %+v", b2)
 	}
-	if ans.Lanes[2].Count != 0 {
-		t.Fatalf("the lane needs you = %+v", ans.Lanes[2])
+	if ans.Lanes[2].Count != 1 || ans.Waiting.NeedsYou != 1 {
+		t.Fatalf("the lane needs you = %+v, waiting %+v", ans.Lanes[2], ans.Waiting)
 	}
 }
 
@@ -701,5 +706,54 @@ func TestPlainReasons(t *testing.T) {
 	}
 	if got := strings.Join(asksOf([]string{"front.pages_write", "bash"}, nil), "|"); got != "Before it writes a page of the wiki|Before it runs a shell command" {
 		t.Errorf("the asks = %q", got)
+	}
+}
+
+// A card carries a summary in one line: the first line of the result to
+// check, what a decision asks, and for a team whose agents finished the
+// first line of the newest message of an agent in its channel.
+func TestCardSummary(t *testing.T) {
+	result := run("R-R", "writer", fw.StateCompleted, ago(time.Hour), ago(time.Minute), map[string]string{fleet.MetaReview: "1"})
+	result.Output = "## The notes of 2.4\n\nThey are in the wiki."
+	asks := run("R-A", "writer", fw.StateInputRequired, ago(time.Hour), ago(time.Minute), nil)
+	asks.Pending = &fw.Approval{ID: "ap", Tool: "bash", Reason: "Restart sshd on both hosts."}
+	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: result}, {Run: asks}},
+		Bridges: []bridges.Item{{Bridge: bridges.Bridge{ID: "B1", Title: "Backup policy", Operator: "alice", State: bridges.StateOpen, CreatedAt: ago(time.Hour), Members: []bridges.Member{
+			{Handle: "writer", Agent: "writer", Presence: bridges.PresenceIdle}}}, Summary: "The policy is in backups/policy.md."}},
+	}
+	in.Mine = mineAll(in.Runs...)
+	ans := Assemble(in)
+	if c := cardOf(t, ans, "run:R-R"); c.Stage != StageReview || c.Summary != "The notes of 2.4" {
+		t.Fatalf("the result = %+v", c)
+	}
+	if c := cardOf(t, ans, "run:R-A"); c.Stage != StageNeedsYou || c.Summary != "Asks before it runs a shell command: Restart sshd on both hosts." {
+		t.Fatalf("the decision = %+v", c)
+	}
+	if c := cardOf(t, ans, "bridge:B1"); c.Stage != StageReview || c.Summary != "The policy is in backups/policy.md." {
+		t.Fatalf("the team = %+v", c)
+	}
+}
+
+// After Needs work, the card of the run works on the note at once, also
+// while the view still holds the end before it: the facts of the archive
+// saw the note reach the agent (tester finding 2).
+func TestReworkingCard(t *testing.T) {
+	r := run("R-N", "writer", fw.StateCompleted, ago(time.Hour), ago(time.Minute), map[string]string{fleet.MetaReview: "1"})
+	r.Output = "The first answer."
+	w := fleet.Work{Facts: true, Ends: 1, Reviewed: 1, Verdict: fleet.VerdictRejected, LastVerdict: fleet.VerdictRejected, Note: "Shorter.", Reworking: true}
+	in := Input{Me: "alice", Now: t0, Runs: []Run{{Run: r, Work: w}}}
+	in.Mine = mineAll(in.Runs...)
+	if c := cardOf(t, Assemble(in), "run:R-N"); c.Stage != StageWorking || c.Reason != "The agent works on your note." || c.Next != NextAgent {
+		t.Fatalf("the card after Needs work = %+v", c)
+	}
+	// The view holds the end before the note, and the archive the events
+	// after it: the run of the archive wins.
+	live := *r
+	live.Seq = 3
+	arch := *r
+	arch.Seq, arch.State = 5, fw.StateRunning
+	got := mergeRuns([]fleet.WorkRun{{Run: &arch, Work: w}}, []*fw.Run{&live})
+	if len(got) != 1 || got[0].Run.State != fw.StateRunning {
+		t.Fatalf("the merged run = %+v", got)
 	}
 }

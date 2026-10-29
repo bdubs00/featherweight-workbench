@@ -409,12 +409,17 @@ func (s *Service) begin(ctx context.Context, st *stored, start Trigger) (Outcome
 	if err != nil {
 		return Outcome{}, err
 	}
+	if lastWorking(days) != nil && s.settleOpen(ctx, st, days) {
+		if days, _, err = s.recent(ctx, d.Name, loc, now); err != nil {
+			return Outcome{}, err
+		}
+	}
 	if n := countWorking(days); n >= maxWorking {
 		e.State, e.Reason = StateSkipped, fmt.Sprintf("%d runs of the job work now, the most at one time.", n)
 	} else if open := lastWorking(days); open != nil {
 		switch d.Limits.Overlap {
 		case OverlapSkip:
-			e.State, e.Reason = StateSkipped, fmt.Sprintf("The run of %s had not ended, and the overlap of the job is skip.", slotWords(open.Slot, loc))
+			e.State, e.Reason = StateSkipped, fmt.Sprintf("The run of %s still works, and this job starts no second run while one works. Start it again when that run ends.", slotWords(open.Slot, loc))
 		case OverlapQueue:
 			if waits(days) {
 				e.State, e.Reason = StateSkipped, "A start already waits for the run that works, and the overlap of the job is queue."
@@ -455,6 +460,31 @@ func (s *Service) begin(ctx context.Context, st *stored, start Trigger) (Outcome
 		return Outcome{Waiting: e.Reason}, nil
 	}
 	return s.carry(ctx, st, dateOf(start.Slot, loc), e), nil
+}
+
+// settleOpen settles each start of a duty whose run works in the history
+// from the runs as the view shows them now, and reports whether one of
+// them changed. The engine learns the end of a run on its next pass, a
+// few seconds after the end, so a start that comes right after the end,
+// such as Run now, reads the end first and is no skip.
+func (s *Service) settleOpen(ctx context.Context, st *stored, days map[string]day) bool {
+	runs, err := s.runs(ctx, st.Duty.Name)
+	if err != nil {
+		return false
+	}
+	settled := false
+	for date, d := range days {
+		for _, e := range d.Entries {
+			if !working(e.State) || e.Run == "" {
+				continue
+			}
+			if r, cost := find(runs, e.Run); r != nil && r.State.Terminal() {
+				s.settle(ctx, st, date, e, r, cost, st.Duty.Paused)
+				settled = true
+			}
+		}
+	}
+	return settled
 }
 
 // lastWorking returns the newest start whose run works, or nil.

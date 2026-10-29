@@ -80,8 +80,9 @@ const (
 	listSchema = `{"type":"object","properties":{}}`
 
 	openSchema = `{"type":"object","properties":{
-		"title":{"type":"string","description":"The title of the bridge, a few words."},
-		"goal":{"type":"string","description":"The goal of the whole job."},
+		"title":{"type":"string","description":"The name of the channel in 2 to 4 words, such as Backup policy or Harden lab hosts. Never a whole sentence."},
+		"topic":{"type":"string","description":"The whole request of the person, in the words of the person. The page shows it under the name of the channel."},
+		"goal":{"type":"string","description":"The goal of the whole job, for the agents."},
 		"placement":{"type":"string","enum":["queue","spawn"],"description":"queue puts one run per seat on the queue of the pool of its agent; spawn seats each member as a child of a run of the manager. The default comes from the configuration."},
 		"members":{"type":"array","minItems":1,"items":` + seatSchema + `,"description":"The seats of the bridge."},
 		"delegation":{"type":"object","properties":{
@@ -116,7 +117,8 @@ const (
 	personBridgeArg = `"bridge":{"type":"string","minLength":1,"description":"The id of the bridge, as bridge_list or the page names it."}`
 
 	patchSchema = `{"type":"object","properties":{` + personBridgeArg + `,
-		"title":{"type":"string","description":"A new title."},
+		"title":{"type":"string","description":"A new title, 2 to 4 words."},
+		"topic":{"type":"string","description":"A new topic: the whole request in the words of the person."},
 		"state":{"type":"string","enum":["open","closed"],"description":"closed closes the bridge, and open opens it again. A close cancels nothing."},
 		"delegation":{"type":"object","properties":{"approve":{"type":"boolean"},"budget":{"type":"boolean"},"members":{"type":"boolean"},"report":{"type":"boolean"}},"description":"What the manager can do in the bridge. A missing key stays."},
 		"caps":{"type":"object","properties":{"maxMessages":{"type":"integer","minimum":1},"maxFanoutPerMinute":{"type":"integer","minimum":1},"maxPairMessages":{"type":"integer","minimum":1},"maxTurns":{"type":"integer","minimum":1},"maxCostUSD":{"type":"number","minimum":0,"description":"The most dollars of all runs together; 0 removes the cap of cost."}},"description":"The caps of the fan-out. A missing key stays, and a raised cap delivers again."}
@@ -252,7 +254,7 @@ func tools(s *mcp.Server) []mcp.Tool {
 		mcp.NewTool(&sdk.Tool{
 			Name:        ToolOpen,
 			Title:       "Open bridge",
-			Description: "Open a bridge from a plan, as the person of your run: a title, a goal, and the seats, each with a handle, an agent, and a task. The bridge starts one run per seat, which spends from the budget of the pool of its agent, or of your run for the placement spawn. Read the open bridges with bridge_list first, and do not open a bridge for work that an open bridge already does. Read the fleet with agents_list and fleet too.",
+			Description: "Open a bridge, which the person sees as a channel, from a plan, as the person of your run: a short title of 2 to 4 words that names the channel, such as Backup policy, the topic with the whole request of the person in the words of the person, a goal, and the seats, each with a handle, an agent, and a task. Never make the title a whole sentence: the page cuts a long title to nothing, and it shows the topic under the title. The bridge starts one run per seat, which spends from the budget of the pool of its agent, or of your run for the placement spawn. Read the open bridges with bridge_list first, and do not open a bridge for work that an open bridge already does. Read the fleet with agents_list and fleet too.",
 			InputSchema: json.RawMessage(openSchema),
 			Annotations: &sdk.ToolAnnotations{DestructiveHint: &yes, OpenWorldHint: &no},
 		}, t.open),
@@ -622,7 +624,12 @@ func (t *toolSet) open(ctx context.Context, _ *sdk.CallToolRequest, in OpenSpec)
 	if err != nil {
 		return toolError(err), nil, nil
 	}
-	return mcp.Result(fmt.Sprintf("Opened the bridge %s %q for %s with %s, placement %s. The channel starts with a post of yours that names each member and its task, so do not post that again. Follow it with bridge_read (bridge %s). Tell the person that they follow the work in the bridge %q on the page of bossmode. Nothing wakes your run when the bridge finishes, so do not promise a later report.", rec.ID, rec.Title, s.personName(by.Subject, ""), plural(len(rec.Members), "member", "members"), rec.Placement, rec.ID, rec.Title), it), nil, nil
+	text := fmt.Sprintf("Opened the channel %q (bridge %s) for %s with %s, placement %s. The channel starts with a post of yours that names each agent and its task, so do not post that again. Follow it with bridge_read (bridge %s). Tell the person in one sentence that the work goes on in the channel %q. Do not name a tool, an id, or the word bridge to the person. Nothing wakes your run when the channel finishes, so do not promise a later report.",
+		rec.Title, rec.ID, s.personName(by.Subject, ""), plural(len(rec.Members), "agent", "agents"), rec.Placement, rec.ID, rec.Title)
+	if len(strings.Fields(rec.Title)) > shortTitleWords {
+		text += fmt.Sprintf(" The title has %d words, and the page cuts a long title: next time, name the channel in 2 to 4 words and put the request in topic.", len(strings.Fields(rec.Title)))
+	}
+	return mcp.Result(text, it), nil, nil
 }
 
 // delegated checks that the run of a call can change its bridge for the

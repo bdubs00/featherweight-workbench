@@ -107,8 +107,12 @@ const (
 // channel and one batch, BatchOf(ID). Members holds the seats, with the
 // presence and the activity of each when a route answers it.
 type Bridge struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// Topic is the whole request of the person, the line under the short
+	// title of the channel. A bridge that the open gave none has the
+	// goal, or a title that is a whole sentence, as its topic (public).
+	Topic    string `json:"topic,omitempty"`
 	Goal     string `json:"goal"`
 	Operator string `json:"operator"`
 	// OperatorName is a name of the operator that people read, the email
@@ -224,15 +228,29 @@ type Activity struct {
 // count reached past it. LastAt is the time of the newest entry of the
 // channel, for the freshness of a row of the list, and nil before the
 // first entry. Usage is set by GET /v1/bridges/{id} alone.
+//
+// NeedsYou counts the seats that wait for a person, and WaitsFor says for
+// whom when it is not 0: "you" when the caller is the person who asked for
+// the bridge, or the owner of the duty that opened it, else a name of that
+// person. Only that person counts the bridge in the one count of the work
+// that needs a person (work.Waiting), so a channel of another person says
+// whom it waits for instead. Summary is the first line of the newest
+// message of an agent in the channel, for a row of a list and a card.
 type Item struct {
 	Bridge
-	Read        uint64          `json:"read"`
-	Unread      int             `json:"unread"`
-	UnreadMore  bool            `json:"unreadMore"`
-	MemberCount int             `json:"memberCount"`
-	NeedsYou    int             `json:"needsYou"`
-	LastAt      *time.Time      `json:"lastAt,omitempty"`
-	Usage       *fleet.UsageSum `json:"usage,omitempty"`
+	Read        uint64 `json:"read"`
+	Unread      int    `json:"unread"`
+	UnreadMore  bool   `json:"unreadMore"`
+	MemberCount int    `json:"memberCount"`
+	NeedsYou    int    `json:"needsYou"`
+	WaitsFor    string `json:"waitsFor,omitempty"`
+	Summary     string `json:"summary,omitempty"`
+	// People are the people of the channel, each with the display name
+	// that a page shows: the person who asked for it first, then the owner
+	// of the duty that opened it, then the people who posted lately.
+	People []Person        `json:"people,omitempty"`
+	LastAt *time.Time      `json:"lastAt,omitempty"`
+	Usage  *fleet.UsageSum `json:"usage,omitempty"`
 }
 
 // Message is one entry of the channel of a bridge. Page names the page of
@@ -283,6 +301,24 @@ type From struct {
 	Name    string `json:"name,omitempty"`
 	Display string `json:"display,omitempty"`
 }
+
+// Person is a person of a channel: the subject of the sign-in, the
+// display name that a page shows (people.Display), never the subject when
+// it is an id of the issuer, and the role: asked for the person who asked
+// for the bridge, owner for the owner of the duty that opened it, and
+// posted for a person who posted in it.
+type Person struct {
+	Subject string `json:"subject"`
+	Display string `json:"display"`
+	Role    string `json:"role"`
+}
+
+// Roles of a person of a channel (Person.Role).
+const (
+	RoleAsked  = "asked"
+	RoleOwner  = "owner"
+	RolePosted = "posted"
+)
 
 // Mirror names the run event that an entry mirrors, so a reaction on the
 // entry reaches the run.
@@ -572,6 +608,7 @@ func (r *record) waits(seq uint64) bool {
 // bookkeeping, with a copy of the members.
 func (r *record) public() Bridge {
 	b := r.Bridge
+	b.Topic = topicOf(r.Bridge)
 	b.Members = append([]Member(nil), r.Members...)
 	for i := range b.Members {
 		b.Members[i].Runs = append([]string{}, b.Members[i].Runs...)
@@ -618,4 +655,36 @@ func system(event, text string) Message {
 	m := newMessage(From{Kind: KindSystem}, text)
 	m.Event = event
 	return m
+}
+
+// Bounds of the title of a channel: the manager names a channel in 2 to
+// 4 words, and a title of more words is a whole request.
+const (
+	shortTitleWords = 4
+	maxTopicRunes   = 2000
+)
+
+// topicOf is the topic of a bridge: the topic of its open, else its goal,
+// else its title when the title is longer than a short name. So a channel
+// of an older front, or of a plan that named no topic, has the line too.
+func topicOf(b Bridge) string {
+	if t := strings.TrimSpace(b.Topic); t != "" {
+		return t
+	}
+	if g := strings.TrimSpace(b.Goal); g != "" {
+		return cutRunes(g, maxTopicRunes)
+	}
+	if len(strings.Fields(b.Title)) > shortTitleWords {
+		return b.Title
+	}
+	return ""
+}
+
+// cutRunes cuts a text to n characters, with "..." when it cut.
+func cutRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return strings.TrimSpace(string(r[:n])) + "..."
 }

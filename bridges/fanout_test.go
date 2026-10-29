@@ -57,7 +57,7 @@ func TestFanOut(t *testing.T) {
 	if got.Auth != "Bearer "+fleetToken || got.Member != "default/crew-0" || from["kind"] != fw.FromPerson || from["name"] != "alice" || from["member"] != "migrator-1" {
 		t.Fatalf("delivery = %+v", got)
 	}
-	if !strings.HasPrefix(content, `[bridge "Migrate logrotate" `+id+`] to everyone from operator: Status, please.`) {
+	if !strings.HasPrefix(content, `[channel "Migrate logrotate" `+id+`] to everyone from operator: Status, please.`) {
 		t.Fatalf("content = %q", content)
 	}
 
@@ -144,7 +144,7 @@ func TestAnswerReachesTheAddressedTeammate(t *testing.T) {
 	if from["kind"] != fw.FromAgent || from["name"] != "reviewer" || from["run"] != "r-rev" || from["member"] != "migrator-1" {
 		t.Fatalf("from = %+v", from)
 	}
-	if !strings.HasPrefix(content, `[bridge "Migrate logrotate" `+id+`] @migrator-1 from reviewer: **@Migrator-1**`) || !strings.HasSuffix(content, "6. Run the tests again.") {
+	if !strings.HasPrefix(content, `[channel "Migrate logrotate" `+id+`] @migrator-1 from reviewer: **@Migrator-1**`) || !strings.HasSuffix(content, "6. Run the tests again.") {
 		t.Fatalf("content = %.200q ... %q", content, content[max(0, len(content)-60):])
 	}
 	answers := 0

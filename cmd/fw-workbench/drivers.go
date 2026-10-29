@@ -48,6 +48,7 @@ import (
 	_ "github.com/bdubs00/featherweight-workbench/inbox"
 	_ "github.com/bdubs00/featherweight-workbench/knowhow"
 	_ "github.com/bdubs00/featherweight-workbench/pages"
+	_ "github.com/bdubs00/featherweight-workbench/people"
 	_ "github.com/bdubs00/featherweight-workbench/playbooks"
 	_ "github.com/bdubs00/featherweight-workbench/routines"
 	_ "github.com/bdubs00/featherweight-workbench/surface/web"

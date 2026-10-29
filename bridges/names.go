@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
+	"github.com/bdubs00/featherweight-workbench/people"
 )
 
 // maxNames bounds the names that a process keeps.
@@ -61,10 +62,13 @@ func opaque(subject string) bool {
 
 // learn keeps the name of a person who calls a route, by subject: the
 // name of the principal when it differs from the subject and says more.
+// The store of the people keeps it too (people.Learn), so it survives a
+// restart of the front and reaches the other replica.
 func (s *Store) learn(p *fw.Principal) {
 	if p == nil || p.Subject == "" {
 		return
 	}
+	people.Learn(context.Background(), s.a, p)
 	name := oneLine(p.Name, 256)
 	if name == "" || name == p.Subject || opaque(name) {
 		return
@@ -80,27 +84,34 @@ func (s *Store) learn(p *fw.Principal) {
 	s.names[p.Subject] = name
 }
 
-// knownName returns a name of a person that people read: name, when it is
-// one, else the name that the front learned for the subject, else the
-// subject when it is no opaque id. It returns "" when the front knows no
-// such name.
+// knownName returns a name of a person that people read, the display name
+// of the person (people.Display): the name claim of the sign-in, a name
+// that the person set, the part of the email before the @ in readable
+// form, else name or the subject when it is no opaque id. name, when it
+// is one, else the name that the front learned for the subject, is the
+// hint, such as the email that a record kept. It returns "" when the
+// front knows no such name, and "Admin token" for the static token.
 func (s *Store) knownName(subject, name string) string {
-	if name = oneLine(name, 256); name != "" && !opaque(name) {
-		return name
+	hint := oneLine(name, 256)
+	if hint == "" || opaque(hint) {
+		s.namesMu.Lock()
+		hint = s.names[subject]
+		s.namesMu.Unlock()
 	}
-	if subject == "" {
+	if subject == "" && hint == "" {
 		return ""
 	}
-	s.namesMu.Lock()
-	learned := s.names[subject]
-	s.namesMu.Unlock()
-	if learned != "" {
-		return learned
-	}
-	if !opaque(subject) {
-		return subject
+	if d := people.Display(context.Background(), s.a, subject, hint); d != people.SomePerson {
+		return d
 	}
 	return ""
+}
+
+// displayOf is the display name of a person for an entry and a page: the
+// name that knownName finds, else "A person". It never shows the subject
+// of a sign-in that is an id of the issuer.
+func (s *Store) displayOf(subject, hint string) string {
+	return orWords(s.knownName(subject, hint), people.SomePerson)
 }
 
 // Learn keeps the name of the person p, as a call of a route of the
@@ -153,4 +164,50 @@ func (s *Store) nameOf(ctx context.Context, p *fw.Principal) string {
 		return "somebody"
 	}
 	return s.personName(p.Subject, p.Name)
+}
+
+// Asker returns the subject of the person whom the questions of a bridge
+// wait for: the person who asked for the bridge, or the owner of the duty
+// that opened it. A question to operator goes to that person, and the
+// board counts it for that person alone.
+func Asker(operator, owner string) string {
+	if strings.HasPrefix(operator, "duty:") && owner != "" {
+		return owner
+	}
+	return operator
+}
+
+// waitsFor names the person whom the questions of a bridge wait for, for
+// the caller subject: "you" for that person, else a name of the person.
+func (s *Store) waitsFor(rec *record, subject string) string {
+	who := Asker(rec.Operator, rec.Owner)
+	if who == subject && subject != "" {
+		return "you"
+	}
+	if who == rec.Operator {
+		return s.personName(who, rec.OperatorName)
+	}
+	return s.personName(who, "")
+}
+
+// peopleOf lists the people of a channel with their display names: the
+// person who asked for it, the owner of the duty that opened it, and the
+// people who posted lately. A duty is no person, and the front writes as
+// no person.
+func (s *Store) peopleOf(ctx context.Context, rec *record) []Person {
+	var out []Person
+	seen := map[string]bool{}
+	add := func(subject, hint, role string) {
+		if subject == "" || seen[subject] || strings.HasPrefix(subject, "duty:") || subject == HandleOperator {
+			return
+		}
+		seen[subject] = true
+		out = append(out, Person{Subject: subject, Display: s.displayOf(subject, hint), Role: role})
+	}
+	add(rec.Operator, rec.OperatorName, RoleAsked)
+	add(rec.Owner, "", RoleOwner)
+	for _, subject := range s.b.posters(ctx, rec) {
+		add(subject, "", RolePosted)
+	}
+	return out
 }

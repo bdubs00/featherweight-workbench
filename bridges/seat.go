@@ -54,7 +54,10 @@ var agentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 // bridge_open take it. Delegation and Caps are partial: a missing key
 // takes the default.
 type OpenSpec struct {
-	Title      string           `json:"title"`
+	Title string `json:"title"`
+	// Topic is the whole request of the person in the words of the
+	// person, the line under the short title of the channel.
+	Topic      string           `json:"topic,omitempty"`
 	Goal       string           `json:"goal"`
 	Placement  string           `json:"placement,omitempty"`
 	Members    []SeatSpec       `json:"members"`
@@ -224,6 +227,7 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 	rec := &record{Bridge: Bridge{
 		ID:         strings.ToLower(fw.NewID()),
 		Title:      title,
+		Topic:      strings.TrimSpace(spec.Topic),
 		Goal:       strings.TrimSpace(spec.Goal),
 		State:      StateOpen,
 		Placement:  placement,
@@ -487,6 +491,11 @@ type instructionsData struct {
 	ID, Title, Goal, Operator string
 	Handle, Agent, Task, Peer string
 	Roster                    []rosterLine
+	// Person names the person whom the work is for, by the display name,
+	// or "the person who asked" when the front knows no name, and Named
+	// says that it is a name.
+	Person string
+	Named  bool
 }
 
 // instructionsOf renders the instructions of a seat: the bridge, the
@@ -496,6 +505,14 @@ type instructionsData struct {
 // of the run (learnedContext), never in the instructions.
 func (s *Store) instructionsOf(ctx context.Context, rec *record, m Member) string {
 	d := instructionsData{ID: rec.ID, Title: rec.Title, Goal: rec.Goal, Operator: s.operatorName(rec, "The operator"), Handle: m.Handle, Agent: m.Agent, Task: m.Task}
+	d.Person = s.knownName(Asker(rec.Operator, rec.Owner), rec.OperatorName)
+	if Asker(rec.Operator, rec.Owner) != rec.Operator {
+		d.Person = s.knownName(rec.Owner, "")
+	}
+	d.Named = d.Person != ""
+	if !d.Named {
+		d.Person = "the person who asked"
+	}
 	if d.Goal == "" {
 		d.Goal = rec.Title
 	}

@@ -61,6 +61,9 @@ type buckets struct {
 	// an entry once per process.
 	mu        sync.Mutex
 	summaries map[string]summary
+	// display names the sender of an entry of a person, from its subject
+	// and the name that the entry kept (Store.displayOf), or nil.
+	display func(subject, hint string) string
 }
 
 // summary is what never changes of an entry: the kind and the name of the
@@ -71,6 +74,9 @@ type summary struct {
 	// quiet marks a line of a worker that went to sleep or woke up, which
 	// says nothing about the work of the bridge (quietLine).
 	quiet bool
+	// first is the first line of the text of a message of an agent, for
+	// the summary of a bridge (lastPost), and "" for another entry.
+	first string
 }
 
 // quietLine reports whether an entry is a line of sleep or wake: a worker
@@ -86,7 +92,88 @@ func quietLine(m Message) bool {
 
 // summarize is the summary of an entry.
 func summarize(m Message) summary {
-	return summary{kind: m.From.Kind, name: m.From.Name, at: m.At, quiet: quietLine(m)}
+	s := summary{kind: m.From.Kind, name: m.From.Name, at: m.At, quiet: quietLine(m)}
+	if m.From.Kind == KindAgent {
+		s.first = FirstLine(m.Text, summaryRunes)
+	}
+	return s
+}
+
+// summaryRunes bounds the summary of a bridge, in characters.
+const summaryRunes = 200
+
+// FirstLine returns the first line of a text that says something, as
+// plain words of at most n characters: the marks of Markdown, a heading,
+// a quote, or a list go, and a line that holds only such marks or a
+// handle that addresses a teammate counts as no line. A line that is
+// longer ends with "...".
+func FirstLine(text string, n int) string {
+	for l := range strings.SplitSeq(text, "\n") {
+		l = strings.TrimSpace(l)
+		l = strings.TrimLeft(l, "#>-*+ \t")
+		l = strings.NewReplacer("**", "", "__", "", "`", "").Replace(l)
+		l = strings.TrimSpace(l)
+		for strings.HasPrefix(l, "@") {
+			// The handle of a teammate in front of an answer says
+			// nothing to a person.
+			i := strings.IndexAny(l, " \t")
+			if i < 0 {
+				l = ""
+				break
+			}
+			l = strings.TrimLeft(strings.TrimSpace(l[i:]), ",:")
+			l = strings.TrimSpace(l)
+		}
+		if l == "" || strings.Trim(l, "-=_*|: ") == "" {
+			continue
+		}
+		if r := []rune(l); len(r) > n {
+			l = strings.TrimSpace(string(r[:n])) + "..."
+		}
+		return l
+	}
+	return ""
+}
+
+// posters returns the subjects of the people who posted in the last
+// postersScan entries of a channel, newest first, each once.
+func (b *buckets) posters(ctx context.Context, rec *record) []string {
+	var out []string
+	seen := map[string]bool{}
+	for seq, n := rec.LastSeq, 0; seq > 0 && n < postersScan; seq, n = seq-1, n+1 {
+		s, ok, err := b.summaryOf(ctx, rec.ID, seq)
+		if err != nil {
+			return out
+		}
+		if ok && s.kind == KindPerson && s.name != "" && !seen[s.name] {
+			seen[s.name] = true
+			out = append(out, s.name)
+		}
+	}
+	return out
+}
+
+// postersScan bounds the entries that posters reads back. It is the scan
+// of lastPost, so a list of the bridges reads each entry once.
+const postersScan = lastPostScan
+
+// lastPostScan bounds the entries that lastPost reads back from the newest
+// one.
+const lastPostScan = 24
+
+// lastPost returns the first line of the newest message of an agent of a
+// channel, from the summaries, or "" when the last entries hold none.
+func (b *buckets) lastPost(ctx context.Context, rec *record) string {
+	for seq, n := rec.LastSeq, 0; seq > 0 && n < lastPostScan; seq, n = seq-1, n+1 {
+		s, ok, err := b.summaryOf(ctx, rec.ID, seq)
+		if err != nil {
+			return ""
+		}
+		if ok && s.first != "" {
+			return s.first
+		}
+	}
+	return ""
 }
 
 // maxSummaries bounds the summaries that a process keeps.
@@ -235,6 +322,9 @@ func (b *buckets) entry(ctx context.Context, id string, seq uint64) (Message, ui
 	}
 	if m.To == nil {
 		m.To = []string{}
+	}
+	if m.From.Kind == KindPerson && b.display != nil {
+		m.From.Display = b.display(m.From.Name, m.From.Display)
 	}
 	b.remember(e.Key, m)
 	return m, e.Revision, nil

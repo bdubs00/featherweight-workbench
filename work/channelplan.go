@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-workbench/bridges"
@@ -175,7 +177,8 @@ func channelPlan(in PlanInput) Plan {
 }
 
 // jobMessage is the message that each run of a job posts: the words
-// without the words of the schedule.
+// without the words of the schedule, as a sentence that starts with a
+// capital, so "every day at 9, post one new tip" posts "Post one new tip".
 func jobMessage(words, said string) string {
 	t := words
 	if said != "" {
@@ -189,5 +192,6 @@ func jobMessage(words, said string) string {
 	if t == "" || t == "." {
 		return words
 	}
-	return t
+	r, n := utf8.DecodeRuneInString(t)
+	return string(unicode.ToUpper(r)) + t[n:]
 }

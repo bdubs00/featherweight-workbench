@@ -50,6 +50,7 @@ import (
 	"github.com/bdubs00/featherweight-workbench/connections"
 	"github.com/bdubs00/featherweight-workbench/dashboard"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	persons "github.com/bdubs00/featherweight-workbench/people"
 )
 
 // Routes, the cookie, and the limits of the browser sign-in.
@@ -793,6 +794,12 @@ func (s *server) signinCallback(w http.ResponseWriter, r *http.Request) {
 		signinFailed(w, http.StatusForbidden, "This server does not accept the token of the sign-in service.")
 		return
 	}
+	if claims, ok := idTokenClaims(tok.IDToken); ok {
+		// The kernel names the principal by the email first, so the
+		// name claim of the ID token reaches the names of the people
+		// here alone (persons.LearnClaims).
+		persons.LearnClaims(r.Context(), s.a, p.Subject, claims)
+	}
 	s.keepRefresh(w, r, tok, p.Subject, 0)
 	log.Info("native: browser sign-in succeeded", "subject", p.Subject, "token", kind, "renewable", tok.RefreshToken != "")
 	signinDone(w, token, st.Next)
@@ -894,6 +901,25 @@ func (si *signin) tokenRequest(ctx context.Context, doc *discoveryDoc, form url.
 		return tokenAnswer{}, &tokenError{status: resp.StatusCode, code: "no_token"}
 	}
 	return ans, nil
+}
+
+// idTokenClaims reads the claims of an ID token whose nonce the sign-in
+// checked. The front only takes a name and an email from them, for the
+// display name of the person, never a right.
+func idTokenClaims(token string) (map[string]any, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+	if err != nil {
+		return nil, false
+	}
+	var claims map[string]any
+	if json.Unmarshal(raw, &claims) != nil {
+		return nil, false
+	}
+	return claims, true
 }
 
 // idTokenNonce reads the nonce claim of an ID token. The signature is the

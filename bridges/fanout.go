@@ -136,12 +136,12 @@ func wakeInput(seq uint64) string {
 
 // header is the first line of a follow-up, which names the bridge, so a
 // run that reads several bridges tells them apart:
-// [bridge "<title>" <id>] @reviewer from migrator-1: ...
+// [channel "<title>" <id>] @reviewer from migrator-1: ...
 func header(rec *record, to []string, from string) string {
 	if len(to) == 0 {
-		return fmt.Sprintf("[bridge %q %s] to everyone from %s: ", rec.Title, rec.ID, from)
+		return fmt.Sprintf("[channel %q %s] to everyone from %s: ", rec.Title, rec.ID, from)
 	}
-	return fmt.Sprintf("[bridge %q %s] @%s from %s: ", rec.Title, rec.ID, strings.Join(to, " @"), from)
+	return fmt.Sprintf("[channel %q %s] @%s from %s: ", rec.Title, rec.ID, strings.Join(to, " @"), from)
 }
 
 // limited reports whether a run stopped at a limit of its budget, so a

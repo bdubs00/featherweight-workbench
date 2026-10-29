@@ -6,6 +6,7 @@ import (
 	"github.com/bdubs00/featherweight-kernel/fw"
 	"github.com/bdubs00/featherweight-kernel/surface/view"
 	"github.com/bdubs00/featherweight-workbench/fleet"
+	"github.com/bdubs00/featherweight-workbench/people"
 	"github.com/bdubs00/featherweight-workbench/teams"
 )
 
@@ -22,6 +23,10 @@ type Whoami struct {
 	// workbench.links of fw.yaml, such as metrics, the Grafana dashboard of
 	// the fleet. The page offers them in the account menu.
 	Links map[string]string `json:"links,omitempty"`
+	// Display is the display name of the caller (people.Display): "Admin
+	// token" for the static token, and never the subject of a sign-in that
+	// is an id of the issuer.
+	Display string `json:"display,omitempty"`
 }
 
 // links is the part of the workbench block that names the addresses.
@@ -52,5 +57,12 @@ func WhoamiOf(ctx context.Context, a *fw.Agent) (Whoami, error) {
 		out.Fleet = f.Name()
 	}
 	out.Links = Links(a.Config())
+	if p := fw.PrincipalFrom(ctx); p != nil && p.Subject != "" {
+		people.Learn(ctx, a, p)
+		out.Display = people.Display(ctx, a, p.Subject, p.Name)
+		if p.Kind == fw.KindToken {
+			out.Display = people.AdminToken
+		}
+	}
 	return out, nil
 }
