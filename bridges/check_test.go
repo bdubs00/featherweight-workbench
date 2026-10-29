@@ -181,3 +181,23 @@ func TestPeopleOfAChannel(t *testing.T) {
 		}
 	}
 }
+
+// A channel has a topic, the whole request: the topic of its open, else
+// its goal, else a title that is a whole sentence. A short title gives no
+// topic (live walk M8).
+func TestTopicOf(t *testing.T) {
+	for _, c := range []struct {
+		b    Bridge
+		want string
+	}{
+		{Bridge{Title: "Backup policy", Topic: "Write the backup policy of the lab.", Goal: "A policy."}, "Write the backup policy of the lab."},
+		{Bridge{Title: "Backup policy", Goal: "A policy for every host."}, "A policy for every host."},
+		{Bridge{Title: "Write homelab/overview.md: a one-page overview of the homelab"}, "Write homelab/overview.md: a one-page overview of the homelab"},
+		{Bridge{Title: "Backup policy"}, ""},
+	} {
+		rec := &record{Bridge: c.b}
+		if got := rec.public().Topic; got != c.want {
+			t.Errorf("the topic of %+v = %q, want %q", c.b, got, c.want)
+		}
+	}
+}

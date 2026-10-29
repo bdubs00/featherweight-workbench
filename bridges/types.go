@@ -107,8 +107,12 @@ const (
 // channel and one batch, BatchOf(ID). Members holds the seats, with the
 // presence and the activity of each when a route answers it.
 type Bridge struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// Topic is the whole request of the person, the line under the short
+	// title of the channel. A bridge that the open gave none has the
+	// goal, or a title that is a whole sentence, as its topic (public).
+	Topic    string `json:"topic,omitempty"`
 	Goal     string `json:"goal"`
 	Operator string `json:"operator"`
 	// OperatorName is a name of the operator that people read, the email
@@ -604,6 +608,7 @@ func (r *record) waits(seq uint64) bool {
 // bookkeeping, with a copy of the members.
 func (r *record) public() Bridge {
 	b := r.Bridge
+	b.Topic = topicOf(r.Bridge)
 	b.Members = append([]Member(nil), r.Members...)
 	for i := range b.Members {
 		b.Members[i].Runs = append([]string{}, b.Members[i].Runs...)
@@ -650,4 +655,36 @@ func system(event, text string) Message {
 	m := newMessage(From{Kind: KindSystem}, text)
 	m.Event = event
 	return m
+}
+
+// Bounds of the title of a channel: the manager names a channel in 2 to
+// 4 words, and a title of more words is a whole request.
+const (
+	shortTitleWords = 4
+	maxTopicRunes   = 2000
+)
+
+// topicOf is the topic of a bridge: the topic of its open, else its goal,
+// else its title when the title is longer than a short name. So a channel
+// of an older front, or of a plan that named no topic, has the line too.
+func topicOf(b Bridge) string {
+	if t := strings.TrimSpace(b.Topic); t != "" {
+		return t
+	}
+	if g := strings.TrimSpace(b.Goal); g != "" {
+		return cutRunes(g, maxTopicRunes)
+	}
+	if len(strings.Fields(b.Title)) > shortTitleWords {
+		return b.Title
+	}
+	return ""
+}
+
+// cutRunes cuts a text to n characters, with "..." when it cut.
+func cutRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return strings.TrimSpace(string(r[:n])) + "..."
 }

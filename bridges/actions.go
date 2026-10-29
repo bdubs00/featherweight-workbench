@@ -621,6 +621,7 @@ func subjectOfPrincipal(p *fw.Principal) string {
 // part, and its state, closed or open.
 type BridgePatch struct {
 	Title      *string          `json:"title,omitempty"`
+	Topic      *string          `json:"topic,omitempty"`
 	Delegation *DelegationPatch `json:"delegation,omitempty"`
 	Caps       *CapsPatch       `json:"caps,omitempty"`
 	State      *string          `json:"state,omitempty"`
@@ -645,6 +646,9 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 			return nil, false, invalid("the title of a bridge holds at most %d characters", maxTitleRunes)
 		}
 	}
+	if p.Topic != nil && utf8.RuneCountInString(strings.TrimSpace(*p.Topic)) > maxTopicRunes {
+		return nil, false, invalid("the topic of a bridge holds at most %d characters", maxTopicRunes)
+	}
 	if p.State != nil && *p.State != StateOpen && *p.State != StateClosed {
 		return nil, false, invalid("the state of a bridge is open or closed, not %q", *p.State)
 	}
@@ -656,6 +660,9 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 		changed := false
 		if p.Title != nil && title != rec.Title {
 			rec.Title, changed = title, true
+		}
+		if p.Topic != nil && strings.TrimSpace(*p.Topic) != rec.Topic {
+			rec.Topic, changed = strings.TrimSpace(*p.Topic), true
 		}
 		if p.Delegation != nil {
 			before := rec.Delegation

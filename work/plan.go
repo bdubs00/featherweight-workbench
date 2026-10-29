@@ -441,7 +441,7 @@ func MakePlan(in PlanInput) Plan {
 		p.Start.Duty = duty
 		p.Open = "#duties/" + name
 	case p.Kind == PlanTeam:
-		p.Start.Bridge = map[string]any{"title": p.Title, "goal": words, "placement": "queue", "members": seats,
+		p.Start.Bridge = map[string]any{"title": p.Title, "topic": words, "goal": words, "placement": "queue", "members": seats,
 			"caps": map[string]any{"maxTurns": 400}, "delegation": map[string]any{"report": true}}
 	default:
 		md := map[string]string{"fw.view": "task"}
