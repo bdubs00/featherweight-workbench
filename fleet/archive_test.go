@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -335,5 +336,95 @@ func TestArchiveAllReadsHeldRuns(t *testing.T) {
 	events, err := ArchiveEvents(context.Background(), front.a, "01RUN")
 	if err != nil || len(events) != 6 || events[0].Type != fw.EvRunQueued {
 		t.Fatalf("ArchiveEvents = %d, %v", len(events), err)
+	}
+}
+
+// A verdict on a result whose worker the pool replaced lands: the front
+// keeps the thumb in the archive, on the end of the run, so the facts of
+// the work say that a person checked the newest answer. The same thumb
+// twice writes one event, and a thumb down keeps its note.
+func TestArchiveKeepsAVerdict(t *testing.T) {
+	t.Setenv("FW_ATESPACE", "")
+	t.Setenv("FW_API_TOKEN", "fleet-secret")
+	bus := fw.NewMemBus()
+	front := newMember(t, bus, "front", nil, fw.WithSurfaces(native.New()))
+	start := time.Now().Add(-time.Hour).UTC()
+	node := "ax:team/pooled-0"
+	meta := map[string]string{MetaReview: "1"}
+	for _, e := range []fw.Event{
+		archiveEvent(t, "01CHECK", node, fw.EvRunQueued, 1, start, fw.RunQueuedData{Agent: "pooled", Input: "Name one use of a homelab.", Metadata: meta, Origin: "native", Principal: "alice"}),
+		archiveEvent(t, "01CHECK", node, fw.EvRunStarted, 2, start.Add(time.Second), map[string]any{}),
+		archiveEvent(t, "01CHECK", node, fw.EvRunFinished, 3, start.Add(2*time.Second), fw.RunFinishedData{Outcome: fw.OutcomeCompleted, Output: "A place to learn."}),
+	} {
+		if err := bus.Publish(context.Background(), "fw.events.team.pooled."+e.Type, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "the archive keeps the run", func() bool {
+		return front.f.arch().summaries(context.Background())["01CHECK"].Events == 3
+	})
+	p := front.f.platform
+	p.mu.Lock()
+	p.forgetMember(p.members["team/pooled-0"], time.Now())
+	p.mu.Unlock()
+	h, err := front.a.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	post := func(body string) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest("POST", srv.URL+"/v1/runs/01CHECK/reactions", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	before := front.f.arch().summaries(context.Background())["01CHECK"]
+	if !ToCheck(before.listed(), before.Work) {
+		t.Fatalf("the run does not wait for a check: %+v", before.Work)
+	}
+	for range 2 {
+		code, body := post(`{"seq":0,"reaction":"up"}`)
+		if code != http.StatusOK || !strings.Contains(body, `"archived":true`) || !strings.Contains(body, `"up":1`) {
+			t.Fatalf("Looks right = %d %s", code, body)
+		}
+	}
+	after := front.f.arch().summaries(context.Background())["01CHECK"]
+	if after.Events != 4 || after.Work.Reviewed != 1 || after.Work.LastVerdict != VerdictAccepted || ToCheck(after.listed(), after.Work) {
+		t.Fatalf("after Looks right: events %d, work %+v", after.Events, after.Work)
+	}
+	events, err := front.f.arch().events(context.Background(), "01CHECK")
+	if err != nil || len(events) != 4 {
+		t.Fatalf("events = %d, %v", len(events), err)
+	}
+	var d fw.ReactionData
+	if e := events[3]; e.Type != fw.EvRunReacted || e.Seq != 4 || e.Decode(&d) != nil || d.Seq != 3 || d.Reaction != fw.ReactionUp {
+		t.Fatalf("the reaction = %+v %+v", e, d)
+	}
+	// Needs work keeps the note, and the result reads as sent back.
+	run, err := ReactArchived(context.Background(), front.a, "01CHECK", fw.ReactionData{Reaction: fw.ReactionDown, Note: "Name two."})
+	if err != nil || run.Reactions[fw.ReactionDown] != 1 {
+		t.Fatalf("Needs work = %+v, %v", run, err)
+	}
+	if w := front.f.arch().summaries(context.Background())["01CHECK"].Work; w.LastVerdict != VerdictRejected || w.Note != "Name two." {
+		t.Fatalf("after Needs work: %+v", w)
+	}
+	// A person cannot react for another person, and a word that is no
+	// reaction does not read.
+	alice := fw.WithPrincipal(context.Background(), &fw.Principal{Subject: "alice", Kind: fw.KindUser})
+	if _, err := ReactArchived(alice, front.a, "01CHECK", fw.ReactionData{Reaction: fw.ReactionUp, By: "bob"}); !errors.Is(err, fw.ErrForbidden) {
+		t.Fatalf("a reaction for another person = %v", err)
+	}
+	if code, body := post(`{"reaction":"maybe"}`); code != http.StatusBadRequest {
+		t.Fatalf("a word that is no reaction = %d %s", code, body)
+	}
+	if _, err := ReactArchived(context.Background(), front.a, "01NONE", fw.ReactionData{Reaction: fw.ReactionUp}); !errors.Is(err, fw.ErrRunNotFound) {
+		t.Fatalf("a run that nobody holds = %v", err)
 	}
 }

@@ -44,8 +44,12 @@ var ArchiveBucket = bucket.Config{
 const ArchiveConsumer = "fw-workbench-archive"
 
 // ReadOnlyRun is the detail of the answer 409 to a write to a run of the
-// archive.
-const ReadOnlyRun = "The worker of this conversation was replaced, so the conversation is read-only. Start a new one."
+// archive, in the words of the page: a person reads it in a toast.
+const ReadOnlyRun = "The agent that held this conversation was replaced, so the conversation takes no new messages. You can still read it, and Looks right and Needs work still count. Start a new conversation to go on."
+
+// GoneRun is the detail of the answer 404 to a read of the live view or of
+// the files of a run of the archive.
+const GoneRun = "The agent that held this work was replaced, so its live view and its files are gone. You can still read the conversation."
 
 // ErrArchived means that a run lives in the archive alone, so it takes no
 // write.

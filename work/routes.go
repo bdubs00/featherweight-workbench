@@ -36,6 +36,9 @@ func init() {
 	fw.RegisterService(Service)
 	native.Extend(mount)
 	mcp.RegisterTools(tools)
+	// A thumb on a run through the route of the kernel is a verdict too,
+	// so the board of every caller reads it at once.
+	fleet.OnReaction(func(a *fw.Agent) { cacheOf(a).clear() })
 }
 
 // maxJobs bounds the jobs whose queues one board reads.
