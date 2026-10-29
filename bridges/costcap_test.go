@@ -58,7 +58,7 @@ func TestCostCapStopsTheBridge(t *testing.T) {
 		t.Fatalf("%d follow-ups past the cap of cost", n)
 	}
 	resp, body = do(t, http.MethodGet, url+"/v1/bridges/"+id+"/messages", "alice", "")
-	if resp.StatusCode != http.StatusOK || strings.Count(body, "The bridge reached its cap of $1.50: its runs cost $1.60. Its open runs stop at a limit") != 1 {
+	if resp.StatusCode != http.StatusOK || strings.Count(body, "The channel reached its cap of $1.50: its runs cost $1.60. Its open runs stop at a limit") != 1 {
 		t.Fatalf("the channel = %s", body)
 	}
 	if resp, out := do(t, http.MethodPatch, url+"/v1/bridges/"+id, "alice", `{"caps":{"maxCostUSD":-1}}`); resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, "maxCostUSD") {
@@ -80,9 +80,9 @@ func TestCostCapLineWordsSmallCaps(t *testing.T) {
 		limit, spent float64
 		want         string
 	}{
-		{1.5, 1.6, "The bridge reached its cap of $1.50: its runs cost $1.60."},
-		{0.005, 0.0071681, "The bridge reached its cap of $0.005: its runs cost $0.007."},
-		{0.3, 0.3012, "The bridge reached its cap of $0.30: its runs cost $0.30."},
+		{1.5, 1.6, "The channel reached its cap of $1.50: its runs cost $1.60."},
+		{0.005, 0.0071681, "The channel reached its cap of $0.005: its runs cost $0.007."},
+		{0.3, 0.3012, "The channel reached its cap of $0.30: its runs cost $0.30."},
 	} {
 		rec := &record{}
 		rec.Caps.MaxCostUSD = c.limit

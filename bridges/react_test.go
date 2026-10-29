@@ -359,7 +359,7 @@ func TestFire(t *testing.T) {
 		t.Fatalf("a second fire = %d", resp.StatusCode)
 	}
 	fired := withEvent(channel(t, s, it.ID), EventFired)
-	if len(fired) != 1 || fired[0].Text != "Alice fired migrator-1" {
+	if len(fired) != 1 || fired[0].Text != "Alice took migrator-1 off the channel" {
 		t.Fatalf("fired lines = %+v", fired)
 	}
 	// A broadcast reaches the others only.
@@ -474,7 +474,7 @@ func TestSeatAgainWithTheSameTask(t *testing.T) {
 		t.Fatalf("the new run has the input %q", input)
 	}
 	lines := withEvent(channel(t, s, it.ID), EventTask)
-	if len(lines) != 1 || lines[0].Text != "Alice seated migrator-1 again on its task: Migrate the logrotate module" {
+	if len(lines) != 1 || lines[0].Text != "Alice started migrator-1 again on its task: Migrate the logrotate module" {
 		t.Fatalf("task lines = %+v", lines)
 	}
 	// A double click: the new run has not shown yet, so nothing more.
@@ -543,7 +543,7 @@ func TestCloseAsksForTheReport(t *testing.T) {
 		t.Fatalf("ask = %+v", ask.Body)
 	}
 	do(t, http.MethodPatch, url+"/v1/bridges/"+it.ID, "alice", `{"state":"closed"}`)
-	if l := withEvent(channel(t, s, it.ID), EventClosed); len(l) != 1 || l[0].Text != "Alice closed the bridge" {
+	if l := withEvent(channel(t, s, it.ID), EventClosed); len(l) != 1 || l[0].Text != "Alice closed the channel" {
 		t.Fatalf("closed lines = %+v", l)
 	}
 	if len(fm.find(http.MethodPost, "/v1/runs/mgr-run-1/cancel")) != 0 {

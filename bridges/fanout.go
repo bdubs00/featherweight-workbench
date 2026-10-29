@@ -432,14 +432,14 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 	if f.Messages > rec.Caps.MaxMessages {
 		if !f.Capped {
 			f.Capped = true
-			lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d messages", rec.Caps.MaxMessages)))
+			lines = append(lines, system(EventCap, fmt.Sprintf("The channel reached its cap of %d messages", rec.Caps.MaxMessages)))
 		}
 		return seqLines(rec, lines, now), nil, nil, nil
 	}
 	if limit, turns := rec.Caps.turnCap(), turnsOf(runs); turns >= limit {
 		if !f.TurnsCapped {
 			f.TurnsCapped = true
-			lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d turns", limit)))
+			lines = append(lines, system(EventCap, fmt.Sprintf("The channel reached its cap of %d turns", limit)))
 		}
 		return seqLines(rec, lines, now), nil, nil, nil
 	}
@@ -538,7 +538,7 @@ func fanPlan(rec *record, snd sender, msg Message, text string, runs map[string]
 	}
 	if len(minuteMissed) > 0 && !f.MinuteCapped.Equal(minute) {
 		f.MinuteCapped = minute
-		lines = append(lines, system(EventCap, fmt.Sprintf("The bridge reached its cap of %d deliveries a minute, and %s did not get message %d", rec.Caps.MaxFanoutPerMinute, strings.Join(minuteMissed, ", "), msg.Seq)))
+		lines = append(lines, system(EventCap, fmt.Sprintf("The channel reached its cap of %d deliveries a minute, and %s did not get message %d", rec.Caps.MaxFanoutPerMinute, strings.Join(minuteMissed, ", "), msg.Seq)))
 	}
 	return seqLines(rec, lines, now), plan, seats, inputs
 }
@@ -826,7 +826,7 @@ func (s *Store) placeAgain(ctx context.Context, rec *record, seats []Member, inp
 func (s *Store) seatFailed(id string, seats []Member, err error) {
 	lines := make([]Message, 0, len(seats))
 	for _, m := range seats {
-		lines = append(lines, system(EventFailed, fmt.Sprintf("The server failed to seat %s again: %s", m.Handle, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
+		lines = append(lines, system(EventFailed, fmt.Sprintf("The server failed to start %s again: %s", m.Handle, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
 	}
 	_ = s.postLines(s.ctx, id, lines...)
 }

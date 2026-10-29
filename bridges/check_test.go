@@ -45,7 +45,7 @@ func TestCheck(t *testing.T) {
 	if err != nil || got.State != StateClosed || got.Verdict != VerdictAccepted || got.ClosedAt == nil {
 		t.Fatalf("Looks right = %+v, %v", got, err)
 	}
-	if l := withEvent(channel(t, s, it.ID), EventClosed); len(l) != 1 || l[0].Text != "Alice said that the result looks right and closed the bridge" {
+	if l := withEvent(channel(t, s, it.ID), EventClosed); len(l) != 1 || l[0].Text != "Alice said that the result looks right and closed the channel" {
 		t.Fatalf("the line of the close = %+v", l)
 	}
 	// A closed bridge takes no note.

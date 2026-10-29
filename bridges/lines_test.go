@@ -66,7 +66,7 @@ func TestSeatThatLostItsRun(t *testing.T) {
 	s.poll(ctx)
 	s.poll(ctx)
 	lost := withEvent(channel(t, s, it.ID), EventLost)
-	if len(lost) != 2 || lost[0].Text != "migrator-1 lost its run r-mig: no worker of the fleet holds it" || lost[1].Text != "reviewer lost its run r-rev: no worker of the fleet holds it" || lost[0].From.Kind != KindSystem {
+	if len(lost) != 2 || lost[0].Text != "migrator-1 lost its run r-mig: the fleet no longer holds it" || lost[1].Text != "reviewer lost its run r-rev: the fleet no longer holds it" || lost[0].From.Kind != KindSystem {
 		t.Fatalf("lost lines = %+v", lost)
 	}
 	if got := presenceOf(t, url, it.ID); got["migrator-1"] != PresenceError || got["reviewer"] != PresenceIdle {

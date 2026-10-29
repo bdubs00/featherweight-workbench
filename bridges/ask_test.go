@@ -397,7 +397,7 @@ func TestCloseEndsTheQuestions(t *testing.T) {
 			line = e
 		}
 	}
-	if !strings.HasSuffix(line.Text, "closed the bridge; the question of reviewer ends without an answer") {
+	if !strings.HasSuffix(line.Text, "closed the channel; the question of reviewer ends without an answer") {
 		t.Fatalf("the line of the close = %q", line.Text)
 	}
 	rec, _, err := s.b.get(context.Background(), it.ID)
