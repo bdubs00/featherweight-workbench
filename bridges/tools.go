@@ -622,7 +622,7 @@ func (t *toolSet) open(ctx context.Context, _ *sdk.CallToolRequest, in OpenSpec)
 	if err != nil {
 		return toolError(err), nil, nil
 	}
-	return mcp.Result(fmt.Sprintf("Opened the bridge %s %q for %s with %s, placement %s. Follow it with bridge_read (bridge %s). Tell the person that they follow the work in the bridge %q on the page of bossmode. Nothing wakes your run when the bridge finishes, so do not promise a later report.", rec.ID, rec.Title, s.personName(by.Subject, ""), plural(len(rec.Members), "member", "members"), rec.Placement, rec.ID, rec.Title), it), nil, nil
+	return mcp.Result(fmt.Sprintf("Opened the bridge %s %q for %s with %s, placement %s. The channel starts with a post of yours that names each member and its task, so do not post that again. Follow it with bridge_read (bridge %s). Tell the person that they follow the work in the bridge %q on the page of bossmode. Nothing wakes your run when the bridge finishes, so do not promise a later report.", rec.ID, rec.Title, s.personName(by.Subject, ""), plural(len(rec.Members), "member", "members"), rec.Placement, rec.ID, rec.Title), it), nil, nil
 }
 
 // delegated checks that the run of a call can change its bridge for the

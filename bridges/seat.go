@@ -246,6 +246,15 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 		seat.Budget = m.Budget
 		seat.Seatings = 1
 	}
+	// A bridge that a run opens through bridge_open starts with a post of
+	// that run, which says what it did, before the line that the bridge
+	// opened. The page folds the system lines of the opening under it.
+	var first []Message
+	if mgr != nil {
+		post := newMessage(From{Kind: KindAgent, Handle: HandleManager, Run: mgr.Run}, openerText(rec.Members))
+		post.Seq, post.At = rec.alloc(), now
+		first = append(first, post)
+	}
 	switch placement {
 	case PlacementQueue:
 		for _, m := range rec.Members {
@@ -265,7 +274,7 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 	if err := s.b.create(ctx, rec); err != nil {
 		return nil, err
 	}
-	s.land(ctx, rec.ID, opened)
+	s.land(ctx, rec.ID, append(first, opened)...)
 	for _, m := range rec.Members {
 		emitMember(rec.ID, Member{Handle: m.Handle, Agent: m.Agent, Pool: m.Pool, Task: m.Task, Runs: []string{}, Presence: PresenceWaiting})
 	}
@@ -274,6 +283,48 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 	}
 	s.log.Info("bridges: a bridge is open", "bridge", rec.ID, "placement", placement, "members", len(rec.Members), "operator", rec.Operator)
 	return rec, nil
+}
+
+// openerText is the post of the run that opened a bridge through
+// bridge_open: what it did, from the open request alone, with no model
+// call. It names each agent that it put on the channel with the first
+// line of its task.
+func openerText(members []Member) string {
+	var b strings.Builder
+	b.WriteString("I opened this channel and put " + countWords(len(members), "agent", "agents") + " on it.")
+	for _, m := range members {
+		b.WriteString("\n- **" + m.Handle + "**")
+		if task := oneLine(firstLineOf(m.Task), 200); task != "" {
+			b.WriteString(": " + task)
+		}
+	}
+	return b.String()
+}
+
+// firstLineOf returns the first line of a text that holds words.
+func firstLineOf(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// numberWords are the numbers that a sentence writes in words.
+var numberWords = []string{"no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"}
+
+// countWords writes a count with its noun, the small numbers in words,
+// such as two agents.
+func countWords(n int, one, many string) string {
+	noun := many
+	if n == 1 {
+		noun = one
+	}
+	if n >= 0 && n < len(numberWords) {
+		return numberWords[n] + " " + noun
+	}
+	return fmt.Sprintf("%d %s", n, noun)
 }
 
 // plural writes a number with the singular or the plural noun.

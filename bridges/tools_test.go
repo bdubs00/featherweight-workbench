@@ -266,6 +266,17 @@ func TestToolsOfTheManager(t *testing.T) {
 	if it.Operator != "alice" || it.Manager == nil || it.Manager.Run != "mgr-conv" || it.Manager.Member != "default/crew-0" || len(it.Members) != 2 {
 		t.Fatalf("opened = %+v", it.Bridge)
 	}
+	if !strings.Contains(textOf(res), "do not post that again") {
+		t.Fatalf("open = %s", textOf(res))
+	}
+	// The channel starts with the post of the run that opened it, from the
+	// open request alone, and then the line that the bridge opened.
+	ch := channel(t, s, it.ID)
+	want := "I opened this channel and put two agents on it.\n- **migrator-1**: Migrate nginx\n- **reviewer**: Review nginx"
+	if len(ch) < 2 || ch[0].From != (From{Kind: KindAgent, Handle: HandleManager, Run: "mgr-conv"}) || ch[0].Text != want || ch[0].Seq != 1 ||
+		ch[1].Event != EventOpened || ch[1].Seq != 2 {
+		t.Fatalf("channel = %+v", ch)
+	}
 	// carol cannot operate the agents, so her manager opens nothing.
 	if res := callTool(t, cs, ToolOpen, plan, metaOf("mgr-carol", "manager", "carol")); !res.IsError || !strings.Contains(textOf(res), "Forbidden") {
 		t.Fatalf("open for carol = %s", textOf(res))
@@ -533,5 +544,21 @@ func TestListAdmin(t *testing.T) {
 	got := list("carol")
 	if len(got) != 3 || !strings.Contains(strings.Join(got, ","), "Seeded") || !strings.Contains(strings.Join(got, ","), "Private") {
 		t.Errorf("carol lists %v", got)
+	}
+}
+
+// The post of the opener names each agent with the first line of its task,
+// and writes a small count in words.
+func TestOpenerText(t *testing.T) {
+	one := openerText([]Member{{Handle: "scribe", Task: "\n  Draft the release notes of 2.4.\nUse the merged pull requests."}})
+	if one != "I opened this channel and put one agent on it.\n- **scribe**: Draft the release notes of 2.4." {
+		t.Fatalf("one = %q", one)
+	}
+	many := make([]Member, 12)
+	for i := range many {
+		many[i] = Member{Handle: fmt.Sprintf("a-%d", i)}
+	}
+	if got := openerText(many); !strings.HasPrefix(got, "I opened this channel and put 12 agents on it.\n- **a-0**\n") {
+		t.Fatalf("many = %q", got)
 	}
 }
