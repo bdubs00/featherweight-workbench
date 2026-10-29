@@ -268,13 +268,13 @@ func TestWorkRework(t *testing.T) {
 		ev(4, fw.EvMessageReceived, at(10), fw.MessageReceivedData{Role: fw.RoleUser, Origin: "http", By: "alice"}),
 	)
 	run.State = fw.StateRunning
-	if w := WorkOf(events); ToCheck(run, w) {
-		t.Fatalf("a run that works again is no result to check: %+v", w)
+	if w := WorkOf(events); ToCheck(run, w) || !w.Reworking {
+		t.Fatalf("a run that works again is no result to check, and it reworks: %+v", w)
 	}
 	run.State = fw.StateCompleted
 	events = append(events, ev(5, fw.EvRunFinished, at(12), fw.RunFinishedData{Outcome: "completed"}))
 	w := WorkOf(events)
-	if !ToCheck(run, w) || !Again(w) || w.Note != "Name the competitor on each line." || w.Verdict != VerdictRejected || w.Rework != 1 {
+	if !ToCheck(run, w) || !Again(w) || w.Note != "Name the competitor on each line." || w.Verdict != VerdictRejected || w.Rework != 1 || w.Reworking {
 		t.Fatalf("the new answer: to check %v, again %v, %+v", ToCheck(run, w), Again(w), w)
 	}
 	events = append(events, ev(6, fw.EvRunReacted, at(15), fw.ReactionData{Seq: 5, Reaction: fw.ReactionUp, By: "alice"}))

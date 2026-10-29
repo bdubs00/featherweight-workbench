@@ -159,8 +159,8 @@ type RestView interface {
 func (rl *Relay) Take(w http.ResponseWriter, r *http.Request) bool {
 	if r.Pattern == routeReactions && r.Method == http.MethodPost {
 		// A reaction can be a verdict on a result, so the views that
-		// keep a copy of the board forget it (OnReaction).
-		defer reacted(rl.a)
+		// keep a copy of the board forget it (OnChange).
+		defer changed(rl.a)
 	}
 	if r.Method == http.MethodPost && r.URL.Path == "/v1/runs" && !rl.takeContinues(w, r) {
 		return true // the problem of a body with continues (continues.go)

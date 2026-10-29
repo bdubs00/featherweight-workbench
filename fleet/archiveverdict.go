@@ -147,28 +147,31 @@ func (f *Fleet) allowArchived(ctx context.Context, run *fw.Run, action string) e
 	return f.decide(ctx, rec, run.Agent, run, action)
 }
 
-// onReaction holds the functions that run after each reaction that a
-// person sends through the relay: a thumb is a verdict, so a package that
-// keeps a copy of the board, such as work, forgets it at once.
-var onReaction struct {
+// onChange holds the functions that run after a change that moves a card
+// of the board: each reaction that a person sends through the relay,
+// because a thumb is a verdict, and each end and each message of a run
+// that the archive keeps, such as the new answer after Needs work. A
+// package that keeps a copy of the board, such as work, forgets it then.
+var onChange struct {
 	mu sync.Mutex
 	fs []func(*fw.Agent)
 }
 
-// OnReaction adds f to the functions that run after each request of
-// POST /v1/runs/{id}/reactions that the relay sees, whatever its answer.
-// A package calls it from init.
-func OnReaction(f func(*fw.Agent)) {
-	onReaction.mu.Lock()
-	defer onReaction.mu.Unlock()
-	onReaction.fs = append(onReaction.fs, f)
+// OnChange adds f to the functions that run after each request of
+// POST /v1/runs/{id}/reactions that the relay sees, whatever its answer,
+// and after each fw.run.finished and fw.message.received that the archive
+// keeps. A package calls it from init.
+func OnChange(f func(*fw.Agent)) {
+	onChange.mu.Lock()
+	defer onChange.mu.Unlock()
+	onChange.fs = append(onChange.fs, f)
 }
 
-// reacted runs the functions of OnReaction for a.
-func reacted(a *fw.Agent) {
-	onReaction.mu.Lock()
-	fs := onReaction.fs
-	onReaction.mu.Unlock()
+// changed runs the functions of OnChange for a.
+func changed(a *fw.Agent) {
+	onChange.mu.Lock()
+	fs := onChange.fs
+	onChange.mu.Unlock()
 	for _, f := range fs {
 		f(a)
 	}

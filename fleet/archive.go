@@ -510,7 +510,18 @@ func (f *Fleet) startArchive(ctx context.Context, cfg *fw.Config, egress string)
 		// get them (backfill.go).
 		a.summaries(f.ctx)
 		go a.backfill(f.ctx)
-		stop, err := OpenArchiveSource(f.ctx, f, cfg, egress, func(e fw.Event) error { return a.add(f.ctx, e) })
+		stop, err := OpenArchiveSource(f.ctx, f, cfg, egress, func(e fw.Event) error {
+			if err := a.add(f.ctx, e); err != nil {
+				return err
+			}
+			if e.Type == fw.EvRunFinished || e.Type == fw.EvMessageReceived {
+				// An end and a follow-up move a card of the board, such as
+				// the new answer after Needs work, so the board forgets
+				// its copy (OnChange).
+				changed(f.a)
+			}
+			return nil
+		})
 		if err != nil {
 			f.log.Warn("fleet: the archive reads no new event", "error", err)
 			return

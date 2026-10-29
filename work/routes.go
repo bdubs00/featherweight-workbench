@@ -37,8 +37,9 @@ func init() {
 	native.Extend(mount)
 	mcp.RegisterTools(tools)
 	// A thumb on a run through the route of the kernel is a verdict too,
-	// so the board of every caller reads it at once.
-	fleet.OnReaction(func(a *fw.Agent) { cacheOf(a).clear() })
+	// and the end of a run moves its card, such as the new answer after
+	// Needs work, so the board of every caller reads it at once.
+	fleet.OnChange(func(a *fw.Agent) { cacheOf(a).clear() })
 }
 
 // maxJobs bounds the jobs whose queues one board reads.
@@ -103,7 +104,10 @@ func Fresh(ctx context.Context, a *fw.Agent, now time.Time) (Answer, error) {
 // run of the archive when the archive saw its end: after a start of the
 // front, the view knows the run of a Task that sleeps from the index of the
 // runs alone, without its title, its output, its metadata, or its done,
-// and the card then lost its title and its verdict.
+// and the card then lost its title and its verdict. A run whose archive
+// saw later events than the view keeps the run of the archive too: the
+// stream carries an event at once, and the view reads its members every
+// few seconds, so after Needs work the view still holds the end before.
 func mergeRuns(facts []fleet.WorkRun, live []*fw.Run) []Run {
 	var out []Run
 	byID := map[string]int{}
@@ -120,7 +124,7 @@ func mergeRuns(facts []fleet.WorkRun, live []*fw.Run) []Run {
 		case !ok:
 			byID[r.ID] = len(out)
 			out = append(out, Run{Run: r})
-		case r.State.Terminal() && out[i].Run.State.Terminal() && out[i].Run.Seq >= r.Seq:
+		case r.State.Terminal() && out[i].Run.State.Terminal() && out[i].Run.Seq >= r.Seq, out[i].Run.Seq > r.Seq:
 			out[i].Lost = false
 		default:
 			out[i].Run, out[i].Lost = r, false
