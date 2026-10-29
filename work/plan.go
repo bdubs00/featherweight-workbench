@@ -344,9 +344,9 @@ func MakePlan(in PlanInput) Plan {
 		}
 		if p.Kind == PlanTeam {
 			if p.Cost.High > 0 {
-				p.Cost.Basis += " " + spanWords("The whole team", p.Cost.Low, p.Cost.High)
+				p.Cost.Basis += " " + spanWords("All its agents together", p.Cost.Low, p.Cost.High)
 			}
-			p.Cost.Basis += " The team stops at your limit."
+			p.Cost.Basis += " The channel stops at your limit."
 		}
 	}
 
@@ -455,7 +455,7 @@ func MakePlan(in PlanInput) Plan {
 		}
 		p.Start.Run = &PlanRun{Member: member, Body: map[string]any{"agent": agent, "input": words, "title": p.Title, "metadata": md}}
 		if member == "" {
-			p.Problems = append(p.Problems, fmt.Sprintf("agent: No worker runs %s now.", byName[agent].Name))
+			p.Problems = append(p.Problems, fmt.Sprintf("agent: Nothing in the fleet runs %s now.", byName[agent].Name))
 		}
 	}
 	return p
@@ -867,7 +867,7 @@ func gapsOf(w, agent string, byName map[string]Candidate) []string {
 		}
 		seen[h] = true
 		if !reaches(c.Hosts, h) {
-			gaps = append(gaps, fmt.Sprintf("%s cannot reach %s: its workers reach only the hosts that the server allows. The person who runs the server adds a host.", c.Name, h))
+			gaps = append(gaps, fmt.Sprintf("%s cannot reach %s: it reaches only the hosts that the server allows. The person who runs the server adds a host.", c.Name, h))
 		}
 	}
 	return gaps

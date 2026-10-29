@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,21 @@ import (
 	"github.com/bdubs00/featherweight-workbench/work"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// oldWords matches the words that a person no longer reads: the page says
+// channel, agent, and job.
+var oldWords = regexp.MustCompile(`(?i)\b(bridges?|seats?|seated|workers?|duty|duties|teams?)\b`)
+
+// saysChannelAndJob fails the test for an item whose text says bridge,
+// seat, worker, duty, or team.
+func saysChannelAndJob(t *testing.T, items []Item) {
+	t.Helper()
+	for _, it := range items {
+		if w := oldWords.FindString(it.Text); w != "" {
+			t.Errorf("the text of an item of the kind %s says %q: %q", it.Kind, w, it.Text)
+		}
+	}
+}
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
@@ -180,9 +196,10 @@ func TestInbox(t *testing.T) {
 	if fail.Duty != "report" || !strings.Contains(fail.Text, "The queue did not take the run") {
 		t.Fatalf("the failure = %+v", fail)
 	}
-	if paused.Duty != "report" || !strings.Contains(paused.Text, "The duty report paused itself: 3 runs failed in a row") {
+	if paused.Duty != "report" || !strings.Contains(paused.Text, "The job report paused itself: 3 runs failed in a row") {
 		t.Fatalf("the paused duty = %+v", paused)
 	}
+	saysChannelAndJob(t, ans.Items)
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/inbox", nil)
 	req.Header.Set("Authorization", "Bearer alice")
@@ -511,6 +528,7 @@ func TestSeatItems(t *testing.T) {
 	}
 	seen := map[string]bool{"r5": true}
 	got := seatItems(waiting, seen, map[string]bool{"r3": true})
+	saysChannelAndJob(t, got)
 	if len(got) != 2 || got[0].Kind != KindQuestion || got[0].Text != "writer asks in Exporter: Which port?" || got[1].Kind != KindApproval || got[1].Approval != "ap4" || !seen["r4"] {
 		t.Fatalf("the items of the seats = %+v", got)
 	}
@@ -530,6 +548,7 @@ func TestTeamAndNoteItems(t *testing.T) {
 		{ID: "run:R1", Kind: work.KindConversation, Title: "A draft", Stage: work.StageReview, Next: work.NextYou, Links: work.Links{Run: "R1"}},
 	}}
 	got := teamItems(board)
+	saysChannelAndJob(t, got)
 	if len(got) != 1 || got[0] != (Item{Kind: KindResult, Bridge: "B1", Agent: "writer", Since: at, Text: "Release notes: the agents finished, and the result waits for a check."}) {
 		t.Fatalf("the teams to check = %+v", got)
 	}

@@ -48,7 +48,7 @@ func TestManagerDecides(t *testing.T) {
 	f.fleet.set(&fw.Run{ID: q.ID, Agent: "manager", State: fw.StateCompleted, Output: "```json\n{\"verdict\": \"allow\", \"reason\": \"The push  serves the report.\"}\n```"})
 	f.pass(t)
 	decided, notes, _, _ := f.fleet.lists()
-	if !slices.Equal(decided, []string{run + "/A1=allow"}) || notes[0] != "The manager decided for the duty report while its owner was away: The push serves the report." {
+	if !slices.Equal(decided, []string{run + "/A1=allow"}) || notes[0] != "The manager decided for the job report while its owner was away: The push serves the report." {
 		t.Fatalf("decided = %v, notes = %v", decided, notes)
 	}
 	got := f.decided(t, "report")
@@ -132,7 +132,7 @@ func TestTimeoutCancels(t *testing.T) {
 	run := f.duty(t, "report", &duties.WhileAway{Decider: "nobody", Timeout: "1h", Then: "cancel"})
 	f.asks(run, "report", "A1", "git.push", "rule: ask git.*", nil)
 	f.pass(t)
-	if w := entryOf(t, b, run, "A1"); w.Route != RoutePerson || w.Why != "The duty says that nobody decides while you are away." || !w.Told {
+	if w := entryOf(t, b, run, "A1"); w.Route != RoutePerson || w.Why != "The job says that nobody decides while you are away." || !w.Told {
 		t.Fatalf("the entry = %+v", w)
 	}
 	c.Add(time.Hour)
@@ -180,7 +180,7 @@ func TestNobodyDecidesByDefault(t *testing.T) {
 	run := f.duty(t, "report", nil)
 	f.asks(run, "report", "A1", "git.push", "rule: ask git.*", nil)
 	f.pass(t)
-	if w := entryOf(t, b, run, "A1"); w.Route != RoutePerson || w.Why != "The duty says that nobody decides while you are away." || w.Timeout != "2h" {
+	if w := entryOf(t, b, run, "A1"); w.Route != RoutePerson || w.Why != "The job says that nobody decides while you are away." || w.Timeout != "2h" {
 		t.Fatalf("the entry = %+v", w)
 	}
 	if _, _, _, asked := f.fleet.lists(); len(asked) != 0 {

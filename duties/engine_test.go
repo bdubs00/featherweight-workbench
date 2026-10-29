@@ -202,7 +202,7 @@ func TestOverlap(t *testing.T) {
 	if s := f.states(t, OverlapSkip); !slices.Equal(s, []string{StateSkipped, StateSkipped, "running"}) {
 		t.Fatalf("skip = %v", s)
 	}
-	if h := f.history(t, OverlapSkip); !strings.Contains(h[0].Reason, "had not ended, and the overlap of the duty is skip") {
+	if h := f.history(t, OverlapSkip); !strings.Contains(h[0].Reason, "had not ended, and the overlap of the job is skip") {
 		t.Fatalf("the reason of a skip = %q", h[0].Reason)
 	}
 	if s := f.states(t, OverlapQueue); !slices.Equal(s, []string{StateSkipped, StateWaiting, "running"}) {
@@ -267,7 +267,7 @@ func TestRetriesAndBreaker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !v.Paused || v.State.FailuresInRow != 3 || !strings.Contains(v.State.PausedReason, "3 runs failed in a row, so the duty paused itself. The last one: The run failed: the model refused again") {
+	if !v.Paused || v.State.FailuresInRow != 3 || !strings.Contains(v.State.PausedReason, "3 runs failed in a row, so the job paused itself. The last one: The run failed: the model refused again") {
 		t.Fatalf("after three failures = paused %v, %+v", v.Paused, v.State)
 	}
 	if k := allNotices.kinds(f.a, "flaky"); !slices.Equal(k, []string{NoticeFailed, NoticeFailed, NoticeFailed, NoticePaused}) {
@@ -349,7 +349,7 @@ func TestDailyCap(t *testing.T) {
 	f.clock.Set(start.Add(6 * time.Hour).Add(time.Second))
 	f.pass(t)
 	h := f.history(t, "capped")
-	if h[0].State != StateSkipped || h[1].State != StateSkipped || !strings.Contains(h[0].Reason, "The duty spent $1.10 today, and its daily cap is $1.00, so it skips until midnight, New York time.") {
+	if h[0].State != StateSkipped || h[1].State != StateSkipped || !strings.Contains(h[0].Reason, "The job spent $1.10 today, and its daily cap is $1.00, so it skips until midnight, New York time.") {
 		t.Fatalf("history = %+v", h[:2])
 	}
 	if n := len(f.queue.list()); n != 2 {
@@ -384,7 +384,7 @@ func TestKillSwitch(t *testing.T) {
 		t.Fatalf("the switch let %d runs start", n)
 	}
 	out, err := f.s.RunNow(as("alice"), "report")
-	if err != nil || out.Skipped != "Every duty is paused: storm" {
+	if err != nil || out.Skipped != "Every job is paused: storm" {
 		t.Fatalf("run now under the switch = %+v, %v", out, err)
 	}
 	list, _ := f.s.List(as("carol"))
@@ -492,7 +492,7 @@ func TestStaleAndLost(t *testing.T) {
 	f.clock.Set(t0.Add(lostAfter + time.Hour))
 	f.pass(t)
 	h := f.history(t, "report")
-	if h[0].State != StateLost || !strings.Contains(h[0].Reason, "No worker reported the run R-GONE for 2h") {
+	if h[0].State != StateLost || !strings.Contains(h[0].Reason, "Nothing in the fleet reported the run R-GONE for 2h") {
 		t.Fatalf("a run that nobody reports = %+v", h[0])
 	}
 }
@@ -672,7 +672,7 @@ func TestMaxWorking(t *testing.T) {
 		if i < maxWorking && out.Run == "" {
 			t.Fatalf("start %d = %+v", i, out)
 		}
-		if i >= maxWorking && out.Skipped != "40 runs of the duty work now, the most at one time." {
+		if i >= maxWorking && out.Skipped != "40 runs of the job work now, the most at one time." {
 			t.Fatalf("start %d = %+v", i, out)
 		}
 	}

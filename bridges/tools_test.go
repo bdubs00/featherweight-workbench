@@ -312,7 +312,7 @@ func TestToolsOfTheManager(t *testing.T) {
 		t.Fatalf("remove = %s", textOf(res))
 	}
 	eventually(t, "the cancel reaches the run", func() bool { return len(fm.find(http.MethodPost, "/v1/runs/r-rev/cancel")) == 1 })
-	if l := withEvent(channel(t, s, it.ID), EventFired); len(l) != 1 || l[0].Text != "the manager for Alice fired reviewer" {
+	if l := withEvent(channel(t, s, it.ID), EventFired); len(l) != 1 || l[0].Text != "the manager for Alice took reviewer off the channel" {
 		t.Fatalf("fired = %+v", l)
 	}
 	res = callTool(t, cs, ToolAddMember, map[string]any{"bridge": it.ID, "handle": "reviewer-2", "agent": "reviewer", "task": "Review again"}, metaOf("mgr-conv", "manager", "alice"))

@@ -467,7 +467,7 @@ func TestGiveTaskSeatsANotStartedSeat(t *testing.T) {
 	if c := x.seatsOf("mgr-run-1")["migrator-1"]; !strings.Contains(c, `"[seat migrator-1] Migrate cron"`) {
 		t.Fatalf("the follow-up = %q", c)
 	}
-	if l := withEvent(channel(t, x.s, x.id), EventTask); len(l) != 1 || l[0].Text != "Alice seated migrator-1 again on its task: Migrate cron" {
+	if l := withEvent(channel(t, x.s, x.id), EventTask); len(l) != 1 || l[0].Text != "Alice started migrator-1 again on its task: Migrate cron" {
 		t.Fatalf("task lines = %+v", l)
 	}
 	// A double click seats nothing more.

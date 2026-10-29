@@ -148,7 +148,7 @@ func TestTurnCapBoundsTheBridge(t *testing.T) {
 		t.Fatalf("%d follow-ups past the cap of turns", n)
 	}
 	resp, body := do(t, http.MethodGet, url+"/v1/bridges/"+id+"/messages", "alice", "")
-	if resp.StatusCode != http.StatusOK || strings.Count(body, "The bridge reached its cap of 10 turns") != 1 {
+	if resp.StatusCode != http.StatusOK || strings.Count(body, "The channel reached its cap of 10 turns") != 1 {
 		t.Fatalf("the channel = %s", body)
 	}
 	if resp, out := do(t, http.MethodPatch, url+"/v1/bridges/"+id, "alice", `{"caps":{"maxTurns":100}}`); resp.StatusCode != http.StatusOK || !strings.Contains(out, `"maxTurns":100`) {

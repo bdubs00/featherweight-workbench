@@ -356,7 +356,7 @@ func dutyItems(ctx context.Context, svc *duties.Service, subject string, now tim
 			continue
 		}
 		if d.Paused && r.PausedReason != "" && d.Owner == subject {
-			out = append(out, Item{Kind: KindPaused, Duty: d.Name, Agent: d.Agent, Text: fmt.Sprintf("The duty %s paused itself: %s", d.Name, r.PausedReason), Since: r.Changed})
+			out = append(out, Item{Kind: KindPaused, Duty: d.Name, Agent: d.Agent, Text: fmt.Sprintf("The job %s paused itself: %s", d.Name, r.PausedReason), Since: r.Changed})
 		}
 		starts, err := svc.Starts(ctx, d.Name, now.Add(-FailuresFor))
 		if err != nil {
@@ -366,9 +366,9 @@ func dutyItems(ctx context.Context, svc *duties.Service, subject string, now tim
 			if e.State != duties.StateFailed {
 				continue
 			}
-			text := fmt.Sprintf("A run of the duty %s failed.", d.Name)
+			text := fmt.Sprintf("A run of the job %s failed.", d.Name)
 			if e.Reason != "" {
-				text = fmt.Sprintf("The duty %s: %s", d.Name, oneLine(e.Reason, 300))
+				text = fmt.Sprintf("The job %s: %s", d.Name, oneLine(e.Reason, 300))
 			}
 			out = append(out, Item{Kind: KindFailure, Run: e.Run, Duty: d.Name, Agent: d.Agent, Text: text, Since: e.At})
 		}

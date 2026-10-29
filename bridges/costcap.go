@@ -47,7 +47,7 @@ func costCapLine(rec *record, runs map[string]*fw.Run) (*Message, bool) {
 	}
 	rec.Fan.CostCapped = true
 	cap, cost := capDollars(limit, spent)
-	m := system(EventCap, fmt.Sprintf("The bridge reached its cap of %s: its runs cost %s. Its open runs stop at a limit", cap, cost))
+	m := system(EventCap, fmt.Sprintf("The channel reached its cap of %s: its runs cost %s. Its open runs stop at a limit", cap, cost))
 	return &m, true
 }
 

@@ -3,6 +3,7 @@ package duties
 import (
 	"context"
 	"log/slog"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -98,8 +99,8 @@ func TestEventWords(t *testing.T) {
 	}{
 		{Event{Kind: EventQuestionWaiting, After: "1h"}, "When a question waits longer than 1 hour."},
 		{Event{Kind: EventQuestionWaiting, After: "90m"}, "When a question waits longer than 1 hour and 30 minutes."},
-		{Event{Kind: EventBridgeClosed, After: "30m"}, "When a bridge closes. The duty starts 30 minutes later."},
-		{Event{Kind: EventCapReached}, "When a duty reaches its daily cost cap."},
+		{Event{Kind: EventBridgeClosed, After: "30m"}, "When a channel closes. The job starts 30 minutes later."},
+		{Event{Kind: EventCapReached}, "When a job reaches its daily cost cap."},
 		{Event{Kind: EventPageChanged, Path: "walk/", After: "0"}, "When a page of the wiki under walk/ changes."},
 		{Event{Kind: EventRunFailed, Agent: "triage"}, "When a run of triage fails after its retries."},
 		{Event{Kind: "custom.kind", Agent: "triage"}, "When the event custom.kind comes, for the agent triage."},
@@ -131,5 +132,47 @@ func TestReadbackNamesTheAgentInWords(t *testing.T) {
 	}
 	if got := f.s.agentWords(context.Background(), "reviewer"); got != "reviewer" {
 		t.Fatalf("an agent without a display name = %q", got)
+	}
+}
+
+// oldWords matches the words that a person no longer reads: the page says
+// job and channel. paths matches a path or an address, such as
+// /v1/duties/x/call, which is no word.
+var (
+	oldWords = regexp.MustCompile(`(?i)\b(bridges?|seats?|seated|workers?|duty|duties|teams?)\b`)
+	paths    = regexp.MustCompile(`\S*/\S*`)
+)
+
+// The readback of a job, its part for developers, its row While you are
+// away, and the reasons of its history say job and channel, never duty,
+// bridge, seat, worker, or team.
+func TestWordsSayJob(t *testing.T) {
+	check := &CheckFirst{Look: Look{HTTP: &LookHTTP{URL: "https://example.com/q?key=1"}}, Where: []Where{{Field: "state", Is: []byte(`"open"`)}}, Key: "id", Wake: Wake{When: WakeNew}}
+	notify := &Notify{Result: []string{"owner", "bob@example.com"}, ResultWhen: ResultFound}
+	duties := []Duty{
+		{Name: "daily", Agent: "triage", When: When{Schedule: scheduleOf("daily", "09:00")}, CheckFirst: check, Notify: notify, Review: true},
+		{Name: "bearer", Agent: "triage", When: When{Webhook: &Webhook{Auth: WebhookAuth{Mode: "bearer"}, Key: "ticket_id"}}, Notify: &Notify{Result: []string{"owner"}}},
+		{Name: "hmac", Agent: "triage", When: When{Webhook: &Webhook{Auth: WebhookAuth{Mode: "hmac", Header: "X-Gitea-Signature"}}}, CheckFirst: &CheckFirst{Look: Look{Tool: "github.list_issues"}, Wake: Wake{When: WakeAtLeast, Count: 3}}},
+		{Name: "open", Agent: "triage", When: When{Webhook: &Webhook{Auth: WebhookAuth{Mode: "none"}}}, Review: true},
+	}
+	for _, kind := range []string{EventBridgeClosed, EventRunFailed, EventQuestionWaiting, EventPageChanged, EventRoutineReady, EventCapReached, "custom.kind"} {
+		duties = append(duties, Duty{Name: kind, Agent: "triage", When: When{Event: &Event{Kind: kind, Agent: "triage", Path: "walk/", After: "30m"}}})
+	}
+	var texts []string
+	for _, d := range duties {
+		texts = append(texts, readback(&d, "alice"), readback(&d, ""), details(&d), capWords(&d, 2))
+	}
+	texts = append(texts,
+		AwayWords(nil),
+		AwayWords(&WhileAway{Decider: DeciderManager, Timeout: "90m", Then: "cancel"}),
+		lostWords("R-1"),
+		failReason("budget exceeded: maxCostUSD"),
+		failReason("the model refused"),
+		reviewWords, youReview,
+	)
+	for _, text := range texts {
+		if w := oldWords.FindString(paths.ReplaceAllString(text, "")); w != "" {
+			t.Errorf("a text for a person says %q: %q", w, text)
+		}
 	}
 }

@@ -225,7 +225,7 @@ func webhookDetails(name string, w *Webhook) string {
 	s := "Another app calls POST /v1/duties/" + name + "/call"
 	switch w.Auth.Mode {
 	case "bearer":
-		s += " with the bearer token of the duty."
+		s += " with the bearer token of the job."
 	case "hmac":
 		s += " with the HMAC-SHA256 signature of the body in the header " + w.Auth.Header + "."
 	default:
@@ -308,7 +308,7 @@ func eventWords(e *Event) string {
 	subject, verb := "", ""
 	switch e.Kind {
 	case EventBridgeClosed:
-		subject, verb = "a bridge", "closes"
+		subject, verb = "a channel", "closes"
 	case EventRunFailed:
 		subject, verb = "a run", "fails after its retries"
 	case EventQuestionWaiting:
@@ -318,7 +318,7 @@ func eventWords(e *Event) string {
 	case EventRoutineReady:
 		subject, verb = "a routine", "is ready for a sign-off"
 	case EventCapReached:
-		subject, verb = "a duty", "reaches its daily cost cap"
+		subject, verb = "a job", "reaches its daily cost cap"
 	}
 	after := time.Duration(0)
 	if strings.TrimSpace(e.After) != "" {
@@ -349,7 +349,7 @@ func eventWords(e *Event) string {
 		// The start comes only while the question still waits.
 		return s + " longer than " + spanWords(after) + "."
 	}
-	return s + ". The duty starts " + spanWords(after) + " later."
+	return s + ". The job starts " + spanWords(after) + " later."
 }
 
 // AwayFor is the timeout of whileAway of a duty that names none, as the

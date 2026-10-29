@@ -195,7 +195,7 @@ func (s *Store) addMember(ctx context.Context, id string, spec SeatSpec, by *fw.
 	s.land(ctx, id, line)
 	m := *rec.member(spec.Handle)
 	if err := s.place(ctx, rec, []Member{m}, nil); err != nil {
-		_ = s.postLines(ctx, id, system(EventFailed, fmt.Sprintf("The server failed to seat %s: %s", m.Handle, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
+		_ = s.postLines(ctx, id, system(EventFailed, fmt.Sprintf("The server failed to start %s: %s", m.Handle, oneLine(strings.TrimPrefix(err.Error(), "bridges: "), 300))))
 	}
 	out := s.memberOf(ctx, rec, m.Handle)
 	emitMember(id, out)
@@ -240,7 +240,7 @@ func (s *Store) place(ctx context.Context, rec *record, seats []Member, inputs m
 				return s.send(ctx, mgr, content, fw.MessageFrom{Kind: fw.FromPerson, Name: op, Member: HandleManager}, false)
 			},
 			fail: func(err error) {
-				_ = s.postLines(s.ctx, rec.ID, system(EventFailed, fmt.Sprintf("The manager did not get the seat %s: %s", handle, oneLine(err.Error(), 300))))
+				_ = s.postLines(s.ctx, rec.ID, system(EventFailed, fmt.Sprintf("The manager did not get the ask to start %s: %s", handle, oneLine(err.Error(), 300))))
 			},
 		})
 	}
@@ -344,7 +344,7 @@ func (s *Store) fire(ctx context.Context, id, handle string, by *fw.Principal) (
 		if sm := rec.Seats[handle]; sm != nil {
 			sm.Ask, sm.AskOpen = 0, false
 		}
-		line = system(EventFired, fmt.Sprintf("%s fired %s", s.nameOf(ctx, by), handle))
+		line = system(EventFired, fmt.Sprintf("%s took %s off the channel", s.nameOf(ctx, by), handle))
 		line.Seq, line.At = rec.alloc(), now
 		return nil
 	})
@@ -578,10 +578,10 @@ func (s *Store) giveTask(ctx context.Context, rec *record, m Member, by *fw.Prin
 			if seatingOut(rec.Seats[m.Handle], m, s.now()) {
 				return
 			}
-			_ = s.postLines(ctx, rec.ID, system(EventTask, fmt.Sprintf("%s seated %s again on its task: %s", s.nameOf(ctx, by), m.Handle, oneLine(m.Task, 300))))
+			_ = s.postLines(ctx, rec.ID, system(EventTask, fmt.Sprintf("%s started %s again on its task: %s", s.nameOf(ctx, by), m.Handle, oneLine(m.Task, 300))))
 		}
 		if err := s.seatAgain(ctx, rec.ID, m.Handle); err != nil {
-			_ = s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The server failed to seat %s again: %s", m.Handle, oneLine(err.Error(), 300))))
+			_ = s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The server failed to start %s again: %s", m.Handle, oneLine(err.Error(), 300))))
 		}
 		return
 	}
@@ -678,9 +678,9 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 		switch {
 		case p.State != nil && *p.State == StateClosed && rec.State == StateOpen:
 			rec.State, rec.ClosedAt, rec.Verdict = StateClosed, &now, p.verdict
-			text := fmt.Sprintf("%s closed the bridge", s.nameOf(ctx, by))
+			text := fmt.Sprintf("%s closed the channel", s.nameOf(ctx, by))
 			if p.verdict == VerdictAccepted {
-				text = fmt.Sprintf("%s said that the result looks right and closed the bridge", s.nameOf(ctx, by))
+				text = fmt.Sprintf("%s said that the result looks right and closed the channel", s.nameOf(ctx, by))
 			}
 			// Nobody answers in a closed bridge, so its questions end.
 			switch settled := rec.closeQuestions(); len(settled) {
@@ -697,13 +697,13 @@ func (s *Store) patch(ctx context.Context, id string, p BridgePatch, by *fw.Prin
 			}
 		case p.State != nil && *p.State == StateOpen && rec.State == StateClosed:
 			rec.State, rec.ClosedAt, rec.Report, rec.Verdict = StateOpen, nil, nil, ""
-			l = system(EventReopened, fmt.Sprintf("%s opened the bridge again", s.nameOf(ctx, by)))
+			l = system(EventReopened, fmt.Sprintf("%s reopened the channel", s.nameOf(ctx, by)))
 		case p.verdict != "" && rec.State == StateClosed && rec.Verdict != p.verdict:
 			// A person checks a bridge that was closed already.
 			rec.Verdict = p.verdict
 			l = system(EventChanged, fmt.Sprintf("%s said that the result looks right", s.nameOf(ctx, by)))
 		case changed:
-			l = system(EventChanged, fmt.Sprintf("%s changed the settings of the bridge", s.nameOf(ctx, by)))
+			l = system(EventChanged, fmt.Sprintf("%s changed the settings of the channel", s.nameOf(ctx, by)))
 		default:
 			return errNoChange
 		}

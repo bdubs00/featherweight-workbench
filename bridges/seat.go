@@ -269,7 +269,7 @@ func (s *Store) open(ctx context.Context, spec OpenSpec, by *fw.Principal, mgr *
 		}
 		rec.Manager = run
 	}
-	opened := system(EventOpened, fmt.Sprintf("%s opened the bridge with %s", s.nameOf(ctx, by), plural(len(rec.Members), "member", "members")))
+	opened := system(EventOpened, fmt.Sprintf("%s opened the channel with %s", s.nameOf(ctx, by), plural(len(rec.Members), "member", "members")))
 	opened.Seq, opened.At = rec.alloc(), now
 	if err := s.b.create(ctx, rec); err != nil {
 		return nil, err
@@ -386,7 +386,7 @@ func (s *Store) enqueue(ctx context.Context, rec *record, seats []Member, inputs
 		}
 		s.log.Warn("bridges: a seat did not reach its queue", "bridge", rec.ID, "agent", at.agent, "pool", at.pool, "queue", queue, "error", err)
 		for _, h := range handles[at][sent:] {
-			s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The server failed to put the job of %s on its queue: %s", h, oneLine(strings.TrimPrefix(err.Error(), "fleet: "), 300))))
+			s.postLines(ctx, rec.ID, system(EventFailed, fmt.Sprintf("The server failed to queue the run of %s: %s", h, oneLine(strings.TrimPrefix(err.Error(), "fleet: "), 300))))
 		}
 	}
 }
@@ -657,7 +657,7 @@ func (s *Store) startManager(ctx context.Context, rec *record, input, idem strin
 	body := map[string]any{
 		"agent":    s.cfg.Manager,
 		"input":    input,
-		"title":    oneLine("Bridge: "+rec.Title, maxTitleRunes),
+		"title":    oneLine("Channel: "+rec.Title, maxTitleRunes),
 		"metadata": map[string]string{fw.MetaBatch: BatchOf(rec.ID)},
 		"wait":     false,
 	}

@@ -28,7 +28,7 @@ func TestRecordAndChannel(t *testing.T) {
 		t.Fatalf("members = %+v", it.Members)
 	}
 	opened := channel(t, s, it.ID)
-	if len(opened) != 1 || opened[0].Event != EventOpened || opened[0].From.Kind != KindSystem || opened[0].Text != "Alice opened the bridge with 2 members" {
+	if len(opened) != 1 || opened[0].Event != EventOpened || opened[0].From.Kind != KindSystem || opened[0].Text != "Alice opened the channel with 2 members" {
 		t.Fatalf("channel = %+v", opened)
 	}
 

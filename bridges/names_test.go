@@ -51,7 +51,7 @@ func TestNoTextNamesAPersonByAnID(t *testing.T) {
 	}
 	var first Item
 	structured(t, res, &first)
-	if l := withEvent(channel(t, s, first.ID), EventOpened); len(l) != 1 || l[0].Text != "the manager for a person opened the bridge with 2 members" {
+	if l := withEvent(channel(t, s, first.ID), EventOpened); len(l) != 1 || l[0].Text != "the manager for a person opened the channel with 2 members" {
 		t.Fatalf("opened = %+v", l)
 	}
 	rec, _, _ := s.b.get(context.Background(), first.ID)
@@ -70,7 +70,7 @@ func TestNoTextNamesAPersonByAnID(t *testing.T) {
 	if res.IsError || !strings.Contains(textOf(res), "for erin@example.com") || second.OperatorName != "erin@example.com" || second.Operator != erinSubject {
 		t.Fatalf("open after the list = %s %+v", textOf(res), second.Bridge)
 	}
-	if l := withEvent(channel(t, s, second.ID), EventOpened); len(l) != 1 || l[0].Text != "the manager for erin@example.com opened the bridge with 2 members" {
+	if l := withEvent(channel(t, s, second.ID), EventOpened); len(l) != 1 || l[0].Text != "the manager for erin@example.com opened the channel with 2 members" {
 		t.Fatalf("opened = %+v", l)
 	}
 	rec, _, _ = s.b.get(context.Background(), second.ID)

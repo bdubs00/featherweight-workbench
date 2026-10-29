@@ -680,7 +680,7 @@ func TestPlainReasons(t *testing.T) {
 		"run:R-L":   "Stopped at its limit of tool calls in one step.",
 		"bridge:B1": "The agents finished, and the result waits for a check.",
 		"bridge:B2": "writer works on its part.",
-		"bridge:B3": "The team has no agent.",
+		"bridge:B3": "The channel has no agent.",
 	}
 	for id, w := range want {
 		if c := cardOf(t, ans, id); c.Reason != w {
@@ -694,7 +694,7 @@ func TestPlainReasons(t *testing.T) {
 		}
 	}
 	for tool, w := range map[string]string{"bash": "runs a shell command", "front.pages_write": "writes a page of the wiki", "front.pages_trash": "uses the wiki",
-		"servicenow.update_incident": "calls update incident in servicenow", "front.duty_put": "calls duty put", "": "uses a tool"} {
+		"servicenow.update_incident": "calls update incident in servicenow", "front.duty_put": "saves a job", "front.duties_list": "uses a job", "": "uses a tool"} {
 		if got := toolWords(tool); got != w {
 			t.Errorf("toolWords(%q) = %q, want %q", tool, got, w)
 		}
